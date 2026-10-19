@@ -1,0 +1,64 @@
+Monitor++
+Copyright (c) 2026 mojingjing-git
+
+本产品基于开源项目 LiteMonitor 派生、修改并自行分发。
+
+上游项目：LiteMonitor
+原作者：Diorser
+上游仓库：https://github.com/Diorser/LiteMonitor
+上游主页：https://litemonitor.cn
+上游协议：MIT License（见上游 README 的"开源协议"章节；截至本版本发布，
+上游仓库根目录尚未提交 LICENSE 文件，授权意图以其 README 声明为准）
+
+本派生版本依照 MIT License 发布，完整许可文本见同目录 LICENSE 文件。
+上游版权声明（Copyright (c) 2025 Diorser）在所有分发副本中均予保留。
+
+本项目名称、图标、界面与发行渠道与上游项目无关联，非上游官方版本。
+"LiteMonitor" 名称与相关权利归原作者所有，本项目不使用。
+
+------------------------------------------------------------------------
+本项目的主要修改
+------------------------------------------------------------------------
+- 品牌与程序集更名，与上游完全解耦
+- 解除对上游服务器的运行时依赖（更新源、驱动源、城市库、行情接口）
+- 多显卡监控：可同时监控 N 张独立显卡，温度/占用/功耗等指标分卡显示
+- 插件市场：远程插件索引的浏览与安装
+- 监控历史：温度、负载、功耗、频率、FPS 等指标的历史趋势曲线
+- 下载产物 SHA256 完整性校验
+- Web 监控面板、测速、内存清理等上游已有能力的持续维护
+
+------------------------------------------------------------------------
+第三方组件
+------------------------------------------------------------------------
+
+1) LibreHardwareMonitorLib 0.9.6
+   协议：Mozilla Public License 2.0 (MPL-2.0)
+   用途：读取 CPU / GPU / 内存 / 主板 / 风扇 / 温度 / 功耗等硬件传感器
+   来源：https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+
+2) System.Text.Json 9.0.10
+   协议：MIT
+   用途：主题 / 语言包 / 插件 / 配置的 JSON 序列化
+   来源：https://github.com/dotnet/runtime
+
+3) PawnIO 驱动（resources/assets/PawnIO_setup.exe、resources/assets/driver.zip）
+   协议：GNU General Public License v2.0 或更高版本（GPL-2.0-or-later），
+        并附有 PawnIO 版权持有人授予的链接例外（linking exception）
+   版权：Copyright (C) namazso <admin@namazso.eu>
+   来源：https://github.com/namazso/PawnIO
+        （对应源码随本项目一同分发或可从上述地址获取）
+   说明：PawnIO 是内核态输入输出驱动，用于访问 MSR / SuperIO / SMBus / PCI
+        等标准 Windows API 无法读取的硬件寄存器。本项目仅通过设备 IO 控制
+        接口与 PawnIO 通信，属于 PawnIO 链接例外条款所述的"独立模块"，
+        因此本项目自身仍以 MIT 协议发布。
+        二进制文件为 PawnIO 官方发布的安装包，未经修改。
+
+4) PresentMon（resources/assets/LiteMonitorFPS.exe）
+   协议：BSD 3-Clause License
+   用途：提供游戏帧率（FPS）计数所需的 ETW 采集能力
+   来源：https://github.com/GameTechDev/PresentMon
+   说明：二进制为上游项目分发的预编译版本，未经修改。
+
+5) 网络测速服务器
+   来源见 src/Core/NetworkSpeedTester.cs 中的服务器地址列表，
+   均为第三方公开测速服务，使用其公开接口。
