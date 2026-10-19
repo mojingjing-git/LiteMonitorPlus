@@ -28,6 +28,19 @@ namespace LiteMonitor.src.SystemServices
         
         // 显卡硬件缓存 (用于快速定位)
         public IHardware? CachedGpu { get; private set; }
+
+        // ★★★ [多显卡] 被监控的显卡列表, 下标即 Key 中的序号 ★★★
+        public List<IHardware> CachedGpus { get; private set; } = new List<IHardware>();
+
+        /// <summary>取指定序号的被监控显卡, 越界返回 null</summary>
+        public IHardware? GetGpuByIndex(int index)
+        {
+            lock (_lock)
+            {
+                if (index < 0 || index >= CachedGpus.Count) return null;
+                return CachedGpus[index];
+            }
+        }
         // ★★★ [新增] 缓存总线传感器 (用于 Zen 5 频率修正) ★★★
         public ISensor? CpuBusSpeedSensor { get; private set; }
 
@@ -57,7 +70,9 @@ namespace LiteMonitor.src.SystemServices
                 _map.Clear();
                 CpuCoreCache.Clear();
                 CachedGpu = null;
+                CachedGpus = new List<IHardware>();
                 CpuBusSpeedSensor = null;
+                GpuRegistry.Clear();
                 // _lastSensorFingerprint = 0; // 已移除
             }
         }
@@ -86,6 +101,49 @@ namespace LiteMonitor.src.SystemServices
         // =======================================================================
         // [核心] 构建传感器映射与缓存 (最复杂的构建逻辑)
         // =======================================================================
+        /// <summary>
+        /// 选出被监控的显卡集合。
+        /// 规则:
+        ///   - MonitoredGpuCount == 1 : 沿用旧逻辑, 优先用 PreferredGpu 指定的卡, 否则取优先级最高的一张
+        ///   - MonitoredGpuCount >= 2 : 按优先级取前 N 张
+        /// 顺序与 Rebuild 中的遍历顺序一致, 保证 Key 中的序号稳定。
+        /// </summary>
+        private static List<IHardware> SelectMonitoredGpus(Computer computer, Settings cfg)
+        {
+            var all = computer.Hardware
+                .Where(HardwareScanner.IsGpuHardware)
+                .OrderBy(h => HardwareRules.GetHwPriority(h))
+                .ToList();
+
+            if (all.Count == 0) return new List<IHardware>();
+
+            int want = cfg.MonitoredGpuCount;
+            if (want < 1) want = 1;
+
+            if (want == 1)
+            {
+                var selected = HardwareScanner.FindGpuByConfig(computer, cfg.PreferredGpu ?? "");
+                if (selected != null) return new List<IHardware> { selected };
+                return new List<IHardware> { all[0] };
+            }
+
+            return all.Take(Math.Min(want, all.Count)).ToList();
+        }
+
+        /// <summary>
+        /// 在被监控显卡列表中按引用查找序号, 找不到返回 -1。
+        /// 这里刻意不用 Dictionary + ReferenceEqualityComparer —— 该比较器只实现了
+        /// IEqualityComparer&lt;object&gt;, 不能直接用于 Dictionary&lt;IHardware, int&gt;。
+        /// </summary>
+        private static int FindGpuIndex(List<IHardware> monitored, IHardware hw)
+        {
+            for (int i = 0; i < monitored.Count; i++)
+            {
+                if (ReferenceEquals(monitored[i], hw)) return i;
+            }
+            return -1;
+        }
+
         public void Rebuild(Computer computer, Settings cfg) // ★ 签名修改
         {
             _cfg = cfg;
@@ -100,23 +158,21 @@ namespace LiteMonitor.src.SystemServices
             // 但为了保持原代码结构，我们依然用candidates收集主板相关数据
             var candidatesMoboTemps = new List<ISensor>(capacity: 10); // 预设容量，减少扩容开销
 
-            string preferredGpu = cfg.PreferredGpu ?? "";
-            IHardware? selectedGpu = HardwareScanner.FindGpuByConfig(computer, preferredGpu);
+            // ★★★ [多显卡] 选出被监控的显卡集合 (序号即 Key 中的序号) ★★★
+            var monitoredGpus = SelectMonitoredGpus(computer, cfg);
+
+            // ★★★ [多显卡] 显卡简称的本地缓冲区, 在原子交换点整体写入 GpuRegistry ★★★
+            var gpuInfoBuffer = new GpuInfo[GpuKey.MaxGpuCount];
 
             // 局部递归函数
-            void RegisterTo(IHardware hw)
+            void RegisterTo(IHardware hw, int gpuIndex)
             {
                 //hw.Update();
 
                 bool isGpuHardware = HardwareScanner.IsGpuHardware(hw);
 
-                // 用户选择的显卡仍存在时只映射指定显卡；配置失效或旧名称无法唯一定位时回退自动优先级。
-                if (isGpuHardware &&
-                    selectedGpu != null &&
-                    !ReferenceEquals(hw, selectedGpu))
-                {
-                    return;
-                }
+                // ★★★ [多显卡] 只有在监控集合里的显卡才继续处理 ★★★
+                if (isGpuHardware && gpuIndex < 0) return;
 
                 // --- 填充 CPU 缓存 (用于加权平均) ---
                 if (hw.HardwareType == HardwareType.Cpu)
@@ -146,18 +202,38 @@ namespace LiteMonitor.src.SystemServices
                 // --- 填充 GPU 缓存 (优化版：完全依赖优先级排序) ---
                 if (isGpuHardware)
                 {
-                    // 因为外层循环已经按照 GetHwPriority 排序（强力显卡在前），
-                    // 所以第一个遇到的显卡就是最强的，直接锁定即可。
-                    // 移除了复杂的“后来者居上”判断逻辑，避免过度设计。
                     if (newGpu == null)
                     {
                         newGpu = hw;
                     }
-                    
-                    // ★★★ [新增] GPU 风扇映射 ★★★
+
+                    // ★★★ [多显卡] 登记显卡简称, 供 UI 打标签 ★★★
+                    // 先写进本地数组, 最后在原子交换点整体替换 GpuRegistry ——
+                    // 避免读侧 (UI 线程) 看到"半更新"的注册表。
+                    if (gpuIndex >= 0 && gpuIndex < gpuInfoBuffer.Length)
+                    {
+                        gpuInfoBuffer[gpuIndex] = new GpuInfo
+                        {
+                            ShortName = HardwareRules.GetShortGpuName(hw.Name),
+                            FullName = hw.Name
+                        };
+                    }
+
+
+                    // ★★★ [多显卡] GPU 风扇映射 (按序号写各自的 Key) ★★★
+                    // 修复: 旧代码这里是无条件赋值 newMap["GPU.Fan"] = fan,
+                    //       多卡时后一张卡会覆盖前一张, 导致风扇读数串卡。
+                    //       现在每张卡写进自己的 "GPU.{序号}.Fan", 互不干扰。
                     var fan = hw.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Fan);
                     if (fan == null) fan = hw.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Control);
-                    if (fan != null) newMap["GPU.Fan"] = fan;
+                    if (fan != null)
+                    {
+                        string fanKey = GpuKey.Build(gpuIndex, "Fan");
+                        if (!newMap.ContainsKey(fanKey)) newMap[fanKey] = fan;
+
+                        // 第 0 张卡额外写入旧格式 Key, 保证旧配置继续可用
+                        if (gpuIndex == 0 && !newMap.ContainsKey("GPU.Fan")) newMap["GPU.Fan"] = fan;
+                    }
                 }
                 
                 // ★★★ [新增] 收集主板/SuperIO 传感器 ★★★
@@ -176,45 +252,62 @@ namespace LiteMonitor.src.SystemServices
                     string? key = SensorMatcher.Match(hw, s); // 调用 SensorMatcher 进行识别
                     if (!string.IsNullOrEmpty(key))
                     {
-                        if (!newMap.ContainsKey(key))
+                        // ★★★ [多显卡] 显卡指标改写成带序号的形式 ★★★
+                        bool isGpuKey = isGpuHardware
+                                        && key.StartsWith(GpuKey.Prefix, StringComparison.OrdinalIgnoreCase);
+                        string finalKey = key;
+                        if (isGpuKey)
                         {
-                            newMap[key] = s;
+                            string metric = key.Substring(GpuKey.Prefix.Length);
+                            finalKey = GpuKey.Build(gpuIndex, metric);
+                        }
+
+                        if (!newMap.ContainsKey(finalKey))
+                        {
+                            newMap[finalKey] = s;
                         }
                         else
                         {
                             // [Fix] 冲突解决策略：优先选择 Vendor (非 D3D) 传感器
                             // 必须严格保护高优先级显卡的数据，防止被低优先级显卡覆盖！
-                            var existing = newMap[key];
+                            var existing = newMap[finalKey];
                             
                             // 1. 如果现有数据来自"更强"的显卡 (Priority数值更小)，绝对禁止覆盖！
-                            // (注意：RegisterTo 按照 0->100 顺序遍历，所以 existing 的优先级只可能 <= 当前 hw 的优先级)
-                            // 如果 existing < hw，说明它是更强的显卡写入的，直接跳过。
                             if (HardwareRules.GetHwPriority(existing.Hardware) < HardwareRules.GetHwPriority(hw))
                             {
                                 continue;
                             }
 
-                            // 2. 如果优先级相同 (通常是同一张显卡的不同传感器，或者是两张同样的显卡)，
-                            // 则应用 D3D vs Vendor 优选逻辑。
+                            // 2. 如果优先级相同，则应用 D3D vs Vendor 优选逻辑。
                             bool existingIsD3D = existing.Name.Contains("D3D", StringComparison.OrdinalIgnoreCase);
                             bool newIsD3D = s.Name.Contains("D3D", StringComparison.OrdinalIgnoreCase);
                             
                             // 如果现有的是 D3D 而新来的不是 D3D -> 替换为新来的 (Upgrade)
                             if (existingIsD3D && !newIsD3D)
                             {
-                                newMap[key] = s;
+                                newMap[finalKey] = s;
                             }
                             // 其他情况 (Vendor vs Vendor, Vendor vs D3D) -> 保持现有 (First Wins / Vendor Wins)
+                        }
+
+                        // ★★★ [多显卡] 第 0 张卡额外写入旧格式 Key, 兼容旧配置 ★★★
+                        if (isGpuKey && gpuIndex == 0 && !newMap.ContainsKey(key))
+                        {
+                            newMap[key] = s;
                         }
                     }
                 }
 
-                foreach (var sub in hw.SubHardware) RegisterTo(sub);
+                foreach (var sub in hw.SubHardware) RegisterTo(sub, gpuIndex);
             }
 
             // 按优先级排序并注册
             var ordered = computer.Hardware.OrderBy(h => HardwareRules.GetHwPriority(h));
-            foreach (var hw in ordered) RegisterTo(hw);
+            foreach (var hw in ordered)
+            {
+                int gpuIndex = FindGpuIndex(monitoredGpus, hw);
+                RegisterTo(hw, gpuIndex);
+            }
             
             // ============================================
             // ★★★ [新增] 智能匹配逻辑 ★★★
@@ -287,7 +380,11 @@ namespace LiteMonitor.src.SystemServices
                 
                 CpuCoreCache = newCpuCache;
                 CachedGpu = newGpu;
+                CachedGpus = new List<IHardware>(monitoredGpus); // ★★★ [多显卡] ★★★
                 CpuBusSpeedSensor = newBusSensor; // ★ 更新 Bus Sensor 缓存
+
+                // ★★★ [多显卡] 显卡简称注册表整体替换 (原子) ★★★
+                GpuRegistry.ReplaceAll(gpuInfoBuffer);
                 
                 _lastMapBuild = DateTime.Now;
                 // ★★★ [优化 3] 指纹记录已移除 ★★★
