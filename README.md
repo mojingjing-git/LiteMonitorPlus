@@ -4,21 +4,21 @@
 > 完整许可证见 [LICENSE](./LICENSE)，变更与致谢见 [NOTICE](./NOTICE)。
 
 
-# <img src="./resources/screenshots/logo.png"  width="28" style="vertical-align: middle; margin-top: -4px;" /> Monitor++
+# <img src="./resources/screenshots/logo.png"  width="28" style="vertical-align: middle; margin-top: -4px;" /> LiteMonitor++
 一款轻量、可定制的开源桌面硬件监控软件 — 实时监测 CPU、GPU、内存、磁盘、网络等系统性能。
 
 A lightweight and customizable desktop hardware monitoring tool — real-time monitoring of system performance such as CPU, GPU, memory, disk, and network.
 
 支持横/竖屏/任务栏/网页显示、主题切换、多语言、透明度显示、三色报警等，界面简洁且高度可配置 。
-> 🟢 **立即下载最新版本：** [📦 GitHub Releases → Monitor++ 最新版](https://github.com/mojingjing-git/MonitorPlus/releases/latest)    
+> 🟢 **立即下载最新版本：** [📦 GitHub Releases → LiteMonitor++ 最新版](https://github.com/mojingjing-git/LiteMonitorPlus/releases/latest)    
 
 > 🟢 已支持【内存清理】和【自定义插件】功能，详见：[插件开发指南（无需编程）](./resources/plugins/PLUGIN_DEV_GUIDE.md#🔌-plugin-system)
 
 
-![Monitor++ 主界面](./resources/screenshots/overview.png)
+![LiteMonitor++ 主界面](./resources/screenshots/overview.png)
 
 ###  🟢 横条模式 / 任务栏显示模式
-![Monitor++ 横屏/任务栏显示](./resources/screenshots/overview3.png)
+![LiteMonitor++ 横屏/任务栏显示](./resources/screenshots/overview3.png)
 
 
 # 🖥️ 系统监控功能
@@ -37,22 +37,22 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 
 
 
-> 💡 Monitor++ 持续完善中，如需更多监控项或功能支持，欢迎在 [GitHub Issues](https://github.com/mojingjing-git/MonitorPlus/issues) 中反馈建议！
+> 💡 LiteMonitor++ 持续完善中，如需更多监控项或功能支持，欢迎在 [GitHub Issues](https://github.com/mojingjing-git/LiteMonitorPlus/issues) 中反馈建议！
 
 ---
 
 ###  🟢 网络测速功能 
-![Monitor++ 网速测试](./resources/screenshots/overview4.png)  👉 ![Monitor++ 菜单](./resources/screenshots/overview5.jpg)
+![LiteMonitor++ 网速测试](./resources/screenshots/overview4.png)  👉 ![LiteMonitor++ 菜单](./resources/screenshots/overview5.jpg)
 
 
 ###  🟢 监控历史
-![Monitor++ 监控历史](./resources/screenshots/overview9.png)
+![LiteMonitor++ 监控历史](./resources/screenshots/overview9.png)
 
 ###  🟢 历史流量统计
-![Monitor++ 主题编辑器](./resources/screenshots/overview7.png)
+![LiteMonitor++ 主题编辑器](./resources/screenshots/overview7.png)
 
 ###  🟢 网页版监控
-![Monitor++ 网页版监控](./resources/screenshots/web.png)
+![LiteMonitor++ 网页版监控](./resources/screenshots/web.png)
  
 ---
 
@@ -82,8 +82,8 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 
 ## 📦 安装与使用
 
-1. 前往 [Releases 页面](https://github.com/mojingjing-git/MonitorPlus/releases) 下载最新版压缩包  
-2. 解压后运行 `Monitor++.exe`  
+1. 前往 [Releases 页面](https://github.com/mojingjing-git/LiteMonitorPlus/releases) 下载最新版压缩包  
+2. 解压后运行 `LiteMonitor++.exe`  
 3. 程序会自动根据系统语言加载对应语言文件
 
 ---
@@ -164,14 +164,14 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 
 ### 编译命令
 ```bash
-git clone https://github.com/mojingjing-git/MonitorPlus.git
-cd MonitorPlus
+git clone https://github.com/mojingjing-git/LiteMonitorPlus.git
+cd LiteMonitorPlus
 dotnet build -c Release
 ```
 
 输出文件：
 ```
-/bin/Release/net8.0-windows/Monitor++.exe
+/bin/Release/net8.0-windows/LiteMonitor++.exe
 ```
 
 ---
@@ -188,6 +188,6 @@ dotnet build -c Release
 
 ## 📬 联系方式
 **本项目作者**：mojingjing-git  
-**项目主页**：[https://github.com/mojingjing-git/MonitorPlus](https://github.com/mojingjing-git/MonitorPlus)
+**项目主页**：[https://github.com/mojingjing-git/LiteMonitorPlus](https://github.com/mojingjing-git/LiteMonitorPlus)
 
 **上游项目（原作者 Diorser，MIT 协议）**：[https://github.com/Diorser/LiteMonitor](https://github.com/Diorser/LiteMonitor)

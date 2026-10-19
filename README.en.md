@@ -5,26 +5,26 @@
 
 [中文文档](./README.md)
 
-# <img src="./resources/screenshots/logo.png"  width="28" style="vertical-align: middle; margin-top: -4px;" /> Monitor++
+# <img src="./resources/screenshots/logo.png"  width="28" style="vertical-align: middle; margin-top: -4px;" /> LiteMonitor++
 
 A lightweight and fully customizable **Windows hardware monitor** — track CPU, GPU, memory, disk, and network statistics in real time.
 
 > 🟢 **Download latest version:**  
-> [📦 GitHub Releases → Monitor++ Latest](https://github.com/mojingjing-git/MonitorPlus/releases/latest)
+> [📦 GitHub Releases → LiteMonitor++ Latest](https://github.com/mojingjing-git/LiteMonitorPlus/releases/latest)
 
-Monitor++ is a modern **Windows desktop system monitoring tool**.  
+LiteMonitor++ is a modern **Windows desktop system monitoring tool**.  
 It supports horizontal/vertical display, multiple languages, theme switching, transparency, adaptive DPI scaling, and three-level color alerts — in a clean and highly configurable interface.
 
 
-![Monitor++ Main UI](./resources/screenshots/overview.png)
+![LiteMonitor++ Main UI](./resources/screenshots/overview.png)
 ###  🟢 **Horizontal Mode / Taskbar Display**
-![Monitor++ Horizontal](./resources/screenshots/overview3.png)
+![LiteMonitor++ Horizontal](./resources/screenshots/overview3.png)
 
 ###  🟢 **New Network Speed Test Feature**
-![Monitor++ Network Speed Test](./resources/screenshots/overview4.png)  👉 ![Monitor++ 菜单](./resources/screenshots/overview6.png) ![Monitor++ 菜单](./resources/screenshots/overview5.png)
+![LiteMonitor++ Network Speed Test](./resources/screenshots/overview4.png)  👉 ![LiteMonitor++ 菜单](./resources/screenshots/overview6.png) ![LiteMonitor++ 菜单](./resources/screenshots/overview5.png)
 
 ###  🟢 **New Theme Editor**
-![Monitor++ Theme Editor](./resources/screenshots/overview2.jpg)
+![LiteMonitor++ Theme Editor](./resources/screenshots/overview2.jpg)
 
 ---
 
@@ -66,8 +66,8 @@ It supports horizontal/vertical display, multiple languages, theme switching, tr
 
 ## 📦 Installation
 
-1. Download from [GitHub Releases](https://github.com/mojingjing-git/MonitorPlus/releases)
-2. Extract and run `Monitor++.exe`
+1. Download from [GitHub Releases](https://github.com/mojingjing-git/LiteMonitorPlus/releases)
+2. Extract and run `LiteMonitor++.exe`
 3. The app automatically loads the correct theme & language
 
 ---
@@ -164,14 +164,14 @@ Example:
 
 ### Build
 ```bash
-git clone https://github.com/mojingjing-git/MonitorPlus.git
-cd MonitorPlus
+git clone https://github.com/mojingjing-git/LiteMonitorPlus.git
+cd LiteMonitorPlus
 dotnet build -c Release
 ```
 
 Output:
 ```
-/bin/Release/net8.0-windows/Monitor++.exe
+/bin/Release/net8.0-windows/LiteMonitor++.exe
 ```
 
 ---
@@ -188,7 +188,7 @@ Released under the **MIT License** (free for personal & commercial use).
 
 ## 💬 Contact
 **Maintainer:** mojingjing-git  
-**Project:** [https://github.com/mojingjing-git/MonitorPlus](https://github.com/mojingjing-git/MonitorPlus)
+**Project:** [https://github.com/mojingjing-git/LiteMonitorPlus](https://github.com/mojingjing-git/LiteMonitorPlus)
 
 **Upstream project (by Diorser, MIT License):** [https://github.com/Diorser/LiteMonitor](https://github.com/Diorser/LiteMonitor)
 

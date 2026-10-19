@@ -21,7 +21,7 @@ namespace LiteMonitor.src.Plugins.Native
             Path.Combine(AppContext.BaseDirectory, "resources", "assets", "CityCode.json"),
         };
         // 远程回退：仅在本地文件缺失或读取失败时使用
-        private const string JSON_DB_URL = "https://raw.githubusercontent.com/mojingjing-git/MonitorPlus/master/resources/assets/CityCode.json";
+        private const string JSON_DB_URL = "https://raw.githubusercontent.com/mojingjing-git/LiteMonitorPlus/master/resources/assets/CityCode.json";
         
         // Memory Cache
         private static Dictionary<string, List<List<string>>> _db = null;

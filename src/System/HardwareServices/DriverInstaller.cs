@@ -37,15 +37,15 @@ namespace LiteMonitor.src.SystemServices
         // 建议把最快的 Gitee/国内源放在第一个
         private readonly string[] _driverPackageUrls = new[]
         {
-            "https://gitee.com/mojingjing-git/MonitorPlus/raw/master/resources/assets/driver.zip",
-            "https://raw.githubusercontent.com/mojingjing-git/MonitorPlus/master/resources/assets/driver.zip"
+            "https://gitee.com/mojingjing-git/LiteMonitorPlus/raw/master/resources/assets/driver.zip",
+            "https://raw.githubusercontent.com/mojingjing-git/LiteMonitorPlus/master/resources/assets/driver.zip"
         };
 
         // ★★★ [新增] PresentMon 下载源 (FPS 单独下载用) ★★★
         private readonly string[] _presentMonUrls = new[]
         {
-            "https://gitee.com/mojingjing-git/MonitorPlus/raw/master/resources/assets/MonitorPlusFPS.exe",
-            "https://raw.githubusercontent.com/mojingjing-git/MonitorPlus/master/resources/assets/MonitorPlusFPS.exe"
+            "https://gitee.com/mojingjing-git/LiteMonitorPlus/raw/master/resources/assets/LiteMonitorPlusFPS.exe",
+            "https://raw.githubusercontent.com/mojingjing-git/LiteMonitorPlus/master/resources/assets/LiteMonitorPlusFPS.exe"
         };
         
         // 缓存当前的下载任务，避免并发重复弹窗

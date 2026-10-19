@@ -134,7 +134,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             // 1. Hint Note with Link
             var linkDoc = new LiteLink(LanguageManager.T("Menu.PluginDevGuide"), () => {
                 try { 
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://github.com/mojingjing-git/MonitorPlus/blob/master/resources/plugins/PLUGIN_DEV_GUIDE.md") { UseShellExecute = true }); 
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://github.com/mojingjing-git/LiteMonitorPlus/blob/master/resources/plugins/PLUGIN_DEV_GUIDE.md") { UseShellExecute = true }); 
                 } catch { }
             });
             var hintRow = new LiteActionRow(LanguageManager.T("Menu.PluginHint"), linkDoc);

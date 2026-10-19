@@ -11,7 +11,7 @@
       "key": "repo_path",
       "label": "仓库路径",
       "type": "text",
-      "default": "mojingjing-git/MonitorPlus",
+      "default": "mojingjing-git/LiteMonitorPlus",
       "placeholder": "owner/repo",
       "scope": "target"
     },
