@@ -15,6 +15,14 @@ namespace LiteMonitor.src.SystemServices
         #region Singleton & Events
         public static HardwareMonitor? Instance { get; private set; }
         public event Action? OnValuesUpdated;
+
+        /// <summary>
+        /// 最近一次硬件层初始化/重载失败的原因（null 表示一切正常）。
+        /// Release 构建里 Debug.WriteLine 会被整段编译掉，如果只靠它记录异常，
+        /// 「所有 LHM 指标恒 0」这类故障对用户和排查者都是完全不可见的，
+        /// 所以这里保留一个可查询的出口，UI 侧据此提示用户。
+        /// </summary>
+        public static string? LastHardwareError { get; private set; }
         #endregion
 
         #region Private Fields
@@ -204,6 +212,7 @@ namespace LiteMonitor.src.SystemServices
                             try { hw.Update(); }
                             catch (Exception ex)
                             {
+                                HardwareErrorLog.Write("UpdateAll.GPU", ex);
                                 System.Diagnostics.Debug.WriteLine($"[GPU Error] Update failed: {ex.Message}");
                                 needsReload = true;
                             }
@@ -306,6 +315,12 @@ namespace LiteMonitor.src.SystemServices
                 _isOpening = true;
                 try
                 {
+                    // ★★★ [自检] 发布目录里是否残留旧版本文件 ★★★
+                    //   把新版本 publish 到旧输出目录(不先清空)时，目录里会同时留着
+                    //   旧程序集名(AssemblyName=LiteMonitor)的那一套文件，可能与当前 deps.json 冲突，
+                    //   导致 LHM 打不开硬件树、硬件指标全部恒 0。这里只写日志，不打扰用户。
+                    HardwareErrorLog.CheckPublishDirectory();
+
                     // ★★★ [新增] 启动计数器预热 (不阻塞主 UI) ★★★
                     _perfCounterManager.InitializeAsync();
 
@@ -343,6 +358,11 @@ namespace LiteMonitor.src.SystemServices
                 }
                 catch (Exception ex)
                 {
+                    // [Fix] Release 构建里 Debug.WriteLine 会被整段编译掉。
+                    // 之前 LHM 打开失败会被完全静默：程序照常启动，CPU/内存等走性能计数器的指标正常，
+                    // 只有 LHM 系指标全是 0，用户既看不到提示，也拿不到任何日志。
+                    LastHardwareError = ex.ToString();
+                    HardwareErrorLog.Write("InitializeAsync", ex);
                     System.Diagnostics.Debug.WriteLine($"Init Error: {ex.Message}");
                 }
                 finally
@@ -461,17 +481,23 @@ namespace LiteMonitor.src.SystemServices
 
         private void ReloadComputerSafe()
         {
+            bool opened = false;
+
             try
             {
                 lock (_lock)
                 {
                     // 1. 清理业务缓存
+                    //    [Fix] 这里原本还有一句 _sensorMap.Clear()，必须去掉。
+                    //    旧实现是「先清空映射表 -> 再重开硬件 -> 最后 Rebuild」，
+                    //    而这三步全在同一个 try 里：中途任何一步抛异常都会跳到 catch，
+                    //    Rebuild 永远不执行，映射表就永久停在空状态，
+                    //    结果是所有 LHM 指标恒 0，而且异常被 catch { } 吞掉、毫无痕迹。
+                    //    SensorMap.Rebuild 内部本来就是在锁内原子交换 _map，所以这里无需提前清空。
                     _networkManager.ClearCache();
                     _diskManager.ClearCache();
-                    _sensorMap.Clear();
-                    
                     _valueProvider.ClearCache();
-                    
+
                     // 清理扫描器缓存
                     HardwareScanner.ClearCache();
 
@@ -479,30 +505,87 @@ namespace LiteMonitor.src.SystemServices
                     UIUtils.ClearStringPool();
 
                     // 3. 关闭旧硬件服务
-                    if (_computer != null)
+                    try
                     {
-                        _computer.Accept(new HardwareVisitor(h => { }));
-                        _computer.Close();
-                        // ★★★ 核心修复：手动清空硬件列表 ★★★
-                        // LHM 的 Close() 不会清空列表，必须手动 Clear，否则再次 Open 会追加重复硬件
-                        _computer.Hardware.Clear();
+                        if (_computer != null)
+                        {
+                            _computer.Accept(new HardwareVisitor(h => { }));
+                            _computer.Close();
+                            // ★★★ 核心修复：手动清空硬件列表 ★★★
+                            // LHM 的 Close() 不会清空列表，必须手动 Clear，否则再次 Open 会追加重复硬件
+                            _computer.Hardware.Clear();
+                        }
                     }
-                    
-                    _computer.Open();
-                    WarmUpMotherboardSensors();
-                    WarmUpBatterySensors();
+                    catch (Exception ex)
+                    {
+                        HardwareErrorLog.Write("ReloadComputerSafe.Close", ex);
+                    }
 
-                    DisableSensorHistory();
+                    // 4. 重新打开硬件（失败不再静默，而是记录原因并保留旧映射表）
+                    try
+                    {
+                        _computer.Open();
+                        opened = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        LastHardwareError = ex.ToString();
+                        HardwareErrorLog.Write("ReloadComputerSafe.Open", ex);
+                    }
+
+                    if (opened)
+                    {
+                        try { WarmUpMotherboardSensors(); }
+                        catch (Exception ex) { HardwareErrorLog.Write("ReloadComputerSafe.WarmUpMotherboard", ex); }
+
+                        try { WarmUpBatterySensors(); }
+                        catch (Exception ex) { HardwareErrorLog.Write("ReloadComputerSafe.WarmUpBattery", ex); }
+
+                        try { DisableSensorHistory(); }
+                        catch (Exception ex) { HardwareErrorLog.Write("ReloadComputerSafe.DisableSensorHistory", ex); }
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                HardwareErrorLog.Write("ReloadComputerSafe", ex);
+            }
 
-                _sensorMap.Rebuild(_computer, _cfg);
-                _valueProvider.PreCacheAllSensors(_sensorMap);
+            // 5. 重建映射表
+            //    [Fix] 这一段独立于上面的风险步骤：无论前面成功与否都会尝试执行。
+            //    只有 Open 成功才重建，避免拿空硬件树把还能用的旧映射冲掉。
+            try
+            {
+                if (opened && _computer != null)
+                {
+                    _sensorMap.Rebuild(_computer, _cfg);
+                    _valueProvider.PreCacheAllSensors(_sensorMap);
 
-                // 4. 优化 T1：重置后再次修剪内存
+                    // [Fix] 硬件层已经恢复正常，清掉上一次失败的残留错误。
+                    // 否则 UI 侧会拿到一条「过期」的失败原因并弹出误导性的错误气泡。
+                    LastHardwareError = null;
+                }
+                else
+                {
+                    // 打开失败：保留原有映射表，宁可读到陈旧数据，也不要把所有指标退化成 0
+                    HardwareErrorLog.Write("ReloadComputerSafe", "Computer.Open() 失败，已保留原有映射表以避免所有指标退化为 0。");
+                }
+            }
+            catch (Exception ex)
+            {
+                HardwareErrorLog.Write("ReloadComputerSafe.Rebuild", ex);
+            }
+
+            // 6. 优化 T1：重置后再次修剪内存
+            try
+            {
                 GC.Collect();
                 SystemOptimizer.TrimWorkingSet();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                HardwareErrorLog.Write("ReloadComputerSafe.Trim", ex);
+            }
         }
 
         private void ReleaseComputerForDriverInstall()
@@ -525,6 +608,7 @@ namespace LiteMonitor.src.SystemServices
                     }
                     catch (Exception ex)
                     {
+                        HardwareErrorLog.Write("ReleaseComputerForDriverInstall", ex);
                         System.Diagnostics.Debug.WriteLine($"[DriverInstaller] 释放硬件监控失败: {ex.Message}");
                     }
                 }

@@ -23,6 +23,7 @@ namespace LiteMonitor
 
         private List<GroupLayoutInfo> _groups = new();
         private bool _gpuLegacyLabelMigrated = false;
+        private bool _hardwareErrorNotified = false;
         private List<Column> _hxColsHorizontal = new();
         private List<Column> _hxColsTaskbar = new();
         private HorizontalLayout? _hxLayout;
@@ -208,6 +209,12 @@ namespace LiteMonitor
                 //   而 UserLabel 优先级最高 -> 会把组标题的显卡型号重新顶回行标签上。
                 MigrateLegacyGpuItemLabels();
 
+                // ★★★ [硬件自检] 硬件层失败时提示一次用户 ★★★
+                //   之前 LHM 打不开硬件树会被 catch 静默吞掉，用户只看到「指标全是 0」，
+                //   既没有提示也没有日志。现在由 HardwareMonitor 暴露 LastHardwareError，
+                //   这里统一转成托盘气泡提示（详情已写进 LiteMonitor++_HardwareError.log）。
+                NotifyHardwareErrorOnce();
+
                 // ① 更新竖屏 items
                 foreach (var g in _groups)
                     foreach (var it in g.Items)
@@ -385,6 +392,39 @@ namespace LiteMonitor
                 }
             }
             if (changed) _form.Invalidate();
+        }
+
+        /// <summary>
+        /// 硬件层初始化/重载失败时，用托盘气泡提示用户一次。
+        /// [Fix] 之前这类故障被 catch 吞掉，Release 构建下连日志都没有，
+        /// 用户只能看到「所有硬件指标都是 0」而完全不知道原因。
+        /// 失败详情已经写进运行目录下的 LiteMonitor++_HardwareError.log。
+        /// </summary>
+        private void NotifyHardwareErrorOnce()
+        {
+            string? err = HardwareMonitor.LastHardwareError;
+
+            // 硬件层已恢复正常（HardwareMonitor 在重建映射表成功后会清空 LastHardwareError）
+            // -> 复位通知标记, 以便之后再次失败时能重新提示一次
+            if (string.IsNullOrEmpty(err))
+            {
+                _hardwareErrorNotified = false;
+                return;
+            }
+
+            if (_hardwareErrorNotified) return;
+
+            _hardwareErrorNotified = true;
+            try
+            {
+                string firstLine = err.Split('\n')[0].Trim();
+                MainForm.ShowNotification(
+                    "LiteMonitor++ 硬件监控初始化失败",
+                    "所有硬件传感器指标将显示为 0。\r\n\r\n原因: " + firstLine +
+                    "\r\n\r\n完整信息见运行目录下的 LiteMonitor++_HardwareError.log",
+                    ToolTipIcon.Error);
+            }
+            catch { }
         }
 
         /// <summary>
