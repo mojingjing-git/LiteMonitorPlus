@@ -115,7 +115,7 @@ namespace LiteMonitor.src.Core
                  {
                      double totalGB = (key.IndexOf("MEM", StringComparison.OrdinalIgnoreCase) >= 0) 
                         ? Settings.DetectedRamTotalGB 
-                        : Settings.DetectedGpuVramTotalGB;
+                        : GetGpuVramTotalGB(key);
 
                      if (totalGB > 0)
                      {
@@ -187,7 +187,7 @@ namespace LiteMonitor.src.Core
                 if (Settings.Load().MemoryDisplayMode != 1) return "%";
                 if (context == UnitContext.SettingsPanel || context == UnitContext.SettingsTaskbar) return "{u}";
 
-                double totalGB = (key.IndexOf("MEM", StringComparison.OrdinalIgnoreCase) >= 0) ? Settings.DetectedRamTotalGB : Settings.DetectedGpuVramTotalGB;
+                double totalGB = (key.IndexOf("MEM", StringComparison.OrdinalIgnoreCase) >= 0) ? Settings.DetectedRamTotalGB : GetGpuVramTotalGB(key);
                 
                 return (totalGB > 0 && value.HasValue) 
                     ? FormatDataSizeParts((value.Value / 100.0) * totalGB * 1073741824.0, -1).unit 
@@ -399,6 +399,23 @@ namespace LiteMonitor.src.Core
             // 3. 视觉修正：限制在 [0.05, 1.0] 之间
             // 确保即使数值很小也能看到一条细线
             return Math.Max(0.05, Math.Min(1.0, rawPct));
+        }
+
+        /// <summary>
+        /// 取指定 Key 对应显卡的显存总容量 (GB)。
+        /// "GPU.1.VRAM" -> 查 "GPU.1" ; "GPU.VRAM" -> 查 "GPU" (旧格式回退)
+        /// </summary>
+        private static double GetGpuVramTotalGB(string key)
+        {
+            string prefix = key ?? "";
+            int vramPos = prefix.LastIndexOf("VRAM", StringComparison.OrdinalIgnoreCase);
+            if (vramPos > 0) prefix = prefix.Substring(0, vramPos);
+            prefix = prefix.TrimEnd('.');
+
+            if (Settings.DetectedGpuVramTotalGBByKey.TryGetValue(prefix, out float total) && total > 0)
+                return total;
+
+            return Settings.DetectedGpuVramTotalGB; // 旧单卡缓存回退
         }
 
         public static double GetAdaptivePercentage(string key, double val)

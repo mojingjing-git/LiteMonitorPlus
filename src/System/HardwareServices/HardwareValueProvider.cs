@@ -391,18 +391,7 @@ namespace LiteMonitor.src.SystemServices
 
                     // 7. 显存
                     case "GPU.VRAM":
-                        float? used = GetValue("GPU.VRAM.Used");
-                        float? total = GetValue("GPU.VRAM.Total");
-                        if (used.HasValue && total.HasValue && total > 0)
-                        {
-                            if (Settings.DetectedGpuVramTotalGB <= 0) Settings.DetectedGpuVramTotalGB = total.Value / 1024f;
-                            if (total > 10485760) { used /= 1048576f; total /= 1048576f; }
-                            result = used / total * 100f;
-                        }
-                        else
-                        {
-                            if (_manualSensorCache.TryGetValue("GPU.VRAM.Load", out var s) && s.Value.HasValue) result = s.Value;
-                        }
+                        result = GetGpuVramPercent(key);
                         break;
 
                     // 8. 风扇/泵 (带 Max 记录)
@@ -410,17 +399,7 @@ namespace LiteMonitor.src.SystemServices
                     case "CPU.Pump":
                     case "CASE.Fan":
                     case "GPU.Fan":
-                        if (_manualSensorCache.TryGetValue(key, out var sFan))
-                        {
-                            result = sFan.Value;
-                        }
-                        else 
-                        {
-                            if (_manualSensorCache.TryGetValue(key, out var autoS) && autoS.Value.HasValue)
-                                result = autoS.Value.Value;
-                        }
-                        if (result.HasValue && result.Value < 10000f) 
-                            _cfg.UpdateMaxRecord(key, result.Value);
+                        result = ReadFanValue(key);
                         break;
 
                     // 主板温度
@@ -482,6 +461,13 @@ namespace LiteMonitor.src.SystemServices
                                 result = _diskManager.GetBestValue(key, _computer, _cfg, _lastValidMap, _lock);
                             }
                         }
+                        else if (key.EndsWith(".Fan", StringComparison.OrdinalIgnoreCase) ||
+                                 key.EndsWith(".Pump", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // ★★★ [多显卡] 带序号的 "GPU.0.Fan" 也要记录每卡峰值 ★★★
+                            // 精确 case "GPU.Fan" 接不住它, 落到这里统一处理。
+                            result = ReadFanValue(key);
+                        }
                         else if (key.Contains("Clock") || key.Contains("Power"))
                         {
                             if (useCounter && key == "CPU.Clock")
@@ -493,6 +479,12 @@ namespace LiteMonitor.src.SystemServices
                             {
                                 result = _componentProcessor.GetCompositeValue(key, _manualSensorCache);
                             }
+                        }
+                        else if (GpuKey.TryParse(key, out _, out string gpuMetric)
+                                 && gpuMetric.Equals("VRAM", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // ★★★ [多显卡] "GPU.1.VRAM" 等带序号的显存项 ★★★
+                            result = GetGpuVramPercent(key);
                         }
                         break;
                 }
@@ -528,6 +520,62 @@ namespace LiteMonitor.src.SystemServices
             }
         }
 
+        /// <summary>
+        /// 计算显存占用百分比。
+        /// key 形如 "GPU.VRAM" (旧) 或 "GPU.1.VRAM" (多卡), 由此派生出 Used / Total 子 Key。
+        /// </summary>
+        private float? GetGpuVramPercent(string key)
+        {
+            // "GPU.VRAM" -> "GPU." ; "GPU.1.VRAM" -> "GPU.1."
+            string prefix = key.Substring(0, key.Length - "VRAM".Length);
+
+            float? used = GetValue(prefix + "VRAM.Used");
+            float? total = GetValue(prefix + "VRAM.Total");
+            if (used.HasValue && total.HasValue && total > 0)
+            {
+                // ★★★ 单位归一化: LHM 0.9.x 报的是 MB, 新版 LHM 报的是字节 ★★★
+                // 阈值 10485760 MB 实际不可能出现, 所以命中即代表单位是字节
+                if (total > 10485760) { used /= 1048576f; total /= 1048576f; }
+
+                // 现在 total 的单位是 MB
+                float gb = total.Value / 1024f;
+
+                // 旧单卡缓存 (保留原有语义)
+                if (Settings.DetectedGpuVramTotalGB <= 0 && gb > 0 && gb < 1024)
+                {
+                    Settings.DetectedGpuVramTotalGB = gb;
+                }
+
+                // ★★★ [多显卡] 每张卡单独记录自己的显存总容量 ★★★
+                string cardKey = prefix.TrimEnd('.');
+                if (gb > 0 && gb < 1024 && !Settings.DetectedGpuVramTotalGBByKey.ContainsKey(cardKey))
+                {
+                    Settings.DetectedGpuVramTotalGBByKey[cardKey] = gb;
+                }
+
+                return used / total * 100f;
+            }
+
+            if (_manualSensorCache.TryGetValue(prefix + "VRAM.Load", out var s) && s.Value.HasValue) return s.Value;
+            return null;
+        }
+
+        /// <summary>
+        /// 读取风扇/泵读数并记录峰值。
+        /// 同时支持旧格式 ("CPU.Fan" / "GPU.Fan") 与多卡格式 ("GPU.0.Fan") ——
+        /// 带序号的 Key 必须走这里, 否则不会触发 UpdateMaxRecord, 每卡峰值永远记不上。
+        /// </summary>
+        private float? ReadFanValue(string key)
+        {
+            float? result = null;
+            if (_manualSensorCache.TryGetValue(key, out var sFan))
+            {
+                result = sFan.Value;
+            }
+            if (result.HasValue && result.Value < 10000f)
+                _cfg.UpdateMaxRecord(key, result.Value);
+            return result;
+        }
         private float? ReadMoboTemperature(ISensor sensor)
         {
             bool manualSensor = IsManualMoboTemperatureSelected();
