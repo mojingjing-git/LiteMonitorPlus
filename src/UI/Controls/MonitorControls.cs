@@ -339,6 +339,14 @@ namespace LiteMonitor.src.UI.Controls
     {
         public string GroupKey { get; private set; }
         public LiteUnderlineInput InputAlias { get; private set; }
+        /// <summary>
+        /// 输入框的初始文本 (用户上次保存的别名, 或分组默认标题)。
+        ///
+        /// 保存时必须用它判断「用户到底改没改」, 不能拿「当前默认标题」去比:
+        /// 默认标题会随硬件刷新变化 (显卡简称可能在设置页打开之后才拿到),
+        /// 拿它当基准会把「用户没动过」误判成「用户改过」, 把默认值固化成别名。
+        /// </summary>
+        public string InputInitial { get; private set; } = "";
         private LiteCheck _chkAll; // [需求2] 增加组开关
         public event EventHandler MoveUp;
         public event EventHandler MoveDown;
@@ -359,10 +367,14 @@ namespace LiteMonitor.src.UI.Controls
                 ForeColor = Color.Gray 
             };
 
-            string defGName = LanguageManager.T("Groups." + groupKey);
-            if (defGName.StartsWith("Groups.")) defGName = groupKey;
-            
-            InputAlias = new LiteUnderlineInput(string.IsNullOrEmpty(alias) ? defGName : alias, "", "", 100) 
+            // ★★★ [按卡拆组] 默认标题统一走 GroupTitleResolver:
+            //   按卡分组的默认标题是显卡简称 ("3080 Ti"), 不是语言包里的 "GPU"。
+            //   另: 原来的 "Groups." 前缀守卫是死代码 ——
+            //   LanguageManager.GetOriginal 回退时返回的是 key 的后缀, 永远不会以 "Groups." 开头。
+            string defGName = GroupTitleResolver.GetDefaultTitle(groupKey);
+            InputInitial = string.IsNullOrEmpty(alias) ? defGName : alias;
+
+            InputAlias = new LiteUnderlineInput(InputInitial, "", "", 100) 
             { Location = new Point(MonitorLayout.X_COL2, UIUtils.S(8)) };
             InputAlias.SetBg(UIColors.GroupHeader); 
             InputAlias.Inner.Font = UIFonts.Bold(9F);

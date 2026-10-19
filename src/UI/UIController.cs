@@ -194,6 +194,14 @@ namespace LiteMonitor
                     RebuildLayout();
                 }
 
+                // ★★★ [按卡拆组] 就地刷新分组标题 ★★★
+                //   面板的分组标题在 BuildMetrics() 里算好并缓存进 GroupLayoutInfo.Label,
+                //   而 BuildMetrics() 在 UIController 构造时就跑完了 —— 那时硬件还没初始化完,
+                //   GpuRegistry 里拿不到显卡简称, 标题只能是 "GPU.0" / "GPU.1"。
+                //   硬件是异步初始化的, 如果不在这里刷新, 冷启动就永远看不到 "3080 Ti" 这种标题。
+                //   标题只参与绘制 (画在 gr.Bounds 之上), 不参与布局计算 -> 只改 Label 即可。
+                RefreshPerCardGroupTitles();
+
                 // ① 更新竖屏 items
                 foreach (var g in _groups)
                     foreach (var it in g.Items)
@@ -293,9 +301,7 @@ namespace LiteMonitor
                 if (groupKey != currentGroupKey && currentGroupList.Count > 0)
                 {
                     var gr = new GroupLayoutInfo(currentGroupKey, currentGroupList);
-                    string gName = LanguageManager.T(UIUtils.Intern("Groups." + currentGroupKey));
-                    if (_cfg.GroupAliases.ContainsKey(currentGroupKey)) gName = _cfg.GroupAliases[currentGroupKey];
-                    
+                    string gName = GroupTitleResolver.Resolve(_cfg, currentGroupKey);
                     gr.Label = gName;
                     _groups.Add(gr);
                     currentGroupList = new List<MetricItem>();
@@ -343,12 +349,36 @@ namespace LiteMonitor
             if (currentGroupList.Count > 0)
             {
                 var gr = new GroupLayoutInfo(currentGroupKey, currentGroupList);
-                string gName = LanguageManager.T(UIUtils.Intern("Groups." + currentGroupKey));
-                 if (_cfg.GroupAliases.ContainsKey(currentGroupKey)) gName = _cfg.GroupAliases[currentGroupKey];
-                
+                string gName = GroupTitleResolver.Resolve(_cfg, currentGroupKey);
                 gr.Label = gName;
                 _groups.Add(gr);
             }
+        }
+
+        /// <summary>
+        /// 就地刷新「按卡分组」的标题。
+        ///
+        /// 背景: 面板的分组标题在 BuildMetrics() 里算好并缓存到 GroupLayoutInfo.Label,
+        ///   而 BuildMetrics() 在 UIController 构造时就跑完了 —— 那时硬件还没初始化完,
+        ///   GpuRegistry 里拿不到显卡简称, 标题只能是 "GPU.0" / "GPU.1"。
+        ///   硬件是异步初始化的, 如果不刷新, 冷启动就永远看不到 "3080 Ti" 这种标题。
+        ///
+        /// 只处理按卡分组: 其余分组的标题是静态的 (语言包 / 用户别名), 不会随时间变化。
+        /// </summary>
+        private void RefreshPerCardGroupTitles()
+        {
+            bool changed = false;
+            foreach (var gr in _groups)
+            {
+                if (!GpuGroupPolicy.TryGetCardIndex(gr.GroupName, out _)) continue;
+                string title = GroupTitleResolver.Resolve(_cfg, gr.GroupName);
+                if (!string.Equals(gr.Label, title, StringComparison.Ordinal))
+                {
+                    gr.Label = title;
+                    changed = true;
+                }
+            }
+            if (changed) _form.Invalidate();
         }
 
         private void BuildHorizontalColumns()

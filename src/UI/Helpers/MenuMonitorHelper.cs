@@ -236,8 +236,7 @@ namespace LiteMonitor.src.UI.Helpers
                 foreach (var g in groups)
                 {
                     // 分组标题
-                    string gName = LanguageManager.T(UIUtils.Intern("Groups." + g.Key));
-                    if (cfg.GroupAliases.ContainsKey(g.Key)) gName = cfg.GroupAliases[g.Key];
+                    string gName = GroupTitleResolver.Resolve(cfg, g.Key);
                     
                     if (g.Key == "BAT")
                     {

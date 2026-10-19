@@ -16,14 +16,32 @@ namespace LiteMonitor.src.Core
             if (!string.IsNullOrEmpty(config.UserLabel)) 
                 return config.UserLabel;
 
-            // 2. [多显卡] 标签带上显卡简称, 例如 "3080 Ti 温度"
+            // 2. [多显卡] 显卡项的标签
+            //    ★ [按卡拆组] 组标题已经标明「这是哪张卡」, 项标签再带一遍显卡简称
+            //      就是重复 (面板会变成 "3080 Ti" / "3080 Ti 温度"), 所以拆组模式下
+            //      只取基础标签 ("温度")。
+            //    ★ 语言包没有该条目时 (例如自建的 "GPU.0.Custom"), T() 会回退成原始 Key
+            //      ("GPU.Custom"), 这时**必须**继续往下走动态标签分支 ——
+            //      否则插件 / InfoService 注入的标签会被原始 Key 顶掉。
             if (GpuKey.TryParse(config.Key, out int gpuIndex, out string metric))
             {
-                string shortName = GpuRegistry.GetShortName(gpuIndex);
-                if (!string.IsNullOrEmpty(shortName))
+                string baseKey = GpuKey.BaseKey(metric);                   // "GPU.Load"
+                string baseLabel = LanguageManager.T(UIUtils.Intern("Items." + baseKey));
+                bool translated = !string.Equals(baseLabel, baseKey, StringComparison.Ordinal);
+
+                if (GpuGroupPolicy.SplitPerCard)
                 {
-                    string baseLabel = LanguageManager.T(UIUtils.Intern("Items." + GpuKey.BaseKey(metric)));
-                    return $"{shortName} {StripGpuPrefix(baseLabel)}".Trim();
+                    if (translated) return StripGpuPrefix(baseLabel);
+                    // 未翻译 -> 继续往下走动态标签分支
+                }
+                else
+                {
+                    string shortName = GpuRegistry.GetShortName(gpuIndex);
+                    if (!string.IsNullOrEmpty(shortName))
+                    {
+                        return $"{shortName} {StripGpuPrefix(baseLabel)}".Trim();
+                    }
+                    // 简称还没拿到 -> 继续往下走动态标签分支 (与旧行为一致)
                 }
             }
 

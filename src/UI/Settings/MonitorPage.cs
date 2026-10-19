@@ -497,12 +497,27 @@ namespace LiteMonitor.src.UI.SettingsPage
                 var blocks = _container.Controls.Cast<Control>().Reverse().OfType<GroupBlock>();
                 foreach (var block in blocks)
                 {
-                    string alias = block.Header.InputAlias.Inner.Text.Trim();
-                    string defName = LanguageManager.T("Groups." + block.Header.GroupKey);
-                    if (!string.IsNullOrEmpty(alias) && alias != defName) 
-                        Config.GroupAliases[block.Header.GroupKey] = alias;
-                    else 
+                    // ★★★ [按卡拆组] 判定基准是「输入框初值」, 不是「当前默认标题」 ★★★
+                    //   Task 3.3 把初值改成了显卡简称之后, 如果这里还拿「当前默认标题」比,
+                    //   用户什么都没改就会把当时的简称写进 GroupAliases 并永久固化
+                    //   (标题从此不再跟随显卡简称变化)。
+                    string input = block.Header.InputAlias.Inner.Text.Trim();
+                    string initial = block.Header.InputInitial;
+
+                    if (string.Equals(input, initial, StringComparison.Ordinal))
+                    {
+                        // 用户没动过 -> GroupAliases 保持原样 (既有的别名不删, 也没有的不加)
+                    }
+                    else if (!string.IsNullOrEmpty(input))
+                    {
+                        // 用户改过 -> 保存新别名
+                        Config.GroupAliases[block.Header.GroupKey] = input;
+                    }
+                    else
+                    {
+                        // 用户清空了 -> 回到分组默认标题
                         Config.GroupAliases.Remove(block.Header.GroupKey);
+                    }
 
                     foreach (MonitorItemRow row in block.RowsPanel.Controls.Cast<Control>().Reverse())
                         row.Config.SortIndex = idx++;
