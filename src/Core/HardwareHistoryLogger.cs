@@ -188,14 +188,26 @@ namespace LiteMonitor.src.Core
 
         private static IEnumerable<string> GetEnabledSupportedKeys(Settings cfg)
         {
+            // 用 HashSet 去重 —— 同一个 key 出现两次会让采样值被重复累加
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (string key in _supportedKeys)
             {
                 bool enabled = cfg.MonitorItems.Any(item =>
                     item.Key.Equals(key, StringComparison.OrdinalIgnoreCase) &&
                     (item.VisibleInPanel || item.VisibleInTaskbar));
 
-                if (enabled) yield return key;
+                if (enabled) result.Add(key);
             }
+
+            // ★★★ [多显卡] 带序号的显卡 Key (如 "GPU.1.Temp") 也要记录 ★★★
+            foreach (var item in cfg.MonitorItems)
+            {
+                if (!(item.VisibleInPanel || item.VisibleInTaskbar)) continue;
+                if (GpuKey.TryParse(item.Key, out _, out _)) result.Add(item.Key);
+            }
+
+            return result;
         }
 
         private static bool IsValidValue(string key, float v)
