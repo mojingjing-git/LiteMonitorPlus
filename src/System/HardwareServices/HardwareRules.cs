@@ -95,6 +95,7 @@ namespace LiteMonitor.src.SystemServices
             
             return false;
         }
+
         /// <summary>
         /// 从显卡全名提取简短显示名, 用于多显卡监控时区分不同显卡。
         /// "NVIDIA GeForce RTX 3080 Ti" -> "3080 Ti"
