@@ -177,10 +177,13 @@ namespace LiteMonitor.src.WebServer
                     if (displayName.StartsWith("Items.")) displayName = displayName.Split('.')[1];
                 }
                 
-                string groupId = item.UIGroup.ToUpper();
-                // [Optimization] Use cached keys
-                string groupsKey = !string.IsNullOrEmpty(item.CachedGroupsKey) ? item.CachedGroupsKey : UIUtils.Intern("Groups." + item.UIGroup);
-                string groupDisplay = LanguageManager.T(groupsKey);
+                // ★★★ [按卡拆组] gid 会被前端拼进 DOM id 和 querySelector 选择器,
+                //   "GPU.0" 里的点号是非法 CSS 选择器字符 (会被当成 class, 而 class 不能以数字开头),
+                //   querySelector 会抛 DOMException 导致整个网页端白屏 -> 必须先消毒成 "GPU_0"。
+                //   (已用 headless Chrome 实测: '#rw-GPU.0' 抛 SyntaxError, render() 中断。)
+                string groupId = GroupTitleResolver.ToSafeGroupId(item.UIGroup);
+                // 分组标题统一走 GroupTitleResolver, 保证与桌面端一致 (别名 / 显卡简称)。
+                string groupDisplay = GroupTitleResolver.Resolve(_cfg, item.UIGroup);
 
                 string valStr = "";
                 string unit = "";
