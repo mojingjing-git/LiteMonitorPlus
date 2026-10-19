@@ -294,7 +294,9 @@ namespace LiteMonitor
 
                 currentGroupKey = groupKey;
 
-                string label = LanguageManager.T(UIUtils.Intern("Items." + cfgItem.Key));
+                // ★★★ [多显卡] 带序号的 Key ("GPU.0.Load") 要回退到基础 Key ("GPU.Load") ★★★
+                // 否则语言包查不到时 LanguageManager 会回退成字面量 "GPU.0.Load"。
+                string label = LanguageManager.T(UIUtils.Intern("Items." + GpuKey.ToBaseKey(cfgItem.Key)));
                 var item = new MetricItem 
                 { 
                     Key = cfgItem.Key, 
@@ -305,7 +307,7 @@ namespace LiteMonitor
                 // 如果 BoundConfig.UserLabel 有值，Getter 会优先返回它
                 item.Label = label;
 
-                string defShort = LanguageManager.T(UIUtils.Intern("Short." + cfgItem.Key));
+                string defShort = LanguageManager.T(UIUtils.Intern("Short." + GpuKey.ToBaseKey(cfgItem.Key)));
                 item.ShortLabel = defShort;
 
                 
@@ -409,10 +411,10 @@ namespace LiteMonitor
             // 如果用户未定义 (null/empty)，则使用语言包中的默认值
             // 如果用户定义了 " " (空格)，则保留空格 (意味着隐藏标签)
             
-            string defLabel = LanguageManager.T(UIUtils.Intern("Items." + cfg.Key));
+            string defLabel = LanguageManager.T(UIUtils.Intern("Items." + GpuKey.ToBaseKey(cfg.Key)));
             item.Label = defLabel; // 设为默认值，BoundConfig 会负责处理覆盖
 
-            string defShort = LanguageManager.T(UIUtils.Intern("Short." + cfg.Key));
+            string defShort = LanguageManager.T(UIUtils.Intern("Short." + GpuKey.ToBaseKey(cfg.Key)));
             item.ShortLabel = defShort;
 
 
