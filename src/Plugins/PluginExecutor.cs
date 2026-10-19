@@ -63,7 +63,7 @@ namespace LiteMonitor.src.Plugins
                     MaxConnectionsPerServer = 20
                 });
                 _http.Timeout = TimeSpan.FromSeconds(10); 
-                _http.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor/1.0");
+                _http.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor++/1.0");
             }
         }
 
@@ -448,7 +448,7 @@ namespace LiteMonitor.src.Plugins
                 
                 var client = new HttpClient(handler);
                 client.Timeout = TimeSpan.FromSeconds(10);
-                client.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor/1.0");
+                client.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor++/1.0");
                 return client;
             });
         }

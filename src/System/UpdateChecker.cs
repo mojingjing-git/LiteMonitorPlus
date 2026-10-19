@@ -15,7 +15,7 @@ using System.IO.Compression;
 namespace LiteMonitor
 {
     /// <summary>
-    /// LiteMonitor 自动更新模块（最终完整版）
+    /// LiteMonitor++ 自动更新模块
     /// - version.json 支持国内 / GitHub 两源自动 fallback
     /// - ZIP 下载支持两源测速自动选择最快
     /// - ZIP 下载完成后，主程序抢先更新 Updater.exe，防止自更新死锁
@@ -348,7 +348,7 @@ namespace LiteMonitor
 
                 // 2. 杀掉所有残留的 Updater 进程 (防止占用)
                 // 涵盖新旧两个名字
-                string[] updaterNames = { "Updater", "LiteMonitor.Updater" };
+                string[] updaterNames = { "Updater", "LiteMonitor++.Updater" };
                 foreach (var name in updaterNames)
                 {
                     foreach (var p in Process.GetProcessesByName(name))
@@ -374,7 +374,7 @@ namespace LiteMonitor
                 {
                     // 优先找新版
                     var entry = archive.Entries.FirstOrDefault(e => 
-                        e.FullName.EndsWith("LiteMonitor.Updater.exe", StringComparison.OrdinalIgnoreCase));
+                        e.FullName.EndsWith("LiteMonitor++.Updater.exe", StringComparison.OrdinalIgnoreCase));
                     
                     // 没找到则找旧版
                     if (entry == null)

@@ -378,7 +378,7 @@ namespace LiteMonitor
             else
             {
                 // B. 预更新失败 (ZIP异常?)，尝试回退到现有文件
-                string newUpdater = Path.Combine(resourcesDir, "LiteMonitor.Updater.exe");
+                string newUpdater = Path.Combine(resourcesDir, "LiteMonitor++.Updater.exe");
                 string oldUpdater = Path.Combine(resourcesDir, "Updater.exe");
 
                 if (File.Exists(newUpdater)) updater = newUpdater;

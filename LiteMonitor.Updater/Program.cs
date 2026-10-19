@@ -10,7 +10,7 @@ namespace LiteMonitor.Updater
 {
     internal class Program
     {
-        private const string ExeName = "LiteMonitor.exe";
+        private const string ExeName = "LiteMonitor++.exe";
 
         static void Main(string[] args)
         {
@@ -29,7 +29,7 @@ namespace LiteMonitor.Updater
 
             if (baseDir == null)
             {
-                LogError(resourcesDir, "[Fatal] 找不到 LiteMonitor.exe，更新终止！");
+                LogError(resourcesDir, "[Fatal] 找不到 LiteMonitor++.exe，更新终止！");
                 return;
             }
 
@@ -43,7 +43,7 @@ namespace LiteMonitor.Updater
             Thread.Sleep(1000); 
 
             // ===========================================================
-            // 3. 解压到 LiteMonitor/_update_tmp 目录
+            // 3. 解压到 LiteMonitor++/_update_tmp 目录
             // ===========================================================
             string tempDir = Path.Combine(baseDir, "_update_tmp");
 
@@ -81,9 +81,9 @@ namespace LiteMonitor.Updater
                     // 逻辑：主程序 (PreUpdateUpdater) 已经在 Updater 启动前完成了 Updater 的更新。
                     // 因此，Updater 运行时，它自己已经是最新版，无需再次覆盖。
                     // 直接跳过，避免“文件正在使用”错误。
-                    // 兼容旧版 Updater.exe 和新版 LiteMonitor.Updater.exe
+                    // 兼容旧版 Updater.exe 和新版 LiteMonitor++.Updater.exe
                     if (rel.EndsWith("Updater.exe", StringComparison.OrdinalIgnoreCase) || 
-                        rel.EndsWith("LiteMonitor.Updater.exe", StringComparison.OrdinalIgnoreCase))
+                        rel.EndsWith("LiteMonitor++.Updater.exe", StringComparison.OrdinalIgnoreCase))
                     {
                         continue; 
                     }
@@ -109,7 +109,7 @@ namespace LiteMonitor.Updater
             try { File.Delete(zipFile); } catch { }
 
             // ===========================================================
-            // 7. 重启 LiteMonitor
+            // 7. 重启 LiteMonitor++
             // ===========================================================
             RestartMain(baseDir);
         }
@@ -186,7 +186,7 @@ namespace LiteMonitor.Updater
             return false;
         }
 
-        private static bool ContainsLiteMonitorExe(string dir)
+        private static bool ContainsMainExe(string dir)
         {
             return Directory.GetFiles(dir, "*", SearchOption.TopDirectoryOnly)
                             .Any(f => Path.GetFileName(f)
@@ -209,11 +209,11 @@ namespace LiteMonitor.Updater
             // 先检查 resourcesDir 的上级目录
             DirectoryInfo? current = new DirectoryInfo(resourcesDir).Parent;
 
-            if (current != null && ContainsLiteMonitorExe(current.FullName))
+            if (current != null && ContainsMainExe(current.FullName))
                 return current.FullName;
 
             // 再检查当前目录（便携版）
-            if (ContainsLiteMonitorExe(resourcesDir))
+            if (ContainsMainExe(resourcesDir))
                 return resourcesDir;
 
             return null;

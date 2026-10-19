@@ -52,7 +52,7 @@ namespace LiteMonitor.src.Plugins.Native
             };
             var client = new HttpClient(handler);
             client.Timeout = TimeSpan.FromSeconds(12);
-            client.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor/1.0");
+            client.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor++/1.0");
             return client;
         }
 

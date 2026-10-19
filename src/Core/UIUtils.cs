@@ -7,7 +7,7 @@ using System.Linq;
 namespace LiteMonitor.src.Core
 {
     /// <summary>
-    /// LiteMonitor UI Utilities (Refactored)
+    /// LiteMonitor++ UI Utilities (Refactored)
     /// Logic delegated to MetricUtils.
     /// This class now focuses on GDI+ Rendering helpers and Resource Management.
     /// </summary>

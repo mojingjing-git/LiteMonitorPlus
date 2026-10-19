@@ -17,7 +17,7 @@ namespace LiteMonitor
     public static class MenuManager
     {
         /// <summary>
-        /// 构建 LiteMonitor 主菜单（右键菜单 + 托盘菜单）
+        /// 构建 LiteMonitor++ 主菜单（右键菜单 + 托盘菜单）
         /// </summary>
         public static ContextMenuStrip Build(MainForm form, Settings cfg, UIController? ui, string targetPage = null)
         {

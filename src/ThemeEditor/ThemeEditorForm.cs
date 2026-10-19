@@ -8,7 +8,7 @@ using LiteMonitor.src.Core;
 namespace LiteMonitor.ThemeEditor
 {
     /// <summary>
-    /// LiteMonitor 主题编辑器主窗口
+    /// LiteMonitor++ 主题编辑器主窗口
     /// 左侧：主题管理
     /// 中间：TabControl（Layout / Font / Colors / Threshold）
     /// 右侧：ThemePreviewControl（实时预览）

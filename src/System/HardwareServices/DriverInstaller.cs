@@ -125,7 +125,7 @@ namespace LiteMonitor.src.SystemServices
                 }
 
                 var pawnIOCheck = CheckPawnIORequirement();
-                string fpsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "resources", "LiteMonitorFPS.exe");
+                string fpsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "resources", "LiteMonitorPlusFPS.exe");
                 bool isFpsEnabled = _cfg.IsAnyEnabled("FPS");
                 bool isFpsValid = IsValidExecutable(fpsPath);
                 
@@ -150,9 +150,9 @@ namespace LiteMonitor.src.SystemServices
                     {
                         _runtimeLegacyPawnIOPromptShown = true;
                         ShowMessageBox(IsChinese
-                                ? "检测到 PawnIO 驱动版本过旧，当前运行状态下不会卸载驱动。\n请重启 LiteMonitor，并在启动时完成驱动升级。"
-                                : "An older PawnIO driver was detected. LiteMonitor will not uninstall the driver while running.\nPlease restart LiteMonitor and complete the driver update during startup.",
-                            IsChinese ? "需要重启软件" : "Restart LiteMonitor Required",
+                                ? "检测到 PawnIO 驱动版本过旧，当前运行状态下不会卸载驱动。\n请重启 LiteMonitor++，并在启动时完成驱动升级。"
+                                : "An older PawnIO driver was detected. LiteMonitor++ will not uninstall the driver while running.\nPlease restart LiteMonitor++ and complete the driver update during startup.",
+                            IsChinese ? "需要重启软件" : "Restart LiteMonitor++ Required",
                             MessageBoxIcon.Information);
                     }
 
@@ -202,14 +202,14 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         private async Task<bool> InstallFpsComponent()
         {
-            string targetPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "resources", "LiteMonitorFPS.exe");
+            string targetPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "resources", "LiteMonitorPlusFPS.exe");
             
             var context = new DownloadContext
             {
                 Title = IsChinese ? "检测到缺失FPS组件" : "FPS Monitor Component Missing",
                 Description = IsChinese 
                     ? "您开启了FPS监控，但检测到 FPS 监控组件缺失。\n需要安装该组件来支持 FPS 帧率显示功能。\n点击“立即安装”自动获取并安装。"
-                    : "FPS Monitor Component Missing.\nLiteMonitor needs to download an additional component to support FPS monitoring.\nClick 'Install' to proceed.",
+                    : "FPS Monitor Component Missing.\nLiteMonitor++ needs to download an additional component to support FPS monitoring.\nClick 'Install' to proceed.",
                 Urls = _presentMonUrls,
                 SavePath = targetPath,
                 ActionButtonText = "Install",
@@ -247,7 +247,7 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         private async Task<bool> InstallDriverPackage(bool needFPS, PawnIOCheckResult pawnIOCheck, DriverInstallMode mode)
         {
-            string tempZip = Path.Combine(Path.GetTempPath(), $"LiteMonitor_Drivers_{Guid.NewGuid()}.zip");
+            string tempZip = Path.Combine(Path.GetTempPath(), $"LiteMonitor++_Drivers_{Guid.NewGuid()}.zip");
             string targetDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "resources");
             
             try 
@@ -333,7 +333,7 @@ namespace LiteMonitor.src.SystemServices
                         string destPath = Path.Combine(targetDir, entry.FullName);
                         
                         // 智能跳过逻辑：FPS 组件如果存在且有效则不覆盖
-                        if (entry.Name.Equals("LiteMonitorFPS.exe", StringComparison.OrdinalIgnoreCase) && IsValidExecutable(destPath))
+                        if (entry.Name.Equals("LiteMonitorPlusFPS.exe", StringComparison.OrdinalIgnoreCase) && IsValidExecutable(destPath))
                         {
                             Debug.WriteLine($"[安装程序] 跳过 {entry.Name} (文件存在且有效)");
                             continue; 
@@ -348,7 +348,7 @@ namespace LiteMonitor.src.SystemServices
                         {
                             entry.ExtractToFile(destPath, true);
                         }
-                        catch (IOException) when (entry.Name.Equals("LiteMonitorFPS.exe", StringComparison.OrdinalIgnoreCase))
+                        catch (IOException) when (entry.Name.Equals("LiteMonitorPlusFPS.exe", StringComparison.OrdinalIgnoreCase))
                         {
                             // 忽略 FPS 文件锁定错误
                             Debug.WriteLine($"[安装程序] 无法覆盖 {entry.Name} (文件被锁定)。保留现有版本。");
@@ -414,8 +414,8 @@ namespace LiteMonitor.src.SystemServices
                 if (uninstallResult != DriverOperationResult.Success)
                 {
                     ShowMessageBox(IsChinese
-                            ? "旧版 PawnIO 驱动自动卸载失败，本次不会继续安装新版驱动。\n请重启电脑后再打开 LiteMonitor 重试。"
-                            : "Failed to uninstall the old PawnIO driver. The new driver will not be installed now.\nPlease restart Windows and open LiteMonitor again.",
+                            ? "旧版 PawnIO 驱动自动卸载失败，本次不会继续安装新版驱动。\n请重启电脑后再打开 LiteMonitor++ 重试。"
+                            : "Failed to uninstall the old PawnIO driver. The new driver will not be installed now.\nPlease restart Windows and open LiteMonitor++ again.",
                         IsChinese ? "驱动更新失败" : "Driver Update Failed",
                         MessageBoxIcon.Warning);
                     return false;
@@ -470,9 +470,9 @@ namespace LiteMonitor.src.SystemServices
                 else
                 {
                     ShowMessageBox(IsChinese
-                            ? "检测到旧版 PawnIO 驱动仍存在，当前运行状态下无法覆盖升级。\n请重启软件，让 LiteMonitor 在启动前完成驱动升级。"
-                            : "An older PawnIO driver already exists and cannot be upgraded while LiteMonitor is running.\nPlease restart LiteMonitor so the driver can be updated before hardware monitoring starts.",
-                        IsChinese ? "需要重新启动软件" : "Restart LiteMonitor Required",
+                            ? "检测到旧版 PawnIO 驱动仍存在，当前运行状态下无法覆盖升级。\n请重启软件，让 LiteMonitor++ 在启动前完成驱动升级。"
+                            : "An older PawnIO driver already exists and cannot be upgraded while LiteMonitor++ is running.\nPlease restart LiteMonitor++ so the driver can be updated before hardware monitoring starts.",
+                        IsChinese ? "需要重新启动软件" : "Restart LiteMonitor++ Required",
                         MessageBoxIcon.Warning);
                 }
 
@@ -485,8 +485,8 @@ namespace LiteMonitor.src.SystemServices
                 {
                     _shouldExitAfterDriverOperation = true;
                     ShowMessageBox(IsChinese
-                            ? "旧版 PawnIO 驱动已卸载，但新版驱动安装失败。\n请重启电脑后再打开 LiteMonitor 重试。"
-                            : "The old PawnIO driver was uninstalled, but the new driver installation failed.\nPlease restart Windows and open LiteMonitor again.",
+                            ? "旧版 PawnIO 驱动已卸载，但新版驱动安装失败。\n请重启电脑后再打开 LiteMonitor++ 重试。"
+                            : "The old PawnIO driver was uninstalled, but the new driver installation failed.\nPlease restart Windows and open LiteMonitor++ again.",
                         IsChinese ? "驱动更新未完成" : "Driver Update Incomplete",
                         MessageBoxIcon.Warning);
                     return false;
@@ -692,7 +692,7 @@ namespace LiteMonitor.src.SystemServices
 
             return IsChinese
                 ? "电脑缺失CPU的PawnIO驱动\n软件将无法获取CPU的温度/频率/功耗等数据 \n点击“立即安装”自动获取并安装（约3MB）\n\n安装完成后即可自动恢复CPU监控等功能。"
-                : "LiteMonitor needs to install the driver to monitor CPU temperature, frequency, and power consumption.\nClick 'Install' to install.";
+                : "LiteMonitor++ needs to install the driver to monitor CPU temperature, frequency, and power consumption.\nClick 'Install' to install.";
         }
 
         private string GetPawnIOVersionLabel(PawnIOCheckResult check)
@@ -801,8 +801,8 @@ namespace LiteMonitor.src.SystemServices
         private void ShowPawnIORestartRequiredMessage(string description)
         {
             ShowMessageBox(description + (IsChinese
-                    ? "\n请重启电脑后再打开 LiteMonitor。"
-                    : "\nPlease restart Windows before opening LiteMonitor again."),
+                    ? "\n请重启电脑后再打开 LiteMonitor++。"
+                    : "\nPlease restart Windows before opening LiteMonitor++ again."),
                 IsChinese ? "需要重启" : "Restart Required",
                 MessageBoxIcon.Information);
         }

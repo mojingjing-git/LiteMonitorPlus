@@ -177,7 +177,7 @@ namespace LiteMonitor.src.Plugins.Native
                     {
                         // 设置超时
                         client.Timeout = TimeSpan.FromSeconds(15);
-                        client.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor/1.0");
+                        client.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor++/1.0");
                         
                         json = await client.GetStringAsync(JSON_DB_URL);
                     }

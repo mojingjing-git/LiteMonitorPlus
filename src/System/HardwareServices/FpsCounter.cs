@@ -64,7 +64,7 @@ namespace LiteMonitor.src.SystemServices
         // ★★★ [新增] 排除进程列表，减少字符串比较开销 ★★★
         private static readonly HashSet<string> ExcludedProcesses = new(StringComparer.OrdinalIgnoreCase) 
         { 
-            "LiteMonitor", "LiteMonitorFPS", "PresentMon", "Unknown" 
+            "LiteMonitor++", "LiteMonitorPlusFPS", "PresentMon", "Unknown" 
         };
         
         // 锁定机制变量，用于实现粘性锁定逻辑
@@ -73,7 +73,7 @@ namespace LiteMonitor.src.SystemServices
         private int _pendingCount = 0;          // 待切换进程的连续领先周期数
 
         // PresentMon 会话名称
-        private const string SESSION_NAME = "LiteMonitor_Golden_Session";
+        private const string SESSION_NAME = "LiteMonitor++_Golden_Session";
         
         // 累计窗口大小：4次采样 = 2.0秒（抹平 GpuTest 波动）
         private const int ACCUMULATOR_SIZE = 4;
@@ -85,7 +85,7 @@ namespace LiteMonitor.src.SystemServices
         private static readonly string BaseDir = AppDomain.CurrentDomain.BaseDirectory; // 使用 AppDomain 确保准确
         // ★★★ [修改] 统一路径到 resources/assets ★★★
         private static readonly string AssetDir = Path.Combine(BaseDir, "resources");
-        private static readonly string ExePath = Path.Combine(AssetDir, "LiteMonitorFPS.exe");
+        private static readonly string ExePath = Path.Combine(AssetDir, "LiteMonitorPlusFPS.exe");
         private static readonly string LogPath = Path.Combine(BaseDir, "fps_debug.log");
         
         /// <summary>
@@ -546,10 +546,10 @@ namespace LiteMonitor.src.SystemServices
 
             try
             {
-                // 1. 优先终止所有名为 LiteMonitorFPS 的进程 (最重要)
-                foreach (var p in Process.GetProcessesByName("LiteMonitorFPS")) { try { p.Kill(); } catch { } }
+                // 1. 优先终止所有名为 LiteMonitorPlusFPS 的进程 (最重要)
+                foreach (var p in Process.GetProcessesByName("LiteMonitorPlusFPS")) { try { p.Kill(); } catch { } }
                 
-                // 2. 停止 LiteMonitorFPS 会话
+                // 2. 停止 LiteMonitorPlusFPS 会话
                 // 仅在 CLR 未关闭时尝试调用 logman，避免在程序退出极晚期引发异常
                 if (!Environment.HasShutdownStarted)
                 {

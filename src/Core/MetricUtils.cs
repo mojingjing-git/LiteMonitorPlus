@@ -21,7 +21,7 @@ namespace LiteMonitor.src.Core
     }
 
     /// <summary>
-    /// LiteMonitor 核心指标处理工具
+    /// LiteMonitor++ 核心指标处理工具
     /// 包含：类型解析、数据格式化、阈值评估、状态管理
     /// </summary>
     public static class MetricUtils

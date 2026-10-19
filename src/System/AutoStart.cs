@@ -9,7 +9,40 @@ namespace LiteMonitor.src.SystemServices
 {
     public static class AutoStart
     {
-        private const string TaskName = "LiteMonitor_AutoStart";
+        // 当前品牌的计划任务名
+        private const string TaskName = "LiteMonitor++_AutoStart";
+        // 品牌迁移前创建遗留的计划任务名。首次启用自启时需清理，
+        // 否则老用户升级后会同时存在新旧两个任务，导致开机启动两次。
+        private const string LegacyTaskName = "LiteMonitor_AutoStart";
+
+        /// <summary>
+        /// 删除旧品牌名（LiteMonitor_AutoStart）遗留的计划任务。
+        /// 任务不存在时 schtasks 返回非 0 退出码，属正常情况，静默忽略。
+        /// 清理失败不阻断自启设置。
+        /// </summary>
+        private static void DeleteLegacyTask()
+        {
+            if (string.IsNullOrEmpty(LegacyTaskName) ||
+                string.Equals(LegacyTaskName, TaskName, StringComparison.OrdinalIgnoreCase)) return;
+
+            try
+            {
+                var psi = new ProcessStartInfo("schtasks.exe", $"/Delete /TN \"{LegacyTaskName}\" /F")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                using var p = Process.Start(psi);
+                p?.WaitForExit(5000);
+                // 退出码非 0 = 任务不存在，属正常情况，无需提示
+            }
+            catch
+            {
+                // 清理失败不应阻断自启动设置
+            }
+        }
 
         public static void Set(bool enabled)
         {
@@ -31,8 +64,11 @@ namespace LiteMonitor.src.SystemServices
             {
                 if (IsEnabledForCurrentExe(exePath)) return;
 
+                // 清理旧品牌名遗留的计划任务（仅首次；任务不存在时 schtasks 返回非 0，忽略即可）
+                DeleteLegacyTask();
+
                 // 使用 XML 方案，这是唯一能同时满足 [不报PowerShell错误] + [实现电池启动] 的方案
-                string tempXmlPath = Path.Combine(Path.GetTempPath(), $"LiteMonitor_Task_{Guid.NewGuid()}.xml");
+                string tempXmlPath = Path.Combine(Path.GetTempPath(), $"LiteMonitor++_Task_{Guid.NewGuid()}.xml");
 
                 try
                 {
@@ -170,7 +206,7 @@ namespace LiteMonitor.src.SystemServices
                 new XElement(ns + "Task",
                     new XAttribute("version", "1.2"),
                     new XElement(ns + "RegistrationInfo",
-                        new XElement(ns + "Description", "LiteMonitor Auto Start")
+                        new XElement(ns + "Description", "LiteMonitor++ Auto Start")
                     ),
                     new XElement(ns + "Triggers",
                         new XElement(ns + "LogonTrigger",

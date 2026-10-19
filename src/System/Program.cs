@@ -133,7 +133,7 @@ namespace LiteMonitor
             try
             {
                 // 日志文件保存在程序运行目录下
-                string logPath = Path.Combine(AppContext.BaseDirectory, "LiteMonitor_Error.log");
+                string logPath = Path.Combine(AppContext.BaseDirectory, "LiteMonitor++_Error.log");
                 
                 string errorMsg = "==================================================\n" +
                                   $"[Time]: {DateTime.Now}\n" +
@@ -146,7 +146,7 @@ namespace LiteMonitor
 
                 // 只有真的崩了才弹窗提示用户
                 MessageBox.Show($"程序遇到致命错误！\n错误日志已保存至：{logPath}\n\n原因：{ex.Message}", 
-                                "LiteMonitor Crash", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                "LiteMonitor++ Crash", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch 
             {
