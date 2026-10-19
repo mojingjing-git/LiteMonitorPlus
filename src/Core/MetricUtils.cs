@@ -423,19 +423,31 @@ namespace LiteMonitor.src.Core
             var cfg = Settings.Load();
             float max = 1.0f;
 
-            if (key == "CPU.Clock") max = cfg.RecordedMaxCpuClock;
-            else if (key == "CPU.Power") max = cfg.RecordedMaxCpuPower;
-            else if (key == "GPU.Clock") max = cfg.RecordedMaxGpuClock;
-            else if (key == "GPU.Power") max = cfg.RecordedMaxGpuPower;
-            else if (key == "CPU.Fan") max = cfg.RecordedMaxCpuFan;
-            else if (key == "CPU.Pump") max = cfg.RecordedMaxCpuPump;
-            else if (key == "CASE.Fan") max = cfg.RecordedMaxChassisFan;
-            else if (key == "GPU.Fan") max = cfg.RecordedMaxGpuFan;
-            else if (key == "FPS") max = cfg.RecordedMaxFps;
-            else if (key == "CPU.Voltage") max = 1.6f;
-            else if (key == "BAT.Power") max = 100f;
-            else if (key == "BAT.Voltage") max = 20f;
-            else if (key == "BAT.Current") max = 5f;
+            // ★★★ [多显卡] 带序号的 Key ("GPU.1.Power") 归一化成基础 Key ("GPU.Power") ★★★
+            string baseKey = GpuKey.ToBaseKey(key);
+
+            if (baseKey == "CPU.Clock") max = cfg.RecordedMaxCpuClock;
+            else if (baseKey == "CPU.Power") max = cfg.RecordedMaxCpuPower;
+            else if (baseKey == "GPU.Clock") max = cfg.RecordedMaxGpuClock;
+            else if (baseKey == "GPU.Power") max = cfg.RecordedMaxGpuPower;
+            else if (baseKey == "CPU.Fan") max = cfg.RecordedMaxCpuFan;
+            else if (baseKey == "CPU.Pump") max = cfg.RecordedMaxCpuPump;
+            else if (baseKey == "CASE.Fan") max = cfg.RecordedMaxChassisFan;
+            else if (baseKey == "GPU.Fan") max = cfg.RecordedMaxGpuFan;
+            else if (baseKey == "FPS") max = cfg.RecordedMaxFps;
+            else if (baseKey == "CPU.Voltage") max = 1.6f;
+            else if (baseKey == "BAT.Power") max = 100f;
+            else if (baseKey == "BAT.Voltage") max = 20f;
+            else if (baseKey == "BAT.Current") max = 5f;
+
+            // ★★★ [多显卡] 该卡有独立峰值时优先使用, 让每张卡的进度条各自自适应 ★★★
+            if (key != baseKey
+                && cfg.RecordedMaxGpuDynamic != null
+                && cfg.RecordedMaxGpuDynamic.TryGetValue(key, out float dynMax)
+                && dynMax > 1f)
+            {
+                max = dynMax;
+            }
 
             if (max < 1) max = 1;
             double pct = val / max;
