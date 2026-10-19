@@ -15,8 +15,19 @@ namespace LiteMonitor.src.Core
             // 1. 用户自定义 (最高优先级)
             if (!string.IsNullOrEmpty(config.UserLabel)) 
                 return config.UserLabel;
-            
-            // 2. 运行时动态注入 (高优先级)
+
+            // 2. [多显卡] 标签带上显卡简称, 例如 "3080 Ti 温度"
+            if (GpuKey.TryParse(config.Key, out int gpuIndex, out string metric))
+            {
+                string shortName = GpuRegistry.GetShortName(gpuIndex);
+                if (!string.IsNullOrEmpty(shortName))
+                {
+                    string baseLabel = LanguageManager.T("Items." + GpuKey.BaseKey(metric));
+                    return $"{shortName} {StripGpuPrefix(baseLabel)}".Trim();
+                }
+            }
+
+            // 3. 运行时动态注入 (高优先级)
             // 插件运行过程中会实时向 InfoService 注入 PROP.Label.Key
             // [Optimization] Use cached key if available
             string dynKey = !string.IsNullOrEmpty(config.CachedPropLabelKey) 
@@ -51,7 +62,14 @@ namespace LiteMonitor.src.Core
             if (!string.IsNullOrEmpty(config.TaskbarLabel)) 
                 return config.TaskbarLabel;
 
-            // 2. 运行时动态注入
+            // 2. [多显卡] 任务栏用显卡简称区分 (数值单位已能区分指标: % / °C / W / GHz)
+            if (GpuKey.TryParse(config.Key, out int gpuIndex, out _))
+            {
+                string shortName = GpuRegistry.GetShortName(gpuIndex);
+                if (!string.IsNullOrEmpty(shortName)) return shortName;
+            }
+
+            // 3. 运行时动态注入
             string dynKey = !string.IsNullOrEmpty(config.CachedPropShortLabelKey)
                 ? config.CachedPropShortLabelKey
                 : "PROP.ShortLabel." + config.Key;
@@ -60,11 +78,26 @@ namespace LiteMonitor.src.Core
             if (!string.IsNullOrEmpty(dynVal)) 
                 return dynVal;
 
-            // 3. 配置中的动态标签
+            // 4. 配置中的动态标签
             if (!string.IsNullOrEmpty(config.DynamicTaskbarLabel)) 
                 return config.DynamicTaskbarLabel;
 
             return "";
+        }
+
+        /// <summary>
+        /// 去掉基础标签里的 "GPU" 前缀, 避免拼成 "3080 Ti GPU温度"。
+        /// "GPU温度" -> "温度" ; "GPU Load" -> "Load" ; "显存占用" -> "显存占用"
+        /// </summary>
+        private static string StripGpuPrefix(string label)
+        {
+            if (string.IsNullOrWhiteSpace(label)) return "";
+            string t = label.Trim();
+            if (t.StartsWith("GPU", StringComparison.OrdinalIgnoreCase))
+            {
+                t = t.Substring(3).Trim();
+            }
+            return t.Length > 0 ? t : label.Trim();
         }
     }
 }
