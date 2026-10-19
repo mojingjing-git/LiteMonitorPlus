@@ -642,10 +642,10 @@ namespace LiteMonitor.src.Plugins
                 }
 
                 // 4. Dynamic Label Logic
-                string labelPattern = !string.IsNullOrEmpty(output.Label) ? output.Label : (tmpl.Meta.Name + " " + output.Key);
+                string labelPattern = !string.IsNullOrEmpty(output.Label) ? PluginI18n.Pick(output.Label, output.LabelEn) : (PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key);
                 
                 string newName = PluginProcessor.ResolveTemplate(labelPattern, inputs);
-                string newShort = PluginProcessor.ResolveTemplate(output.ShortLabel ?? "", inputs);
+                string newShort = PluginProcessor.ResolveTemplate(PluginI18n.Pick(output.ShortLabel ?? "", output.ShortLabelEn ?? ""), inputs);
                 
                 // Apply default values for missing inputs in labels
                 if (tmpl.Inputs != null)
@@ -692,10 +692,10 @@ namespace LiteMonitor.src.Plugins
                     try 
                     {
                         string itemKey = PluginConstants.DASH_PREFIX + injectKey;
-                        string labelPattern = !string.IsNullOrEmpty(output.Label) ? output.Label : (tmpl.Meta.Name + " " + output.Key);
+                        string labelPattern = !string.IsNullOrEmpty(output.Label) ? PluginI18n.Pick(output.Label, output.LabelEn) : (PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key);
                         
                         string newName = PluginProcessor.ResolveTemplate(labelPattern, inputs);
-                        string newShort = PluginProcessor.ResolveTemplate(output.ShortLabel ?? "", inputs);
+                        string newShort = PluginProcessor.ResolveTemplate(PluginI18n.Pick(output.ShortLabel ?? "", output.ShortLabelEn ?? ""), inputs);
 
                         // Apply default values for missing inputs in labels
                         if (tmpl.Inputs != null)
@@ -726,7 +726,7 @@ namespace LiteMonitor.src.Plugins
                         try 
                         {
                             string itemKey = PluginConstants.DASH_PREFIX + injectKey;
-                            string fallback = !string.IsNullOrEmpty(output.Label) ? output.Label : (tmpl.Meta.Name + " " + output.Key);
+                            string fallback = !string.IsNullOrEmpty(output.Label) ? PluginI18n.Pick(output.Label, output.LabelEn) : (PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key);
                             
                             // Remove template markers to make it look cleaner if possible
                             if (fallback.Contains("{{")) 

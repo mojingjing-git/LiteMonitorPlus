@@ -72,7 +72,24 @@ It supports horizontal/vertical display, multiple languages, theme switching, tr
 
 ---
 
-## Multilingual Support
+## Plugin Market
+
+Settings → Plugin Market lets you install community plugins with one click.
+
+| Item | Details |
+|---|---|
+| Source | Fixed to [awesome-litemonitor-plugins](https://github.com/mojingjing-git/awesome-litemonitor-plugins) — the source cannot be changed inside the app |
+| Install location | `resources/plugins/` inside the program directory, alongside the built-in plugins |
+| Uninstall | Click "Uninstall" on the market page — only plugins installed via the market are removed; built-in plugins can never be uninstalled |
+| Integrity check | Every entry carries a SHA-256; the raw bytes of the download are verified on install and a mismatch aborts it |
+
+Installed plugins are **purely declarative JSON configuration** (they only declare *where to fetch data, how to extract it, and how to display it*) and **cannot execute third-party scripts or code**. They do make network requests as configured, which may send your IP address or the API keys you entered to the service they declare — check the request domains listed in each plugin's README before installing.
+
+> Writing to the program directory requires permission. If the program lives under `C:\Program Files\`, installation will fail — run it as administrator.
+
+Want to write your own plugin? See [`resources/plugins/PLUGIN_DEV_GUIDE.md`](./resources/plugins/PLUGIN_DEV_GUIDE.md).
+
+</new_string>
 
 Language files are stored in `/resources/lang/`:
 

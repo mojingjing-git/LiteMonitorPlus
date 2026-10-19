@@ -201,7 +201,7 @@ namespace LiteMonitor.src.UI.SettingsPage
 
         private void CreatePluginGroup(PluginInstanceConfig inst, PluginTemplate tmpl, bool isDefault, bool? savedState = null)
         {
-            string title = $"{tmpl.Meta.Name} v{tmpl.Meta.Version} (ID: {inst.Id}) by: {tmpl.Meta.Author}";
+            string title = $"{PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn)} v{tmpl.Meta.Version} (ID: {inst.Id}) by: {tmpl.Meta.Author}";
             var group = new LiteSettingsGroup(title);
 
             // 1. Header Actions
@@ -220,9 +220,10 @@ namespace LiteMonitor.src.UI.SettingsPage
                 group.AddHeaderAction(btnDel);
             }
 
-            if (!string.IsNullOrEmpty(tmpl.Meta.Description))
+            string metaDescription = PluginI18n.Pick(tmpl.Meta.Description, tmpl.Meta.DescriptionEn);
+            if (!string.IsNullOrEmpty(metaDescription))
             {
-                 group.AddHint(tmpl.Meta.Description);
+                 group.AddHint(metaDescription);
             }
 
             // 2. Enable Switch
@@ -241,7 +242,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                 return inst.Enabled;
             };
 
-            var chk = group.AddToggle(this, tmpl.Meta.Name, 
+            var chk = group.AddToggle(this, PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn),
                 getVal, 
                 v => {
                     if (inst.Enabled != v) {

@@ -88,6 +88,25 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 
 ---
 
+## 插件市场
+
+设置 → 插件市场，可以直接从社区插件仓库一键安装插件。
+
+| 项 | 说明 |
+|---|---|
+| 插件源 | 固定为 [awesome-litemonitor-plugins](https://github.com/mojingjing-git/awesome-litemonitor-plugins)，程序内不提供修改入口 |
+| 安装位置 | 程序目录下的 `resources/plugins/`，与内置插件同级 |
+| 卸载 | 在市场页点「卸载」，只会删除通过市场安装的插件；内置插件永不可卸载 |
+| 完整性校验 | 每个插件在索引里带 SHA-256，安装时校验下载内容的原始字节，不匹配即中止 |
+
+已装插件是**纯声明式 JSON 配置**（只声明「去哪取数、怎么提取、怎么显示」），**不具备执行第三方脚本或代码的能力**。但插件会按其配置发起网络请求，可能把你填写的 API Key 发送给它声明的接口 —— 安装前请查看插件 README 里说明的请求域名。
+
+> 写入程序目录需要权限。若程序装在 `C:\Program Files\` 下，安装会失败，请以管理员身份运行本程序。
+
+想自己写插件？见 [`resources/plugins/PLUGIN_DEV_GUIDE.md`](./resources/plugins/PLUGIN_DEV_GUIDE.md)。
+
+---
+
 ## 主题系统
 
 主题文件位于 `/themes/` 目录。

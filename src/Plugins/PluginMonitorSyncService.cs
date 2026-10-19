@@ -79,16 +79,16 @@ namespace LiteMonitor.src.Plugins
 
                             var item = settings.MonitorItems.FirstOrDefault(x => x.Key == itemKey);
 
-                            string labelPattern = output.Label;
-                            if (string.IsNullOrEmpty(labelPattern)) labelPattern = (tmpl.Meta.Name) + " " + output.Key;
+                            string labelPattern = PluginI18n.Pick(output.Label, output.LabelEn);
+                            if (string.IsNullOrEmpty(labelPattern)) labelPattern = (PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn)) + " " + output.Key;
 
                             string finalName = PluginProcessor.ResolveTemplate(labelPattern, mergedInputs);
-                            string finalShort = PluginProcessor.ResolveTemplate(output.ShortLabel, mergedInputs);
+                            string finalShort = PluginProcessor.ResolveTemplate(PluginI18n.Pick(output.ShortLabel, output.ShortLabelEn), mergedInputs);
 
                             if (item == null)
                             {
                                 // Create New Item
-                                string safeLabel = !string.IsNullOrEmpty(finalName) ? finalName : (tmpl.Meta.Name + " " + output.Key);
+                                string safeLabel = !string.IsNullOrEmpty(finalName) ? finalName : (PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key);
                                 string safeShort = !string.IsNullOrEmpty(finalShort) ? finalShort : output.Key;
 
                                 // [Optimization] Smart Insert: Follow last sibling based on SortIndex
@@ -127,7 +127,7 @@ namespace LiteMonitor.src.Plugins
                             else
                             {
                                 // Update Existing Item
-                                string safeLabel = !string.IsNullOrEmpty(finalName) ? finalName : (tmpl.Meta.Name + " " + output.Key);
+                                string safeLabel = !string.IsNullOrEmpty(finalName) ? finalName : (PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key);
                                 string safeShort = !string.IsNullOrEmpty(finalShort) ? finalShort : output.Key;
 
                                 if (item.DynamicLabel != safeLabel) { item.DynamicLabel = safeLabel; changed = true; }
@@ -212,22 +212,22 @@ namespace LiteMonitor.src.Plugins
 
                                     string labelPattern;
                                     if (targetField == "short_label")
-                                        labelPattern = output.ShortLabel;
+                                        labelPattern = PluginI18n.Pick(output.ShortLabel, output.ShortLabelEn);
                                     else
-                                        labelPattern = output.Label;
+                                        labelPattern = PluginI18n.Pick(output.Label, output.LabelEn);
 
-                                    if (string.IsNullOrEmpty(labelPattern)) labelPattern = tmpl.Meta.Name;
+                                    if (string.IsNullOrEmpty(labelPattern)) labelPattern = PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn);
 
                                     string resolved = PluginProcessor.ResolveTemplate(labelPattern, mergedInputs);
 
                                     if (string.IsNullOrEmpty(resolved) || resolved.Contains("{{"))
-                                        return tmpl.Meta.Name + " " + output.Key;
+                                        return PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key;
 
                                     return resolved;
                                 }
                             }
                         }
-                        return tmpl.Meta.Name;
+                        return PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn);
                     }
                 }
             }

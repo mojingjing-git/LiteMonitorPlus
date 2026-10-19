@@ -34,6 +34,16 @@ LiteMonitor++ 的插件是一个 **`.json` 文本文件**，存放在 `resources
 2.  **怎么处理数据？** (例如：把温度从华氏度转为摄氏度)
 3.  **怎么显示数据？** (例如：在任务栏显示 "上海 25°C")
 
+### 命名规范（重要）
+
+*   **文件名必须等于 `id` + `.json`** —— 例如 `id: "hello_world"` 对应文件 `hello_world.json`。
+    这是插件市场判定"这个插件是不是我装的"的唯一依据，名字对不上会导致插件无法被市场管理与卸载。
+*   `id` 只能包含 `A-Za-z0-9_-`，最长 64 字符。
+*   `id` 一经发布即**不可更改** —— 它是用户的安装主键，改 id 等于换插件。
+*   `id` 不能与内置插件重名。内置 id 清单：`Bilibili`、`Crypto`、`Exchange`、`GitHub`、`Hitokoto`、
+    `Holiday`、`ProxyLatency`、`PublicIP`、`Stock`、`UniversalAPI`、`Weather`、`WeiboHot`。
+*   `meta.author` 请填真实作者（GitHub 用户名最佳），不要用 `User` / `Codex` 这类占位符。
+
 ---
 
 ## 2. 快速开始：你的第一个插件
@@ -41,7 +51,7 @@ LiteMonitor++ 的插件是一个 **`.json` 文本文件**，存放在 `resources
 让我们编写一个最简单的插件：**显示一段固定的文字**。
 
 **步骤：**
-1.  在 `resources/plugins/` 下新建文件 `Hello.json`。
+1.  在 `resources/plugins/` 下新建文件 `hello_world.json`（文件名 = `id` + `.json`）。
 2.  复制以下内容并保存：
 
 ```json
@@ -95,11 +105,30 @@ LiteMonitor++ 的插件是一个 **`.json` 文本文件**，存放在 `resources
 ```json
 "meta": {
   "name": "天气监控",      // 插件名 (显示在添加列表)
+  "name_en": "Weather Monitor", // 英文名 (界面为非中文时优先使用)
   "version": "1.0",       // 版本号
   "author": "你的名字",    // 作者
-  "description": "从 WeatherAPI 获取实时天气" // 详细描述
+  "description": "从 WeatherAPI 获取实时天气", // 详细描述
+  "description_en": "Real-time weather from WeatherAPI" // 英文描述
 }
 ```
+
+**关于 `_en` 后缀的双语字段**：
+
+程序界面支持多语言。下列字段都提供了中文与英文两份，程序按当前界面语言自动选择：
+
+| 字段 | 中文 | 英文 | 缺失时的行为 |
+|---|---|---|---|
+| `meta.name` | `name` | `name_en` | 英文缺失时回退中文 |
+| `meta.description` | `description` | `description_en` | 英文缺失时回退中文 |
+| `inputs[].label` | `label` | `label_en` | 英文缺失时回退中文 |
+| `outputs[].label` | `label` | `label_en` | 英文缺失时回退中文 |
+| `outputs[].short_label` | `short_label` | `short_label_en` | 英文缺失时回退中文 |
+
+*   简体中文与繁体中文界面一律使用中文字段（`_en` 不会被使用）。
+*   英文缺失**不会**显示空白，而是回退中文 —— 但仍建议补全，让非中文用户看到原生文案。
+*   `short_label` 为 `" "`（单个空格）表示"隐藏这个标签"，此语义在英文下同样保留 —
+    此时的 `short_label_en` 也应填 `" "`，不要填真实文案。
 
 ### 4.2 Inputs (让用户配置)
 定义设置界面，让用户输入参数。
@@ -109,6 +138,7 @@ LiteMonitor++ 的插件是一个 **`.json` 文本文件**，存放在 `resources
   {
     "key": "city",            // 变量名 (在后面用 {{city}} 引用)
     "label": "城市名称",       // 设置界面显示的标题
+    "label_en": "City",       // 英文标题 (界面为非中文时使用)
     "type": "text",           // 输入框类型: text (文本), select (下拉框)
     "default": "Shanghai",    // 默认值
     "placeholder": "请输入拼音", // 提示语
@@ -271,7 +301,9 @@ LiteMonitor++ 的插件是一个 **`.json` 文本文件**，存放在 `resources
   {
     "key": "main",
     "label": "{{city_name}}", // 标签：显示在数值左边 (如 "北京:")
+    "label_en": "{{city_name}}", // 英文标签 (界面为非中文时使用)
     "short_label": "W",       // 短标签：空间不足时显示
+    "short_label_en": "W",    // 英文短标签
     "format_val": "{{temp}}", // 数值部分
     "unit": "°C",             // 单位后缀
     "color": "{{color_state}}"// 绑定颜色变量

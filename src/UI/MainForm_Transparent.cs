@@ -137,6 +137,11 @@ namespace LiteMonitor
             HardwareHistoryLogger.Load();
             src.Plugins.PluginManager.Instance.LoadPlugins(Path.Combine(AppContext.BaseDirectory, "resources", "plugins"));
             src.Plugins.PluginManager.Instance.Start();
+
+            // 启动自检：找出疑似覆盖内置插件的残留文件（如旧版市场落盘的 PublicIP.json），
+            // 结果由插件市场页展示，提示用户删除
+            src.Plugins.PluginSelfCheck.RunOnce();
+
             _ui = new UIController(_cfg, this);
             new src.WebServer.LiteWebServer(_cfg);
 

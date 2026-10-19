@@ -165,6 +165,10 @@ namespace LiteMonitor
         public int MonitoredGpuCount { get; set; } = 1;
         public List<PluginInstanceConfig> PluginInstances { get; set; } = new List<PluginInstanceConfig>();
 
+        // ★★★ 插件市场：市场安装的插件记录。卸载所有权判定与更新检测的唯一依据 ★★★
+        // 旧版 settings.json 没有这个字段，反序列化为 null，由 Load() 兜底成空列表
+        public List<MarketPluginRecord> MarketPlugins { get; set; } = new List<MarketPluginRecord>();
+
         // ★★★ [新增] 极简样式封装（复制到 Settings 类里） ★★★
         public struct TBStyle { 
             public string Font; public float Size; public bool Bold; 
@@ -195,6 +199,12 @@ namespace LiteMonitor
             if (_instance.WebServerPassword == null)
             {
                 _instance.WebServerPassword = "";
+            }
+
+            // 兼容旧配置：如果 MarketPlugins 为 null，初始化为空列表
+            if (_instance.MarketPlugins == null)
+            {
+                _instance.MarketPlugins = new List<MarketPluginRecord>();
             }
 
             return _instance;

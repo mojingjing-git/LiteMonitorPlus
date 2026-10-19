@@ -46,7 +46,13 @@ namespace LiteMonitor.src.Plugins
 
             // 1. 加载模版
             _templates.Clear();
-            var files = Directory.GetFiles(directoryPath, PluginConstants.CONFIG_EXT);
+
+            // ★ 排序后再遍历，保证去重的 tie-break 是确定性的
+            //   （否则留下的那个取决于 Directory.GetFiles 的枚举顺序 —— 正是我们要消除的不确定性）
+            var files = Directory.GetFiles(directoryPath, PluginConstants.CONFIG_EXT)
+                                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                                .ToList();
+
             foreach (var file in files)
             {
                 try
@@ -55,6 +61,14 @@ namespace LiteMonitor.src.Plugins
                     var tmpl = JsonSerializer.Deserialize<PluginTemplate>(json);
                     if (tmpl != null && !string.IsNullOrEmpty(tmpl.Id))
                     {
+                        // ★ 同 id 的模板只留第一个：
+                        //   内置插件改 id 时旧文件不会被 CopyToOutputDirectory 删除，
+                        //   新旧两个模板并存会让 FirstOrDefault 取到哪个不确定。
+                        if (_templates.Any(t => t.Id == tmpl.Id))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[PluginManager] 跳过重复 id 的插件: {tmpl.Id} ({file})");
+                            continue;
+                        }
                         _templates.Add(tmpl);
                     }
                 }

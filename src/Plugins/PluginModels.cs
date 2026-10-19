@@ -44,6 +44,10 @@ namespace LiteMonitor.src.Plugins
         [JsonPropertyName("name")]
         public string Name { get; set; } = "";
 
+        /// <summary>英文名。界面为非中文时优先使用，缺失则回退 <see cref="Name"/>。</summary>
+        [JsonPropertyName("name_en")]
+        public string NameEn { get; set; } = "";
+
         [JsonPropertyName("version")]
         public string Version { get; set; } = "1.0.0";
 
@@ -52,7 +56,11 @@ namespace LiteMonitor.src.Plugins
 
         [JsonPropertyName("description")]
         public string Description { get; set; } = "";
-        
+
+        /// <summary>英文简介。界面为非中文时优先使用，缺失则回退 <see cref="Description"/>。</summary>
+        [JsonPropertyName("description_en")]
+        public string DescriptionEn { get; set; } = "";
+
         [JsonPropertyName("url")]
         public string Url { get; set; } = "";
     }
@@ -65,12 +73,16 @@ namespace LiteMonitor.src.Plugins
         [JsonPropertyName("label")]
         public string Label { get; set; } = ""; // 显示给用户的名称
 
+        /// <summary>英文显示名。界面为非中文时优先使用，缺失则回退 <see cref="Label"/>。</summary>
+        [JsonPropertyName("label_en")]
+        public string LabelEn { get; set; } = "";
+
         [JsonPropertyName("type")]
         public string Type { get; set; } = "text"; // text, password, select...
 
         [JsonPropertyName("default")]
         public string DefaultValue { get; set; } = "";
-        
+
         [JsonPropertyName("placeholder")]
         public string Placeholder { get; set; } = "";
 
@@ -81,7 +93,7 @@ namespace LiteMonitor.src.Plugins
         // global: 整个插件实例共享 (如 API Key)
         // target: 每个目标单独配置 (如 股票代码)
         [JsonPropertyName("scope")]
-        public string Scope { get; set; } = "global"; 
+        public string Scope { get; set; } = "global";
     }
 
     public class PluginExecution
@@ -190,8 +202,17 @@ namespace LiteMonitor.src.Plugins
         [JsonPropertyName("label")]
         public string Label { get; set; } = ""; // 完整显示名称模式，如 "{{city}} 温度"
 
+        /// <summary>英文显示名称模式。界面为非中文时优先使用，缺失则回退 <see cref="Label"/>。</summary>
+        [JsonPropertyName("label_en")]
+        public string LabelEn { get; set; } = "";
+
         [JsonPropertyName("short_label")]
         public string ShortLabel { get; set; } = ""; // 任务栏名称模式
+
+        /// <summary>英文任务栏名称模式。界面为非中文时优先使用，缺失则回退 <see cref="ShortLabel"/>。</summary>
+        /// <remarks>注意：<c>short_label</c> 为 " " 表示"隐藏标签"，此语义在英文下同样保留。</remarks>
+        [JsonPropertyName("short_label_en")]
+        public string ShortLabelEn { get; set; } = "";
 
         [JsonPropertyName("format_val")]
         public string Format { get; set; } = ""; // 数据格式，如 "{{val}}"
