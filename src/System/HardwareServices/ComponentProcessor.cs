@@ -152,11 +152,21 @@ namespace LiteMonitor.src.SystemServices
                 return null;
             }
 
-            if (key.StartsWith("GPU"))
+            if (key.StartsWith("GPU", StringComparison.OrdinalIgnoreCase))
             {
-                var gpu = _sensorMap.CachedGpu;
+                // ★★★ [多显卡] 解析出显卡序号, 取对应那张卡的传感器 ★★★
+                int gpuIndex = -1;
+                string metric = key.Substring(GpuKey.Prefix.Length);
+                if (GpuKey.TryParse(key, out int parsedIndex, out string parsedMetric))
+                {
+                    gpuIndex = parsedIndex;
+                    metric = parsedMetric;
+                }
+
+                var gpu = gpuIndex >= 0 ? _sensorMap.GetGpuByIndex(gpuIndex) : _sensorMap.CachedGpu;
                 if (gpu == null) return null;
-                if (key == "GPU.Clock")
+
+                if (metric.Equals("Clock", StringComparison.OrdinalIgnoreCase))
                 {
                     var s = gpu.Sensors.FirstOrDefault(x => x.SensorType == SensorType.Clock && (SensorMap.Has(x.Name, "graphics") || SensorMap.Has(x.Name, "core") || SensorMap.Has(x.Name, "shader")));
                     if (s != null && s.Value.HasValue) 
@@ -167,7 +177,7 @@ namespace LiteMonitor.src.SystemServices
                         return val; 
                     }
                 }
-                else if (key == "GPU.Power")
+                else if (metric.Equals("Power", StringComparison.OrdinalIgnoreCase))
                 {
                     var s = gpu.Sensors.FirstOrDefault(x => x.SensorType == SensorType.Power && (SensorMap.Has(x.Name, "package") || SensorMap.Has(x.Name, "ppt") || SensorMap.Has(x.Name, "board") || SensorMap.Has(x.Name, "core") || SensorMap.Has(x.Name, "gpu")));
                     if (s != null && s.Value.HasValue) 
