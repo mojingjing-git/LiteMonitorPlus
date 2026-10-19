@@ -331,6 +331,7 @@ namespace LiteMonitor.src.SystemServices
                         _computer.Open();
                         WarmUpMotherboardSensors();
                         WarmUpBatterySensors();
+                        WarmUpGpuSensors();          // ★★★ [新增] Intel 核显负载传感器懒激活预热
 
                         // 先建立映射，再由正常刷新循环更新数值，避免启动时预热所有 GPU 拖慢 CPU/MEM 展示。
                         _sensorMap.Rebuild(_computer, _cfg);
@@ -409,6 +410,23 @@ namespace LiteMonitor.src.SystemServices
                     catch { }
                 }
             }
+        }
+
+        private void WarmUpGpuSensors()
+        {
+            // Intel 核显的负载/显存传感器是懒激活的: 硬件对象构造时只创建传感器实例,
+            // 只在 Update() 里才调用 ActivateSensor 注册进 Sensors 集合; 而 NVIDIA / AMD /
+            // Intel 独显 (IntelDiscreteGpu) 的构造函数末尾都自调 Update(), 传感器开箱即就绪。
+            // 若不补这一次 Update, SensorMap.Rebuild 建表时拿不到核显的负载传感器,
+            // "GPU.Load" / "GPU.0.Load" 键直接缺失 -> 占用率恒为 0 且无法自愈。
+            //
+            // 只对"没有 Load 传感器"的显卡预热 (GpuWarmup.NeedsWarmUp 判定),
+            // 独显机器零额外开销, 不会拖慢启动。
+            //
+            // 本方法必须在 HardwareMonitor._lock 内调用: SensorMap.Rebuild 在
+            // ReloadComputerSafe 里是锁外执行的, 若把预热塞进 Rebuild 就会在锁外
+            // 触发 hw.Update(), 与 UpdateAll 持锁做的 hw.Update() 竞争同一硬件对象。
+            GpuWarmup.WarmUpIfNeeded(_computer, UpdateWithSubHardware);
         }
 
         private double UpdateTiming()
@@ -540,6 +558,10 @@ namespace LiteMonitor.src.SystemServices
 
                         try { WarmUpBatterySensors(); }
                         catch (Exception ex) { HardwareErrorLog.Write("ReloadComputerSafe.WarmUpBattery", ex); }
+
+                        // 热插拔 / 重开硬件后, 显卡对象被重建, 传感器回到"未上线"状态, 需重新预热
+                        try { WarmUpGpuSensors(); }
+                        catch (Exception ex) { HardwareErrorLog.Write("ReloadComputerSafe.WarmUpGpu", ex); }
 
                         try { DisableSensorHistory(); }
                         catch (Exception ex) { HardwareErrorLog.Write("ReloadComputerSafe.DisableSensorHistory", ex); }
