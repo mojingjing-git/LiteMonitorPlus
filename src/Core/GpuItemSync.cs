@@ -152,6 +152,20 @@ namespace LiteMonitor.src.Core
                     items.Add(kv.Value);
                 }
             }
+
+            // 5. ★★★ [按卡拆组] 旧版整组别名 ("GPU" -> "我的游戏卡") 迁移到 0 号卡 ★★★
+            //    拆组之后不再存在 "GPU" 分组, 这个别名会变成孤儿 —— 没有任何界面会再读它,
+            //    用户会发现"我给显卡起的名字没了"而且没有任何提示。
+            //    只迁移给 0 号卡: 既保住用户的命名, 又不会让两张卡同名 (后者正是本功能要消灭的问题)。
+            //    幂等: 迁移完就把 "GPU" 删掉, 重复调用不会二次生效。
+            if (cfg.GroupAliases != null
+                && cfg.GroupAliases.TryGetValue("GPU", out string? legacyGroupAlias)
+                && !string.IsNullOrEmpty(legacyGroupAlias))
+            {
+                if (!cfg.GroupAliases.ContainsKey("GPU.0"))
+                    cfg.GroupAliases["GPU.0"] = legacyGroupAlias;
+                cfg.GroupAliases.Remove("GPU");
+            }
         }
     }
 }
