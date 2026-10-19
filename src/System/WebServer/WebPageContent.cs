@@ -28,7 +28,7 @@ namespace LiteMonitor.src.WebServer
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     {{FAVICON}}
-    <title>LiteMonitor WebServer</title>
+    <title>LiteMonitor++ WebServer</title>
     <style>
         :root {
             --bg: #09090b;

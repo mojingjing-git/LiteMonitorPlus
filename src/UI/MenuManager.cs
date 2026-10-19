@@ -131,7 +131,7 @@ namespace LiteMonitor
                 if (cfg.WebServerEnabled)
                 {
                     string msg = LanguageManager.T("Menu.WebServerTip");
-                    if (MessageBox.Show(msg, "LiteMonitor", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) == DialogResult.OK)
+                    if (MessageBox.Show(msg, "LiteMonitor++", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) == DialogResult.OK)
                     {
                         itemWebOpen.PerformClick();
                     }

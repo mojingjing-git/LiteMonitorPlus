@@ -3,7 +3,7 @@
   "meta": {
     "name": "GitHub项目监控",
     "version": "1.0",
-    "author": "LiteMonitor",
+    "author": "LiteMonitor++",
     "description": "监控 GitHub 项目的 Star、Fork、Issues 数量"
   },
   "inputs": [

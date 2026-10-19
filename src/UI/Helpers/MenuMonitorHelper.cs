@@ -51,7 +51,7 @@ namespace LiteMonitor.src.UI.Helpers
                 cfg.MaxLimitTipShown = true;
                 cfg.Save();
 
-                if (MessageBox.Show(msg, "LiteMonitor Setup", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                if (MessageBox.Show(msg, "LiteMonitor++ Setup", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
                 {
                     try
                     {

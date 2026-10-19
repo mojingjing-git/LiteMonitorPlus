@@ -17,9 +17,11 @@ namespace LiteMonitor
             bool isZh = LanguageManager.CurrentLang == "zh";
 
             string strTitle = LanguageManager.T("Menu.About");
-            string strDesc = isZh ? "一款开源的轻量级硬件监控软件。\n© 2025 Diorser / LiteMonitor Project" 
-                                  : "A lightweight desktop hardware monitor.\n© 2025 Diorser / LiteMonitor Project";
-            string strWebPrefix = isZh ? "官网" : "Website";
+            // 双份版权：上游作者与本项目作者都必须保留（MIT 义务 + 致谢惯例）
+            string strDesc = isZh
+                ? "一款开源的轻量级硬件监控软件。\n\n基于 LiteMonitor (Diorser) 派生修改\n© 2025 Diorser / LiteMonitor Project\n© 2026 mojingjing-git / LiteMonitor++ Project\n\nMIT License · github.com/mojingjing-git/MonitorPlus"
+                : "A lightweight desktop hardware monitor.\n\nForked & modified from LiteMonitor (Diorser)\n© 2025 Diorser / LiteMonitor Project\n© 2026 mojingjing-git / LiteMonitor++ Project\n\nMIT License · github.com/mojingjing-git/MonitorPlus";
+            string strWebPrefix = isZh ? "上游项目" : "Upstream";
             string strUpdate = LanguageManager.T("Menu.CheckUpdate");
             string strClose = LanguageManager.T("Menu.OK");
             string strBug = LanguageManager.T("Menu.Feedback");
@@ -43,7 +45,7 @@ namespace LiteMonitor
             // === 标题 ===
             var lblTitle = new Label
             {
-                Text = "⚡️LiteMonitor",
+                Text = "⚡️LiteMonitor++",
                 Font = new Font(theme.Font.Family, 14, FontStyle.Bold),
                 ForeColor = ThemeManager.ParseColor(theme.Color.TextTitle),
                 AutoSize = true,
@@ -79,7 +81,7 @@ namespace LiteMonitor
             // === 官网链接 ===
             var websiteLink = new LinkLabel
             {
-                Text = $"{strWebPrefix}: LiteMonitor.cn",
+                Text = $"{strWebPrefix}: litemonitor.cn",
                 LinkColor = Color.SkyBlue,
                 ActiveLinkColor = Color.LightSkyBlue,
                 VisitedLinkColor = Color.DeepSkyBlue,
@@ -90,7 +92,7 @@ namespace LiteMonitor
             {
                 try
                 {
-                    Process.Start(new ProcessStartInfo("https://LiteMonitor.cn")
+                    Process.Start(new ProcessStartInfo("https://litemonitor.cn")
                     { UseShellExecute = true });
                 }
                 catch { }
@@ -99,7 +101,7 @@ namespace LiteMonitor
             // === GitHub 链接 ===
             var githubLink = new LinkLabel
             {
-                Text = "GitHub: github.com/Diorser/LiteMonitor",
+                Text = "GitHub: github.com/mojingjing-git/MonitorPlus",
                 LinkColor = Color.SkyBlue,
                 ActiveLinkColor = Color.LightSkyBlue,
                 VisitedLinkColor = Color.DeepSkyBlue,
@@ -110,7 +112,7 @@ namespace LiteMonitor
             {
                 try
                 {
-                    Process.Start(new ProcessStartInfo("https://github.com/Diorser/LiteMonitor")
+                    Process.Start(new ProcessStartInfo("https://github.com/mojingjing-git/MonitorPlus")
                     { UseShellExecute = true });
                 }
                 catch { }
@@ -135,7 +137,7 @@ namespace LiteMonitor
             {
                 try
                 {
-                    Process.Start(new ProcessStartInfo("https://github.com/Diorser/LiteMonitor/issues")
+                    Process.Start(new ProcessStartInfo("https://github.com/mojingjing-git/MonitorPlus/issues")
                     { UseShellExecute = true });
                 }
                 catch { }

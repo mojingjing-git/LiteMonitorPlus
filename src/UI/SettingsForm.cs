@@ -233,7 +233,7 @@ namespace LiteMonitor.src.UI
             {
                 // 自动纠正：如果所有可交互入口都被封死（隐藏或穿透+隐藏托盘），强制显示托盘
                 _draftCfg.HideTrayIcon = false;
-                MessageBox.Show("为了防止所有可交互入口都被死锁（隐藏或穿透+隐藏托盘），已强制显示托盘图标。", "LiteMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("为了防止所有可交互入口都被死锁（隐藏或穿透+隐藏托盘），已强制显示托盘图标。", "LiteMonitor++", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
 
             // 2. 合并变更到 Live Settings

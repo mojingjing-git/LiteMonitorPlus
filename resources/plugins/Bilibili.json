@@ -3,7 +3,7 @@
   "meta": {
     "name": "B站粉丝监控",
     "version": "1.0",
-    "author": "LiteMonitor",
+    "author": "LiteMonitor++",
     "description": "监控 Bilibili UP主粉丝数，自动获取UP主名称"
   },
   "inputs": [

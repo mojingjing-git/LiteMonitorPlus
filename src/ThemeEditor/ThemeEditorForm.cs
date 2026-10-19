@@ -39,7 +39,7 @@ namespace LiteMonitor.ThemeEditor
 
         public ThemeEditorForm()
         {
-            Text = "LiteMonitor Theme Editor";
+            Text = "LiteMonitor++ Theme Editor";
             StartPosition = FormStartPosition.CenterScreen;
             
             // DPI 缩放支持

@@ -3,7 +3,7 @@
   "meta": {
     "name": "通用API监控",
     "version": "1.0",
-    "author": "LiteMonitor",
+    "author": "LiteMonitor++",
     "description": "通用JSON接口监控，自定义API地址，JSON路径支持点号data.val或数组data[0].val"
   },
   "inputs": [

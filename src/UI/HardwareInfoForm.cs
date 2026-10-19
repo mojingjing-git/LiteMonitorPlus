@@ -23,7 +23,7 @@ namespace LiteMonitor.src.UI
 
         public HardwareInfoForm()
         {
-            this.Text = T("LiteMonitor - Hardware Info", "LiteMonitor - 系统硬件详情");
+            this.Text = T("LiteMonitor++ - Hardware Info", "LiteMonitor++ - 系统硬件详情");
             this.Size = new Size(UIUtils.S(600), UIUtils.S(750)); // 稍微加宽一点
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.White;

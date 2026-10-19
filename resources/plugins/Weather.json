@@ -3,7 +3,7 @@
   "meta": {
     "name": "实时天气监控",
     "version": "1.0",
-    "author": "LiteMonitor",
+    "author": "LiteMonitor++",
     "description": "实时天气插件（国内），基于IP自动定位，获取高精度天气数据，支持多种显示方式"
   },
   "inputs": [

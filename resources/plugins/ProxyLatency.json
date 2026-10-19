@@ -3,7 +3,7 @@
   "meta": {
     "name": "科学节点延迟监控",
     "version": "1.0",
-    "author": "LiteMonitor",
+    "author": "LiteMonitor++",
     "description": "一般Clash代理地址为：127.0.0.1:7890 (默认端口，一般无需修改)，如测试本地延迟则全部留空"
   },
   "inputs": [

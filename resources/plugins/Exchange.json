@@ -3,7 +3,7 @@
   "meta": {
     "name": "实时汇率监控",
     "version": "1.0",
-    "author": "LiteMonitor",
+    "author": "LiteMonitor++",
     "description": "实时汇率监控，输入货币对，如 USD, EUR, GBP, JPY"
   },
   "inputs": [

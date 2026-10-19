@@ -158,7 +158,7 @@ namespace LiteMonitor.src.UI.Helpers
         private void InitTray()
         {
             try { _tray.Icon = Properties.Resources.AppIcon ?? _form.Icon; } catch { _tray.Icon = _form.Icon; }
-            _tray.Text = "LiteMonitor";
+            _tray.Text = "LiteMonitor++";
             _tray.Visible = !_cfg.HideTrayIcon;
 
             RebuildMenus();
@@ -368,7 +368,7 @@ namespace LiteMonitor.src.UI.Helpers
             if (File.Exists(tokenPath))
             {
                 try { File.Delete(tokenPath); } catch { }
-                string title = "⚡️LiteMonitor_v" + UpdateChecker.GetCurrentVersion();
+                string title = "⚡️LiteMonitor++_v" + UpdateChecker.GetCurrentVersion();
                 string content = _cfg.Language == "zh" ? "🎉 软件已成功更新到最新版本！" : "🎉 Software updated to latest version!";
                 ShowNotification(title, content, ToolTipIcon.Info);
             }

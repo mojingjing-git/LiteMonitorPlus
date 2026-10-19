@@ -250,7 +250,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                         string hex = $"#{c.R:X2}{c.G:X2}{c.B:X2}";
                         tbResult.Inner.Text = hex;
                         f.Close();
-                        if (MessageBox.Show(string.Format("{0} {1}?", LanguageManager.T("Menu.ScreenColorPickerTip"), hex), "LiteMonitor", MessageBoxButtons.YesNo) == DialogResult.Yes)
+                        if (MessageBox.Show(string.Format("{0} {1}?", LanguageManager.T("Menu.ScreenColorPickerTip"), hex), "LiteMonitor++", MessageBoxButtons.YesNo) == DialogResult.Yes)
                         {
                             if (Config != null) Config.TaskbarColorBg = hex;
                             foreach (var control in _customColorInputs)

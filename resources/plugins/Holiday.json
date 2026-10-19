@@ -3,7 +3,7 @@
   "meta": {
     "name": "放假倒计时",
     "version": "1.0",
-    "author": "LiteMonitor",
+    "author": "LiteMonitor++",
     "description": "显示距离下一个法定节假日还有多少天（含调休计算）"
   },
   "inputs": [],

@@ -1,5 +1,5 @@
 {
-  "Title": "⚡️LiteMonitor",
+  "Title": "⚡️LiteMonitor++",
   "Groups": {
     "DASH": "ℹ️看板",
     "CPU": "💻CPU",
@@ -81,7 +81,7 @@
   "Menu": {
     "__Comment_Global__": "--- 全局/按钮/右键菜单 ---",
     "SettingsPanel": "设置面板",
-    "About": "关于 LiteMonitor",
+    "About": "关于 LiteMonitor++",
     "Exit": "退出",
     "OK": "确定",
     "Cancel": "取消",
