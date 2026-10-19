@@ -22,10 +22,10 @@
       "default": "star_only",
       "scope": "target",
       "options": [
-        { "label": "仅 Star (🌟 1.2k)", "value": "star_only" },
-        { "label": "Star + Fork (🌟 1.2k 🔀 300)", "value": "star_fork" },
-        { "label": "Star + Issues (🌟 1.2k ⭕ 5)", "value": "star_issue" },
-        { "label": "详细数据 (🌟1.2k 🔀300 ⭕5)", "value": "detail" }
+        { "label": "仅 Star (1.2k)", "value": "star_only" },
+        { "label": "Star + Fork (1.2k / 300)", "value": "star_fork" },
+        { "label": "Star + Issues (1.2k / 5)", "value": "star_issue" },
+        { "label": "详细数据 (1.2k / 300 / 5)", "value": "detail" }
       ]
     }
   ],
@@ -57,10 +57,10 @@
             "source": "display_mode",
             "function": "map",
             "map": {
-              "star_only": "🌟{{stars}}",
-              "star_fork": "🌟{{stars}}  🔀{{forks}}",
-              "star_issue": "🌟{{stars}}  ⭕{{issues}}",
-              "detail": "🌟{{stars}} 🔀{{forks}} ⭕{{issues}}"
+              "star_only": "{{stars}}",
+              "star_fork": "{{stars}} / {{forks}}",
+              "star_issue": "{{stars}} / {{issues}}",
+              "detail": "{{stars}} / {{forks}} / {{issues}}"
             }
           },
           {

@@ -28,7 +28,7 @@
     {
       "key": "next",
       "label": "距离{{name}}",
-      "short_label": "🏖️",
+      "short_label": "放假",
       "format_val": "{{rest}}",
       "unit": " 天"
     }

@@ -63,8 +63,8 @@ namespace LiteMonitor.src.UI.SettingsPage
                     e.Graphics.DrawLine(p, 0, _tabPanel.Height - 1, _tabPanel.Width, _tabPanel.Height - 1);
             };
 
-            _btnTabMain = CreateTabButton("🖥️ " + LanguageManager.T("Menu.MainForm"), true);
-            _btnTabBar = CreateTabButton("➖ " + LanguageManager.T("Menu.Taskbar") + " / " + LanguageManager.T("Menu.Horizontal"), false);
+            _btnTabMain = CreateTabButton(LanguageManager.T("Menu.MainForm"), true);
+            _btnTabBar = CreateTabButton(LanguageManager.T("Menu.Taskbar") + " / " + LanguageManager.T("Menu.Horizontal"), false);
 
             _btnTabMain.Click += (s, e) => SwitchTab(false);
             _btnTabBar.Click += (s, e) => SwitchTab(true);

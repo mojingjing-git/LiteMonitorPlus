@@ -288,38 +288,38 @@ namespace LiteMonitor.src.UI
         private string GetHardwareTypeString(HardwareType type)
         {
             switch (type) {
-                case HardwareType.Cpu: return T("💻 [CPU]", "💻 [处理器]");
+                case HardwareType.Cpu: return T("[CPU]", "[处理器]");
                 case HardwareType.GpuNvidia:
                 case HardwareType.GpuAmd:
-                case HardwareType.GpuIntel: return T("🎮 [GPU]", "🎮 [显卡]");
-                case HardwareType.Memory: return T("💾 [Memory]", "💾 [内存]");
-                case HardwareType.Motherboard: return T("⌨ [Motherboard]", "⌨ [主板]");
-                case HardwareType.Storage: return T("💽 [Storage]", "💽 [硬盘]");
-                case HardwareType.Network: return T("🌐 [Network]", "🌐 [网卡]"); 
-                case HardwareType.SuperIO: return T("📟 [SuperIO]", "📟 [IO芯片]");
+                case HardwareType.GpuIntel: return T("[GPU]", "[显卡]");
+                case HardwareType.Memory: return T("[Memory]", "[内存]");
+                case HardwareType.Motherboard: return T("[Motherboard]", "[主板]");
+                case HardwareType.Storage: return T("[Storage]", "[硬盘]");
+                case HardwareType.Network: return T("[Network]", "[网卡]"); 
+                case HardwareType.SuperIO: return T("[SuperIO]", "[IO芯片]");
                 // 可选：如果遇到水冷控制器等
-                case HardwareType.Cooler: return T("❄️ [Cooler]", "❄️ [散热器]");
-                default: return $"🟢 [{type}]";
+                case HardwareType.Cooler: return T("[Cooler]", "[散热器]");
+                default: return $"[{type}]";
             }
         }
         private string GetSensorTypeString(SensorType type)
         {
             switch (type) {
-                case SensorType.Temperature: return T("🌡️ [Temperature]", "🌡️ [温度]");
-                case SensorType.Load: return T("⌛ [Load]", "⌛ [负载]");
-                case SensorType.Fan: return T("🌀 [Fan]", "🌀 [风扇]");
-                case SensorType.Power: return T("⚡ [Power]", "⚡ [功耗]");
-                case SensorType.Clock: return T("⏱️ [Clock]", "⏱️ [频率]");
-                case SensorType.Control: return T("🎛️ [Control]", "🎛️ [控制]");
-                case SensorType.Voltage: return T("🔋 [Voltage]", "🔋 [电压]");
-                case SensorType.Data: return T("📈 [Data]", "📈 [数据]");
-                case SensorType.SmallData: return T("📶 [SmallData]", "📶 [小型数据]");
-                case SensorType.Throughput: return T("🚀 [Throughput]", "🚀 [吞吐量]");
+                case SensorType.Temperature: return T("[Temperature]", "[温度]");
+                case SensorType.Load: return T("[Load]", "[负载]");
+                case SensorType.Fan: return T("[Fan]", "[风扇]");
+                case SensorType.Power: return T("[Power]", "[功耗]");
+                case SensorType.Clock: return T("[Clock]", "[频率]");
+                case SensorType.Control: return T("[Control]", "[控制]");
+                case SensorType.Voltage: return T("[Voltage]", "[电压]");
+                case SensorType.Data: return T("[Data]", "[数据]");
+                case SensorType.SmallData: return T("[SmallData]", "[小型数据]");
+                case SensorType.Throughput: return T("[Throughput]", "[吞吐量]");
                 // ★★★ 新增以下三项 ★★★
-                case SensorType.Level: return T("📉 [Level]", "📉 [剩余/寿命]"); // 用于 SSD 寿命或油箱液位
-                case SensorType.Factor: return T("🔢 [Factor]", "🔢 [系数]");      // 用于写入放大系数等
-                case SensorType.Timing: return T("⏱️ [Timing]", "⏱️ [时序]");
-                default: return $"🟢 [{type}]";
+                case SensorType.Level: return T("[Level]", "[剩余/寿命]"); // 用于 SSD 寿命或油箱液位
+                case SensorType.Factor: return T("[Factor]", "[系数]");      // 用于写入放大系数等
+                case SensorType.Timing: return T("[Timing]", "[时序]");
+                default: return $"[{type}]";
             }
         }
 

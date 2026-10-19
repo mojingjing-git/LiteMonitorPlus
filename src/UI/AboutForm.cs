@@ -45,7 +45,7 @@ namespace LiteMonitor
             // === 标题 ===
             var lblTitle = new Label
             {
-                Text = "⚡️LiteMonitor++",
+                Text = "LiteMonitor++",
                 Font = new Font(theme.Font.Family, 14, FontStyle.Bold),
                 ForeColor = ThemeManager.ParseColor(theme.Color.TextTitle),
                 AutoSize = true,

@@ -237,7 +237,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             var tbResult = new LiteUnderlineInput("#000000", "", "", 65, null, HorizontalAlignment.Center);
             tbResult.Padding = UIUtils.S(new Padding(0, 5, 0, 1)); 
             tbResult.Inner.ReadOnly = true; 
-            var btnPick = new LiteSortBtn("🖌"); 
+            var btnPick = new LiteSortBtn(LanguageManager.T("Menu.ScreenColorPickerShort")); 
             btnPick.Location = new Point(UIUtils.S(70), UIUtils.S(1));
             btnPick.Click += (s, e) => {
                 using (Form f = new Form { FormBorderStyle = FormBorderStyle.None, WindowState = FormWindowState.Maximized, TopMost = true, Cursor = Cursors.Cross })

@@ -345,9 +345,8 @@ namespace LiteMonitor
 
 
 
-                // ★★★ 修复：将🔥加回 Total 列 ★★★
+                // 离群行以高亮色标记
                 string totalText = MetricUtils.FormatDataSize(item.Total);  
-                if (isOutlier) totalText = "🔥 " + totalText;
                 row.Cells["Total"].Value = totalText;
 
                 if (isOutlier)

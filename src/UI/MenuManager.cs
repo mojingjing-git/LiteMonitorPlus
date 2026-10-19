@@ -628,7 +628,7 @@ namespace LiteMonitor
             if (UpdateChecker.IsUpdateFound)
             {
                 bool isZh = cfg.Language?.ToLower().Contains("zh") == true;
-                string text = isZh ? $"💡发现新版本(v{UpdateChecker.LatestVersionInfo?.latest})" : $"🔄New version(v{UpdateChecker.LatestVersionInfo?.latest})";
+                string text = isZh ? $"发现新版本(v{UpdateChecker.LatestVersionInfo?.latest})" : $"New version(v{UpdateChecker.LatestVersionInfo?.latest})";
                 
                 var updateItem = new ToolStripMenuItem(text);
                 // 鼠标停留提示更新日期与内容摘要 (移除加粗和自定义颜色以解决托盘菜单闪烁问题)

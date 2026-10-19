@@ -202,9 +202,9 @@ namespace LiteMonitor.src.UI.SettingsPage
                           "2. 点击右上角的【更改设置】按钮（如果是灰色的）。\n" +
                           "3. 在列表中找到【LiteMonitor++】。\n" +
                           "4. ★ 必须打三个勾（缺一不可）：\n" +
-                          "   ✅ 左侧名字【LiteMonitor++】\n" +
-                          "   ✅ 右侧【专用】\n" +
-                          "   ✅ 右侧【公用】\n" +
+                          "   左侧名字【LiteMonitor++】\n" +
+                          "   右侧【专用】\n" +
+                          "   右侧【公用】\n" +
                           "5. 点击底部的【确定】保存。";
                 }
                 else
@@ -217,9 +217,9 @@ namespace LiteMonitor.src.UI.SettingsPage
                           "2. Click the 'Change settings' button (if greyed out).\n" +
                           "3. Find 'LiteMonitor++' in the list.\n" +
                           "4. ★ You MUST check all three boxes:\n" +
-                          "   ✅ Left Name [LiteMonitor++]\n" +
-                          "   ✅ Right [Private]\n" +
-                          "   ✅ Right [Public]\n" +
+                          "   Left Name [LiteMonitor++]\n" +
+                          "   Right [Private]\n" +
+                          "   Right [Public]\n" +
                           "5. Click [OK] at the bottom to save.";
                 }
                 MessageBox.Show(msg, isChinese ? "内网连接修复指引" : "Connection Fix Guide", MessageBoxButtons.OK, MessageBoxIcon.Warning);

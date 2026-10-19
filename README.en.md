@@ -9,34 +9,34 @@
 
 A lightweight and fully customizable **Windows hardware monitor** — track CPU, GPU, memory, disk, and network statistics in real time.
 
-> 🟢 **Download latest version:**  
-> [📦 GitHub Releases → LiteMonitor++ Latest](https://github.com/mojingjing-git/LiteMonitorPlus/releases/latest)
+> **Download latest version:**  
+> [GitHub Releases → LiteMonitor++ Latest](https://github.com/mojingjing-git/LiteMonitorPlus/releases/latest)
 
 LiteMonitor++ is a modern **Windows desktop system monitoring tool**.  
 It supports horizontal/vertical display, multiple languages, theme switching, transparency, adaptive DPI scaling, and three-level color alerts — in a clean and highly configurable interface.
 
 
 ![LiteMonitor++ Main UI](./resources/screenshots/overview.png)
-###  🟢 **Horizontal Mode / Taskbar Display**
+###  **Horizontal Mode / Taskbar Display**
 ![LiteMonitor++ Horizontal](./resources/screenshots/overview3.png)
 
-###  🟢 **New Network Speed Test Feature**
-![LiteMonitor++ Network Speed Test](./resources/screenshots/overview4.png)  👉 ![LiteMonitor++ 菜单](./resources/screenshots/overview6.png) ![LiteMonitor++ 菜单](./resources/screenshots/overview5.png)
+###  **New Network Speed Test Feature**
+![LiteMonitor++ Network Speed Test](./resources/screenshots/overview4.png)  ![LiteMonitor++ 菜单](./resources/screenshots/overview6.png) ![LiteMonitor++ 菜单](./resources/screenshots/overview5.png)
 
-###  🟢 **New Theme Editor**
+###  **New Theme Editor**
 ![LiteMonitor++ Theme Editor](./resources/screenshots/overview2.jpg)
 
 ---
 
-# 🖥️ Monitoring Features
+# Monitoring Features
 
 | Category | Metrics |
 |-----------|----------|
-| 💻 **CPU** | Real-time usage & temperature (multi-core average + peak). |
-| 🎮 **GPU** | GPU usage, temperature, VRAM usage; supports NVIDIA / AMD / Intel. |
-| 💾 **Memory** | RAM usage overview in percentage. |
-| 📀 **Disk** | Read/Write throughput (KB/s, MB/s). Auto/manual disk selection supported. |
-| 🌐 **Network** | Upload/Download speed with adaptive unit formatting. Auto/manual NIC selection supported. |
+| **CPU** | Real-time usage & temperature (multi-core average + peak). |
+| **GPU** | GPU usage, temperature, VRAM usage; supports NVIDIA / AMD / Intel. |
+| **Memory** | RAM usage overview in percentage. |
+| **Disk** | Read/Write throughput (KB/s, MB/s). Auto/manual disk selection supported. |
+| **Network** | Upload/Download speed with adaptive unit formatting. Auto/manual NIC selection supported. |
 
 ---
 
@@ -44,27 +44,27 @@ It supports horizontal/vertical display, multiple languages, theme switching, tr
 
 | Feature | Description |
 |--------|-------------|
-| 🎨 **Theme Customization** | JSON-defined colors, fonts, spacing, corner radius. New Theme System v2 with cleaner structure & scaling logic. |
-| 🟥🟨🟩 **Three-Level Color Alerts** | Bars and values change colors based on thresholds; network/disk have independent logic. |
-| 🌍 **Multilingual UI** | Supports 8 languages (ZH/EN/JA/KO/FR/DE/ES/RU). Switching languages updates UI instantly. |
-| 📊 **Show/Hide Metrics** | Toggle CPU/GPU/VRAM/MEM/NET/DISK modules individually. |
-| 🧮 **Horizontal Mode** | Brand-new two-row layout with per-column dynamic width, smart unit formatting, and automatic panel width calculation. |
-| 📏 **Adjustable Panel Width** | Change width from menu; layout refreshes instantly. |
-| 🔠 **UI Scaling (UIScale)** | Full DPI + user-defined scaling support; fonts and layout resize proportionally. |
-| 🎞️ **Smooth Animations** | Numeric values transition smoothly; speed configurable. |
-| 🪟 **Window Features** | Rounded corners, transparency, high-quality text rendering, always-on-top. |
-| 🧭 **Auto Hide on Screen Edge** | Automatically collapses when docked to edges; reappears on mouse hover. Multi-monitor aware. |
-| 🧲 **Clamp to Screen** | Prevents window from being dragged outside visible screen area. |
-| 👆 **Click-Through Mode** | Allows mouse interactions to pass through the window. |
-| 🎨 **Instant Theme/Language Switching** | No restart required; UI updates immediately. |
-| 🔍 **Smart Value Formatting** | Automatic unit conversion, adaptive decimals; horizontal mode removes `/s`, trims decimals for large values. |
-| 🔄 **Auto Update Check** | Silent background check on startup; popup only when triggered manually. |
-| 🚀 **Auto Startup** | Uses Windows Task Scheduler (supports elevated run). |
-| 📂 **Persistent Settings** | All preferences saved to `settings.json` in real time. |
+| **Theme Customization** | JSON-defined colors, fonts, spacing, corner radius. New Theme System v2 with cleaner structure & scaling logic. |
+| **Three-Level Color Alerts** | Bars and values change colors based on thresholds; network/disk have independent logic. |
+| **Multilingual UI** | Supports 8 languages (ZH/EN/JA/KO/FR/DE/ES/RU). Switching languages updates UI instantly. |
+| **Show/Hide Metrics** | Toggle CPU/GPU/VRAM/MEM/NET/DISK modules individually. |
+| **Horizontal Mode** | Brand-new two-row layout with per-column dynamic width, smart unit formatting, and automatic panel width calculation. |
+| **Adjustable Panel Width** | Change width from menu; layout refreshes instantly. |
+| **UI Scaling (UIScale)** | Full DPI + user-defined scaling support; fonts and layout resize proportionally. |
+| **Smooth Animations** | Numeric values transition smoothly; speed configurable. |
+| **Window Features** | Rounded corners, transparency, high-quality text rendering, always-on-top. |
+| **Auto Hide on Screen Edge** | Automatically collapses when docked to edges; reappears on mouse hover. Multi-monitor aware. |
+| **Clamp to Screen** | Prevents window from being dragged outside visible screen area. |
+| **Click-Through Mode** | Allows mouse interactions to pass through the window. |
+| **Instant Theme/Language Switching** | No restart required; UI updates immediately. |
+| **Smart Value Formatting** | Automatic unit conversion, adaptive decimals; horizontal mode removes `/s`, trims decimals for large values. |
+| **Auto Update Check** | Silent background check on startup; popup only when triggered manually. |
+| **Auto Startup** | Uses Windows Task Scheduler (supports elevated run). |
+| **Persistent Settings** | All preferences saved to `settings.json` in real time. |
 
 ---
 
-## 📦 Installation
+## Installation
 
 1. Download from [GitHub Releases](https://github.com/mojingjing-git/LiteMonitorPlus/releases)
 2. Extract and run `LiteMonitor++.exe`
@@ -72,7 +72,7 @@ It supports horizontal/vertical display, multiple languages, theme switching, tr
 
 ---
 
-## 🌐 Multilingual Support
+## Multilingual Support
 
 Language files are stored in `/resources/lang/`:
 
@@ -89,7 +89,7 @@ Language files are stored in `/resources/lang/`:
 
 ---
 
-## 🎨 Theme System
+## Theme System
 
 Themes are stored under `/resources/themes/` as JSON files.
 
@@ -113,7 +113,7 @@ Example:
 
 ---
 
-## ⚙️ Settings (settings.json)
+## Settings (settings.json)
 
 | Field | Description |
 |--------|-------------|
@@ -136,7 +136,7 @@ Example:
 
 ---
 
-## 🧩 Architecture Overview
+## Architecture Overview
 
 | File | Responsibility |
 |------|----------------|
@@ -155,7 +155,7 @@ Example:
 
 ---
 
-## 🛠️ Build Instructions
+## Build Instructions
 
 ### Requirements
 - Windows 10 / 11  
@@ -176,7 +176,7 @@ Output:
 
 ---
 
-## 📄 License
+## License
 
 Released under the **MIT License** (free for personal & commercial use).
 
@@ -186,7 +186,7 @@ Released under the **MIT License** (free for personal & commercial use).
 
 ---
 
-## 💬 Contact
+## Contact
 **Maintainer:** mojingjing-git  
 **Project:** [https://github.com/mojingjing-git/LiteMonitorPlus](https://github.com/mojingjing-git/LiteMonitorPlus)
 

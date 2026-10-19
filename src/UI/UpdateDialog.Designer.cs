@@ -56,7 +56,7 @@ namespace LiteMonitor
             lblVersion.Name = "lblVersion";
             lblVersion.Size = new Size(186, 22);
             lblVersion.TabIndex = 0;
-            lblVersion.Text = "⚡️LiteMonitor++_v1.0.6";
+            lblVersion.Text = "LiteMonitor++_v1.0.6";
             lblVersion.TextAlign = ContentAlignment.MiddleCenter;
             // 
             // rtbChangelog
@@ -137,7 +137,7 @@ namespace LiteMonitor
             MinimizeBox = false;
             Name = "UpdateDialog";
             StartPosition = FormStartPosition.CenterScreen;
-            Text = "⚡️LiteMonitor++";
+            Text = "LiteMonitor++";
             ResumeLayout(false);
             PerformLayout();
         }

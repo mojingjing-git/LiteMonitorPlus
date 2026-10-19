@@ -265,11 +265,11 @@ namespace LiteMonitor.src.WebServer
 <body>
 
     <div class='header'>
-        <div class='brand'><span>⚡</span>Lite<span>Monitor</span></div>
+        <div class='brand'>Lite<span>Monitor</span></div>
         <div class='sys-info'>
             <div class='tag'><b>IP</b> <span id='sys-ip'>--</span></div>
             <div class='tag'><b>RUNTIME</b> <span id='sys-uptime'>--</span></div>
-            <div id='btn-auth' class='tag' style='cursor:pointer;display:none' onclick='showAuth()' title='输入密码 / Enter Password'><b>AUTH</b> <span>🔒</span></div>
+            <div id='btn-auth' class='tag' style='cursor:pointer;display:none' onclick='showAuth()' title='输入密码 / Enter Password'><b>AUTH</b></div>
              <div class='tag'>
                 <div id='status-dot' style='width:8px; height:8px; border-radius:50%; background:var(--text-sub); margin-right:6px;'></div>
                 <span id='status-text' style='font-weight:700; font-size:0.8rem;'>--</span>

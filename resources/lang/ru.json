@@ -1,14 +1,14 @@
 {
-  "Title": "⚡️LiteMonitor++",
+  "Title": "LiteMonitor++",
   "Groups": {
-    "DASH": "ℹ️Дашборд",
-    "CPU": "💻CPU",
-    "GPU": "🎮GPU",
-    "HOST": "🖥️Хост",
-    "DISK": "💽Диск",
-    "NET": "🌐Сеть",
-    "DATA": "📈Трафик",
-    "BAT": "🔋Батарея"
+    "DASH": "Дашборд",
+    "CPU": "CPU",
+    "GPU": "GPU",
+    "HOST": "Хост",
+    "DISK": "Диск",
+    "NET": "Сеть",
+    "DATA": "Трафик",
+    "BAT": "Батарея"
   },
   "Items": {
     "DASH.HOST": "Хост",
@@ -49,10 +49,10 @@
     "DASH.Time": " ",
     "DASH.IP": " ",
     "DASH.Uptime": " ",
-    "BAT.Percent": "🔋",
-    "BAT.Power": "🔋",
-    "BAT.Voltage": "🔋",
-    "BAT.Current": "🔋",
+    "BAT.Percent": "BAT",
+    "BAT.Power": "BPWR",
+    "BAT.Voltage": "BVOL",
+    "BAT.Current": "BCUR",
     "CPU.Load": "CPU",
     "CPU.Temp": "CPU",
     "CPU.Clock": "CCLK",
@@ -73,10 +73,10 @@
     "DISK.Temp": "Диск",
     "DISK.Read": "R",
     "DISK.Write": "W",
-    "NET.Up": "🔼",
-    "NET.Down": "🔽",
-    "DATA.DayUp": "⏫",
-    "DATA.DayDown": "⏬"
+    "NET.Up": "↑",
+    "NET.Down": "↓",
+    "DATA.DayUp": "↑↑",
+    "DATA.DayDown": "↓↓"
   },
   "Menu": {
     "__Comment_Global__": "--- Global ---",
@@ -129,7 +129,7 @@
     "WebServerPassword": "Пароль",
     "WebServerPasswordTip": "Пусто для сброса",
     "OpenWeb": "Открыть веб",
-    "WebServerTip": "⚠️Веб включен. Доступ: LAN 'IP:Порт' или 'IPv6:Порт'.",
+    "WebServerTip": "Веб включен. Доступ: LAN 'IP:Порт' или 'IPv6:Порт'.",
 
     "Appearance": "Внешний вид",
     "Theme": "Тема",
@@ -155,9 +155,9 @@
     "TaskbarAlignRight": "Справа",
     "TaskbarAlignLeft": "Слева",
     "TaskbarOffset": "Смещение",
-    "TaskbarAlignTip": "⚠️Слева при центре Win11. Смещение: 10px -20px",
+    "TaskbarAlignTip": "Слева при центре Win11. Смещение: 10px -20px",
     "TaskbarCustomLayout": "Макет",
-    "TaskbarCustomLayoutTip": "⚠️Примечание: Макет только при включенном режиме. Отступы: 6px -6px",
+    "TaskbarCustomLayoutTip": "Примечание: Макет только при включенном режиме. Отступы: 6px -6px",
     "TaskbarFont": "Шрифт",
     "TaskbarFontSize": "Размер",
     "TaskbarFontBold": "Жирный",
@@ -166,7 +166,7 @@
     "TaskbarVerticalPadding": "Заполнение",
 
     "TaskbarCustomColors": "Цвета",
-    "TaskbarCustomTip": "⚠️Фон должен совпадать с панелью задач.",
+    "TaskbarCustomTip": "Фон должен совпадать с панелью задач.",
     "ScreenColorPicker": "Выбор цвета",
     "ScreenColorPickerTip": "Цвет фона:",
     "HorizontalFollowsTaskbar": "Полоса как панель задач",
@@ -191,7 +191,7 @@
 
     "__Comment_Page4__": "--- 4. Thresholds ---",
     "Thresholds": "Пороги",
-    "ThresholdsTips": "⚠️Цвет шкалы по порогу",
+    "ThresholdsTips": "Цвет шкалы по порогу",
     "AlertTemp": "Алерт Темп",
     "AlertThreshold": "Лимит",
 
@@ -217,17 +217,17 @@
 
     "Calibration": "Калибровка",
     "MaxLimits": "Максимум",
-    "CalibrationTip": "⚠️Задает 100% для шкал. Пусто = Авто.",
+    "CalibrationTip": "Задает 100% для шкал. Пусто = Авто.",
 
     "HardwareSettings": "Источник",
     "DiskSource": "Диск",
     "NetworkSource": "Сеть",
     "GpuSource": "GPU",
     "GpuMonitorCount": "Количество отслеживаемых GPU",
-    "GpuMonitorCountTip": "⚠️В режиме нескольких GPU отслеживаются N видеокарт с наивысшим приоритетом; температура/загрузка/мощность показываются по каждой карте",
+    "GpuMonitorCountTip": "В режиме нескольких GPU отслеживаются N видеокарт с наивысшим приоритетом; температура/загрузка/мощность показываются по каждой карте",
     "Auto": "Авто",
     "UseWinPerCounters": "Системные счетчики",
-    "UseWinPerCountersTip": "⚠️Отключите при неточности. CPU/GPU/RAM/Диск читаются из датчиков.",
+    "UseWinPerCountersTip": "Отключите при неточности. CPU/GPU/RAM/Диск читаются из датчиков.",
     "Refresh": "Частота",
     "IgnoreSMBTraffic": "Игнор. SMB",
     "MemoryDisplayMode": "Вид ОЗУ",
@@ -235,13 +235,14 @@
     "__Comment_Page6__": "--- 6. Плагины (PluginPage) ---",
     "Plugins": "Плагины",
     "PluginDevGuide": "Гайд Dev",
-    "PluginHint": "⚠️Инфо: Измените имя/ед.изм/порядок на стр [Монитор].",
+    "PluginHint": "Инфо: Измените имя/ед.изм/порядок на стр [Монитор].",
     "PluginNoInstances": "Нет плагинов",
     "PluginCreateCopy": "Создать копию",
     "PluginDeleteCopy": "Удалить копию",
     "PluginRemoveTarget": "Убрать",
     "PluginTargetTitle": "# Цель",
     "PluginAddTarget": "+ Добавить цель",
-    "PluginDeleteConfirm": "Удалить копию?"
+    "PluginDeleteConfirm": "Удалить копию?",
+    "ScreenColorPickerShort": "P"
   }
 }

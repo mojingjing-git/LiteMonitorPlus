@@ -368,8 +368,8 @@ namespace LiteMonitor.src.UI.Helpers
             if (File.Exists(tokenPath))
             {
                 try { File.Delete(tokenPath); } catch { }
-                string title = "⚡️LiteMonitor++_v" + UpdateChecker.GetCurrentVersion();
-                string content = _cfg.Language == "zh" ? "🎉 软件已成功更新到最新版本！" : "🎉 Software updated to latest version!";
+                string title = "LiteMonitor++_v" + UpdateChecker.GetCurrentVersion();
+                string content = _cfg.Language == "zh" ? "软件已成功更新到最新版本！" : "Software updated to latest version!";
                 ShowNotification(title, content, ToolTipIcon.Info);
             }
         }

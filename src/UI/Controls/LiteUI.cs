@@ -88,7 +88,7 @@ namespace LiteMonitor.src.UI.Controls
             var inputWarn = new LiteNumberInput(range.Warn.ToString(), unit, LanguageManager.T("Menu.ValueWarnColor"), 140, UIColors.TextWarn);
             inputWarn.Padding = UIUtils.S(new Padding(0, 5, 0, 1));
             
-            var arrow = new Label { Text = "➜", AutoSize = true, ForeColor = Color.LightGray, Font = new Font("Microsoft YaHei UI", 9F), Margin = UIUtils.S(new Padding(5, 4, 5, 0)) };
+            var arrow = new Label { Text = ">", AutoSize = true, ForeColor = Color.LightGray, Font = new Font("Microsoft YaHei UI", 9F), Margin = UIUtils.S(new Padding(5, 4, 5, 0)) };
             
             var inputCrit = new LiteNumberInput(range.Crit.ToString(), unit, LanguageManager.T("Menu.ValueCritColor"), 140, UIColors.TextCrit);
             inputCrit.Padding = UIUtils.S(new Padding(0, 5, 0, 1));

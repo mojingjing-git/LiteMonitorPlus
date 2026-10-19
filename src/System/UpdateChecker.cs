@@ -131,7 +131,7 @@ namespace LiteMonitor
                     var context = new DownloadContext
                     {
                         Title = isZh ? "发现新版本！" : "New Version!",
-                        VersionLabel = $"⚡️LiteMonitor++_v{latest}",
+                        VersionLabel = $"LiteMonitor++_v{latest}",
                         Description = $"更新日志：\n{changelog} \n更新日期：\n{releaseDate}\n\nGitHub：https://github.com/mojingjing-git/LiteMonitorPlus",
                         Urls = sortedUrls.ToArray(),
                         SavePath = Path.Combine(AppContext.BaseDirectory, "resources", "update.zip"),

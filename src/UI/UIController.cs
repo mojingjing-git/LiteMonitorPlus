@@ -487,7 +487,7 @@ namespace LiteMonitor
                     
                     if ((DateTime.Now - _overheatStartTimes[key]).TotalSeconds >= 5)
                     {
-                        alertLines.Add($"{label} {alertTitle}: 🔥{val:F0}°C{msgSuffix}");
+                        alertLines.Add($"{label} {alertTitle}: {val:F0}°C{msgSuffix}");
                     }
                 }
                 else

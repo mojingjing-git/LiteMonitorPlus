@@ -1,14 +1,14 @@
 {
-  "Title": "⚡️LiteMonitor++",
+  "Title": "LiteMonitor++",
   "Groups": {
-    "DASH": "ℹ️儀表板",
-    "CPU": "💻CPU",
-    "GPU": "🎮GPU",
-    "HOST": "🖥️主機",
-    "DISK": "💽磁碟",
-    "NET": "🌐網路",
-    "DATA": "📈流量統計",
-    "BAT": "🔋電池"
+    "DASH": "儀表板",
+    "CPU": "CPU",
+    "GPU": "GPU",
+    "HOST": "主機",
+    "DISK": "磁碟",
+    "NET": "網路",
+    "DATA": "流量統計",
+    "BAT": "電池"
   },
   "Items": {
     "DASH.HOST": "主機",
@@ -46,10 +46,10 @@
   },
   "Short": {
     "DASH.Uptime": " ",
-    "BAT.Percent": "🔋",
-    "BAT.Power": "🔋",
-    "BAT.Voltage": "🔋",
-    "BAT.Current": "🔋",
+    "BAT.Percent": "電量",
+    "BAT.Power": "功耗",
+    "BAT.Voltage": "電壓",
+    "BAT.Current": "電流",
     "CPU.Load": "CPU",
     "CPU.Temp": "CPU",
     "CPU.Clock": "CCLK",
@@ -70,10 +70,10 @@
     "DISK.Temp": "磁碟",
     "DISK.Read": "讀",
     "DISK.Write": "寫",
-    "NET.Up": "🔼",
-    "NET.Down": "🔽",
-    "DATA.DayUp": "⏫",
-    "DATA.DayDown": "⏬"
+    "NET.Up": "↑",
+    "NET.Down": "↓",
+    "DATA.DayUp": "↑↑",
+    "DATA.DayDown": "↓↓"
   },
   "Menu": {
         "__Comment_Global__": "--- 全域/按鈕/右鍵選單 ---",
@@ -126,7 +126,7 @@
     "WebServerPassword": "訪問密碼",
     "WebServerPasswordTip": "留空即無密碼",
     "OpenWeb": "開啟網頁",
-    "WebServerTip": "⚠️開啟網頁版後，手機可透過區網「內網IP:連接埠」訪問，或「IPv6:連接埠」遠端訪問",
+    "WebServerTip": "開啟網頁版後，手機可透過區網「內網IP:連接埠」訪問，或「IPv6:連接埠」遠端訪問",
 
     "Appearance": "外觀設定",
     "Theme": "主題",
@@ -152,9 +152,9 @@
     "TaskbarAlignRight": "工作列右側",
     "TaskbarAlignLeft": "工作列左側",
     "TaskbarOffset": "左右偏移量",
-    "TaskbarAlignTip": "⚠️win11工作列為置中對齊時，可設定工作列左側顯示; 左右偏移量可使用正負數如：10px -20px",
+    "TaskbarAlignTip": "win11工作列為置中對齊時，可設定工作列左側顯示; 左右偏移量可使用正負數如：10px -20px",
     "TaskbarCustomLayout": "自訂字體與間距",
-    "TaskbarCustomLayoutTip": "⚠️注意：自訂字體與間距僅在啟用後可設定，間距可使用正負數如：6px -6px",
+    "TaskbarCustomLayoutTip": "注意：自訂字體與間距僅在啟用後可設定，間距可使用正負數如：6px -6px",
     "TaskbarFont": "字體",
     "TaskbarFontSize": "字體大小",
     "TaskbarFontBold": "加粗",
@@ -163,7 +163,7 @@
     "TaskbarVerticalPadding": "工作列上下邊距",
 
     "TaskbarCustomColors": "自訂工作列顏色",
-    "TaskbarCustomTip": "⚠️注意：自訂顏色僅在啟用後可設定，字體背景色請吸取系統工作列的顏色，否則可能出現花字",
+    "TaskbarCustomTip": "注意：自訂顏色僅在啟用後可設定，字體背景色請吸取系統工作列的顏色，否則可能出現花字",
     "LabelColor": "監控項名稱",
     "ValueSafeColor": "正常數值",
     "ValueWarnColor": "告警數值",
@@ -191,7 +191,7 @@
     "AlertTemp": "高溫報警彈窗",
     "AlertThreshold": "高溫報警閾值",
     
-    "ThresholdsTips": "⚠️進度條和數值將根據硬體閾值顯示對應的顏色",
+    "ThresholdsTips": "進度條和數值將根據硬體閾值顯示對應的顏色",
     "GeneralHardware": "通用硬體",
     "HardwareLoad": "硬體負載",
     
@@ -215,17 +215,17 @@
 
     "Calibration": "硬體參數校準",
     "MaxLimits": "最大值",
-    "CalibrationTip": "⚠️為了進度條顯示更準確，請填寫硬體實際的最大值，不填將在高負載時自動學習並更新最大值",
+    "CalibrationTip": "為了進度條顯示更準確，請填寫硬體實際的最大值，不填將在高負載時自動學習並更新最大值",
 
     "HardwareSettings": "硬體設定",
     "DiskSource": "首選磁碟",
     "NetworkSource": "首選網卡",
     "GpuSource": "首選顯卡",
     "GpuMonitorCount": "監控顯示卡數量",
-    "GpuMonitorCountTip": "⚠️多顯示卡模式下按效能優先級取前 N 張顯示卡，溫度/佔用/功耗等指標會分卡顯示",
+    "GpuMonitorCountTip": "多顯示卡模式下按效能優先級取前 N 張顯示卡，溫度/佔用/功耗等指標會分卡顯示",
     "Auto": "自動模式",
     "UseWinPerCounters": "優先使用系統計數器",
-    "UseWinPerCountersTip": "⚠️如數據不準可關閉系統計數器，關閉後，CPU使用率、CPU頻率、記憶體占用、磁碟讀取將直讀硬體感測器",
+    "UseWinPerCountersTip": "如數據不準可關閉系統計數器，關閉後，CPU使用率、CPU頻率、記憶體占用、磁碟讀取將直讀硬體感測器",
     "Refresh": "重新整理頻率",
     "IgnoreSMBTraffic": "不統計局域網SMB流量",
     "MemoryDisplayMode": "記憶體/顯示記憶體顯示",
@@ -233,13 +233,14 @@
     "__Comment_Page6__": "--- 6. 插件管理 (PluginPage) ---",
     "Plugins": "插件管理",
     "PluginDevGuide": "插件開發規範",
-    "PluginHint": "⚠️說明：如需修改插件的顯示名稱、單位或排序，請前往 [監控項顯示] 設定頁面",
+    "PluginHint": "說明：如需修改插件的顯示名稱、單位或排序，請前往 [監控項顯示] 設定頁面",
     "PluginNoInstances": "暫無插件實例",
     "PluginCreateCopy": "建立副本",
     "PluginDeleteCopy": "刪除副本",
     "PluginRemoveTarget": "移除",
     "PluginTargetTitle": "# 監控目標",
     "PluginAddTarget": "+ 新增監控目標",
-    "PluginDeleteConfirm": "確定要刪除此插件副本嗎？"
+    "PluginDeleteConfirm": "確定要刪除此插件副本嗎？",
+    "ScreenColorPickerShort": "取"
   }
 }

@@ -1,14 +1,14 @@
 {
-  "Title": "⚡️LiteMonitor++",
+  "Title": "LiteMonitor++",
   "Groups": {
-    "DASH": "ℹ️Panel",
-    "CPU": "💻CPU",
-    "GPU": "🎮GPU",
-    "HOST": "🖥️Host",
-    "DISK": "💽Disco",
-    "NET": "🌐Red",
-    "DATA": "📈Datos",
-    "BAT": "🔋Batería"
+    "DASH": "Panel",
+    "CPU": "CPU",
+    "GPU": "GPU",
+    "HOST": "Host",
+    "DISK": "Disco",
+    "NET": "Red",
+    "DATA": "Datos",
+    "BAT": "Batería"
   },
   "Items": {
     "DASH.HOST": "Host",
@@ -49,10 +49,10 @@
     "DASH.Time": " ",
     "DASH.IP": " ",
     "DASH.Uptime": " ",
-    "BAT.Percent": "🔋",
-    "BAT.Power": "🔋",
-    "BAT.Voltage": "🔋",
-    "BAT.Current": "🔋",
+    "BAT.Percent": "BAT",
+    "BAT.Power": "BPWR",
+    "BAT.Voltage": "BVOL",
+    "BAT.Current": "BCUR",
     "CPU.Load": "CPU",
     "CPU.Temp": "CPU",
     "CPU.Clock": "CCLK",
@@ -73,10 +73,10 @@
     "DISK.Temp": "Disco",
     "DISK.Read": "L",
     "DISK.Write": "E",
-    "NET.Up": "🔼",
-    "NET.Down": "🔽",
-    "DATA.DayUp": "⏫",
-    "DATA.DayDown": "⏬"
+    "NET.Up": "↑",
+    "NET.Down": "↓",
+    "DATA.DayUp": "↑↑",
+    "DATA.DayDown": "↓↓"
   },
   "Menu": {
     "__Comment_Global__": "--- Global ---",
@@ -129,7 +129,7 @@
     "WebServerPassword": "Contraseña",
     "WebServerPasswordTip": "Vacío para ninguna",
     "OpenWeb": "Abrir web",
-    "WebServerTip": "⚠️Web activa. Acceso móvil vía LAN 'IP:Puerto' o 'IPv6:Puerto'.",
+    "WebServerTip": "Web activa. Acceso móvil vía LAN 'IP:Puerto' o 'IPv6:Puerto'.",
 
     "Appearance": "Apariencia",
     "Theme": "Tema",
@@ -155,9 +155,9 @@
     "TaskbarAlignRight": "Derecha",
     "TaskbarAlignLeft": "Izquierda",
     "TaskbarOffset": "Offset",
-    "TaskbarAlignTip": "⚠️Izquierda si barra Win11 centrada. Offset: 10px -20px",
+    "TaskbarAlignTip": "Izquierda si barra Win11 centrada. Offset: 10px -20px",
     "TaskbarCustomLayout": "Layout",
-    "TaskbarCustomLayoutTip": "⚠️Nota: Layout solo disponible si activado. Espacio: 6px -6px",
+    "TaskbarCustomLayoutTip": "Nota: Layout solo disponible si activado. Espacio: 6px -6px",
     "TaskbarFont": "Fuente",
     "TaskbarFontSize": "Tamaño",
     "TaskbarFontBold": "Negrita",
@@ -166,7 +166,7 @@
     "TaskbarVerticalPadding": "Relleno",
 
     "TaskbarCustomColors": "Colores",
-    "TaskbarCustomTip": "⚠️El fondo debe coincidir con la barra.",
+    "TaskbarCustomTip": "El fondo debe coincidir con la barra.",
     "ScreenColorPicker": "Selector color",
     "ScreenColorPickerTip": "Color fondo:",
     "HorizontalFollowsTaskbar": "Barra sigue barra tareas",
@@ -191,7 +191,7 @@
 
     "__Comment_Page4__": "--- 4. Umbrales ---",
     "Thresholds": "Umbrales",
-    "ThresholdsTips": "⚠️Color barra según umbral",
+    "ThresholdsTips": "Color barra según umbral",
     "AlertTemp": "Alerta Temp",
     "AlertThreshold": "Límite",
 
@@ -217,17 +217,17 @@
 
     "Calibration": "Calibración",
     "MaxLimits": "Máximos",
-    "CalibrationTip": "⚠️Define el 100% de las barras. Vacío = Auto.",
+    "CalibrationTip": "Define el 100% de las barras. Vacío = Auto.",
 
     "HardwareSettings": "Fuente",
     "DiskSource": "Disco",
     "NetworkSource": "Red",
     "GpuSource": "GPU",
     "GpuMonitorCount": "Número de GPU monitorizadas",
-    "GpuMonitorCountTip": "⚠️En modo multi-GPU se monitorizan las N GPU con mayor prioridad; temperatura / carga / potencia se muestran por GPU",
+    "GpuMonitorCountTip": "En modo multi-GPU se monitorizan las N GPU con mayor prioridad; temperatura / carga / potencia se muestran por GPU",
     "Auto": "Auto",
     "UseWinPerCounters": "Contadores Sistema",
-    "UseWinPerCountersTip": "⚠️Desactiva si no es exacto. CPU/GPU/RAM/DISCO leídos desde sensores.",
+    "UseWinPerCountersTip": "Desactiva si no es exacto. CPU/GPU/RAM/DISCO leídos desde sensores.",
     "Refresh": "Tasa",
     "IgnoreSMBTraffic": "Ignorar SMB",
     "MemoryDisplayMode": "Vis. RAM",
@@ -235,13 +235,14 @@
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",
     "PluginDevGuide": "Guía Dev",
-    "PluginHint": "⚠️Nota: Cambiar nombre/unidad/orden en [Items Monitor].",
+    "PluginHint": "Nota: Cambiar nombre/unidad/orden en [Items Monitor].",
     "PluginNoInstances": "Sin Plugins",
     "PluginCreateCopy": "Crear Copia",
     "PluginDeleteCopy": "Borrar Copia",
     "PluginRemoveTarget": "Quitar",
     "PluginTargetTitle": "# Objetivo",
     "PluginAddTarget": "+ Añadir Objetivo",
-    "PluginDeleteConfirm": "¿Borrar copia?"
+    "PluginDeleteConfirm": "¿Borrar copia?",
+    "ScreenColorPickerShort": "P"
   }
 }

@@ -1,14 +1,14 @@
 {
-  "Title": "⚡️LiteMonitor++",
+  "Title": "LiteMonitor++",
   "Groups": {
-    "DASH": "ℹ️看板",
-    "CPU": "💻CPU",
-    "GPU": "🎮GPU",
-    "HOST": "🖥️主机",
-    "DISK": "💽磁盘",
-    "NET": "🌐网络",
-    "DATA": "📈流量统计",
-    "BAT": "🔋电池"
+    "DASH": "看板",
+    "CPU": "CPU",
+    "GPU": "GPU",
+    "HOST": "主机",
+    "DISK": "磁盘",
+    "NET": "网络",
+    "DATA": "流量统计",
+    "BAT": "电池"
   },
   "Items": {
     "DASH.HOST": "主机名",
@@ -69,14 +69,14 @@
     "DISK.Temp": "磁盘",
     "DISK.Read": "读",
     "DISK.Write": "写",
-    "NET.Up": "🔼",
-    "NET.Down": "🔽",
-    "DATA.DayUp": "⏫",
-    "DATA.DayDown": "⏬",
-    "BAT.Percent": "🔋",
-    "BAT.Power": "🔋",
-    "BAT.Voltage": "🔋",
-    "BAT.Current": "🔋"
+    "NET.Up": "↑",
+    "NET.Down": "↓",
+    "DATA.DayUp": "↑↑",
+    "DATA.DayDown": "↓↓",
+    "BAT.Percent": "电量",
+    "BAT.Power": "功耗",
+    "BAT.Voltage": "电压",
+    "BAT.Current": "电流"
   },
   "Menu": {
     "__Comment_Global__": "--- 全局/按钮/右键菜单 ---",
@@ -129,7 +129,7 @@
     "WebServerPassword": "访问密码",
     "WebServerPasswordTip": "留空即无密码",
     "OpenWeb": "打开网页版",
-    "WebServerTip": "⚠️开启网页版后，手机可通过局域网“内网IP:端口”访问，或“IPv6:端口”远程访问",
+    "WebServerTip": "开启网页版后，手机可通过局域网“内网IP:端口”访问，或“IPv6:端口”远程访问",
 
     "Appearance": "外观设置",
     "Theme": "主题",
@@ -155,9 +155,9 @@
     "TaskbarAlignRight": "任务栏右侧",
     "TaskbarAlignLeft": "任务栏左侧",
     "TaskbarOffset": "左右偏移量",
-    "TaskbarAlignTip": "⚠️win11仅任务栏为居中对齐时，可设置任务栏左侧显示; 左右偏移量可使用正负数如：10px -20px",
+    "TaskbarAlignTip": "win11仅任务栏为居中对齐时，可设置任务栏左侧显示; 左右偏移量可使用正负数如：10px -20px",
     "TaskbarCustomLayout": "自定义字体与间距",
-    "TaskbarCustomLayoutTip": "⚠️注意：自定义字体与间距仅在启用后可设置，间距可使用正负数如：6px -6px",
+    "TaskbarCustomLayoutTip": "注意：自定义字体与间距仅在启用后可设置，间距可使用正负数如：6px -6px",
     "TaskbarFont": "字体",
     "TaskbarFontSize": "字体大小",
     "TaskbarFontBold": "加粗",
@@ -165,7 +165,7 @@
     "TaskbarInnerSpacing": "数值间距",
     "TaskbarVerticalPadding": "任务栏上下边距",
     "TaskbarCustomColors": "自定义任务栏颜色",
-    "TaskbarCustomTip": "⚠️注意：自定义颜色仅在启用后可设置，字体背景色请吸取系统任务栏的颜色，否则可能出现花字",
+    "TaskbarCustomTip": "注意：自定义颜色仅在启用后可设置，字体背景色请吸取系统任务栏的颜色，否则可能出现花字",
     "LabelColor": "监控项名称",
     "ValueSafeColor": "正常数值",
     "ValueWarnColor": "告警数值",
@@ -193,7 +193,7 @@
     "AlertTemp": "高温报警弹窗",
     "AlertThreshold": "高温报警阈值",
     
-    "ThresholdsTips": "⚠️进度条和数值将根据硬件阈值显示对应的颜色",
+    "ThresholdsTips": "进度条和数值将根据硬件阈值显示对应的颜色",
     "GeneralHardware": "通用硬件",
     "HardwareLoad": "硬件负载",
     
@@ -217,31 +217,32 @@
 
     "Calibration": "硬件参数校准",
     "MaxLimits": "最大值",
-    "CalibrationTip": "⚠️为了进度条显示更准确，请填写硬件实际的最大值，不填将在高负载时自动学习并更新最大值",
+    "CalibrationTip": "为了进度条显示更准确，请填写硬件实际的最大值，不填将在高负载时自动学习并更新最大值",
 
     "HardwareSettings": "硬件与传感器设置",
     "DiskSource": "首选磁盘",
     "NetworkSource": "首选网卡",
     "GpuSource": "首选显卡",
     "GpuMonitorCount": "监控显卡数量",
-    "GpuMonitorCountTip": "⚠️多显卡模式下按性能优先级取前 N 张显卡，温度/占用/功耗等指标会分卡显示",
+    "GpuMonitorCountTip": "多显卡模式下按性能优先级取前 N 张显卡，温度/占用/功耗等指标会分卡显示",
     "Auto": "自动模式",
     "UseWinPerCounters": "优先使用系统计数器",
-    "UseWinPerCountersTip": "⚠️如数据不准可关闭系统计数器，关闭后，CPU使用率、CPU频率、内存占用、磁盘读取将直读硬件传感器",
+    "UseWinPerCountersTip": "如数据不准可关闭系统计数器，关闭后，CPU使用率、CPU频率、内存占用、磁盘读取将直读硬件传感器",
     "Refresh": "刷新频率",
     "IgnoreSMBTraffic": "不统计局域网SMB流量",
     "MemoryDisplayMode": "内存/显存显示",
     
     "__Comment_Page6__": "--- 6. 插件管理 (PluginPage) ---",
     "Plugins": "插件管理",
-    "PluginDevGuide": "📖插件开发指南",
-    "PluginHint": "⚠️说明：如需修改插件的显示名称或排序，请开启插件后前往 [监控项显示] 页面设置",
+    "PluginDevGuide": "插件开发指南",
+    "PluginHint": "说明：如需修改插件的显示名称或排序，请开启插件后前往 [监控项显示] 页面设置",
     "PluginNoInstances": "暂无插件实例",
     "PluginCreateCopy": "创建副本",
     "PluginDeleteCopy": "删除副本",
     "PluginRemoveTarget": "移除",
     "PluginTargetTitle": "# 监控目标",
     "PluginAddTarget": "+ 添加新监控目标",
-    "PluginDeleteConfirm": "确定要删除此插件副本吗？"
+    "PluginDeleteConfirm": "确定要删除此插件副本吗？",
+    "ScreenColorPickerShort": "取"
   }
 }

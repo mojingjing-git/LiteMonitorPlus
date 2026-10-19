@@ -142,13 +142,13 @@ namespace LiteMonitor.src.UI
             _pages.Clear();
             
             // 注册所有页面
-            AddNav("MainPanel", "🖥️ " + LanguageManager.T("Menu.MainFormSettings"), new MainPanelPage());
-            AddNav("Taskbar", "➖ " + LanguageManager.T("Menu.TaskbarSettings"), new TaskbarPage());
-            AddNav("Monitor", "📊 " + LanguageManager.T("Menu.MonitorItemDisplay"), new MonitorPage());
-            AddNav("Threshold", "🔔 " + LanguageManager.T("Menu.Thresholds"), new ThresholdPage());
-            AddNav("System", "⚙️ " + LanguageManager.T("Menu.SystemHardwar"), new SystemHardwarPage());
-            AddNav("Plugins", "🧩 " + LanguageManager.T("Menu.Plugins"), new PluginPage());
-            AddNav("PluginMarket", "🛒 " + LanguageManager.T("Menu.PluginMarket"), new PluginMarketPage());
+            AddNav("MainPanel", LanguageManager.T("Menu.MainFormSettings"), new MainPanelPage());
+            AddNav("Taskbar", LanguageManager.T("Menu.TaskbarSettings"), new TaskbarPage());
+            AddNav("Monitor", LanguageManager.T("Menu.MonitorItemDisplay"), new MonitorPage());
+            AddNav("Threshold", LanguageManager.T("Menu.Thresholds"), new ThresholdPage());
+            AddNav("System", LanguageManager.T("Menu.SystemHardwar"), new SystemHardwarPage());
+            AddNav("Plugins", LanguageManager.T("Menu.Plugins"), new PluginPage());
+            AddNav("PluginMarket", LanguageManager.T("Menu.PluginMarket"), new PluginMarketPage());
 
             _pnlNavContainer.PerformLayout();
             SwitchPage("MainPanel");

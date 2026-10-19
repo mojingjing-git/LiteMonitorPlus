@@ -143,7 +143,7 @@ namespace LiteMonitor
             // 1. 状态标签 (Status) - 使用主题字体和颜色
             lblStatus = new Label
             {
-                Text = "🌐 Network Speed Test",
+                Text = "Network Speed Test",
                 AutoSize = false,
                 Width = Width,
                 Height = ScaleDPI(30), // 增加高度以容纳更大的字体
@@ -277,7 +277,7 @@ namespace LiteMonitor
             // 批量重置 UI 状态
             Invoke(new Action(() =>
             {
-                lblStatus.Text = "🚀 Speed Test Started...";
+                lblStatus.Text = "Speed Test Started...";
                 lblSpeed.Text = "Internet: ↓ 0.0 Mbps ↑ 0.0 Mbps";
                 lblLocalSpeed.Text = "Measuring network traffic...";
                 lblLocalSpeed.ForeColor = ThemeManager.ParseColor(_currentTheme.Color.ValueSafe);
@@ -411,7 +411,7 @@ namespace LiteMonitor
             {
                 // 移除 btnClose.Visible = false; 这行，让关闭按钮保持默认显示状态
                 btnRetry.Visible = false;
-                lblStatus.Text = "🚀 Speed Test Started...";
+                lblStatus.Text = "Speed Test Started...";
                 lblSpeed.Text = "Internet: ↓ 0.0 Mbps ↑ 0.0 Mbps";
                 bar.Value = DownloadStartProgress;
                 lblLocalSpeed.Text = "Connecting to server...";
@@ -424,7 +424,7 @@ namespace LiteMonitor
             _currentPhase = SpeedTestPhase.Download;
             Invoke(new Action(() =>
             {
-                lblStatus.Text = "▶ Download Test Starting...";
+                lblStatus.Text = "Download Test Starting...";
                 lblSpeed.Text = "Connecting to server...";
             }));
 
@@ -435,7 +435,7 @@ namespace LiteMonitor
             // ----------------------------------------------------
             Invoke(new Action(() =>
             {
-                lblStatus.Text = "✅ Download Test Complete";
+                lblStatus.Text = "Download Test Complete";
                 lblSpeed.Text = $"Internet: ↓ {lastDownload:F1} Mbps   ↑ 0.0 Mbps";
                 lblLocalSpeed.Text = $" ↓ {maxLocalDownload:F1}MB/s   ↑ 0.0MB/s";
                 lblLocalSpeed.ForeColor = ThemeManager.ParseColor(_currentTheme.Color.TextPrimary);
@@ -447,7 +447,7 @@ namespace LiteMonitor
             _currentPhase = SpeedTestPhase.Upload;
             Invoke(new Action(() =>
             {
-                lblStatus.Text = "▶ Upload Test Starting...";
+                lblStatus.Text = "Upload Test Starting...";
                 lblSpeed.Text = $"Internet: ↓ {lastDownload:F1} Mbps   ↑ Connecting...";
                 lblLocalSpeed.ForeColor = ThemeManager.ParseColor(_currentTheme.Color.ValueSafe);
             }));
@@ -459,7 +459,7 @@ namespace LiteMonitor
             // ----------------------------------------------------
             Invoke(new Action(() =>
             {
-                lblStatus.Text = "✅ Upload Test Complete";
+                lblStatus.Text = "Upload Test Complete";
                 lblSpeed.Text = $"Internet: ↓ {lastDownload:F1} Mbps   ↑ {lastUpload:F1} Mbps";
             }));
 
@@ -469,7 +469,7 @@ namespace LiteMonitor
             _currentPhase = SpeedTestPhase.Complete;
             Invoke(new Action(() =>
             {
-                lblStatus.Text = "🎯 Speed Test Complete";
+                lblStatus.Text = "Speed Test Complete";
 
                 // 锁定 lblLocalSpeed 为最终峰值
                 lblLocalSpeed.Text = $" ↓ {maxLocalDownload:F1}MB/s   ↑ {maxLocalUpload:F1}MB/s";

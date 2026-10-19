@@ -45,7 +45,7 @@
     {
       "key": "quote",
       "label": "一言",
-      "short_label": "📖",
+      "short_label": "一言",
       "format_val": "{{hitokoto}}",
       "unit": ""
     }

@@ -55,7 +55,7 @@ namespace LiteMonitor
             _sortedUrls = new List<string>(_context.Urls);
 
             // 初始化 UI
-            this.Text = IsChinese ? $"⚡️LiteMonitor++ - {_context.Title}" : $"⚡️LiteMonitor++ - {_context.Title}";
+            this.Text = IsChinese ? $"LiteMonitor++ - {_context.Title}" : $"LiteMonitor++ - {_context.Title}";
             lblVersion.Text = _context.VersionLabel;
             
             // 富文本设置 (必须在设置文本之前/之间正确处理)

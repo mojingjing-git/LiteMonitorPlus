@@ -18,7 +18,7 @@ namespace LiteMonitor.src.Plugins
         /// <summary>
         /// 错误状态显示文本
         /// </summary>
-        public const string STATUS_ERROR = "❌";
+        public const string STATUS_ERROR = "[ERROR]";
 
         /// <summary>
         /// 加载中状态显示文本
@@ -28,12 +28,12 @@ namespace LiteMonitor.src.Plugins
         /// <summary>
         /// 未知状态显示文本 (解析失败/路径错误)
         /// </summary>
-        public const string STATUS_UNKNOWN = "❓";
+        public const string STATUS_UNKNOWN = "[UNKNOWN]";
 
         /// <summary>
         /// 空值状态显示文本 (值为空)
         /// </summary>
-        public const string STATUS_EMPTY = "⛔";
+        public const string STATUS_EMPTY = "[EMPTY]";
 
         /// <summary>
         /// 插件配置文件扩展名

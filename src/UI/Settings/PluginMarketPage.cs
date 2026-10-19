@@ -184,22 +184,22 @@ namespace LiteMonitor.src.UI.SettingsPage
             // 需要的额外准备
             if (entry.Requires != null && entry.Requires.Count > 0)
             {
-                group.AddHint("📌 " + LanguageManager.T("Menu.PluginMarketRequires") + "：" + string.Join("；", entry.Requires));
+                group.AddHint(LanguageManager.T("Menu.PluginMarketRequires") + "：" + string.Join("；", entry.Requires));
             }
 
             if (!string.IsNullOrEmpty(entry.Note))
             {
-                group.AddHint("💬 " + entry.Note);
+                group.AddHint(entry.Note);
             }
 
             if (entry.Renamed && !string.IsNullOrEmpty(entry.OriginalId))
             {
-                group.AddHint("🏷 " + LanguageManager.T("Menu.PluginMarketRenamed") + $"：{entry.OriginalId} → {entry.Id}");
+                group.AddHint(LanguageManager.T("Menu.PluginMarketRenamed") + $"：{entry.OriginalId} → {entry.Id}");
             }
 
             if (!string.IsNullOrEmpty(entry.Source))
             {
-                var link = new LiteLink("🔗 " + LanguageManager.T("Menu.PluginMarketSourceLink"), () => OpenUrl(entry.Source));
+                var link = new LiteLink(LanguageManager.T("Menu.PluginMarketSourceLink"), () => OpenUrl(entry.Source));
                 group.AddFullItem(link);
             }
 

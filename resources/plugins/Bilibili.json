@@ -37,7 +37,7 @@
       "key": "fans",
       "label": "{{up_name}}",
       "short_label": "B站",
-      "format_val": "👤{{follower}}",
+      "format_val": "{{follower}}",
       "unit": ""
     }
   ]

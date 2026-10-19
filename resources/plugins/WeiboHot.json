@@ -31,11 +31,11 @@
             "source": "top_label",
             "function": "map",
             "map": {
-              "爆": "🔥",
-              "热": "🔴",
-              "新": "🆕",
-              "荐": "👍",
-              "沸": "🔥"
+              "爆": "爆 ",
+              "热": "热 ",
+              "新": "新 ",
+              "荐": "荐 ",
+              "沸": "沸 "
             }
           },
           {
@@ -43,7 +43,7 @@
             "source": "icon_map",
             "function": "regex_replace",
             "pattern": "^$",
-            "to": "🍉"
+            "to": ""
           }
         ]
       }
@@ -54,7 +54,7 @@
       "key": "hot",
       "label": "微博热搜",
       "short_label": "WB",
-      "format_val": "{{final_icon}} {{top_word}}",
+      "format_val": "{{final_icon}}{{top_word}}",
       "color": "1"
     }
   ]

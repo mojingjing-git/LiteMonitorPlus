@@ -37,9 +37,9 @@ namespace LiteMonitor.src.Plugins
             {
                 switch (Status)
                 {
-                    case "needs-service": return "⚠️ 需配套服务";
-                    case "needs-code": return "❌ 需改代码";
-                    default: return "✅ 开箱即用";
+                    case "needs-service": return "需配套服务";
+                    case "needs-code": return "需改代码";
+                    default: return "开箱即用";
                 }
             }
         }

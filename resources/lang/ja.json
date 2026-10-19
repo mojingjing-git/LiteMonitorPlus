@@ -1,15 +1,15 @@
 {
-  "Title": "⚡️LiteMonitor++",
+  "Title": "LiteMonitor++",
   "Groups": {
-    "DASH": "ℹ️ダッシュボード",
-    "CPU": "💻CPU",
-    "GPU": "🎮GPU",
-    "HOST": "🖥️ホスト",
+    "DASH": "ダッシュボード",
+    "CPU": "CPU",
+    "GPU": "GPU",
+    "HOST": "ホスト",
 
-    "DISK": "💽ディスク",
-    "NET": "🌐ネット",
-    "DATA": "📈通信量",
-    "BAT": "🔋電池"
+    "DISK": "ディスク",
+    "NET": "ネット",
+    "DATA": "通信量",
+    "BAT": "電池"
   },
   "Items": {
     "DASH.HOST": "ホスト名",
@@ -50,10 +50,10 @@
     "DASH.Time": " ",
     "DASH.IP": " ",
     "DASH.Uptime": " ",
-    "BAT.Percent": "🔋",
-    "BAT.Power": "🔋",
-    "BAT.Voltage": "🔋",
-    "BAT.Current": "🔋",
+    "BAT.Percent": "残量",
+    "BAT.Power": "電力",
+    "BAT.Voltage": "電圧",
+    "BAT.Current": "電流",
     "CPU.Load": "CPU",
     "CPU.Temp": "CPU",
     "CPU.Clock": "CCLK",
@@ -74,10 +74,10 @@
     "DISK.Temp": "ディスク",
     "DISK.Read": "R",
     "DISK.Write": "W",
-    "NET.Up": "🔼",
-    "NET.Down": "🔽",
-    "DATA.DayUp": "⏫",
-    "DATA.DayDown": "⏬"
+    "NET.Up": "↑",
+    "NET.Down": "↓",
+    "DATA.DayUp": "↑↑",
+    "DATA.DayDown": "↓↓"
   },
   "Menu": {
     "__Comment_Global__": "--- Global ---",
@@ -130,7 +130,7 @@
     "WebServerPassword": "パスワード",
     "WebServerPasswordTip": "空で設定なし",
     "OpenWeb": "ウェブを開く",
-    "WebServerTip": "⚠️有効後、スマホはLAN「IP:ポート」または「IPv6:ポート」でアクセス可",
+    "WebServerTip": "有効後、スマホはLAN「IP:ポート」または「IPv6:ポート」でアクセス可",
 
     "Appearance": "外観設定",
     "Theme": "テーマ",
@@ -156,9 +156,9 @@
     "TaskbarAlignRight": "右寄せ",
     "TaskbarAlignLeft": "左寄せ",
     "TaskbarOffset": "左右オフセット",
-    "TaskbarAlignTip": "⚠️Win11タスクバー中央揃え時は左寄せ可能。オフセット: 10px -20px",
+    "TaskbarAlignTip": "Win11タスクバー中央揃え時は左寄せ可能。オフセット: 10px -20px",
     "TaskbarCustomLayout": "レイアウト設定",
-    "TaskbarCustomLayoutTip": "⚠️注意: レイアウトは有効化時のみ使用可。間隔: 6px -6px",
+    "TaskbarCustomLayoutTip": "注意: レイアウトは有効化時のみ使用可。間隔: 6px -6px",
     "TaskbarFont": "フォント",
     "TaskbarFontSize": "サイズ",
     "TaskbarFontBold": "太字",
@@ -167,7 +167,7 @@
     "TaskbarVerticalPadding": "上下余白",
 
     "TaskbarCustomColors": "文字色設定",
-    "TaskbarCustomTip": "⚠️背景色はタスクバーの色に合わせてください。",
+    "TaskbarCustomTip": "背景色はタスクバーの色に合わせてください。",
     "ScreenColorPicker": "カラーピッカー",
     "ScreenColorPickerTip": "背景色を設定:",
     "HorizontalFollowsTaskbar": "バーはタスクバー順に表示",
@@ -192,7 +192,7 @@
 
     "__Comment_Page4__": "--- 4. 閾値設定 ---",
     "Thresholds": "アラート閾値",
-    "ThresholdsTips": "⚠️バーと数値の色が閾値に応じて変化",
+    "ThresholdsTips": "バーと数値の色が閾値に応じて変化",
     "AlertTemp": "高温警告",
     "AlertThreshold": "警告温度",
 
@@ -218,17 +218,17 @@
 
     "Calibration": "ハードウェア校正",
     "MaxLimits": "最大値",
-    "CalibrationTip": "⚠️バー表示の基準となる最大値を設定。空欄で自動学習。",
+    "CalibrationTip": "バー表示の基準となる最大値を設定。空欄で自動学習。",
 
     "HardwareSettings": "ソース選択",
     "DiskSource": "ディスク",
     "NetworkSource": "ネットワーク",
     "GpuSource": "GPU",
     "GpuMonitorCount": "監視する GPU の数",
-    "GpuMonitorCountTip": "⚠️複数 GPU モードでは優先度の上位 N 枚を監視し、温度/使用率/消費電力は GPU ごとに表示します",
+    "GpuMonitorCountTip": "複数 GPU モードでは優先度の上位 N 枚を監視し、温度/使用率/消費電力は GPU ごとに表示します",
     "Auto": "自動",
     "UseWinPerCounters": "システムカウンター優先",
-    "UseWinPerCountersTip": "⚠️不正確な場合は無効にしてください。CPU/GPU/RAM/ディスクはセンサーから直接読み取られます。",
+    "UseWinPerCountersTip": "不正確な場合は無効にしてください。CPU/GPU/RAM/ディスクはセンサーから直接読み取られます。",
     "Refresh": "更新頻度",
     "IgnoreSMBTraffic": "SMB通信を無視",
     "MemoryDisplayMode": "メモリ表示",
@@ -236,13 +236,14 @@
     "__Comment_Page6__": "--- 6. プラグイン (PluginPage) ---",
     "Plugins": "プラグイン管理",
     "PluginDevGuide": "開発ガイド",
-    "PluginHint": "⚠️ヒント: 名前/単位/順序は[表示項目]で変更してください。",
+    "PluginHint": "ヒント: 名前/単位/順序は[表示項目]で変更してください。",
     "PluginNoInstances": "プラグインなし",
     "PluginCreateCopy": "コピー作成",
     "PluginDeleteCopy": "コピー削除",
     "PluginRemoveTarget": "削除",
     "PluginTargetTitle": "# ターゲット",
     "PluginAddTarget": "+ ターゲット追加",
-    "PluginDeleteConfirm": "このコピーを削除しますか？"
+    "PluginDeleteConfirm": "このコピーを削除しますか？",
+    "ScreenColorPickerShort": "彩"
   }
 }

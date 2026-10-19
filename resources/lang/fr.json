@@ -1,15 +1,15 @@
 {
-  "Title": "⚡️LiteMonitor++",
+  "Title": "LiteMonitor++",
   "Groups": {
-    "DASH": "ℹ️Tableau de bord",
-    "CPU": "💻CPU",
-    "GPU": "🎮GPU",
-    "HOST": "🖥️Host",
+    "DASH": "Tableau de bord",
+    "CPU": "CPU",
+    "GPU": "GPU",
+    "HOST": "Host",
 
-    "DISK": "💽Disque",
-    "NET": "🌐Réseau",
-    "DATA": "📈Données",
-    "BAT": "🔋Batterie"
+    "DISK": "Disque",
+    "NET": "Réseau",
+    "DATA": "Données",
+    "BAT": "Batterie"
   },
   "Items": {
     "DASH.HOST": "Hôte",
@@ -50,10 +50,10 @@
     "DASH.Time": " ",
     "DASH.IP": " ",
     "DASH.Uptime": " ",
-    "BAT.Percent": "🔋",
-    "BAT.Power": "🔋",
-    "BAT.Voltage": "🔋",
-    "BAT.Current": "🔋",
+    "BAT.Percent": "BAT",
+    "BAT.Power": "BPWR",
+    "BAT.Voltage": "BVOL",
+    "BAT.Current": "BCUR",
     "CPU.Load": "CPU",
     "CPU.Temp": "CPU",
     "CPU.Clock": "CCLK",
@@ -74,10 +74,10 @@
     "DISK.Temp": "Disque",
     "DISK.Read": "L",
     "DISK.Write": "E",
-    "NET.Up": "🔼",
-    "NET.Down": "🔽",
-    "DATA.DayUp": "⏫",
-    "DATA.DayDown": "⏬"
+    "NET.Up": "↑",
+    "NET.Down": "↓",
+    "DATA.DayUp": "↑↑",
+    "DATA.DayDown": "↓↓"
   },
   "Menu": {
     "__Comment_Global__": "--- Global ---",
@@ -130,7 +130,7 @@
     "WebServerPassword": "Mot de passe",
     "WebServerPasswordTip": "Vide pour aucun",
     "OpenWeb": "Ouvrir web",
-    "WebServerTip": "⚠️Web actif. Accès mobile via LAN 'IP:Port' ou distant 'IPv6:Port'.",
+    "WebServerTip": "Web actif. Accès mobile via LAN 'IP:Port' ou distant 'IPv6:Port'.",
 
     "Appearance": "Apparence",
     "Theme": "Thème",
@@ -156,9 +156,9 @@
     "TaskbarAlignRight": "Droite",
     "TaskbarAlignLeft": "Gauche",
     "TaskbarOffset": "Décalage",
-    "TaskbarAlignTip": "⚠️Gauche si barre centrée (Win11). Décalage: 10px -20px",
+    "TaskbarAlignTip": "Gauche si barre centrée (Win11). Décalage: 10px -20px",
     "TaskbarCustomLayout": "Layout",
-    "TaskbarCustomLayoutTip": "⚠️Note: Layout seulement si activé. Espace: 6px -6px",
+    "TaskbarCustomLayoutTip": "Note: Layout seulement si activé. Espace: 6px -6px",
     "TaskbarFont": "Police",
     "TaskbarFontSize": "Taille",
     "TaskbarFontBold": "Gras",
@@ -167,7 +167,7 @@
     "TaskbarVerticalPadding": "Remplissage",
 
     "TaskbarCustomColors": "Couleurs",
-    "TaskbarCustomTip": "⚠️Le fond doit correspondre à la barre.",
+    "TaskbarCustomTip": "Le fond doit correspondre à la barre.",
     "ScreenColorPicker": "Sélecteur",
     "ScreenColorPickerTip": "Couleur fond:",
     "HorizontalFollowsTaskbar": "Barre suit barre tâches",
@@ -192,7 +192,7 @@
 
     "__Comment_Page4__": "--- 4. Seuils ---",
     "Thresholds": "Seuils",
-    "ThresholdsTips": "⚠️Couleur barre selon seuil",
+    "ThresholdsTips": "Couleur barre selon seuil",
     "AlertTemp": "Alerte Temp",
     "AlertThreshold": "Limite",
 
@@ -218,17 +218,17 @@
 
     "Calibration": "Calibrage",
     "MaxLimits": "Valeur Max",
-    "CalibrationTip": "⚠️Définit le 100% des barres. Vide = Auto.",
+    "CalibrationTip": "Définit le 100% des barres. Vide = Auto.",
 
     "HardwareSettings": "Source",
     "DiskSource": "Disque",
     "NetworkSource": "Réseau",
     "GpuSource": "GPU",
     "GpuMonitorCount": "Nombre de GPU surveillés",
-    "GpuMonitorCountTip": "⚠️En mode multi-GPU, les N GPU les plus prioritaires sont surveillées ; température / charge / puissance sont affichées par GPU",
+    "GpuMonitorCountTip": "En mode multi-GPU, les N GPU les plus prioritaires sont surveillées ; température / charge / puissance sont affichées par GPU",
     "Auto": "Auto",
     "UseWinPerCounters": "Compteurs Système",
-    "UseWinPerCountersTip": "⚠️Désactiver si inexact. CPU/GPU/RAM/DISK lues depuis capteurs.",
+    "UseWinPerCountersTip": "Désactiver si inexact. CPU/GPU/RAM/DISK lues depuis capteurs.",
     "Refresh": "Taux",
     "IgnoreSMBTraffic": "Ignorer SMB",
     "MemoryDisplayMode": "Aff. RAM",
@@ -236,13 +236,14 @@
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",
     "PluginDevGuide": "Guide Dév",
-    "PluginHint": "⚠️Note: Changer nom/unité/ordre dans [Items Moniteur].",
+    "PluginHint": "Note: Changer nom/unité/ordre dans [Items Moniteur].",
     "PluginNoInstances": "Aucun Plugin",
     "PluginCreateCopy": "Créer Copie",
     "PluginDeleteCopy": "Suppr Copie",
     "PluginRemoveTarget": "Retirer",
     "PluginTargetTitle": "# Cible",
     "PluginAddTarget": "+ Ajouter Cible",
-    "PluginDeleteConfirm": "Supprimer copie ?"
+    "PluginDeleteConfirm": "Supprimer copie ?",
+    "ScreenColorPickerShort": "P"
   }
 }

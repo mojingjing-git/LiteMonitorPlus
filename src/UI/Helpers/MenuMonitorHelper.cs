@@ -20,7 +20,7 @@ namespace LiteMonitor.src.UI.Helpers
             var monitorRoot = new ToolStripMenuItem(LanguageManager.T("Menu.MonitorItemDisplay"));
 
             // [新增] 插件管理入口 (Emoji + 跳转)
-            var pluginMgr = new ToolStripMenuItem("🧩 " + LanguageManager.T("Menu.Plugins")); 
+            var pluginMgr = new ToolStripMenuItem(LanguageManager.T("Menu.Plugins")); 
             pluginMgr.Click += (_, __) => 
             {
                 try

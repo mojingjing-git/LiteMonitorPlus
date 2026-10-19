@@ -235,7 +235,7 @@ namespace LiteMonitor.src.Core
                 && pStatus.AcOnline 
                 && pStatus.IsCharging // <--- 新增条件
                 && context != UnitContext.SettingsPanel 
-                && context != UnitContext.SettingsTaskbar) ? "⚡" : "";
+                && context != UnitContext.SettingsTaskbar) ? "+" : "";
 
             // 4. 标准单位表
             return type switch

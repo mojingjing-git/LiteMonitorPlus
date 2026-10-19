@@ -1,14 +1,14 @@
 {
-  "Title": "⚡️LiteMonitor++",
+  "Title": "LiteMonitor++",
   "Groups": {
-    "DASH": "ℹ️Dashboard",
-    "CPU": "💻CPU",
-    "GPU": "🎮GPU",
-    "HOST": "🖥️Host",
-    "DISK": "💽Disk",
-    "NET": "🌐Net",
-    "DATA": "📈Traffic",
-    "BAT": "🔋Battery"
+    "DASH": "Dashboard",
+    "CPU": "CPU",
+    "GPU": "GPU",
+    "HOST": "Host",
+    "DISK": "Disk",
+    "NET": "Net",
+    "DATA": "Traffic",
+    "BAT": "Battery"
   },
   "Items": {
     "DASH.HOST": "Hostname",
@@ -69,10 +69,10 @@
     "DISK.Temp": "Disk",
     "DISK.Read": "R",
     "DISK.Write": "W",
-    "NET.Up": "🔼",
-    "NET.Down": "🔽",
-    "DATA.DayUp": "⏫",
-    "DATA.DayDown": "⏬",
+    "NET.Up": "↑",
+    "NET.Down": "↓",
+    "DATA.DayUp": "↑↑",
+    "DATA.DayDown": "↓↓",
     "BAT.Percent": "BAT",
     "BAT.Power": "BPWR",
     "BAT.Voltage": "BVOL",
@@ -129,7 +129,7 @@
     "WebServerPassword": "Password",
     "WebServerPasswordTip": "Empty for none",
     "OpenWeb": "Open Web",
-    "WebServerTip": "⚠️Web enabled. Mobile access via LAN 'IP:Port' or remote 'IPv6:Port'.",
+    "WebServerTip": "Web enabled. Mobile access via LAN 'IP:Port' or remote 'IPv6:Port'.",
 
     "Appearance": "Appearance",
     "Theme": "Theme",
@@ -155,9 +155,9 @@
     "TaskbarAlignRight": "Right Side",
     "TaskbarAlignLeft": "Left Side",
     "TaskbarOffset": "Offset",
-    "TaskbarAlignTip": "⚠️Left side if Win11 taskbar centered. Offset: 10px -20px",
+    "TaskbarAlignTip": "Left side if Win11 taskbar centered. Offset: 10px -20px",
     "TaskbarCustomLayout": "Custom Layout",
-    "TaskbarCustomLayoutTip": "⚠️Note: Custom layout only available when enabled. Spacing: 6px -6px",
+    "TaskbarCustomLayoutTip": "Note: Custom layout only available when enabled. Spacing: 6px -6px",
     "TaskbarFont": "Font",
     "TaskbarFontSize": "Size",
     "TaskbarFontBold": "Bold",
@@ -166,7 +166,7 @@
     "TaskbarVerticalPadding": "Padding",
 
     "TaskbarCustomColors": "Colors",
-    "TaskbarCustomTip": "⚠️Set BG color close to system taskbar color.",
+    "TaskbarCustomTip": "Set BG color close to system taskbar color.",
     "ScreenColorPicker": "Color Picker",
     "ScreenColorPickerTip": "Set BG color to:",
     "LabelColor": "Label",
@@ -191,7 +191,7 @@
 
     "__Comment_Page4__": "--- 4. Thresholds ---",
     "Thresholds": "Thresholds",
-    "ThresholdsTips": "⚠️Bar color changes by threshold",
+    "ThresholdsTips": "Bar color changes by threshold",
     "AlertTemp": "Temp Alert",
     "AlertThreshold": "Limit",
 
@@ -217,17 +217,17 @@
 
     "Calibration": "Calibration",
     "MaxLimits": "Max Value",
-    "CalibrationTip": "⚠️Define hardware limits for accurate bars. Empty = Auto-learn.",
+    "CalibrationTip": "Define hardware limits for accurate bars. Empty = Auto-learn.",
 
     "HardwareSettings": "Source",
     "DiskSource": "Disk",
     "NetworkSource": "Network",
     "GpuSource": "GPU",
     "GpuMonitorCount": "Monitored GPU count",
-    "GpuMonitorCountTip": "⚠️In multi-GPU mode the top N GPUs by priority are monitored; temperature / load / power are shown per GPU",
+    "GpuMonitorCountTip": "In multi-GPU mode the top N GPUs by priority are monitored; temperature / load / power are shown per GPU",
     "Auto": "Auto",
     "UseWinPerCounters": "Use Sys Counters",
-    "UseWinPerCountersTip": "⚠️Disable if inaccurate. CPU/GPU/MEM/DISK read from sensors.",
+    "UseWinPerCountersTip": "Disable if inaccurate. CPU/GPU/MEM/DISK read from sensors.",
     "Refresh": "Rate",
     "IgnoreSMBTraffic": "Ignore SMB Traffic",
     "MemoryDisplayMode": "RAM Display",
@@ -235,13 +235,14 @@
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",
     "PluginDevGuide": "Dev Guide",
-    "PluginHint": "⚠️Tip: Change name/unit/order in [Monitor Items] page.",
+    "PluginHint": "Tip: Change name/unit/order in [Monitor Items] page.",
     "PluginNoInstances": "No Plugins",
     "PluginCreateCopy": "Create Copy",
     "PluginDeleteCopy": "Delete Copy",
     "PluginRemoveTarget": "Remove",
     "PluginTargetTitle": "# Target",
     "PluginAddTarget": "+ Add Target",
-    "PluginDeleteConfirm": "Delete this plugin copy?"
+    "PluginDeleteConfirm": "Delete this plugin copy?",
+    "ScreenColorPickerShort": "P"
   }
 }
