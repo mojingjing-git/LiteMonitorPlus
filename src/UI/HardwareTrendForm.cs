@@ -396,7 +396,7 @@ namespace LiteMonitor
 
         private string[] GetCurrentKeys()
         {
-            return _category switch
+            string[] baseKeys = _category switch
             {
                 TrendCategory.Temperature => HardwareHistoryLogger.TemperatureKeys,
                 TrendCategory.Load => HardwareHistoryLogger.LoadKeys,
@@ -405,6 +405,46 @@ namespace LiteMonitor
                 TrendCategory.Fps => HardwareHistoryLogger.FpsKeys,
                 _ => HardwareHistoryLogger.TemperatureKeys
             };
+
+            // ★★★ [多显卡] 补上带序号的显卡 Key ("GPU.0.Temp" / "GPU.1.Temp") ★★★
+            // 只加当前分类下、且用户确实开启了的项。
+            var indexed = new List<string>();
+            foreach (var item in _cfg.MonitorItems)
+            {
+                if (!(item.VisibleInPanel || item.VisibleInTaskbar)) continue;
+                if (!GpuKey.TryParse(item.Key, out _, out string metric)) continue;
+
+                string baseKey = GpuKey.BaseKey(metric);
+                bool inCategory = baseKeys.Any(k =>
+                    string.Equals(k, baseKey, StringComparison.OrdinalIgnoreCase));
+                if (!inCategory) continue;
+
+                if (!indexed.Contains(item.Key, StringComparer.OrdinalIgnoreCase))
+                    indexed.Add(item.Key);
+            }
+
+            // ★★★ [多显卡] 旧格式的显卡 Key ("GPU.Temp") 在迁移后已没有对应的监控项,
+            // 继续显示只会留下一条"冻结在升级前最后一个点"的旧曲线, 这里剔除。 ★★★
+            // 注意: 不要写成 .Where(i => GpuKey.TryParse(i.Key, out _, out string m)).Select(i => GpuKey.BaseKey(m))
+            // —— `m` 声明在 Where 的 lambda 里, 下一个 lambda 根本看不到它 (CS0103 编译错误)。
+            var indexedBases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in _cfg.MonitorItems)
+            {
+                if (GpuKey.TryParse(item.Key, out _, out string metric))
+                    indexedBases.Add(GpuKey.BaseKey(metric));
+            }
+
+
+            var result = new List<string>();
+            foreach (var k in baseKeys)
+            {
+                if (k.StartsWith("GPU.", StringComparison.OrdinalIgnoreCase) &&
+                    indexedBases.Contains(k)) continue;
+                result.Add(k);
+            }
+            result.AddRange(indexed);
+
+            return result.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
         private bool HasEnabledMetricInCurrentCategory()
@@ -454,7 +494,7 @@ namespace LiteMonitor
         {
             var item = _cfg.MonitorItems.FirstOrDefault(x => x.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
             string label = item != null ? MetricLabelResolver.ResolveLabel(item) : "";
-            if (string.IsNullOrWhiteSpace(label)) label = LanguageManager.T("Items." + key);
+            if (string.IsNullOrWhiteSpace(label)) label = LanguageManager.T("Items." + GpuKey.ToBaseKey(key));
             return string.IsNullOrWhiteSpace(label) ? key : label;
         }
 
