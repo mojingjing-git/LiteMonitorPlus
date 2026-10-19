@@ -22,7 +22,7 @@ namespace LiteMonitor.src.Core
                 string shortName = GpuRegistry.GetShortName(gpuIndex);
                 if (!string.IsNullOrEmpty(shortName))
                 {
-                    string baseLabel = LanguageManager.T("Items." + GpuKey.BaseKey(metric));
+                    string baseLabel = LanguageManager.T(UIUtils.Intern("Items." + GpuKey.BaseKey(metric)));
                     return $"{shortName} {StripGpuPrefix(baseLabel)}".Trim();
                 }
             }
