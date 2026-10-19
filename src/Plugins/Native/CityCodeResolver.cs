@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -11,8 +12,16 @@ namespace LiteMonitor.src.Plugins.Native
 {
     public static class CityCodeResolver
     {
-        // TODO: 用户需要将生成的 city_code_v8.json 上传到 Cloudflare Pages，并替换此处的 URL
-        private const string JSON_DB_URL = "https://litemonitor.cn/update/CityCode.json";
+        // 优先使用随包分发的本地城市库，离线可用且无外部依赖。
+        // 发布包内 resources/ 目录为平铺布局（与 driver.zip / FPS 组件同层），
+        // 开发构建则位于 resources/assets/，两条路径都尝试。
+        private static readonly string[] LocalJsonCandidates =
+        {
+            Path.Combine(AppContext.BaseDirectory, "resources", "CityCode.json"),
+            Path.Combine(AppContext.BaseDirectory, "resources", "assets", "CityCode.json"),
+        };
+        // 远程回退：仅在本地文件缺失或读取失败时使用
+        private const string JSON_DB_URL = "https://raw.githubusercontent.com/mojingjing-git/MonitorPlus/master/resources/assets/CityCode.json";
         
         // Memory Cache
         private static Dictionary<string, List<List<string>>> _db = null;
@@ -129,52 +138,74 @@ namespace LiteMonitor.src.Plugins.Native
             _isLoading = true;
             try
             {
-                // [Optimization] Use SocketsHttpHandler with Proxy support and Decompression
-                var handler = new SocketsHttpHandler
+                // 1) 优先读取随包分发的本地城市库（离线可用，不依赖任何外部服务）
+                string json = null;
+                try
                 {
-                    AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                    PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-                    UseProxy = true,
-                    // Use system proxy
-                    Proxy = System.Net.WebRequest.GetSystemWebProxy(),
-                    // [Fix] Bypass SSL validation for users with problematic certificates/proxies
-                    SslOptions = new System.Net.Security.SslClientAuthenticationOptions 
+                    foreach (var candidate in LocalJsonCandidates)
                     {
-                        RemoteCertificateValidationCallback = delegate { return true; }
+                        if (!File.Exists(candidate)) continue;
+                        json = await File.ReadAllTextAsync(candidate);
+                        System.Diagnostics.Debug.WriteLine($"[CityCodeResolver] Loaded local CityCode.json: {candidate}");
+                        break;
                     }
-                };
-
-                using (var client = new HttpClient(handler))
+                }
+                catch (Exception ex)
                 {
-                    // 设置超时
-                    client.Timeout = TimeSpan.FromSeconds(15);
-                    client.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor/1.0");
-                    
-                    var json = await client.GetStringAsync(JSON_DB_URL);
-                    var rawDb = JsonSerializer.Deserialize<Dictionary<string, List<List<string>>>>(json);
+                    System.Diagnostics.Debug.WriteLine($"[CityCodeResolver] Local CityCode.json load failed: {ex.Message}");
+                }
 
-                    // [Optimization] Intern strings in the DB to reduce memory usage
-                    // Many cities share the same province name, and many districts share the same city name
-                    _db = new Dictionary<string, List<List<string>>>(rawDb.Count);
-                    
-                    foreach (var kvp in rawDb)
+                // 2) 本地缺失或读取失败时回退远程
+                if (string.IsNullOrEmpty(json))
+                {
+                    // [Optimization] Use SocketsHttpHandler with Proxy support and Decompression
+                    var handler = new SocketsHttpHandler
                     {
-                        // Key (district name) can also be interned
-                        string key = UIUtils.Intern(kvp.Key);
-                        var lists = new List<List<string>>(kvp.Value.Count);
-
-                        foreach (var item in kvp.Value)
+                        AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+                        UseProxy = true,
+                        // Use system proxy
+                        Proxy = System.Net.WebRequest.GetSystemWebProxy(),
+                        // [Fix] Bypass SSL validation for users with problematic certificates/proxies
+                        SslOptions = new System.Net.Security.SslClientAuthenticationOptions 
                         {
-                            // item: [code, name, province]
-                            var newItem = new List<string>(item.Count);
-                            foreach (var str in item)
-                            {
-                                newItem.Add(UIUtils.Intern(str));
-                            }
-                            lists.Add(newItem);
+                            RemoteCertificateValidationCallback = delegate { return true; }
                         }
-                        _db[key] = lists;
+                    };
+
+                    using (var client = new HttpClient(handler))
+                    {
+                        // 设置超时
+                        client.Timeout = TimeSpan.FromSeconds(15);
+                        client.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor/1.0");
+                        
+                        json = await client.GetStringAsync(JSON_DB_URL);
                     }
+                }
+
+                var rawDb = JsonSerializer.Deserialize<Dictionary<string, List<List<string>>>>(json);
+
+                // [Optimization] Intern strings in the DB to reduce memory usage
+                // Many cities share the same province name, and many districts share the same city name
+                _db = new Dictionary<string, List<List<string>>>(rawDb.Count);
+                
+                foreach (var kvp in rawDb)
+                {
+                    // Key (district name) can also be interned
+                    string key = UIUtils.Intern(kvp.Key);
+                    var lists = new List<List<string>>(kvp.Value.Count);
+
+                    foreach (var item in kvp.Value)
+                    {
+                        // item: [code, name, province]
+                        var newItem = new List<string>(item.Count);
+                        foreach (var str in item)
+                        {
+                            newItem.Add(UIUtils.Intern(str));
+                        }
+                        lists.Add(newItem);
+                    }
+                    _db[key] = lists;
                 }
             }
             catch (Exception ex)

@@ -597,11 +597,11 @@ namespace LiteMonitor
             moreRoot.DropDownItems.Add(itemCheckUpdate);
 
             var itemFeedback = new ToolStripMenuItem(LanguageManager.T("Menu.Feedback"));
-            itemFeedback.Click += (_, __) => SystemActions.OpenUrl("https://github.com/Diorser/LiteMonitor/issues");
+            itemFeedback.Click += (_, __) => SystemActions.OpenUrl("https://github.com/mojingjing-git/MonitorPlus/issues");
             moreRoot.DropDownItems.Add(itemFeedback);
 
             var itemChangelog = new ToolStripMenuItem(LanguageManager.T("Menu.Changelog"));
-            itemChangelog.Click += (_, __) => SystemActions.OpenUrl("https://github.com/Diorser/LiteMonitor/releases");
+            itemChangelog.Click += (_, __) => SystemActions.OpenUrl("https://github.com/mojingjing-git/MonitorPlus/releases");
             moreRoot.DropDownItems.Add(itemChangelog);
 
             var itemAbout = new ToolStripMenuItem(LanguageManager.T("Menu.About"));

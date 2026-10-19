@@ -42,15 +42,12 @@ namespace LiteMonitor
         // ========================================================
         private static readonly string[] VersionJsonUrls =
         {
-             // 国官网源
-            "https://litemonitor.cn/update/version.json",
-            
-            // Gitee RAW（自动 fallback 使用）
-             "https://gitee.com/Diorser/LiteMonitor/raw/master/resources/version.json",
+             // 自有源（主）
+            "https://raw.githubusercontent.com/mojingjing-git/MonitorPlus/master/resources/version.json",
 
-            // GitHub RAW（自动 fallback 使用）
-             "https://raw.githubusercontent.com/Diorser/LiteMonitor/master/resources/version.json",
-             
+            // Gitee 镜像（自动 fallback 使用）
+            "https://gitee.com/mojingjing-git/MonitorPlus/raw/master/resources/version.json",
+            
         };
 
         // ========================================================
@@ -59,12 +56,10 @@ namespace LiteMonitor
         private static readonly string[] Mirrors =
         {
             
-            // Gitee Releases
-            "https://gitee.com/Diorser/LiteMonitor/releases/download/v{0}/LiteMonitor_v{0}-win-x64.zip",
-            // 国内 CDN
-            "https://litemonitor.cn/update/LiteMonitor_v{0}-win-x64.zip",
-            // Github Releases
-            "https://github.com/Diorser/LiteMonitor/releases/download/v{0}/LiteMonitor_v{0}-win-x64.zip",
+            // GitHub Releases
+            "https://github.com/mojingjing-git/MonitorPlus/releases/download/v{0}/MonitorPlus_v{0}-win-x64.zip",
+            // Gitee 镜像
+            "https://gitee.com/mojingjing-git/MonitorPlus/releases/download/v{0}/MonitorPlus_v{0}-win-x64.zip",
 
             
         };
@@ -137,7 +132,7 @@ namespace LiteMonitor
                     {
                         Title = isZh ? "发现新版本！" : "New Version!",
                         VersionLabel = $"⚡️LiteMonitor_v{latest}",
-                        Description = $"更新日志：\n{changelog} \n更新日期：\n{releaseDate}\n\n官网：https://litemonitor.cn \nGitHub：https://github.com/Diorser/LiteMonitor",
+                        Description = $"更新日志：\n{changelog} \n更新日期：\n{releaseDate}\n\nGitHub：https://github.com/mojingjing-git/MonitorPlus",
                         Urls = sortedUrls.ToArray(),
                         SavePath = Path.Combine(AppContext.BaseDirectory, "resources", "update.zip"),
                         ActionButtonText = "Update",

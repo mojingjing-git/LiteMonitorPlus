@@ -39,6 +39,12 @@
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
             <CopyToPublishDirectory>Always</CopyToPublishDirectory>
         </Content>
+
+        <!-- 离线城市库（随包分发，避免运行时依赖远程服务） -->
+        <Content Include="resources\assets\CityCode.json">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+            <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+        </Content>
     </ItemGroup>
 	<ItemGroup>
 		<Content Include="resources\LiteMonitor.Updater.exe">

@@ -21,6 +21,14 @@ namespace LiteMonitor.src.SystemServices
         private const int ErrorSuccessRebootRequired = 3010;
         private const int ErrorServiceMarkedForDelete = 1072;
 
+        // ================================================================
+        // 下载产物完整性校验（SHA256，小写 hex）
+        // 驱动包与 FPS 组件下载后会被提权执行，源站被劫持即等于在用户机器上
+        // 提权运行任意代码，因此必须校验后再使用。校验不通过一律中止，不得降级。
+        // ================================================================
+        private const string DriverPackageSha256 = "1a4fe44796f80590c949557230b099d62157d13f5aab490a91967ca4761ef042";
+        private const string FpsComponentSha256 = "ee4eba300a521b16291b7ace14d95efb9fa149b0ef1d31b15df4ee345c4e002b";
+
         private readonly Settings _cfg;
         private readonly Action? _onReloadRequired; // 回调：通知主程序重载
         private readonly Action? _onPrepareDriverInstall; // 回调：安装驱动前释放硬件句柄
@@ -29,17 +37,15 @@ namespace LiteMonitor.src.SystemServices
         // 建议把最快的 Gitee/国内源放在第一个
         private readonly string[] _driverPackageUrls = new[]
         {
-            "https://gitee.com/Diorser/LiteMonitor/raw/master/resources/assets/driver.zip",
-            "https://litemonitor.cn/update/driver.zip", 
-            "https://github.com/Diorser/LiteMonitor/raw/master/resources/assets/driver.zip" 
+            "https://gitee.com/mojingjing-git/MonitorPlus/raw/master/resources/assets/driver.zip",
+            "https://raw.githubusercontent.com/mojingjing-git/MonitorPlus/master/resources/assets/driver.zip"
         };
 
         // ★★★ [新增] PresentMon 下载源 (FPS 单独下载用) ★★★
         private readonly string[] _presentMonUrls = new[]
         {
-            "https://gitee.com/Diorser/LiteMonitor/raw/master/resources/assets/LiteMonitorFPS.exe",
-            "https://litemonitor.cn/update/LiteMonitorFPS.exe",
-            "https://github.com/Diorser/LiteMonitor/raw/master/resources/assets/LiteMonitorFPS.exe"
+            "https://gitee.com/mojingjing-git/MonitorPlus/raw/master/resources/assets/MonitorPlusFPS.exe",
+            "https://raw.githubusercontent.com/mojingjing-git/MonitorPlus/master/resources/assets/MonitorPlusFPS.exe"
         };
         
         // 缓存当前的下载任务，避免并发重复弹窗
@@ -212,6 +218,18 @@ namespace LiteMonitor.src.SystemServices
 
             if (!await ShowDownloadDialog(context)) return false;
 
+            // ★★★ 下载产物完整性校验（SHA256）★★★
+            // 校验不通过即视为下载源被篡改或损坏，直接中止，不执行该文件
+            if (!VerifySha256(targetPath, FpsComponentSha256))
+            {
+                try { File.Delete(targetPath); } catch { }
+                ShowMessageBox(IsChinese
+                    ? "FPS 组件的完整性校验失败（SHA256 不匹配）。\n下载文件可能已损坏或下载源被篡改，已中止安装。\n请稍后重试或手动下载官方组件。"
+                    : "FPS component integrity check failed (SHA256 mismatch).\nThe download may be corrupted or the source tampered with. Installation aborted.\nPlease retry later or download the official component manually.",
+                    IsChinese ? "校验失败" : "Verification Failed", MessageBoxIcon.Error);
+                return false;
+            }
+
             // ★★★ [新增] 下载后校验 ★★★
             if (!IsValidExecutable(targetPath))
             {
@@ -247,6 +265,17 @@ namespace LiteMonitor.src.SystemServices
 
                 if (!await ShowDownloadDialog(context)) return false;
 
+                // ★★★ 下载产物完整性校验（SHA256）★★★
+                // 驱动包会被提权执行，校验不通过一律中止，不得进入解压/安装流程
+                if (!VerifySha256(tempZip, DriverPackageSha256))
+                {
+                    ShowMessageBox(IsChinese
+                        ? "驱动包的完整性校验失败（SHA256 不匹配）。\n下载文件可能已损坏或下载源被篡改，已中止安装。\n请稍后重试或手动下载官方驱动包。"
+                        : "Driver package integrity check failed (SHA256 mismatch).\nThe download may be corrupted or the source tampered with. Installation aborted.\nPlease retry later or download the official package manually.",
+                        IsChinese ? "校验失败" : "Verification Failed", MessageBoxIcon.Error);
+                    return false;
+                }
+
                 // 2. 解压
                 if (!ExtractZipPackage(tempZip, targetDir)) return false;
 
@@ -262,6 +291,34 @@ namespace LiteMonitor.src.SystemServices
         // ----------------------------------------------------------------
         // 基础服务方法 (原子操作)
         // ----------------------------------------------------------------
+
+        /// <summary>
+        /// 校验文件的 SHA256 是否等于期望值（小写 hex，不区分大小写）。
+        /// 任何异常（文件不存在、被占用、读取失败）都视为校验失败。
+        /// </summary>
+        private static bool VerifySha256(string filePath, string expectedHex)
+        {
+            if (string.IsNullOrEmpty(filePath) || string.IsNullOrEmpty(expectedHex)) return false;
+            try
+            {
+                using var sha = System.Security.Cryptography.SHA256.Create();
+                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                var actual = Convert.ToHexString(sha.ComputeHash(fs)).ToLowerInvariant();
+                bool ok = string.Equals(actual, expectedHex.Trim().ToLowerInvariant(), StringComparison.Ordinal);
+                if (!ok)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[DriverInstaller] SHA256 mismatch: {filePath}");
+                    System.Diagnostics.Debug.WriteLine($"[DriverInstaller]   expected: {expectedHex}");
+                    System.Diagnostics.Debug.WriteLine($"[DriverInstaller]   actual  : {actual}");
+                }
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[DriverInstaller] SHA256 verify failed: {ex.Message}");
+                return false;
+            }
+        }
 
         private bool ExtractZipPackage(string zipPath, string targetDir)
         {
