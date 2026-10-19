@@ -19,8 +19,8 @@ namespace LiteMonitor
             string strTitle = LanguageManager.T("Menu.About");
             // 双份版权：上游作者与本项目作者都必须保留（MIT 义务 + 致谢惯例）
             string strDesc = isZh
-                ? "一款开源的轻量级硬件监控软件。\n\n基于 LiteMonitor (Diorser) 派生修改\n© 2025 Diorser / LiteMonitor Project\n© 2026 mojingjing-git / LiteMonitor++ Project\n\nMIT License · github.com/mojingjing-git/MonitorPlus"
-                : "A lightweight desktop hardware monitor.\n\nForked & modified from LiteMonitor (Diorser)\n© 2025 Diorser / LiteMonitor Project\n© 2026 mojingjing-git / LiteMonitor++ Project\n\nMIT License · github.com/mojingjing-git/MonitorPlus";
+                ? "一款开源的轻量级硬件监控软件。\n\n基于 LiteMonitor (Diorser) 派生修改\n© 2025 Diorser / LiteMonitor Project\n© 2026 mojingjing-git / LiteMonitor++ Project\n\nMIT License · github.com/mojingjing-git/LiteMonitorPlus"
+                : "A lightweight desktop hardware monitor.\n\nForked & modified from LiteMonitor (Diorser)\n© 2025 Diorser / LiteMonitor Project\n© 2026 mojingjing-git / LiteMonitor++ Project\n\nMIT License · github.com/mojingjing-git/LiteMonitorPlus";
             string strWebPrefix = isZh ? "上游项目" : "Upstream";
             string strUpdate = LanguageManager.T("Menu.CheckUpdate");
             string strClose = LanguageManager.T("Menu.OK");
@@ -101,7 +101,7 @@ namespace LiteMonitor
             // === GitHub 链接 ===
             var githubLink = new LinkLabel
             {
-                Text = "GitHub: github.com/mojingjing-git/MonitorPlus",
+                Text = "GitHub: github.com/mojingjing-git/LiteMonitorPlus",
                 LinkColor = Color.SkyBlue,
                 ActiveLinkColor = Color.LightSkyBlue,
                 VisitedLinkColor = Color.DeepSkyBlue,
@@ -112,7 +112,7 @@ namespace LiteMonitor
             {
                 try
                 {
-                    Process.Start(new ProcessStartInfo("https://github.com/mojingjing-git/MonitorPlus")
+                    Process.Start(new ProcessStartInfo("https://github.com/mojingjing-git/LiteMonitorPlus")
                     { UseShellExecute = true });
                 }
                 catch { }
@@ -137,7 +137,7 @@ namespace LiteMonitor
             {
                 try
                 {
-                    Process.Start(new ProcessStartInfo("https://github.com/mojingjing-git/MonitorPlus/issues")
+                    Process.Start(new ProcessStartInfo("https://github.com/mojingjing-git/LiteMonitorPlus/issues")
                     { UseShellExecute = true });
                 }
                 catch { }

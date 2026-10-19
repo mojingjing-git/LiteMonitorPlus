@@ -26,7 +26,7 @@ namespace LiteMonitor.src.SystemServices
         // 驱动包与 FPS 组件下载后会被提权执行，源站被劫持即等于在用户机器上
         // 提权运行任意代码，因此必须校验后再使用。校验不通过一律中止，不得降级。
         // ================================================================
-        private const string DriverPackageSha256 = "1a4fe44796f80590c949557230b099d62157d13f5aab490a91967ca4761ef042";
+        private const string DriverPackageSha256 = "343afd65b9d9ef4d6189d3b579487a6140cd2f4c2812d44aaa42464b5173c295";
         private const string FpsComponentSha256 = "ee4eba300a521b16291b7ace14d95efb9fa149b0ef1d31b15df4ee345c4e002b";
 
         private readonly Settings _cfg;
@@ -262,6 +262,15 @@ namespace LiteMonitor.src.SystemServices
                     ActionButtonText = "Install",
                     VersionLabel = GetPawnIOVersionLabel(pawnIOCheck)
                 };
+
+                // 发布包自带驱动包时优先使用本地文件（离线可用，无需联网下载）。
+                // 仅在本地文件存在且 SHA256 校验通过时采用；
+                // 缺失或校验不通过则回落到网络下载，行为与旧版完全一致。
+                string localPackage = Path.Combine(targetDir, "driver.zip");
+                if (File.Exists(localPackage) && VerifySha256(localPackage, DriverPackageSha256))
+                {
+                    context.LocalPath = localPackage;
+                }
 
                 if (!await ShowDownloadDialog(context)) return false;
 

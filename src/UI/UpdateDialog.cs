@@ -20,6 +20,13 @@ namespace LiteMonitor
         public string Description { get; set; } = "";
         public string[] Urls { get; set; } = Array.Empty<string>();
         public string SavePath { get; set; } = "";
+
+        /// <summary>
+        /// 本地优先文件路径（可空）。非空且文件存在时，下载对话框会直接把该文件
+        /// 复制到 SavePath 而不走网络，用于发布包自带驱动包等场景的离线安装。
+        /// 复制后仍由调用方执行 SHA256 校验，信任边界不变。
+        /// </summary>
+        public string? LocalPath { get; set; }
         
         // UI 配置
         public string VersionLabel { get; set; } = "";
@@ -206,9 +213,21 @@ namespace LiteMonitor
 
             try
             {
-                // 1. 尝试所有镜像源
-                foreach (var url in downloadList)
+                // 0. 本地优先：发布包自带驱动包时直接使用本地文件（离线可用）。
+                //    复制完成后仍会走与网络下载完全相同的 SHA256 校验，信任边界不变。
+                if (!string.IsNullOrEmpty(_context.LocalPath) && File.Exists(_context.LocalPath))
                 {
+                    lblStatus.Text = _settings?.Language?.ToLower() == "zh"
+                        ? "正在使用本地安装包..."
+                        : "Using local package...";
+                    File.Copy(_context.LocalPath, _context.SavePath, true);
+                    downloadSuccess = true;
+                }
+
+                // 1. 尝试所有镜像源
+                for (int mirrorIndex = 0; mirrorIndex < downloadList.Count && !downloadSuccess; mirrorIndex++)
+                {
+                    var url = downloadList[mirrorIndex];
                     if (_cts.IsCancellationRequested) break;
 
                     try
