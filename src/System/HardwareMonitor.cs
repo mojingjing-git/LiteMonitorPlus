@@ -599,6 +599,39 @@ namespace LiteMonitor.src.SystemServices
                 return HardwareScanner.ListAllGpuOptions(Instance!._computer);
         }
 
+        /// <summary>
+        /// 取得"已检测到的显卡数量", **不阻塞 UI 线程**。
+        ///
+        /// 快路径: 最多等锁 10ms, 拿到就精确取一次。
+        /// 慢路径: 硬件正在刷新 (ReloadComputerSafe 持锁数秒) 时, 直接读扫描器缓存,
+        ///         绝不阻塞 —— 缓存里的卡数最多是"上一次"的, 但足够用来夹紧。
+        /// 都拿不到时返回 0, 由调用方决定"不夹紧"。
+        /// </summary>
+        public static int TryGetDetectedGpuCount()
+        {
+            var inst = Instance;
+            if (inst == null) return 0;
+
+            if (Monitor.TryEnter(inst._lock, 10))
+            {
+                try
+                {
+                    return HardwareScanner.ListAllGpuOptions(inst._computer)?.Count ?? 0;
+                }
+                catch
+                {
+                    return 0;
+                }
+                finally
+                {
+                    Monitor.Exit(inst._lock);
+                }
+            }
+
+            // 拿不到锁: 退回到扫描器缓存 (不碰硬件, 不阻塞)
+            return HardwareScanner.CachedGpuCount;
+        }
+
         public static List<string> ListAllFans() => HardwareScanner.ListAllFans(Instance!._computer, Instance!._lock);
 
         public static List<string> ListAllMoboTemps() => HardwareScanner.ListAllMoboTemps(Instance!._computer, Instance!._lock);

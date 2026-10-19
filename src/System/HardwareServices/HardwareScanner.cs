@@ -36,6 +36,12 @@ namespace LiteMonitor.src.SystemServices
         }
 
         /// <summary>
+        /// 只读缓存里已检测到的显卡数量, 不碰硬件、不加锁。
+        /// 供 UI 线程在拿不到硬件锁时快速拿到"上次检测到的卡数"。
+        /// </summary>
+        public static int CachedGpuCount => _cachedGpuOptions?.Count ?? 0;
+
+        /// <summary>
         /// 智能命名：将传感器与其所属硬件结合命名，并处理 SuperIO 芯片名的替换
         /// </summary>
         public static string GenerateSmartName(ISensor sensor, IHardware hardware, IComputer computer)

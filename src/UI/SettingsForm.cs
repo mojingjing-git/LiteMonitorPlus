@@ -240,6 +240,15 @@ namespace LiteMonitor.src.UI
             SettingsChanger.Merge(_cfg, _draftCfg);
             bool autoStartChanged = oldAutoStart != _cfg.AutoStart;
 
+            // 2.5 ★★★ [多显卡] 落盘前先同步显卡监控项 ★★★
+            //     必须在 _cfg.Save() 之前 —— ApplyAllSettings 里那一次 Ensure
+            //     发生在保存之后, 磁盘上的 MonitorItems 会比内存晚一轮。
+            int detectedGpuCount = LiteMonitor.src.SystemServices.HardwareMonitor.TryGetDetectedGpuCount();
+            int gpuCap = detectedGpuCount > 0
+                ? detectedGpuCount
+                : Math.Max(1, _cfg.MonitoredGpuCount);
+            GpuItemSync.Ensure(_cfg, availableGpuCount: gpuCap);
+
             // 3. 持久化保存
             _cfg.Save();
             

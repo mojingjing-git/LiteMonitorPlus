@@ -37,7 +37,7 @@ namespace LiteMonitor.src.Core.Actions
             ApplyThemeAndLayout(cfg, ui, mainForm, wasHorizontal); 
             
             // 4. 子模块特定设置
-            ApplyMonitorLayout(ui, mainForm); // 监控项、硬件源变更
+            ApplyMonitorLayout(cfg, ui, mainForm); // 监控项、硬件源变更
             ApplyTaskbarStyle(cfg, ui);       // 任务栏样式
 
             // ★★★ 5. [新增] 应用网页服务设置 (重启服务以应用端口变更) ★★★
@@ -177,8 +177,26 @@ namespace LiteMonitor.src.Core.Actions
         // 5. 数据源与监控项 (磁盘/网络源、监控开关)
         // =============================================================
 
-        public static void ApplyMonitorLayout(UIController? ui, MainForm form, bool rebuildMenus = true)
+        public static void ApplyMonitorLayout(Settings cfg, UIController? ui, MainForm form, bool rebuildMenus = true)
         {
+            // ★★★ [多显卡] 同步显卡监控项 ★★★
+            // 1) 把 MonitoredGpuCount 落到 MonitorItems 上 (生成 GPU.{序号}.{指标})
+            // 2) 按实际检测到的显卡数夹紧 —— 避免选 8 张但机器只有 2 张时产生空白监控项
+            // 必须在本方法重建布局之前执行, 否则 UI 读到的还是旧的 MonitorItems。
+            if (cfg != null)
+            {
+                // ★ 非阻塞取实际卡数 (见 Step 1.5): 绝不 lock 硬件锁 ★
+                int detectedGpuCount = HardwareMonitor.TryGetDetectedGpuCount();
+
+                // 探测不到时 (0) 不做夹紧, 但仍然要按配置数量重新生成监控项 ——
+                // 否则用户改了「监控显卡数量」保存后不会生效。
+                int cap = detectedGpuCount > 0
+                    ? detectedGpuCount
+                    : Math.Max(1, cfg.MonitoredGpuCount);
+
+                GpuItemSync.Ensure(cfg, availableGpuCount: cap);
+            }
+
             // ★★★ [新增] 动态检查硬件开启需求 (热切换) ★★★
             // 如果用户开启了风扇/水泵，自动开启 USB 控制器；反之关闭
             HardwareMonitor.Instance?.RefreshHardwareConfig();

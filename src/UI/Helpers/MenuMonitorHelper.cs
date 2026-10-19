@@ -83,7 +83,7 @@ namespace LiteMonitor.src.UI.Helpers
                     conf.VisibleInTaskbar = item.Checked;
                     cfg.Save();
                     // 在菜单交互中，无需重建菜单 (rebuildMenus: false)
-                    AppActions.ApplyMonitorLayout(ui, form, rebuildMenus: false);
+                    AppActions.ApplyMonitorLayout(cfg, ui, form, rebuildMenus: false);
 
                     if (item.Checked && IsHardwareItem(conf.Key))
                     {
@@ -116,7 +116,7 @@ namespace LiteMonitor.src.UI.Helpers
                     conf.VisibleInPanel = item.Checked;
                     cfg.Save();
                     // 在菜单交互中，无需重建菜单 (rebuildMenus: false)
-                    AppActions.ApplyMonitorLayout(ui, form, rebuildMenus: false);
+                    AppActions.ApplyMonitorLayout(cfg, ui, form, rebuildMenus: false);
 
                     if (item.Checked && IsHardwareItem(conf.Key))
                     {
@@ -268,7 +268,7 @@ namespace LiteMonitor.src.UI.Helpers
                             
                             cfg.Save();
                             // 在菜单交互中，无需重建菜单 (rebuildMenus: false)
-                            AppActions.ApplyMonitorLayout(ui, form, rebuildMenus: false);
+                            AppActions.ApplyMonitorLayout(cfg, ui, form, rebuildMenus: false);
                         };
                         
                         monitorRoot.DropDownItems.Add(groupItem);
