@@ -72,6 +72,14 @@ namespace LiteMonitor
             }
 
             s.InternAllStrings();
+
+            // 3. [多显卡] 同步显卡监控项。
+            //    ★ 必须在 InternAllStrings 之后 ★ (见上方说明)
+            //    也必须在 CheckAndAppendMissingItems 之后 —— 那一步会把缺失的默认项
+            //    (含旧的 "GPU.Load" 单卡项) 补回来, 这里再统一迁移成 "GPU.{序号}.{指标}"。
+            //    注意: 此刻硬件可能还没枚举完, 拿不到实际卡数, 这里先按上限夹紧;
+            //    真实卡数会在保存设置时 (Task 5.5) 与运行时 (Task 12.3) 再次夹紧。
+            GpuItemSync.Ensure(s);
             
             return s;
         }
@@ -265,6 +273,16 @@ namespace LiteMonitor
                     {
                         continue; // 保留所有 DASH.*
                     }
+
+                    // 3. ★★★ [多显卡] 带序号的显卡 Key ("GPU.0.Temp") 一律保留 ★★★
+                    // 白名单 GetStandardKeys() 里只有旧格式的 "GPU.Temp",
+                    // 不加这一句的话, 多显卡监控项会被当成"孤儿项"全部删光,
+                    // 用户对它们做的自定义 (可见性 / 排序 / 用户名) 也会一起丢。
+                    if (GpuKey.TryParse(item.Key, out _, out _))
+                    {
+                        continue;
+                    }
+
                     keysToRemove.Add(item);
                 }
                 
@@ -324,6 +342,18 @@ namespace LiteMonitor
                 .Select(x => { 
                     if (x.TaskbarSortIndex == 0) x.TaskbarSortIndex = x.SortIndex; 
                     return x; 
+                }));
+
+            // 3.5 ★★★ [多显卡] 同样找回带序号的显卡 Key ("GPU.0.Custom") ★★★
+            //     这一步跑在 InternAllStrings / GpuItemSync.Ensure **之前**,
+            //     不找回的话, 老配置 (所有项 TaskbarSortIndex == 0) 走迁移分支时,
+            //     用户的自定义显卡项在到达 Ensure 之前就被丢掉了 (实测会丢)。
+            //     越界的序号 (超出 MonitoredGpuCount) 由 GpuItemSync.Ensure 的 4.5 段再过滤。
+            migratedList.AddRange(settings.MonitorItems
+                .Where(x => GpuKey.TryParse(x.Key, out _, out _) && !standardKeys.Contains(x.Key))
+                .Select(x => {
+                    if (x.TaskbarSortIndex == 0) x.TaskbarSortIndex = x.SortIndex;
+                    return x;
                 }));
 
             settings.MonitorItems = migratedList;
@@ -464,16 +494,29 @@ namespace LiteMonitor
             if (key.Contains("Power") && val > 1000) return;
             if ((key.Contains("Fan") || key.Contains("Pump")) && val > 10000) return;
 
-            if (key == "CPU.Power" && val > settings.RecordedMaxCpuPower) { settings.RecordedMaxCpuPower = val; changed = true; }
-            else if (key == "CPU.Clock" && val > settings.RecordedMaxCpuClock) { settings.RecordedMaxCpuClock = val; changed = true; }
-            else if (key == "GPU.Power" && val > settings.RecordedMaxGpuPower) { settings.RecordedMaxGpuPower = val; changed = true; }
-            else if (key == "GPU.Clock" && val > settings.RecordedMaxGpuClock) { settings.RecordedMaxGpuClock = val; changed = true; }
+            // ★★★ [多显卡] 带序号的 Key ("GPU.1.Power") 归一化成基础 Key ("GPU.Power") 后再比对 ★★★
+            string baseKey = GpuKey.ToBaseKey(key);
+
+            if (baseKey == "CPU.Power" && val > settings.RecordedMaxCpuPower) { settings.RecordedMaxCpuPower = val; changed = true; }
+            else if (baseKey == "CPU.Clock" && val > settings.RecordedMaxCpuClock) { settings.RecordedMaxCpuClock = val; changed = true; }
+            else if (baseKey == "GPU.Power" && val > settings.RecordedMaxGpuPower) { settings.RecordedMaxGpuPower = val; changed = true; }
+            else if (baseKey == "GPU.Clock" && val > settings.RecordedMaxGpuClock) { settings.RecordedMaxGpuClock = val; changed = true; }
             
-            else if (key == "CPU.Fan" && val > settings.RecordedMaxCpuFan) { settings.RecordedMaxCpuFan = val; changed = true; }
-            else if (key == "CPU.Pump" && val > settings.RecordedMaxCpuPump) { settings.RecordedMaxCpuPump = val; changed = true; }
-            else if (key == "GPU.Fan" && val > settings.RecordedMaxGpuFan) { settings.RecordedMaxGpuFan = val; changed = true; }
-            else if (key == "CASE.Fan" && val > settings.RecordedMaxChassisFan) { settings.RecordedMaxChassisFan = val; changed = true; }
-            
+            else if (baseKey == "CPU.Fan" && val > settings.RecordedMaxCpuFan) { settings.RecordedMaxCpuFan = val; changed = true; }
+            else if (baseKey == "CPU.Pump" && val > settings.RecordedMaxCpuPump) { settings.RecordedMaxCpuPump = val; changed = true; }
+            else if (baseKey == "GPU.Fan" && val > settings.RecordedMaxGpuFan) { settings.RecordedMaxGpuFan = val; changed = true; }
+            else if (baseKey == "CASE.Fan" && val > settings.RecordedMaxChassisFan) { settings.RecordedMaxChassisFan = val; changed = true; }
+
+            // ★★★ [多显卡] 每张卡单独记一份峰值, 让各自的进度条独立自适应 ★★★
+            if (key != baseKey)
+            {
+                if (!settings.RecordedMaxGpuDynamic.TryGetValue(key, out float cur) || val > cur)
+                {
+                    settings.RecordedMaxGpuDynamic[key] = val;
+                    changed = true;
+                }
+            }
+
             if (changed && (DateTime.Now - settings.LastAutoSaveTime).TotalSeconds > 30)
             {
                 settings.Save();

@@ -152,6 +152,15 @@ namespace LiteMonitor
         public Dictionary<string, string> GroupAliases { get; set; } = new Dictionary<string, string>();
         public List<MonitorItemConfig> MonitorItems { get; set; } = new List<MonitorItemConfig>();
 
+        // ★★★ [多显卡] 各显卡各自的峰值记录 (key = 完整 Key, 如 "GPU.1.Power"), 供进度条按卡自适应 ★★★
+        public Dictionary<string, float> RecordedMaxGpuDynamic { get; set; } = new Dictionary<string, float>();
+
+        // ★★★ [多显卡] 运行时缓存: 各显卡的显存总容量 (GB), key = "GPU" / "GPU.0" / "GPU.1" ★★★
+        // 用 ConcurrentDictionary: 硬件线程 (HardwareValueProvider.GetGpuVramPercent) 写,
+        // UI 线程 (MetricUtils.GetGpuVramTotalGB) 读 —— 普通 Dictionary 并发写会损坏内部结构。
+        [JsonIgnore]
+        public static ConcurrentDictionary<string, float> DetectedGpuVramTotalGBByKey { get; } = new ConcurrentDictionary<string, float>();
+
         // ★★★ [多显卡] 监控显卡数量: 1 = 只监控 1 张 (沿用旧行为), N = 按优先级监控前 N 张 ★★★
         public int MonitoredGpuCount { get; set; } = 1;
         public List<PluginInstanceConfig> PluginInstances { get; set; } = new List<PluginInstanceConfig>();
