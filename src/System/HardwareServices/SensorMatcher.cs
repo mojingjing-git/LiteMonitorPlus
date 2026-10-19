@@ -71,42 +71,8 @@ namespace LiteMonitor.src.SystemServices
             // --- GPU ---
             if (type is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel)
             {
-                if (s.SensorType == SensorType.Load && (Has(name, "core") || Has(name, "d3d 3d"))) return "GPU.Load";
-                if (s.SensorType == SensorType.Temperature && (Has(name, "core") || Has(name, "hot spot") || Has(name, "soc") || Has(name, "vr"))) return "GPU.Temp";
-                
-                // VRAM Logic (简化且准确)
-                // 1. 根据硬件规则判断是否应该优先找共享内存 (核显)
-                bool preferShared = HardwareRules.ShouldUseSharedMemory(hw);
-
-                if (s.SensorType == SensorType.SmallData && (Has(name, "memory") || Has(name, "dedicated") || Has(name, "shared")))
-                {
-                    bool isShared = Has(name, "shared");
-                    bool isDedicated = Has(name, "dedicated");
-                    // Generic "Memory Used" (Vendor sensors often just say "Memory Used")
-                    bool isGenericMem = !isShared && !isDedicated && Has(name, "memory");
-
-                    if (preferShared)
-                    {
-                        // Integrated: Only accept Shared Memory
-                        if (isShared && Has(name, "used")) return "GPU.VRAM.Used";
-                        if (isShared && Has(name, "total")) return "GPU.VRAM.Total";
-                        
-                        // Fallback: 如果没有 Shared Memory (比如某些老驱动)，但有 Generic Memory，勉强用一下
-                        // 但必须排除 Dedicated (核显通常没有专用显存，如果有也是假的或者极小)
-                        if (isGenericMem && Has(name, "used")) return "GPU.VRAM.Used";
-                    }
-                    else
-                    {
-                        // Discrete: Accept Dedicated or Generic Memory (Block Shared)
-                        if (!isShared) 
-                        {
-                            if (Has(name, "used")) return "GPU.VRAM.Used";
-                            if (Has(name, "total")) return "GPU.VRAM.Total";
-                        }
-                    }
-                }
-                
-                if (s.SensorType == SensorType.Load && Has(name, "memory")) return "GPU.VRAM.Load";
+                string? gpuKey = MatchGpu(name, s.SensorType, HardwareRules.ShouldUseSharedMemory(hw));
+                if (gpuKey != null) return gpuKey;
             }
 
             // --- Memory ---
@@ -155,6 +121,72 @@ namespace LiteMonitor.src.SystemServices
                 if (s.SensorType == SensorType.Voltage) return "BAT.Voltage";
                 if (s.SensorType == SensorType.Current) return "BAT.Current";
             }
+
+            return null;
+        }
+
+        /// <summary>
+        /// GPU 传感器匹配 (抽成独立方法, 便于单元测试, 不需要构造 IHardware/ISensor 桩)。
+        ///
+        /// ★★★ [显存修复] D3D 通道单独建 Key ★★★
+        /// D3D 通道按适配器 (adapter) 统计, 每张卡各读各的, 不会串卡;
+        /// 厂商通道 (NVAPI / ADL) 在 LHM 0.9.6 的 NVIDIA 实现上会被"全局化", 多卡时多张卡拿到同一份数据。
+        /// 所以这里把 D3D 专用显存拆到独立 Key, 由取值层 (GpuVramSource) 按规则择一,
+        /// 而不是像以前那样让厂商值把 D3D 值顶掉 (SensorMap 的冲突规则是"厂商优先")。
+        /// </summary>
+        public static string? MatchGpu(string name, SensorType sensorType, bool preferShared)
+        {
+            if (sensorType == SensorType.Load && (Has(name, "core") || Has(name, "d3d 3d"))) return "GPU.Load";
+            if (sensorType == SensorType.Temperature && (Has(name, "core") || Has(name, "hot spot") || Has(name, "soc") || Has(name, "vr"))) return "GPU.Temp";
+
+            // ★ [显存修复] D3D 专用显存 -> 独立 Key
+            //   注意: 这里只拦 "D3D Dedicated Memory *"。核显的 "D3D Shared Memory *"
+            //   仍然要走下面的通用分支 (它就是核显 GPU.VRAM.Used 的来源), 不能一起拦掉,
+            //   否则核显的显存映射会整个消失。
+            bool isD3DDedicated = Has(name, "d3d") && Has(name, "dedicated");
+            if (sensorType == SensorType.SmallData && isD3DDedicated)
+            {
+                if (Has(name, "used")) return "GPU.VRAM.D3D.Used";
+                if (Has(name, "total")) return "GPU.VRAM.D3D.Total";
+                if (Has(name, "free")) return "GPU.VRAM.D3D.Free";
+            }
+
+            // VRAM Logic (简化且准确)
+            // 1. 根据硬件规则判断是否应该优先找共享内存 (核显)
+            if (sensorType == SensorType.SmallData
+                && (Has(name, "memory") || Has(name, "dedicated") || Has(name, "shared")))
+            {
+                bool isShared = Has(name, "shared");
+                bool isDedicated = Has(name, "dedicated");
+                // Generic "Memory Used" (Vendor sensors often just say "Memory Used")
+                bool isGenericMem = !isShared && !isDedicated && Has(name, "memory");
+
+                if (preferShared)
+                {
+                    // Integrated: Only accept Shared Memory
+                    // ★ 核显的 "D3D Shared Memory Used" 就是从这里进 GPU.VRAM.Used 的
+                    if (isShared && Has(name, "used")) return "GPU.VRAM.Used";
+                    if (isShared && Has(name, "total")) return "GPU.VRAM.Total";
+
+                    // Fallback: 如果没有 Shared Memory (比如某些老驱动)，但有 Generic Memory，勉强用一下
+                    // 但必须排除 Dedicated (核显通常没有专用显存，如果有也是假的或者极小)
+                    if (isGenericMem && Has(name, "used")) return "GPU.VRAM.Used";
+                }
+                else
+                {
+                    // Discrete: Accept Dedicated or Generic Memory (Block Shared)
+                    // ★ D3D 专用的已经在上面单独建 Key 了, 这里跳过, 避免被当成厂商口径
+                    if (!isShared && !isD3DDedicated)
+                    {
+                        if (Has(name, "used")) return "GPU.VRAM.Used";
+                        if (Has(name, "total")) return "GPU.VRAM.Total";
+                    }
+                }
+            }
+
+            // 显存占用率: 只认 "GPU Memory", 不要 "GPU Memory Controller" (那是显存控制器利用率, 不是占用率)
+            if (sensorType == SensorType.Load && Has(name, "memory") && !Has(name, "controller"))
+                return "GPU.VRAM.Load";
 
             return null;
         }
