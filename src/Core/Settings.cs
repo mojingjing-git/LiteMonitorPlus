@@ -263,8 +263,17 @@ namespace LiteMonitor
                     CachedDashUnitKey = UIUtils.Intern(sub + ".Unit");
                 }
                 else
-                    CachedUIGroup = UIUtils.Intern(_key.Split('.')[0]); 
-                
+                {
+                    // ★★★ [按卡拆组] 带序号的显卡 Key 归到「按卡分组」("GPU.0" / "GPU.1"),
+                    //   这样每张卡的 6 个指标会被包在自己的小标题下面, 面板上不再并排
+                    //   出现多组重复的显卡型号。
+                    //   非显卡项 (CPU / MEM / HOST / DASH / ...) 保持原逻辑不变。
+                    if (GpuGroupPolicy.TryGetPerCardGroupKey(_key, out string gpuGroup))
+                        CachedUIGroup = UIUtils.Intern(gpuGroup);
+                    else
+                        CachedUIGroup = UIUtils.Intern(_key.Split('.')[0]);
+                }
+
                 CachedGroupsKey = UIUtils.Intern("Groups." + CachedUIGroup);
                 
                 // 存入缓存
@@ -327,6 +336,10 @@ namespace LiteMonitor
                 {
                     return "DASH";
                 }
+
+                // ★★★ [按卡拆组] 必须与 Key setter 里的推导规则保持完全一致 ★★★
+                if (GpuGroupPolicy.TryGetPerCardGroupKey(Key, out string gpuGroup))
+                    return gpuGroup;
 
                 return Key.Split('.')[0]; 
             }
