@@ -150,5 +150,33 @@ namespace LiteMonitor.src.SystemServices
 
             return n.Length > 0 ? n : "";
         }
+
+        /// <summary>
+        /// 这张卡的显存是不是走"专用显存"口径 (即独显)。
+        ///
+        /// 用途: 显存串卡判定只对独显生效。
+        ///   核显在注册表里记的是 UMA 窗口大小, 与它实际使用的共享显存上限本来就不该相等,
+        ///   拿它当基准会把核显误判成"串卡", 再切到几乎没有的 D3D 专用显存口径,
+        ///   结果核显显存恒显 0% —— 比原 bug 更糟。
+        /// </summary>
+        public static bool UsesDedicatedVramName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+
+            // Intel: 只认 Arc A/B/Pro 独显; UHD / Iris / Arc 核显 都不算
+            if (Has(name, "Intel")) return IsDiscreteArc(name);
+
+            // AMD: "AMD Radeon(TM) Graphics" 这种无型号的核显不算; 有具体型号的按独显处理
+            if (Has(name, "AMD"))
+            {
+                return !name.Equals("AMD Radeon(TM) Graphics", StringComparison.OrdinalIgnoreCase)
+                       && !name.Equals("AMD Radeon Graphics", StringComparison.OrdinalIgnoreCase);
+            }
+
+            // NVIDIA: 一律按独显处理
+            if (Has(name, "NVIDIA")) return true;
+
+            return false;
+        }
     }
 }
