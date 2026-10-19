@@ -53,10 +53,13 @@
 <ItemGroup>
   <Compile Remove="LiteMonitor.Updater\**" />
   <Compile Remove="LiteMonitor.Wpf\**" />
+  <Compile Remove="tests\**" />
   <EmbeddedResource Remove="LiteMonitor.Updater\**" />
   <EmbeddedResource Remove="LiteMonitor.Wpf\**" />
+  <EmbeddedResource Remove="tests\**" />
   <None Remove="LiteMonitor.Updater\**" />
   <None Remove="LiteMonitor.Wpf\**" />
+  <None Remove="tests\**" />
 </ItemGroup>
 	
 <!-- 引入文件资源管理 -->

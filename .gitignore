@@ -1,0 +1,14 @@
+# 构建产物
+bin/
+obj/
+*.user
+*.suo
+
+# 运行期数据（不应进版本库）
+settings.json
+settings.json.bak
+HardwareHistory.json
+HardwareHistory.json.bak
+TrafficHistory.json
+TrafficHistory.json.bak
+*.log
