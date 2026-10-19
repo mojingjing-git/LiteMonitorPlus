@@ -1,6 +1,9 @@
-# LiteMonitor 插件开发完全指南 (v1.0)
+# LiteMonitor++ 插件开发完全指南 (v1.0)
 
-欢迎使用 LiteMonitor 插件系统！
+> 本插件系统最初由上游项目 LiteMonitor 设计（原作者 Diorser，MIT 协议），
+> 本项目沿用其插件规范并继续维护。插件规范本身向后兼容上游。
+
+欢迎使用 LiteMonitor++ 插件系统！
 
 本指南专为初学者设计，旨在帮助你从零开始编写自己的监控插件。无需精通编程，只需了解基本的 JSON 格式即可上手。
 
@@ -25,7 +28,7 @@
 
 ## 1. 什么是插件？
 
-LiteMonitor 的插件是一个 **`.json` 文本文件**，存放在 `resources/plugins/` 目录下。
+LiteMonitor++ 的插件是一个 **`.json` 文本文件**，存放在 `resources/plugins/` 目录下。
 它告诉程序：
 1.  **去哪里拿数据？** (例如：访问天气 API)
 2.  **怎么处理数据？** (例如：把温度从华氏度转为摄氏度)
@@ -65,7 +68,7 @@ LiteMonitor 的插件是一个 **`.json` 文本文件**，存放在 `resources/p
   ]
 }
 ```
-3.  重启 LiteMonitor 或在设置页面点击“重载插件”。
+3.  重启 LiteMonitor++ 或在设置页面点击“重载插件”。
 4.  在插件设置页，你应该能看到“你好世界”插件，添加它，你的任务栏就会显示 "Hello World!"。
 
 ---
@@ -261,7 +264,7 @@ LiteMonitor 的插件是一个 **`.json` 文本文件**，存放在 `resources/p
 ```
 
 ### 4.6 Outputs (显示结果)
-最后一步，告诉 LiteMonitor 在任务栏显示什么。
+最后一步，告诉 LiteMonitor++ 在任务栏显示什么。
 
 ```json
 "outputs": [
@@ -278,7 +281,7 @@ LiteMonitor 的插件是一个 **`.json` 文本文件**，存放在 `resources/p
 
 **💡 小技巧：高级模版语法**
 
-LiteMonitor 支持更丰富的模版逻辑，让你的插件更智能。
+LiteMonitor++ 支持更丰富的模版逻辑，让你的插件更智能。
 
 **1. Fallback (兜底) 语法 `??`**
 如果变量为空，则使用备用值。支持多级回退和字符串常量。
@@ -419,7 +422,7 @@ A: JSON 解析失败。说明你 `extract` 里的路径写错了，或者 API �
 A: 变量提取成功了，但是那个字段的值是空的。
 
 **Q: 修改了 json 没生效？**
-A: 需要在 LiteMonitor 的插件设置页面操作关闭->保存>启动，或者直接重启软件。
+A: 需要在 LiteMonitor++ 的插件设置页面操作关闭->保存>启动，或者直接重启软件。
 
 **Q: 怎么调试？**
 A: 可以在 `outputs` 里临时加一项，把 `format_val` 设为整个 JSON (`"{{$raw}}"`) 或者中间变量，看看数据到底是什么。

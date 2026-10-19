@@ -1,5 +1,5 @@
 =========================================================
-         					LiteMonitor 使用说明
+         					LiteMonitor++ 使用说明
 					     [ 开源 | 免费 | 安全 | 透明 ]
 =========================================================
 
@@ -21,7 +21,9 @@
 2. 为了能够读取CPU温度/频率/功耗等数据，本软件需依赖PawnIO驱动
    * 软件启动时会自动检测是否安装PawnIO驱动，若未安装会自动提醒安装。
    * 如果自动安装失败，您可以手动下载 PawnIO 驱动进行安装。
-   * 下载地址: https://gitee.com/Diorser/LiteMonitor/raw/master/resources/assets/PawnIO_setup.exe
+   * 下载地址: https://raw.githubusercontent.com/mojingjing-git/LiteMonitorPlus/master/resources/assets/PawnIO_setup.exe
+   * 驱动包与 FPS 组件在下载后都会做 SHA256 完整性校验，校验不通过会中止安装，
+     不会执行校验失败的下载文件。
 
 
 [3] 关键文件与数据管理
@@ -36,7 +38,7 @@
   记录了每日的上传/下载流量统计数据。
   > 隐私清理：如需重置历史流量统计，可直接删除此文件，软件会自动重建。
 
-* LiteMonitor_Error.log（崩溃错误日志）
+* LiteMonitor++_Error.log（崩溃错误日志）
   软件运行崩溃或异常时的日志记录。
 
 * resources/themes/*.json (主题文件)
@@ -49,23 +51,38 @@
   存放插件配置与扩展功能定义，可自由增删插件实现个性化监控。
   > 自定义插件：将符合规范的插件 JSON 放入此目录，重启软件即可生效；删除对应文件即可卸载插件。
 
+* LICENSE / NOTICE（许可证与致谢）
+  本程序基于上游开源项目 LiteMonitor 派生，遵循 MIT 协议。
+  LICENSE 内含上游作者与本项目作者的双份版权声明，NOTICE 记录了变更说明
+  与全部第三方组件的许可信息。分发时请一并保留这两个文件。
+
 
 [4] 关于本项目 (Open Source)
 ----------------------------------------------------------------
-LiteMonitor 是一款代码完全开源的免费软件。
-我们承诺代码公开透明，绝无任何恶意后门或隐私窃取行为。
-因涉及底层硬件数据读取，部分杀毒软件可能会拦截此软件。
-如果运行软件或者设置开机启动时出现拦截，请将软件目录添加至杀软信任/白名单。
+LiteMonitor++ 是一款基于开源项目 LiteMonitor（原作者 Diorser，MIT 协议）
+派生修改的免费软件，源码完全公开。
+
+安全说明：
+  * 程序本体不包含任何后门或隐私窃取逻辑。
+  * 但本程序的【插件系统】支持从远程源下载并在本地执行第三方脚本，
+    安装插件即等同于执行该脚本作者提供的代码，请只安装可信来源的插件。
+  * 因涉及底层硬件数据读取，部分杀毒软件可能会拦截此程序。
+    如果运行或设置开机启动时出现拦截，请将程序目录添加至杀软信任/白名单。
 
 * 项目主页 & 源码查看:
-  https://github.com/Diorser/LiteMonitor
+  https://github.com/mojingjing-git/LiteMonitorPlus
 
 * 问题反馈 (BUG/需求提交):
-  https://github.com/Diorser/LiteMonitor/issues
+  https://github.com/mojingjing-git/LiteMonitorPlus/issues
 
-* 多显卡监控增强版 (本 Fork):
-  https://github.com/mojingjing-git/LiteMonitor
-  支持同时监控多张显卡，详见设置 -> 系统与硬件 -> 监控显卡数量。
+* 上游项目（原作者 Diorser，MIT 协议）:
+  https://github.com/Diorser/LiteMonitor
+
+* 多显卡监控:
+  支持同时监控多张显卡，温度/占用/功耗/显存等指标按卡分别显示。
+  详见设置 -> 系统与硬件 -> 监控显卡数量。
+  > 注意：多显卡模式按性能优先级取前 N 张显卡（如独显优先于核显），
+    设置的数量超过实际可用张数时会自动夹紧到实际张数。
 
 如果您觉得这个工具好用，欢迎在 GitHub 上点一个 Star (⭐) 支持一下，感谢！
 
