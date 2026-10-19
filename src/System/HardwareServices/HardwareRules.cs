@@ -95,5 +95,59 @@ namespace LiteMonitor.src.SystemServices
             
             return false;
         }
+        /// <summary>
+        /// 从显卡全名提取简短显示名, 用于多显卡监控时区分不同显卡。
+        /// "NVIDIA GeForce RTX 3080 Ti" -> "3080 Ti"
+        /// "AMD Radeon RX 7900 XTX"      -> "7900 XTX"
+        /// "Intel Arc B580"              -> "B580"
+        /// </summary>
+        public static string GetShortGpuName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "";
+
+            // 0. ★★★ 先剥离注册商标标记并归一化空格 ★★★
+            //    LHM 里 AMD 核显的原始名就是 "AMD Radeon(TM) Graphics"。
+            //    如果不先剥掉 "(TM)"，下面的前缀匹配会全部失配:
+            //    "AMD Radeon " (带空格) 匹配不上 "AMD Radeon(TM)"，
+            //    于是退化成命中 "AMD "，留下 "Radeon(TM) Graphics"。
+            string n = name
+                .Replace("(R)", " ", StringComparison.OrdinalIgnoreCase)
+                .Replace("(TM)", " ", StringComparison.OrdinalIgnoreCase)
+                .Replace("®", " ")
+                .Replace("™", " ");
+            n = string.Join(" ", n.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+
+            // 1. 剥离厂商前缀
+            string[] vendorPrefixes =
+            {
+                // 注意: 这里**不能**写 "Intel(R) " —— Step 0 已经把 "(R)" 剥成空格,
+                // "Intel(R) UHD Graphics 770" 归一化后是 "Intel UHD Graphics 770",
+                // 那个前缀永远匹配不到, 留着只是误导。
+                "NVIDIA GeForce ", "NVIDIA ", "AMD Radeon ", "AMD ",
+                "Intel ", "Apple ", "Microsoft "
+            };
+
+            foreach (var p in vendorPrefixes)
+            {
+                if (n.StartsWith(p, StringComparison.OrdinalIgnoreCase))
+                {
+                    n = n.Substring(p.Length).Trim();
+                    break;
+                }
+            }
+
+            // 2. 剥离系列前缀 (RTX / RX / Arc ...)
+            string[] seriesPrefixes = { "RTX ", "GTX ", "RX ", "Radeon ", "Arc " };
+            foreach (var s in seriesPrefixes)
+            {
+                if (n.StartsWith(s, StringComparison.OrdinalIgnoreCase))
+                {
+                    n = n.Substring(s.Length).Trim();
+                    break;
+                }
+            }
+
+            return n.Length > 0 ? n : "";
+        }
     }
 }
