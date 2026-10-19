@@ -148,6 +148,7 @@ namespace LiteMonitor.src.UI
             AddNav("Threshold", "🔔 " + LanguageManager.T("Menu.Thresholds"), new ThresholdPage());
             AddNav("System", "⚙️ " + LanguageManager.T("Menu.SystemHardwar"), new SystemHardwarPage());
             AddNav("Plugins", "🧩 " + LanguageManager.T("Menu.Plugins"), new PluginPage());
+            AddNav("PluginMarket", "🛒 " + LanguageManager.T("Menu.PluginMarket"), new PluginMarketPage());
 
             _pnlNavContainer.PerformLayout();
             SwitchPage("MainPanel");
