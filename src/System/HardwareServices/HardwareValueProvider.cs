@@ -40,6 +40,7 @@ namespace LiteMonitor.src.SystemServices
         private string _lastPrefDisk = "";
         private string _lastPrefNet = "";
         private string _lastPrefGpu = "";
+        private int _lastGpuCount = 1;
         
         public HardwareValueProvider(Computer c, Settings s, SensorMap map, NetworkManager net, DiskManager disk, FpsCounter fpsCounter,PerformanceCounterManager perfManager, object syncLock, Dictionary<string, float> lastValid)
         {
@@ -70,6 +71,7 @@ namespace LiteMonitor.src.SystemServices
             _lastPrefDisk = _cfg.PreferredDisk;
             _lastPrefNet = _cfg.PreferredNetwork;
             _lastPrefGpu = _cfg.PreferredGpu ?? "";
+            _lastGpuCount = _cfg.MonitoredGpuCount;
 
             // 1. 预查找用户指定的首选传感器 (风扇、水泵、主板温度)
             string[] preferredKeys = { "CPU.Fan", "CPU.Pump", "CASE.Fan", "MOBO.Temp" };
@@ -194,13 +196,15 @@ namespace LiteMonitor.src.SystemServices
                 _tickCache.Clear();
 
                 bool gpuChanged = _lastPrefGpu != (_cfg.PreferredGpu ?? "");
-                if (gpuChanged)
+                bool gpuCountChanged = _lastGpuCount != _cfg.MonitoredGpuCount;
+                if (gpuChanged || gpuCountChanged)
                 {
+                    // ★★★ [多显卡] 显卡数量变了, 重建映射 ★★★
                     _sensorMap.Rebuild(_computer, _cfg);
                 }
 
                 // 自动检测配置变更：如果用户更改了首选风扇/磁盘/显卡，立即自动预热
-                if (gpuChanged ||
+                if (gpuChanged || gpuCountChanged ||
                     _lastPrefCpuFan != _cfg.PreferredCpuFan ||
                     _lastPrefCpuPump != _cfg.PreferredCpuPump ||
                     _lastPrefCaseFan != _cfg.PreferredCaseFan ||

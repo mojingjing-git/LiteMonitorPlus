@@ -185,6 +185,15 @@ namespace LiteMonitor
             {
                 await Task.Run(() => _mon.UpdateAll());
 
+                // ★★★ [多显卡] 实际显卡数少于配置数时 (例如拔掉了第二张卡),
+                // 夹紧配置并重建监控项, 否则会留下一组永远没有数据的空白指标。 ★★★
+                int actualGpuCount = _mon.GetMonitoredGpuCount();
+                if (actualGpuCount > 0 && _cfg.MonitoredGpuCount > actualGpuCount)
+                {
+                    GpuItemSync.Ensure(_cfg, availableGpuCount: actualGpuCount);
+                    RebuildLayout();
+                }
+
                 // ① 更新竖屏 items
                 foreach (var g in _groups)
                     foreach (var it in g.Items)

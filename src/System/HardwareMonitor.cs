@@ -559,10 +559,35 @@ namespace LiteMonitor.src.SystemServices
         private bool ShouldUpdateGpuHardware(IHardware hw)
         {
             var activeGpu = _sensorMap.CachedGpu;
-            if (activeGpu == null) return true;
 
-            // 当前面板只有一组 GPU 指标，刷新非当前显卡只会增加启动和轮询耗时。
-            return ReferenceEquals(hw, activeGpu);
+            // ★★★ [多显卡] 映射还没建好时 (CachedGpu 与 CachedGpus 都为空),
+            // 保持旧行为: 更新所有显卡。否则热插拔触发 SensorMap.Clear() 之后
+            // 到下一次 Rebuild 之间, 显卡会完全不刷新。 ★★★
+            if (activeGpu == null && _sensorMap.CachedGpus.Count == 0) return true;
+
+            if (activeGpu != null && ReferenceEquals(hw, activeGpu)) return true;
+
+            // ★★★ [多显卡] 更新所有被监控的显卡 ★★★
+            foreach (var g in _sensorMap.CachedGpus)
+            {
+                if (ReferenceEquals(g, hw)) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 当前实际被监控的显卡数量 (以传感器映射为准)。
+        /// 用于把配置里的"监控显卡数量"夹到真实卡数, 避免生成空白监控项。
+        /// </summary>
+        public int GetMonitoredGpuCount()
+        {
+            // ★ 无锁读 ★
+            // CachedGpus 只会被整体替换 (Rebuild 的原子交换块 / Clear), 不会被就地修改,
+            // 所以读 .Count 是安全的。
+            // 刻意不用 lock(_lock): 这个方法会被 UI 线程 (UIController.Tick) 调用,
+            // 而 ReloadComputerSafe 持锁可达数秒, 会把界面冻住。
+            return _sensorMap.CachedGpus.Count;
         }
 
         private static bool IsMoboOrCooler(IHardware hw)
