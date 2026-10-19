@@ -201,6 +201,12 @@ namespace LiteMonitor.src.SystemServices
                 {
                     // ★★★ [多显卡] 显卡数量变了, 重建映射 ★★★
                     _sensorMap.Rebuild(_computer, _cfg);
+
+                    // ★★★ [显存修复] 被监控卡集合变了, 之前记的显存容量作废 ★★★
+                    // 旧格式 Key "GPU" 指向的卡可能已经换人 (首选显卡改了 / 数量改了),
+                    // 留着旧容量会让面板出现"百分比按 20GB 算、容量却显示 12GB"的自相矛盾。
+                    Settings.DetectedGpuVramTotalGB = 0;
+                    Settings.DetectedGpuVramTotalGBByKey.Clear();
                 }
 
                 // 自动检测配置变更：如果用户更改了首选风扇/磁盘/显卡，立即自动预热
@@ -527,21 +533,47 @@ namespace LiteMonitor.src.SystemServices
         /// <summary>
         /// 计算显存占用百分比。
         /// key 形如 "GPU.VRAM" (旧) 或 "GPU.1.VRAM" (多卡), 由此派生出 Used / Total 子 Key。
+        ///
+        /// ★★★ [显存修复] 双通道择源 ★★★
+        /// 厂商通道 (NVAPI/ADL) 在 LHM 0.9.6 的 NVIDIA 实现上会被"全局化", 多卡时多张卡拿到同一份数据;
+        /// D3D 通道按适配器统计, 每卡独立。
+        /// 判定交给 GpuVramSource: 厂商通道报的容量命中了"另一块适配器"的容量 ⇒ 它在报告别的卡
+        /// ⇒ 换 D3D 通道。没有证据 ⇒ 维持厂商通道 (单卡 / AMD / Intel 场景行为完全不变)。
         /// </summary>
         private float? GetGpuVramPercent(string key)
         {
             // "GPU.VRAM" -> "GPU." ; "GPU.1.VRAM" -> "GPU.1."
             string prefix = key.Substring(0, key.Length - "VRAM".Length);
+            string cardKey = prefix.TrimEnd('.');        // "GPU" / "GPU.1"
 
-            float? used = GetValue(prefix + "VRAM.Used");
-            float? total = GetValue(prefix + "VRAM.Total");
+            // --- 1. 厂商通道 (NVAPI / ADL) ---
+            float? usedVendor  = ToMB(GetValue(prefix + "VRAM.Used"));
+            float? totalVendor = ToMB(GetValue(prefix + "VRAM.Total"));
+
+            // --- 2. D3D 通道 (按适配器统计, 每卡独立) ---
+            float? usedD3D  = ToMB(GetValue(prefix + "VRAM.D3D.Used"));
+            float? totalD3D = ToMB(GetValue(prefix + "VRAM.D3D.Total"));
+
+            // --- 3. 该卡真实容量 (注册表) + 全部适配器容量 (串卡交叉证据) ---
+            string fullName = GetGpuFullName(cardKey);
+            float? totalReal = GpuVramCapacity.GetTotalMB(fullName);
+            IReadOnlyList<float> allTotals = GpuVramCapacity.GetAllTotalsMB();
+
+            // --- 4. 守卫: 这张卡有没有资格参与"串卡"判定 ---
+            // 核显一律不参与: 注册表里核显记的是 UMA 窗口大小, 与它实际用的共享显存上限
+            // 本来就不该相等, 拿它当基准会把核显误判成串卡, 再切到几乎没有的 D3D 专用显存口径,
+            // 结果核显显存恒显 0% —— 比原 bug 更糟。
+            bool eligible = HardwareRules.UsesDedicatedVramName(fullName)
+                            && !IsSharedMemoryCard(prefix);
+
+            // --- 5. 择源 ---
+            bool useD3D = eligible && GpuVramSource.IsVendorChannelForeign(totalVendor, totalReal, allTotals);
+            var (used, total) = GpuVramSource.Select(
+                usedVendor, totalVendor, usedD3D, totalD3D, totalReal, useD3D);
+
             if (used.HasValue && total.HasValue && total > 0)
             {
-                // ★★★ 单位归一化: LHM 0.9.x 报的是 MB, 新版 LHM 报的是字节 ★★★
-                // 阈值 10485760 MB 实际不可能出现, 所以命中即代表单位是字节
-                if (total > 10485760) { used /= 1048576f; total /= 1048576f; }
-
-                // 现在 total 的单位是 MB
+                // total 的单位是 MB
                 float gb = total.Value / 1024f;
 
                 // 旧单卡缓存 (保留原有语义)
@@ -551,10 +583,15 @@ namespace LiteMonitor.src.SystemServices
                 }
 
                 // ★★★ [多显卡] 每张卡单独记录自己的显存总容量 ★★★
-                string cardKey = prefix.TrimEnd('.');
-                if (gb > 0 && gb < 1024 && !Settings.DetectedGpuVramTotalGBByKey.ContainsKey(cardKey))
+                // 写的是"校正后"的容量 (串卡时用注册表真值), 容量模式显示才会对。
+                // 不能先到先得: 择源结果会随"被监控卡集合"变化, 值变了必须覆盖。
+                if (gb > 0 && gb < 1024)
                 {
-                    Settings.DetectedGpuVramTotalGBByKey[cardKey] = gb;
+                    if (!Settings.DetectedGpuVramTotalGBByKey.TryGetValue(cardKey, out float oldGb)
+                        || Math.Abs(oldGb - gb) > 0.01f)
+                    {
+                        Settings.DetectedGpuVramTotalGBByKey[cardKey] = gb;
+                    }
                 }
 
                 return used / total * 100f;
@@ -562,6 +599,55 @@ namespace LiteMonitor.src.SystemServices
 
             if (_manualSensorCache.TryGetValue(prefix + "VRAM.Load", out var s) && s.Value.HasValue) return s.Value;
             return null;
+        }
+
+        /// <summary>
+        /// 统一把传感器的显存数值换算成 MB。
+        /// LHM 0.9.x 报 MB; 换新版 LHM 报字节。10485760 MB (= 10 TB) 实际不可能出现,
+        /// 命中即代表单位是字节。
+        /// </summary>
+        private static float? ToMB(float? value)
+        {
+            if (!value.HasValue) return null;
+            return value.Value > 10485760f ? value.Value / 1048576f : value.Value;
+        }
+
+        /// <summary>
+        /// 该卡的显存是否走"共享显存"口径 (核显)。
+        /// 判据: 它映射到的 LHM 传感器名里带 "Shared" (核显是 "D3D Shared Memory *")。
+        /// </summary>
+        private bool IsSharedMemoryCard(string prefix)
+        {
+            if (_manualSensorCache.TryGetValue(prefix + "VRAM.Used", out var usedSensor)
+                && usedSensor?.Name != null
+                && usedSensor.Name.Contains("Shared", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (_manualSensorCache.TryGetValue(prefix + "VRAM.Total", out var totalSensor)
+                && totalSensor?.Name != null
+                && totalSensor.Name.Contains("Shared", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 取 "GPU" / "GPU.1" 对应显卡的全名, 供注册表按名字匹配真实显存容量。
+        /// </summary>
+        private static string GetGpuFullName(string cardKey)
+        {
+            int index = -1;
+            if (cardKey == GpuKey.Prefix.TrimEnd('.')) index = 0;      // "GPU" -> 0 号卡
+            else if (cardKey.StartsWith(GpuKey.Prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string rest = cardKey.Substring(GpuKey.Prefix.Length);
+                if (int.TryParse(rest, out int i) && i >= 0) index = i;
+            }
+            return index >= 0 ? GpuRegistry.GetFullName(index) : "";
         }
 
         /// <summary>
