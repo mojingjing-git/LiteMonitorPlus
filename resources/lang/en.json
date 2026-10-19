@@ -223,6 +223,8 @@
     "DiskSource": "Disk",
     "NetworkSource": "Network",
     "GpuSource": "GPU",
+    "GpuMonitorCount": "Monitored GPU count",
+    "GpuMonitorCountTip": "⚠️In multi-GPU mode the top N GPUs by priority are monitored; temperature / load / power are shown per GPU",
     "Auto": "Auto",
     "UseWinPerCounters": "Use Sys Counters",
     "UseWinPerCountersTip": "⚠️Disable if inaccurate. CPU/GPU/MEM/DISK read from sensors.",

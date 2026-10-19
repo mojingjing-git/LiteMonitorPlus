@@ -19,6 +19,19 @@ namespace LiteMonitor.src.UI.SettingsPage
         private LiteComboBox _cbDisk, _cbNet, _cbGpu, _cbMobo;
         private LiteComboBox _cbFanCpu, _cbFanPump, _cbFanCase;
 
+        // ★ 实际检测到的显卡数量, 决定「监控显卡数量」下拉的可选上限 ★
+        private int _detectedGpuCount = 0;
+
+        // ★「监控显卡数量」下拉的句柄: 构造时拿不到真实卡数, 拿到之后再收窄选项 ★
+        //   (CreateSourceCard() 在构造函数里就会被调用, 编译器看不到这条赋值链, 故显式抑制)
+        private LiteComboBox _cbGpuCount = null!;
+
+        // ★ 程序化改动下拉选项时抑制回调 ★
+        //   真正会触发 SelectedIndexChanged 的是后面的 `SelectedIndex = cur - 1` 赋值;
+        //   实测 `Items.Clear()` 本身**不**触发该事件, 也不会把 cmb.Text 清空。
+        //   抑制之后, 夹紧后的值由 RefreshGpuCountOptions 显式回写, 不走事件。
+        private bool _suppressGpuCountEvent = false;
+
         public SystemHardwarPage()
         {
             this.BackColor = UIColors.MainBg;
@@ -59,6 +72,16 @@ namespace LiteMonitor.src.UI.SettingsPage
                 var taskMobo  = Task.Run(() => HardwareScanner.ListAllMoboTemps(HardwareMonitor.Instance.ComputerInstance, HardwareMonitor.Instance.SyncLock));
 
                 await Task.WhenAll(taskDisks, taskNets, taskGpus, taskFans, taskMobo);
+
+                // ★ 实际检测到的显卡数量 (用于「监控显卡数量」下拉的上限) ★
+                //   用局部变量承接: 直接写 `taskGpus.Result?.Count` 会把 Result 的可空状态
+                //   污染到下面的 FillGpuSync(_cbGpu, taskGpus.Result, ...) 调用上 (CS8604)。
+                var detectedGpus = taskGpus.Result;
+                _detectedGpuCount = detectedGpus?.Count ?? 0;
+
+                // ★ 真实卡数拿到了, 收窄「监控显卡数量」下拉的选项 ★
+                // (构造时只能给满 1..8, 因为此刻硬件还没枚举完)
+                RefreshGpuCountOptions();
 
                 // 2. ★★★ 锁定全局布局 (防止每填一个框就重绘一次) ★★★
                 this.SuspendLayout();
@@ -134,6 +157,49 @@ namespace LiteMonitor.src.UI.SettingsPage
             }
         }
 
+        /// <summary>
+        /// 按实际检测到的显卡数收窄「监控显卡数量」下拉的选项。
+        /// CreateSourceCard() 是在构造函数里跑的 (InitializeUI), 那一刻硬件还没枚举完,
+        /// _detectedGpuCount 恒为 0 —— 所以必须等 PopulateAsyncData() 之后再调一次。
+        /// </summary>
+        private void RefreshGpuCountOptions()
+        {
+            if (_cbGpuCount == null) return;
+
+            // ★ 还没探测到显卡 (或探测失败) 时不要收窄选项, 更不要动用户的配置 ★
+            if (_detectedGpuCount <= 0) return;
+
+            int maxSelectable = Math.Max(1, Math.Min(GpuKey.MaxGpuCount, _detectedGpuCount));
+            int cur = Math.Max(1, Math.Min(maxSelectable, Config?.MonitoredGpuCount ?? 1));
+
+            try
+            {
+                // ★ 抑制事件回调: 下面改 **SelectedIndex** 会触发 SelectedIndexChanged,
+                //   把中间态写进 draft。夹紧后的值由下面**显式**回写, 不走事件。 ★
+                //   (实测: Items.Clear() 本身不触发该事件, 真正会触发的是 SelectedIndex 赋值)
+                _suppressGpuCountEvent = true;
+
+                _cbGpuCount.Items.Clear();
+                for (int i = 1; i <= maxSelectable; i++) _cbGpuCount.Items.Add(i.ToString());
+                _cbGpuCount.SelectedIndex = cur - 1;
+            }
+            finally
+            {
+                _suppressGpuCountEvent = false;
+            }
+
+            // ★★★ [关键] 把夹紧后的值显式写回 draft ★★★
+            //   不写回会有个隐蔽的坑: 设置页**再次打开**时, SettingsPageBase.OnShow()
+            //   会重跑 AddCombo 注册的刷新回调, 而它的逻辑是
+            //     "当前值不在 Items 里 -> SelectedIndex = 0" ——
+            //   于是超出实际卡数的值 (比如 3) 会被**静默改成 1**, 而不是我们期望的 2。
+            //   先写回夹紧值, 下次打开时当前值就在 Items 里, 不会被改成 1。
+            if (Config != null && Config.MonitoredGpuCount != cur)
+            {
+                Config.MonitoredGpuCount = cur;
+            }
+        }
+
         private void CreateSourceCard()
         {
             var group = new LiteSettingsGroup(LanguageManager.T("Menu.HardwareSettings"));
@@ -174,6 +240,30 @@ namespace LiteMonitor.src.UI.SettingsPage
                 new[] { new { Label = strAuto, Value = "" } },
                 () => Config?.PreferredGpu ?? "",
                 v => { if (Config != null) Config.PreferredGpu = v ?? ""; });
+
+            // ★★★ [多显卡] 监控显卡数量下拉 ★★★
+            // 1 = 只监控 1 张 (沿用旧行为), 2 及以上 = 按优先级监控前 N 张
+            // ★ 选项上限按**实际检测到的显卡数**决定, 不能给满 8 ——
+            //   否则 2 卡机器上选 8 会凭空多出 6 组永远没有数据的空白监控项。 ★
+            // ★ 但 CreateSourceCard() 是在构造函数里跑的 (InitializeUI), 那一刻硬件还没枚举完,
+            //   _detectedGpuCount 恒为 0 —— 所以这里先给满 1..8,
+            //   等 PopulateAsyncData() 拿到真实卡数后再调 RefreshGpuCountOptions() 收窄。 ★
+            var gpuCountOptions = Enumerable.Range(1, GpuKey.MaxGpuCount).Select(c => c.ToString()).ToList();
+            _cbGpuCount = (LiteComboBox)group.AddCombo(this, "Menu.GpuMonitorCount", gpuCountOptions,
+                () => (Config?.MonitoredGpuCount ?? 1).ToString(),
+                v => {
+                    if (Config == null) return;
+                    // ★ 程序化刷新选项 (RefreshGpuCountOptions) 时会触发本回调, 此时忽略:
+                    //   夹紧后的值由 RefreshGpuCountOptions 显式回写, 不走事件。 ★
+                    if (_suppressGpuCountEvent) return;
+                    // ★ 只写数量, 不在这里改 MonitorItems ★
+                    // 监控项由 Task 5.5 (保存设置时) 统一生成, 避免绕过 draft/live 机制。
+                    // 上限不在这里夹紧 —— 下拉的选项本身已按实际卡数收窄, 用户选不超;
+                    // 真正的夹紧由 Task 5.5 的 GpuItemSync.Ensure(cfg, availableGpuCount) 在保存时完成。
+                    Config.MonitoredGpuCount = Math.Max(1, MetricUtils.ParseInt(v));
+                }
+            );
+            group.AddHint(LanguageManager.T("Menu.GpuMonitorCountTip"));
 
             _cbMobo = (LiteComboBox)group.AddCombo(this, "Items.MOBO.Temp", new List<string> { strAuto },
                 () => Config?.PreferredMoboTemp ?? strAuto, v => { if (Config != null) Config.PreferredMoboTemp = (v == strAuto ? "" : v); });

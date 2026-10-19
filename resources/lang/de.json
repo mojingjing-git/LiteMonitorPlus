@@ -223,6 +223,8 @@
     "DiskSource": "Disk",
     "NetworkSource": "Netz",
     "GpuSource": "GPU",
+    "GpuMonitorCount": "Anzahl überwachter GPUs",
+    "GpuMonitorCountTip": "⚠️Im Multi-GPU-Modus werden die N GPUs mit höchster Priorität überwacht; Temperatur / Auslastung / Leistung werden pro GPU angezeigt",
     "Auto": "Auto",
     "UseWinPerCounters": "Sys Zähler",
     "UseWinPerCountersTip": "⚠️Deaktivieren bei Ungenauigkeit. CPU/GPU/RAM/DISK von Sensoren gelesen.",

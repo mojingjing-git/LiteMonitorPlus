@@ -224,6 +224,8 @@
     "DiskSource": "ディスク",
     "NetworkSource": "ネットワーク",
     "GpuSource": "GPU",
+    "GpuMonitorCount": "監視する GPU の数",
+    "GpuMonitorCountTip": "⚠️複数 GPU モードでは優先度の上位 N 枚を監視し、温度/使用率/消費電力は GPU ごとに表示します",
     "Auto": "自動",
     "UseWinPerCounters": "システムカウンター優先",
     "UseWinPerCountersTip": "⚠️不正確な場合は無効にしてください。CPU/GPU/RAM/ディスクはセンサーから直接読み取られます。",
