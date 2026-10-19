@@ -151,6 +151,9 @@ namespace LiteMonitor
 
         public Dictionary<string, string> GroupAliases { get; set; } = new Dictionary<string, string>();
         public List<MonitorItemConfig> MonitorItems { get; set; } = new List<MonitorItemConfig>();
+
+        // ★★★ [多显卡] 监控显卡数量: 1 = 只监控 1 张 (沿用旧行为), N = 按优先级监控前 N 张 ★★★
+        public int MonitoredGpuCount { get; set; } = 1;
         public List<PluginInstanceConfig> PluginInstances { get; set; } = new List<PluginInstanceConfig>();
 
         // ★★★ [新增] 极简样式封装（复制到 Settings 类里） ★★★
