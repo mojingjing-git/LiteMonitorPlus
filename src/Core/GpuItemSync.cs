@@ -49,6 +49,11 @@ namespace LiteMonitor.src.Core
 
             var items = cfg.MonitorItems;
 
+            // ★★★ 先清掉 null 元素 ★★★
+            // settings.json 被手改坏 / 插件写坏时, MonitorItems 里可能出现 null 项。
+            // 下面每处 it.Key 都会 NRE, 而 Ensure 是在 SettingsHelper.Load() 的**启动路径**上
+            // 调用的 —— 一次 NRE 就能让程序起不来。顺带也把"无意义的 null 项"清干净。
+            items.RemoveAll(it => it == null);
 
             // 1. 旧版单卡项作为迁移模板
             var legacy = new Dictionary<string, MonitorItemConfig>(StringComparer.OrdinalIgnoreCase);
@@ -89,17 +94,33 @@ namespace LiteMonitor.src.Core
                     string baseKey = GpuKey.BaseKey(metric);
                     legacy.TryGetValue(baseKey, out var tpl);
 
-                    int taskbarSort = tpl != null && tpl.TaskbarSortIndex != 0
-                        ? tpl.TaskbarSortIndex
-                        : sort;
-                    taskbarSort += i * SortStride;
+                    // ★★★ 排序基准: 取"0 号卡同一指标"的实际排序值 ★★★
+                    //   优先用已存在的 GPU.0.{metric} —— 它承载了用户在"监控项显示"里拖过的顺序;
+                    //   其次用旧格式项 (首次迁移时 legacy 还在); 最后才用默认值。
+                    //   ⚠️ 不能只看 legacy: 第 1 次 Ensure 就把 legacy 项删光了,
+                    //   之后把卡数从 1 调到 2 时, 新卡会回落成默认值 (301+10=311),
+                    //   而 0 号卡仍保留用户自定义的 500 —— 面板顺序会倒挂成
+                    //   "GPU.0.Temp → GPU.1.* → GPU.0.Load"。
+                    int baseSort = sort;
+                    int baseTaskbarSort = sort;
+
+                    if (indexed.TryGetValue(GpuKey.Build(0, metric), out var firstCard))
+                    {
+                        if (firstCard.SortIndex != 0) baseSort = firstCard.SortIndex;
+                        if (firstCard.TaskbarSortIndex != 0) baseTaskbarSort = firstCard.TaskbarSortIndex;
+                    }
+                    else if (tpl != null)
+                    {
+                        if (tpl.SortIndex != 0) baseSort = tpl.SortIndex;
+                        if (tpl.TaskbarSortIndex != 0) baseTaskbarSort = tpl.TaskbarSortIndex;
+                    }
 
                     items.Add(new MonitorItemConfig
                     {
                         Key = key,
                         // ★ 排序索引同样继承旧项, 否则用户在"监控项显示"里拖过的顺序会被重置 ★
-                        SortIndex = (tpl != null && tpl.SortIndex != 0 ? tpl.SortIndex : sort) + i * SortStride,
-                        TaskbarSortIndex = taskbarSort,
+                        SortIndex = baseSort + i * SortStride,
+                        TaskbarSortIndex = baseTaskbarSort + i * SortStride,
                         VisibleInPanel = tpl?.VisibleInPanel ?? panel,
                         VisibleInTaskbar = tpl?.VisibleInTaskbar ?? taskbar,
                         // 任务栏自定义名要继承 (UserLabel 是故意不继承的: 两张卡同名没意义)

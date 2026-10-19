@@ -498,7 +498,21 @@ namespace LiteMonitor
             }
 
             Check("CPU.Temp", _mon.Get("CPU.Temp"), globalThreshold, LanguageManager.T("Short.CPU.Temp"));
-            Check("GPU.Temp", _mon.Get("GPU.Temp"), globalThreshold, LanguageManager.T("Short.GPU.Temp"));
+
+            // ★★★ [多显卡] 逐张显卡检查超温 ★★★
+            //   ⚠️ 不能只查 "GPU.Temp": 迁移后 MonitorItems 里不再有它,
+            //   而 SensorMap 只为 0 号卡写了这个旧格式 Key —— 那样等于**只告警第 0 张卡**,
+            //   多卡用户最关心的"哪张卡过热"会完全失效。
+            for (int gpuIdx = 0; gpuIdx < _cfg.MonitoredGpuCount; gpuIdx++)
+            {
+                string gpuTempKey = GpuKey.Build(gpuIdx, "Temp");
+                string gpuShort = GpuRegistry.GetShortName(gpuIdx);
+                string gpuAlertLabel = string.IsNullOrEmpty(gpuShort)
+                    ? LanguageManager.T("Short.GPU.Temp")
+                    : $"{gpuShort} {LanguageManager.T("Short.GPU.Temp")}";
+                Check(gpuTempKey, _mon.Get(gpuTempKey), globalThreshold, gpuAlertLabel);
+            }
+
             Check("MOBO.Temp", _mon.Get("MOBO.Temp"), globalThreshold, LanguageManager.T("Short.MOBO.Temp"));
             Check("DISK.Temp", _mon.Get("DISK.Temp"), diskThreshold, LanguageManager.T("Short.DISK.Temp"), $" (>{diskThreshold}°C)");
 

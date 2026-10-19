@@ -231,7 +231,9 @@ namespace LiteMonitor.src.WebServer
                     if (item.Key == "BAT.Percent") isPrimary = true;
                     else if (item.Key == "CPU.Load") isPrimary = true;
                     else if (item.Key == "MEM.Load") isPrimary = true;
-                    else if (item.Key == "GPU.Core.Load" || item.Key == "GPU.Load") isPrimary = true;
+                    // ★ [多显卡] 用基础 Key 归一化, 否则 "GPU.0.Load" / "GPU.1.Load" 匹配不上,
+                    //   GPU 分组就再也拿不到负载状态 (分组环/状态色会失真)。
+                    else if (item.Key == "GPU.Core.Load" || GpuKey.ToBaseKey(item.Key) == "GPU.Load") isPrimary = true;
                     else isPrimary = false;
                 }
 
