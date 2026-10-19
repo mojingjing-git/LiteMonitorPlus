@@ -12,3 +12,9 @@ HardwareHistory.json.bak
 TrafficHistory.json
 TrafficHistory.json.bak
 *.log
+
+# 评审/临时产物
+.review-scratch/
+
+# 发布产物（由 scripts/pack-release.ps1 生成）
+dist/

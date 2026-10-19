@@ -20,6 +20,7 @@ Copyright (c) 2026 mojingjing-git
 本项目的主要修改
 ------------------------------------------------------------------------
 - 品牌与程序集更名，与上游完全解耦
+- 应用图标改为本项目自制（原上游图标不再随本项目分发）
 - 解除对上游服务器的运行时依赖（更新源、驱动源、城市库、行情接口）
 - 多显卡监控：可同时监控 N 张独立显卡，温度/占用/功耗等指标分卡显示
 - 插件市场：远程插件索引的浏览与安装
@@ -53,7 +54,7 @@ Copyright (c) 2026 mojingjing-git
         因此本项目自身仍以 MIT 协议发布。
         二进制文件为 PawnIO 官方发布的安装包，未经修改。
 
-4) PresentMon（resources/assets/LiteMonitorFPS.exe）
+4) PresentMon（resources/assets/LiteMonitorPlusFPS.exe）
    协议：BSD 3-Clause License
    用途：提供游戏帧率（FPS）计数所需的 ETW 采集能力
    来源：https://github.com/GameTechDev/PresentMon
