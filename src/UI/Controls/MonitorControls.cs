@@ -48,6 +48,18 @@ namespace LiteMonitor.src.UI.Controls
 
         private bool _isTaskbarMode = false; // 记录当前模式
 
+        /// <summary>
+        /// 「名称」输入框的初始文本 (构造时解析出来的标签)。
+        ///
+        /// 保存时必须用它判断「用户到底改没改」。不能拿语言包原值当基准 ——
+        /// 语言包里没有 "Items.GPU.0.Load" 这种带序号的条目,
+        /// LanguageManager.GetOriginal 会回退成 "GPU.0.Load" 这种原始 Key,
+        /// 跟输入框里实际显示的内容 (如 "3080 Ti 温度") 根本不是一回事,
+        /// 拿它当基准会把「用户什么都没改」误判成「用户改过」——
+        /// 于是每次打开设置页点保存, 都会把自动生成的标签固化成 UserLabel。
+        /// </summary>
+        private readonly string _initialName;
+
         public event EventHandler MoveUp;
         public event EventHandler MoveDown;
 
@@ -77,7 +89,8 @@ namespace LiteMonitor.src.UI.Controls
             
             string defName = LanguageManager.T(UIUtils.Intern("Items." + item.Key));
             string valName = !string.IsNullOrEmpty(labelResolved) ? labelResolved : defName;
-            
+            _initialName = valName;
+
             _lblName = new Label
             {
                 Text = valName, 
@@ -209,16 +222,6 @@ namespace LiteMonitor.src.UI.Controls
         {
             // Name
             string valName = _inputName.Inner.Text; // 不使用 Trim，允许用户输入空格隐藏
-            string originalName = LanguageManager.GetOriginal(UIUtils.Intern("Items." + Config.Key));
-            
-            // [Fix] Handle untranslated plugin keys (e.g. DASH.UniversalAPI.0.val)
-            // If GetOriginal returns the full key (fallback), try to extract the last part as the field name
-            if (Config.Key.StartsWith("DASH.") && originalName.Contains("DASH."))
-            {
-                int lastDot = originalName.LastIndexOf('.');
-                if (lastDot >= 0 && lastDot < originalName.Length - 1) 
-                    originalName = originalName.Substring(lastDot + 1);
-            }
 
             // 规范化：如果是纯空格，则转为一个空格
             if (valName.Length > 0 && string.IsNullOrWhiteSpace(valName))
@@ -238,16 +241,26 @@ namespace LiteMonitor.src.UI.Controls
                 }
             }
 
-            // [Improvement] Check against current runtime dynamic label as well
-            string currentDynamicLabel = InfoService.Instance.GetValue("PROP.Label." + Config.Key);
-            if (string.IsNullOrEmpty(currentDynamicLabel)) currentDynamicLabel = Config.DynamicLabel;
-
-            // 如果等于默认值，或者等于当前的动态值，则存为空字符串 (恢复自动模式)
-            // 否则存为用户自定义值 (锁定模式)
-            if (valName != " " && (string.Equals(valName, originalName, StringComparison.OrdinalIgnoreCase) || valName == currentDynamicLabel))
-                Config.UserLabel = "";
+            // ★★★ 判定基准是「输入框初值」, 不是语言包原值 ★★★
+            //   语言包里没有 "Items.GPU.0.Load" 这种带序号的条目,
+            //   GetOriginal 会回退成 "GPU.0.Load" 这种原始 Key, 跟输入框里显示的
+            //   实际标签 (如 "3080 Ti 温度") 不是一回事 —— 拿它当基准会把
+            //   「用户什么都没改」误判成「用户改过」, 于是每次打开设置页点保存,
+            //   都会把自动生成的标签固化成 UserLabel (还会顶掉新的分组小标题)。
+            if (valName == " ")
+            {
+                // 空格 = 隐藏标签 (既有语义)
+                Config.UserLabel = " ";
+            }
+            else if (string.Equals(valName, _initialName, StringComparison.Ordinal))
+            {
+                // 用户没动过 -> 保持原状 (原来有自定义名就留着, 没有就继续走自动模式)
+            }
             else
+            {
+                // 用户改过 -> 锁定为用户自定义值
                 Config.UserLabel = valName;
+            }
 
             // Short (TaskbarLabel)
             // ★★★ 修复：允许用户输入空格 (" ") 来隐藏标签 ★★★

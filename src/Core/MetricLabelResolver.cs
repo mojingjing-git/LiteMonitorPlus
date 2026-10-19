@@ -104,6 +104,29 @@ namespace LiteMonitor.src.Core
         }
 
         /// <summary>
+        /// 生成「旧行为」下显卡项的自动标签: "&lt;显卡简称&gt; &lt;指标名&gt;", 如 "3080 Ti 温度"。
+        ///
+        /// 用途: 旧行为下设置页会把这个自动标签固化进 UserLabel (见 MonitorItemRow.SyncToConfig),
+        /// 而 UserLabel 优先级最高 —— 按卡拆组后组标题已经承担了「这是哪张卡」的职责,
+        /// 再留着这个前缀就会让面板重新出现重复的显卡型号。
+        /// 所以用它来识别「被固化的旧式自动名」, 迁移时清掉。
+        ///
+        /// 返回空串 = 该项不是显卡项, 或者显卡简称还没就绪 (无法构造旧式自动名)。
+        /// </summary>
+        public static string BuildLegacyAutoLabel(MonitorItemConfig config)
+        {
+            if (config == null) return "";
+            if (!GpuKey.TryParse(config.Key, out int gpuIndex, out string metric)) return "";
+
+            string shortName = GpuRegistry.GetShortName(gpuIndex);
+            if (string.IsNullOrEmpty(shortName)) return "";
+
+            string baseLabel = LanguageManager.GetOriginal(UIUtils.Intern("Items." + GpuKey.BaseKey(metric)));
+            if (string.IsNullOrEmpty(baseLabel)) return "";
+            return $"{shortName} {StripGpuPrefix(baseLabel)}".Trim();
+        }
+
+        /// <summary>
         /// 去掉基础标签里的 "GPU" 前缀, 避免拼成 "3080 Ti GPU温度"。
         /// "GPU温度" -> "温度" ; "GPU Load" -> "Load" ; "显存占用" -> "显存占用"
         /// </summary>

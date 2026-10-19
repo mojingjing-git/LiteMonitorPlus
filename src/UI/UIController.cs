@@ -22,6 +22,7 @@ namespace LiteMonitor
         private string _lastLayoutSignature = "";
 
         private List<GroupLayoutInfo> _groups = new();
+        private bool _gpuLegacyLabelMigrated = false;
         private List<Column> _hxColsHorizontal = new();
         private List<Column> _hxColsTaskbar = new();
         private HorizontalLayout? _hxLayout;
@@ -202,6 +203,11 @@ namespace LiteMonitor
                 //   标题只参与绘制 (画在 gr.Bounds 之上), 不参与布局计算 -> 只改 Label 即可。
                 RefreshPerCardGroupTitles();
 
+                // ★★★ [按卡拆组] 一次性清掉显卡项上被固化的旧式自动名 ★★★
+                //   旧行为下自动标签是 "3080 Ti 温度", 会被旧版设置页固化成 UserLabel,
+                //   而 UserLabel 优先级最高 -> 会把组标题的显卡型号重新顶回行标签上。
+                MigrateLegacyGpuItemLabels();
+
                 // ① 更新竖屏 items
                 foreach (var g in _groups)
                     foreach (var it in g.Items)
@@ -379,6 +385,54 @@ namespace LiteMonitor
                 }
             }
             if (changed) _form.Invalidate();
+        }
+
+        /// <summary>
+        /// 一次性迁移: 清掉显卡项上「被固化的旧式自动名」。
+        ///
+        /// 背景: 旧行为下显卡项的自动标签是 "&lt;显卡简称&gt; &lt;指标名&gt;" (如 "3080 Ti 温度"),
+        ///   而旧版设置页在保存时把这个自动标签固化进了 UserLabel。
+        ///   UserLabel 的优先级高于一切, 所以按卡拆组之后, 组标题虽然已经是 "3080 Ti",
+        ///   行标签却还是 "3080 Ti 温度" —— 正是本功能要消灭的重复。
+        ///
+        /// 只清掉**与旧式自动名完全一致**的 UserLabel, 用户自己起的名字一律保留。
+        /// 需要等 GpuRegistry 就绪 (拿到显卡简称) 才能构造旧式自动名, 所以放在这里做。
+        /// </summary>
+        private void MigrateLegacyGpuItemLabels()
+        {
+            if (_gpuLegacyLabelMigrated) return;
+
+            // 硬件还没初始化完 -> 拿不到显卡简称, 下个 Tick 再试
+            bool anyShortName = false;
+            for (int i = 0; i < GpuKey.MaxGpuCount; i++)
+            {
+                if (!string.IsNullOrEmpty(GpuRegistry.GetShortName(i))) { anyShortName = true; break; }
+            }
+            if (!anyShortName) return;
+
+            _gpuLegacyLabelMigrated = true;
+
+            bool changed = false;
+            foreach (var item in _cfg.MonitorItems)
+            {
+                if (item == null) continue;
+                if (string.IsNullOrEmpty(item.UserLabel)) continue;
+
+                string legacyAuto = MetricLabelResolver.BuildLegacyAutoLabel(item);
+                if (string.IsNullOrEmpty(legacyAuto)) continue;
+
+                if (string.Equals(item.UserLabel, legacyAuto, StringComparison.Ordinal))
+                {
+                    item.UserLabel = "";
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                // 落盘: 让迁移结果持久化, 下次启动不用再迁
+                _cfg.Save();
+            }
         }
 
         private void BuildHorizontalColumns()
