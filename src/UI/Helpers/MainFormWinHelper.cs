@@ -16,9 +16,25 @@ namespace LiteMonitor.src.UI.Helpers
     {
         private readonly Form _form;
 
+        // ★ A13：窗口轮廓（DWM 角偏好 + Region）的**唯一写入者**是 A09 的
+        //   WindowAppearanceController。本类只做转发，避免两个写入者互相打架。
+        private WindowAppearanceController? _windowAppearance;
+
         public MainFormWinHelper(Form form)
         {
             _form = form;
+        }
+
+        /// <summary>
+        /// 挂上窗口外观控制器（A09）。
+        /// <para>
+        /// 挂上之后，<see cref="ApplyRoundedCorners"/> 只做转发；
+        /// 未挂上时走旧路径的兼容回退，保证本类被独立使用时行为不退化。
+        /// </para>
+        /// </summary>
+        public void AttachWindowAppearance(WindowAppearanceController controller)
+        {
+            _windowAppearance = controller;
         }
 
         public void InitializeStyle(bool topMost, bool clickThrough)
@@ -46,8 +62,8 @@ namespace LiteMonitor.src.UI.Helpers
             ApplyRoundedCorners();
             if (clickThrough) SetClickThrough(true);
 
-            // 绑定 Resize 事件以自动重绘圆角
-            _form.Resize += (_, __) => ApplyRoundedCorners();
+            // ★ A13：Resize 绑定**只有一处**（在 MainForm_Transparent 里）。
+            //   这里不再重复绑定 —— 两处绑定会让窗口轮廓被无谓地重建两遍。
         }
 
         public bool IsTopMostStyleApplied()
@@ -137,7 +153,38 @@ namespace LiteMonitor.src.UI.Helpers
         // =================================================================
         // 圆角处理 (Hybrid: Win11 DWM / Win10 Region)
         // =================================================================
+        /// <summary>
+        /// 按**当前尺寸**重新应用窗口轮廓。
+        /// <para>
+        /// ★ A13：本方法现在是**转发**给 <see cref="WindowAppearanceController"/>（A09）——
+        ///   窗口轮廓的唯一写入者是那个控制器（统一几何 + 统一的 Region 所有权），
+        ///   本类不再自己写 DWM / Region，避免两套实现互相打架。
+        ///   控制器尚未挂上时（旧路径）才走兼容回退 <see cref="ApplyLegacyRoundedCorners"/>。
+        /// </para>
+        /// </summary>
         public void ApplyRoundedCorners()
+        {
+            if (_windowAppearance != null)
+            {
+                try { _windowAppearance.Reapply(); }
+                catch { }
+                return;
+            }
+
+            ApplyLegacyRoundedCorners();
+        }
+
+        /// <summary>
+        /// 旧路径的圆角实现（窗口外观控制器未挂上时的兼容回退）。
+        /// <para>
+        /// ★ 与 A09 路径的差别只有一处，但那一处很关键：
+        ///   旧代码是 <c>_form.Region?.Dispose(); _form.Region = new Region(gp);</c> ——
+        ///   先释放再赋值，而赋给 <c>Control.Region</c> 的实例是由 **WinForms 持有**的，
+        ///   提前释放会造成悬空引用（WinForms 复制旧 Region 时源已失效）。
+        ///   这里改成：先构造新 Region 并赋值，旧实例交给 WinForms 在赋值时释放。
+        /// </para>
+        /// </summary>
+        private void ApplyLegacyRoundedCorners()
         {
             try
             {
@@ -170,7 +217,7 @@ namespace LiteMonitor.src.UI.Helpers
                     gp.AddArc(0, _form.Height - d, d, d, 90, 90);
                     gp.CloseFigure();
 
-                    _form.Region?.Dispose();
+                    // ★ 不再手动释放赋给 Control.Region 的实例（那属于 WinForms）
                     _form.Region = new Region(gp);
                 }
             }

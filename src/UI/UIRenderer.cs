@@ -1,4 +1,6 @@
 using LiteMonitor.src.Core;
+using LiteMonitor.src.SystemServices.Backdrop;
+using LiteMonitor.src.UI.Decor;
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -19,25 +21,79 @@ namespace LiteMonitor
             UIUtils.ClearBrushCache();
         }
 
+        /// <summary>
+        /// 渲染主面板（**旧入口，保留原有公开签名**）。
+        /// <para>
+        /// 走的是**完全不含新外观**的旧路径：没有背景层、没有装饰层、没有新进度条。
+        /// 保留这个入口，是为了让既有调用方与外观探针仍能渲染"改造前的画面"，
+        /// 从而让"新能力全关时逐像素一致"这一验收有可比的基准。
+        /// </para>
+        /// </summary>
         public static void Render(Graphics g, List<GroupLayoutInfo> groups, Theme t)
+        {
+            Render(g, groups, t, null);
+        }
+
+        /// <summary>
+        /// 渲染主面板（含新外观层）。
+        /// </summary>
+        /// <param name="g">目标画布。</param>
+        /// <param name="groups">分组布局。</param>
+        /// <param name="t">当前主题。</param>
+        /// <param name="appearance">
+        /// 外观运行时（可空）。<b>为 null 时逐像素等同于旧路径</b> ——
+        /// 这是"新能力全关时画面不变"的前提。
+        /// </param>
+        public static void Render(Graphics g, List<GroupLayoutInfo> groups, Theme t, AppearanceRuntime? appearance)
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
-            // 1. 绘制背景
+            ThemeAppearanceOptions? options = appearance?.Options;
+            bool hasAppearance = appearance != null && options != null;
+
+            // 0. 背景层（solid / gradient / glass 降级）—— 最底层，在底板之前
+            bool backdropOwnsBasePlate = false;
+            if (hasAppearance)
+            {
+                BackdropStatus backdrop = appearance!.Backdrop.Render(g, options!);
+                // ★ 非 solid 模式下背景层自己铺了**不透明底板**（A08 的 DrawBasePlate），
+                //   旧的实心底板填充必须让位 —— 否则渐变 / 玻璃帧会被整个盖掉，
+                //   等于新背景白画。solid 模式背景层零绘制，底板仍走旧路径（旧主题像素不变）。
+                backdropOwnsBasePlate = backdrop.EffectiveMode != BackdropRenderMode.Solid;
+            }
+
+            // 1. 绘制背景（底板）
             // ★★★ [核心修复] 扩大绘制区域，解决左侧和上侧漏黑边的问题 ★★★
             // 原理：从 (-5, -5) 开始画，确保绝对覆盖掉 (0,0) 处的物理像素死角。
             // 多余的部分会被系统自动裁剪，不会有副作用。
-            g.FillRectangle(UIUtils.GetBrush(t.Color.Background), 
-                new Rectangle(-5, -5, (int)g.VisibleClipBounds.Width + 10, (int)g.VisibleClipBounds.Height + 10));
+            // ★ 注意：这里的 (-5,-5) 溢出策略**只用于把底板填满客户区**，
+            //   绝不能拿来定位外框/装饰 —— 装饰一律用 options.ClientBounds。
+            if (!backdropOwnsBasePlate)
+            {
+                g.FillRectangle(UIUtils.GetBrush(t.Color.Background),
+                    new Rectangle(-5, -5, (int)g.VisibleClipBounds.Width + 10, (int)g.VisibleClipBounds.Height + 10));
+            }
 
-            // 2. 绘制主标题
+            // 2. 窗口底纹（扫描线 / 网格）—— 铺在组块之外的区域，不覆盖数值文字
+            if (hasAppearance)
+                appearance!.Decor.RenderWindowTexture(g, options!, BuildGroupRegions(groups, t));
+
+            // 3. 绘制主标题
             DrawMainTitle(g, t);
 
-            // 3. 绘制各分组
+            // 4. 绘制各分组
             foreach (var gr in groups)
             {
-                DrawGroupBackground(g, gr, t);
-                
+                // 4.1 组块填充（不透明底板）
+                DrawGroupFill(g, gr, t);
+
+                // 4.2 组底纹 / 组框（在组块填充之后、组标题之前）
+                if (hasAppearance)
+                    appearance!.Decor.RenderGroupDecor(g, options!, new DecorGroupRegion(gr.Bounds, t.Layout.GroupRadius));
+
+                // 4.3 组标题（画在组块上方，属于"原有标题"层，与组底纹不重叠）
+                DrawGroupTitle(g, gr, t);
+
                 // 遍历子项绘制 (不再区分 NET/DISK，统一由 Item.Style 决定)
                 for (int i = 0; i < gr.Items.Count; i++)
                 {
@@ -49,9 +105,28 @@ namespace LiteMonitor
                     else if (it.Style == MetricRenderStyle.TextOnly) // [新增]
                         DrawTextItem(g, it, t, isLast);
                     else
-                        DrawStandardItem(g, it, t);
+                        DrawStandardItem(g, it, t, appearance);
                 }
             }
+
+            // 5. 向内的窗口边框 / 高光 —— 最后画，压在最上层
+            if (hasAppearance)
+                appearance!.Decor.RenderWindowFrame(g, options!, t.Layout.CornerRadius);
+        }
+
+        /// <summary>
+        /// 把分组布局转成装饰层需要的组块区域列表（窗口底纹据此排除组块区域）。
+        /// </summary>
+        private static List<DecorGroupRegion> BuildGroupRegions(List<GroupLayoutInfo> groups, Theme t)
+        {
+            var list = new List<DecorGroupRegion>(groups?.Count ?? 0);
+            if (groups == null) return list;
+            foreach (var gr in groups)
+            {
+                if (gr.Bounds.Width <= 0 || gr.Bounds.Height <= 0) continue;
+                list.Add(new DecorGroupRegion(gr.Bounds, t.Layout.GroupRadius));
+            }
+            return list;
         }
 
         private static void DrawMainTitle(Graphics g, Theme t)
@@ -72,14 +147,30 @@ namespace LiteMonitor
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         }
 
-        private static void DrawGroupBackground(Graphics g, GroupLayoutInfo gr, Theme t)
+        /// <summary>
+        /// 绘制组块的圆角填充（不透明底板）。
+        /// <para>
+        /// 与组标题拆成两个方法，是为了让装饰层能按 v4 固定的层次插入：
+        /// <b>组块填充 → 组底纹/组框 → 组标题</b>。两者合并时组底纹就无处可插。
+        /// </para>
+        /// </summary>
+        private static void DrawGroupFill(Graphics g, GroupLayoutInfo gr, Theme t)
         {
-            int gp = t.Layout.GroupPadding;
-            
             // 绘制圆角背景
             UIUtils.FillRoundRect(g, gr.Bounds, t.Layout.GroupRadius, ThemeManager.ParseColor(t.Color.GroupBackground));
+        }
 
-            // 绘制组标题 (CPU, GPU...)
+        /// <summary>
+        /// 绘制组标题 (CPU, GPU...)。
+        /// <para>
+        /// 标题画在组块**上方**（也就是背景层的位置），因此与组底纹/组框并不重叠，
+        /// 两者不会互相覆盖。
+        /// </para>
+        /// </summary>
+        private static void DrawGroupTitle(Graphics g, GroupLayoutInfo gr, Theme t)
+        {
+            int gp = t.Layout.GroupPadding;
+
             // ★★★ 优化：直接使用缓存的 gr.Label，不再每帧调用 LanguageManager.T ★★★
             string label = string.IsNullOrEmpty(gr.Label) ? gr.GroupName : gr.Label;
 
@@ -90,11 +181,11 @@ namespace LiteMonitor
             // Emoji 字符高度通常大于普通字体高度，且 TextRenderer 的 VerticalCenter 可能导致上下被裁剪
             // 解决方案：扩大绘制区域的高度，并保持中心对齐
             int extraH = (int)(8 * t.Layout.LayoutScale);
-            
+
             // Y 向上偏移一半 extraH，高度增加 extraH，这样中心点不变
-            var rectTitle = new Rectangle(gr.Bounds.X + gp, 
-                System.Math.Max(0, titleY - extraH / 2), 
-                gr.Bounds.Width - gp * 2, 
+            var rectTitle = new Rectangle(gr.Bounds.X + gp,
+                System.Math.Max(0, titleY - extraH / 2),
+                gr.Bounds.Width - gp * 2,
                 titleH + extraH);
 
             TextRenderer.DrawText(g, label, t.FontGroup, rectTitle,
@@ -105,7 +196,12 @@ namespace LiteMonitor
         /// <summary>
         /// 绘制标准项 (标签 + 数值 + 进度条)
         /// </summary>
-        private static void DrawStandardItem(Graphics g, MetricItem it, Theme t)
+        /// <param name="appearance">
+        /// 外观运行时（可空）。仅用于进度条：<c>BarStyle=0</c>（旧条）时
+        /// <c>BarRenderer</c> 内部<b>原样转调</b> <see cref="UIUtils.DrawBar"/>，
+        /// 像素与旧路径完全一致；只有 1/2（渐变条 / 纹理条）才走新画法。
+        /// </param>
+        private static void DrawStandardItem(Graphics g, MetricItem it, Theme t, AppearanceRuntime? appearance)
         {
             if (it.Bounds == Rectangle.Empty) return;
 
@@ -128,7 +224,13 @@ namespace LiteMonitor
                 TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
             // Bar - 注意：这里调用的是 UIUtils.DrawBar，它现在已经使用了优化的画刷逻辑
-            UIUtils.DrawBar(g, it, t);
+            // ★ 走外观运行时：旧条（BarStyle=0）由 BarRenderer 原样转调 UIUtils.DrawBar，
+            //   像素与改造前完全一致；渐变条 / 纹理条才走新画法。
+            ThemeAppearanceOptions? options = appearance?.Options;
+            if (appearance != null && options != null)
+                appearance.Bars.RenderBar(g, options, it, t);
+            else
+                UIUtils.DrawBar(g, it, t);
         }
 
         /// <summary>

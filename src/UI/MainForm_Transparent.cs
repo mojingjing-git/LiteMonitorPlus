@@ -20,6 +20,11 @@ namespace LiteMonitor
         private readonly MainFormWinHelper _winHelper;
         private readonly MainFormBizHelper _bizHelper;
         private readonly int _wmTaskbarCreated;
+
+        // ★ A13：窗口轮廓的唯一写入者（A09 的 WindowAppearanceController）。
+        //   它负责 DWM 角偏好与 Region；本类只负责在正确的时机调用它。
+        private readonly WindowAppearanceController _windowAppearance;
+
         private const int WM_DISPLAYCHANGE = 0x007E;
         private CancellationTokenSource _displayChangeCts;
 
@@ -150,6 +155,11 @@ namespace LiteMonitor
 
             // 2. 初始化双助手
             _winHelper = new MainFormWinHelper(this);
+
+            // ★ A13：窗口轮廓交给 A09 的控制器统一负责（DWM 角偏好 + Region）。
+            //   必须在 UI 线程构造（控制器记录构造线程 ID，并拒绝跨线程调用）。
+            _windowAppearance = new WindowAppearanceController(this);
+            _winHelper.AttachWindowAppearance(_windowAppearance);
             
             //资源管理器重启监听
             _wmTaskbarCreated = MainFormWinHelper.RegisterTaskbarCreatedMessage();
@@ -215,9 +225,43 @@ namespace LiteMonitor
             this.DoubleClick += (_, __) => _bizHelper.HandleDoubleClick();
             
             // DPI / Resize
+            // ★ A13：窗口轮廓的 Resize 绑定**只有这一处**。
+            //   MainFormWinHelper 里原先那份已删除 —— 两处绑定会把轮廓重建两遍。
             this.Resize += (_, __) => _winHelper.ApplyRoundedCorners();
             this.VisibleChanged += (_, __) => { if (Visible) _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert: true); };
-            this.HandleCreated += (_, __) => _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert: true);
+            this.HandleCreated += (_, __) =>
+            {
+                _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert: true);
+                // 句柄重建后旧窗口的 Region 已随旧窗口销毁，必须重新应用一次轮廓
+                _windowAppearance?.OnHandleCreated();
+            };
+
+            // 换肤 / DPI 变化 → 重新应用窗口轮廓（外框样式可能在切角与圆角之间切换）
+            if (_ui != null) _ui.AppearanceChanged += ApplyWindowAppearance;
+        }
+
+        /// <summary>
+        /// 用当前外观快照重新应用窗口轮廓（DWM 角偏好 + Region）。
+        /// <para>
+        /// ★ 窗口轮廓的**唯一写入者**是 <see cref="WindowAppearanceController"/>（A09）；
+        ///   本类只负责在正确的时机调用它：换肤、DPI 变化、尺寸变化、句柄重建、首次显示。
+        /// </para>
+        /// <para>
+        /// 圆角半径必须与绘制层的外框用**同一个值**（主题的 <c>layout.cornerRadius</c>，
+        /// 已按布局缩放换算成物理像素），否则窗口轮廓与画出来的边框会错位
+        /// （v4 §3.4「切角使用与画框相同几何」）。
+        /// </para>
+        /// </summary>
+        private void ApplyWindowAppearance()
+        {
+            if (_ui == null) return;
+
+            ThemeAppearanceOptions? options = _ui.SyncAppearanceContext();
+            if (options == null) return;
+
+            // 半径取当前主题的 layout.cornerRadius —— 与 UIRenderer.RenderWindowFrame 传入的同一个值
+            int cornerRadiusPx = ThemeManager.Current.Layout.CornerRadius;
+            _windowAppearance?.Apply(options, cornerRadiusPx);
         }
 
         public void ShowMainWindow()
@@ -291,11 +335,20 @@ namespace LiteMonitor
 
         protected override void OnPaintBackground(PaintEventArgs e) { }
 
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            // ★ A13：句柄销毁后清掉窗口级状态（Region 交回 WinForms 释放），
+            //   避免句柄重建时把"上一次尺寸的旧 Region"再套到新窗口上。
+            _windowAppearance?.OnHandleDestroyed();
+            base.OnHandleDestroyed(e);
+        }
+
         protected override void OnDpiChanged(DpiChangedEventArgs e)
         {
             base.OnDpiChanged(e);
+            // ApplyTheme 内部会重建外观快照并触发 AppearanceChanged → 轮廓随之更新
             _ui?.ApplyTheme(_cfg.Skin);
-            _winHelper.ApplyRoundedCorners();
+            ApplyWindowAppearance();
             this.Invalidate();
         }
 
@@ -318,7 +371,9 @@ namespace LiteMonitor
             }
             
             // 移除了 StartFadeIn 调用，因为它已经还原回构造函数了
-            _winHelper.ApplyRoundedCorners();
+            // ★ A13：首次显示时用当前主题的外观参数正式应用窗口轮廓。
+            //   此时客户区尺寸已最终确定（Reapply 此前还没有任何样式参数可用）。
+            ApplyWindowAppearance();
             _bizHelper.KeepVisible(3.0); // 启动保护期
 
             if (_cfg.ShowTaskbar) ToggleTaskbar(true);
@@ -360,6 +415,9 @@ namespace LiteMonitor
             
             _ui?.Dispose();
             _bizHelper.Dispose();
+
+            // ★ A13：释放窗口外观控制器（它负责把窗体上的 Region 交回 WinForms 释放）
+            _windowAppearance?.Dispose();
         }
     }
 }
