@@ -15,14 +15,23 @@ namespace LiteMonitor.src.SystemServices
         // ★★★ [修复] 状态隔离：每个硬件拥有独立的网络状态，不再全局共享 ★★★
         private class NetworkState
         {
+            public NetworkState(TimeProvider time)
+            {
+                // ★★★ [限频] 流量累计状态：真实采样间隔 + 原生字节计数基线 ★★★
+                Accumulator = new TrafficAccumulator(time);
+            }
+
             public NetworkInterface? NativeAdapter;
-            public long LastNativeUpload;
-            public long LastNativeDownload;
-            public DateTime LastMatchAttempt = DateTime.MinValue;
+            /// <summary>上次尝试匹配原生网卡的单调时间戳（0 = 从未尝试）。</summary>
+            public long LastMatchAttempt;
+            public bool HasMatchAttempt;
             
             // 缓存 LHM 传感器
             public ISensor? CachedUpSensor;
             public ISensor? CachedDownSensor;
+
+            /// <summary>流量累计状态（真实采样间隔 + 原生字节计数基线）。</summary>
+            public readonly TrafficAccumulator Accumulator;
         }
         private readonly Dictionary<IHardware, NetworkState> _netStates = new();
         
@@ -37,10 +46,21 @@ namespace LiteMonitor.src.SystemServices
         // ★★★ 依赖注入：性能计数器 (用于获取 SMB 流量) ★★★
         private readonly PerformanceCounterManager _perfManager;
 
-        public NetworkManager(PerformanceCounterManager perfManager = null)
+        // ★★★ [限频] 单调时钟：流量间隔必须来自两次真实采集之间的经过时间 ★★★
+        private readonly TimeProvider _time;
+
+        /// <summary>
+        /// 采集统计计数器。
+        /// 由拥有 <see cref="HardwareSamplingStatistics"/> 的服务（HardwareMonitor）在构造后接线，
+        /// 接线后这里记录的是**真实执行了 Update 的设备次数**，而不是「进入更新路径的次数」。
+        /// </summary>
+        public HardwareSamplingStatistics? SamplingStatistics { get; set; }
+
+        public NetworkManager(PerformanceCounterManager perfManager = null, TimeProvider? timeProvider = null)
         {
             // 允许为空 (为了兼容性)，如果为空则内部功能自动禁用
             _perfManager = perfManager ?? new PerformanceCounterManager(); 
+            _time = timeProvider ?? TimeProvider.System;
             
             // [Fix #287] 监听网络地址变更事件，强制刷新 IP 和 网卡缓存
             // 当用户切换 WIFI 或插拔网线时，IP地址和网卡实例都会失效，必须重置
@@ -70,6 +90,8 @@ namespace LiteMonitor.src.SystemServices
             if (isTarget)
             {
                 hw.Update();
+                // ★★★ [真实计数] 目标网卡真的执行了 Update 才计数 ★★★
+                RecordDeviceUpdate(hw, "Network");
                 AccumulateTraffic(hw, cfg, timeDelta);
             }
             else if (isStartupPhase || IsVirtualNetwork(hw.Name))
@@ -79,7 +101,21 @@ namespace LiteMonitor.src.SystemServices
             else if (isSlowScanTick)
             {
                 hw.Update();
+                // ★★★ [真实计数] 非目标网卡只在慢扫描轮真的执行了 Update 才计数 ★★★
+                RecordDeviceUpdate(hw, "Network");
             }
+        }
+
+        /// <summary>
+        /// 记录一次**真实发生**的设备更新。
+        /// Key 格式与 HardwareMonitor.BuildDeviceKey 保持一致（"类型:名称"），
+        /// 这样 A1 的统计计数器里 CPU/GPU/磁盘/网卡可以用同一套 Key 对比。
+        /// </summary>
+        private void RecordDeviceUpdate(IHardware hw, string category)
+        {
+            var statistics = SamplingStatistics;
+            if (statistics == null) return;
+            statistics.RecordDeviceUpdate(hw.HardwareType + ":" + hw.Name, category);
         }
 
         // [新增] 获取当前 IP (带 10秒 缓存)
@@ -94,7 +130,7 @@ namespace LiteMonitor.src.SystemServices
                     foreach (var state in _netStates.Values)
                     {
                         state.NativeAdapter = null;
-                        state.LastMatchAttempt = DateTime.MinValue; // 允许立即重新匹配
+                        state.HasMatchAttempt = false; // 允许立即重新匹配
                     }
                     _shouldResetAdapters = false;
                 }
@@ -325,14 +361,11 @@ namespace LiteMonitor.src.SystemServices
             // 1. 获取或创建当前硬件的独立状态
             if (!_netStates.TryGetValue(hw, out var state))
             {
-                state = new NetworkState();
+                state = new NetworkState(_time);
                 _netStates[hw] = state;
             }
 
-            long finalUp = 0;
-            long finalDown = 0;
-
-            // A. LHM 估算值
+            // A. LHM 估算速率 (bytes/sec)
             if (state.CachedUpSensor == null || state.CachedDownSensor == null)
             {
                 foreach (var s in hw.Sensors)
@@ -342,95 +375,68 @@ namespace LiteMonitor.src.SystemServices
                     if (_downKW.Any(k => SensorMap.Has(s.Name, k))) state.CachedDownSensor ??= s;
                 }
             }
-            long lhmUpDelta = (long)((state.CachedUpSensor?.Value ?? 0) * seconds);
-            long lhmDownDelta = (long)((state.CachedDownSensor?.Value ?? 0) * seconds);
+            double lhmUpRate = state.CachedUpSensor?.Value ?? 0;
+            double lhmDownRate = state.CachedDownSensor?.Value ?? 0;
 
             // B. 原生精准值
             MatchNativeNetworkAdapter(hw.Name, state);
-            
-            bool nativeValid = false;
-            long nativeUpDelta = 0;
-            long nativeDownDelta = 0;
 
+            long? nativeUp = null;
+            long? nativeDown = null;
             if (state.NativeAdapter != null)
             {
                 try
                 {
                     var stats = state.NativeAdapter.GetIPStatistics();
-                    long currUp = stats.BytesSent;
-                    long currDown = stats.BytesReceived;
-
-                    if (currUp >= state.LastNativeUpload) nativeUpDelta = currUp - state.LastNativeUpload;
-                    if (currDown >= state.LastNativeDownload) nativeDownDelta = currDown - state.LastNativeDownload;
-
-                    state.LastNativeUpload = currUp;
-                    state.LastNativeDownload = currDown;
-                    nativeValid = true;
+                    nativeUp = stats.BytesSent;
+                    nativeDown = stats.BytesReceived;
                 }
                 catch { state.NativeAdapter = null; }
             }
 
-            // C. 决策时刻
-            if (nativeValid)
+            // C. 累计：真实采样间隔 + 原生字节计数优先 + SMB 扣除 + 安全阀
+            var sample = new TrafficSample
             {
-                if ((nativeUpDelta + nativeDownDelta == 0) && (lhmUpDelta + lhmDownDelta > 51200))
-                {
-                    // 匹配错误
-                    finalUp = lhmUpDelta;
-                    finalDown = lhmDownDelta;
-                    state.NativeAdapter = null; 
-                }
-                else
-                {
-                    finalUp = nativeUpDelta;
-                    finalDown = nativeDownDelta;
-                }
-            }
-            else
+                LhmUpRate = lhmUpRate,
+                LhmDownRate = lhmDownRate,
+                NativeUpBytes = nativeUp,
+                NativeDownBytes = nativeDown
+            };
+
+            // SMB 扣除（沿用旧语义：仅在开启开关且计数器就绪时生效）
+            Func<double, (long Up, long Down)>? smbEstimator = null;
+            if (cfg.IgnoreSmbTraffic && _perfManager.IsInitialized)
             {
-                finalUp = lhmUpDelta;
-                finalDown = lhmDownDelta;
+                smbEstimator = s => _perfManager.GetEstimatedSmbBytes(s);
             }
 
-            // ★★★ [新增] 忽略内网流量 (SMB) ★★★
-            // 如果用户开启了此选项，且计数器已就绪，则从总流量中扣除 SMB 流量
-            if (cfg.IgnoreSmbTraffic)
+            var result = state.Accumulator.Accumulate(sample, seconds, smbEstimator);
+
+            if (result.NativeMismatch)
             {
-                if (_perfManager.IsInitialized)
-                {
-                    // 获取估算的 SMB 流量 (内部已包含 1.1 倍的协议开销补偿)
-                    var smb = _perfManager.GetEstimatedSmbBytes(seconds);
-                    
-                    if (smb.UpBytes > 0 || smb.DownBytes > 0)
-                    {
-                        // 扣除 (由于采样时间误差，防止扣成负数)
-                        if (smb.UpBytes > 0) finalUp = Math.Max(0, finalUp - smb.UpBytes);
-                        if (smb.DownBytes > 0) finalDown = Math.Max(0, finalDown - smb.DownBytes);
-                    }
-                }
-                else
-                {
-                    // Debug.WriteLine("[SMB_DEBUG] IgnoreSmbTraffic=True but PerfManager NOT Initialized!");
-                }
+                // 匹配错误：丢弃当前适配器，下次重新匹配
+                state.NativeAdapter = null;
             }
 
             // D. 存入数据
-            // ★★★ [新增] 安全阀：单次增量超过 10GB 视为异常丢弃 ★★★
-            if (finalUp > 10737418240L || finalDown > 10737418240L) return;
-
-            if (finalUp > 0 || finalDown > 0)
+            if (result.UpBytes > 0 || result.DownBytes > 0)
             {
-                cfg.SessionUploadBytes += finalUp;
-                cfg.SessionDownloadBytes += finalDown;
-                TrafficLogger.AddTraffic(finalUp, finalDown);
+                cfg.SessionUploadBytes += result.UpBytes;
+                cfg.SessionDownloadBytes += result.DownBytes;
+                TrafficLogger.AddTraffic(result.UpBytes, result.DownBytes);
             }
         }
 
         private void MatchNativeNetworkAdapter(string lhmName, NetworkState state)
         {
             if (state.NativeAdapter != null) return;
-            if ((DateTime.Now - state.LastMatchAttempt).TotalSeconds < 10) return;
-            state.LastMatchAttempt = DateTime.Now;
+
+            // 重新匹配的最短间隔（10 秒），用单调时钟判断
+            long now = _time.GetTimestamp();
+            if (state.HasMatchAttempt &&
+                _time.GetElapsedTime(state.LastMatchAttempt, now).TotalSeconds < 10) return;
+            state.LastMatchAttempt = now;
+            state.HasMatchAttempt = true;
 
             try
             {
@@ -514,8 +520,8 @@ namespace LiteMonitor.src.SystemServices
             try
             {
                 var stats = nic.GetIPStatistics();
-                state.LastNativeUpload = stats.BytesSent;
-                state.LastNativeDownload = stats.BytesReceived;
+                // ★★★ [网卡切换] 重新建立原生字节计数基线：切换后的第一次采样不产生增量 ★★★
+                state.Accumulator.ResetBaseline(stats.BytesSent, stats.BytesReceived);
             }
             catch { state.NativeAdapter = null; }
         }
@@ -532,5 +538,257 @@ namespace LiteMonitor.src.SystemServices
         private static readonly string[] _upKW = { "upload", "up", "sent", "send", "tx", "transmit" };
         private static readonly string[] _downKW = { "download", "down", "received", "receive", "rx" };
         private static readonly string[] _virtualNicKW = { "virtual", "vmware", "hyper-v", "hyper v", "vbox", "loopback", "tunnel", "tap", "tun", "bluetooth", "zerotier", "tailscale", "wan miniport" };
+    }
+
+    /// <summary>
+    /// 一次流量采样的输入。
+    ///
+    /// - LHM 速率：LibreHardwareMonitor 提供的 Throughput 传感器值（单位 bytes/sec）；
+    /// - 原生字节计数：网卡的累计收发字节数（null 表示原生计数不可用，例如还没匹配到网卡）。
+    /// </summary>
+    public readonly struct TrafficSample
+    {
+        /// <summary>上传速率（bytes/sec）。</summary>
+        public double LhmUpRate { get; init; }
+        /// <summary>下载速率（bytes/sec）。</summary>
+        public double LhmDownRate { get; init; }
+        /// <summary>网卡累计发送字节（null = 不可用）。</summary>
+        public long? NativeUpBytes { get; init; }
+        /// <summary>网卡累计接收字节（null = 不可用）。</summary>
+        public long? NativeDownBytes { get; init; }
+    }
+
+    /// <summary>一次流量累计的结果。</summary>
+    public readonly struct TrafficAccumulationResult
+    {
+        public TrafficAccumulationResult(long upBytes, long downBytes, double intervalSeconds,
+            bool nativeAvailable, bool nativeMismatch, bool resetByLongGap)
+        {
+            UpBytes = upBytes;
+            DownBytes = downBytes;
+            IntervalSeconds = intervalSeconds;
+            NativeAvailable = nativeAvailable;
+            NativeMismatch = nativeMismatch;
+            ResetByLongGap = resetByLongGap;
+        }
+
+        /// <summary>本次计入的上传字节。</summary>
+        public long UpBytes { get; }
+        /// <summary>本次计入的下载字节。</summary>
+        public long DownBytes { get; }
+        /// <summary>本次实际使用的时间间隔（秒）。</summary>
+        public double IntervalSeconds { get; }
+        /// <summary>本次是否拿到了原生字节计数。</summary>
+        public bool NativeAvailable { get; }
+        /// <summary>原生计数与 LHM 估算明显不符（调用方应丢弃当前网卡适配器）。</summary>
+        public bool NativeMismatch { get; }
+        /// <summary>本次因超长间隔触发了重置策略（不计入任何流量）。</summary>
+        public bool ResetByLongGap { get; }
+    }
+
+    /// <summary>
+    /// 流量累计器：把「两次真实采集之间的经过时间」与字节计数换算成本次增量。
+    ///
+    /// 关键语义（计划 §4.3 / §6.1）：
+    ///  - 时间间隔来自**单调时钟**上两次真实采样的经过时间，不是 UI Tick 数乘刷新间隔；
+    ///  - **原生字节计数优先**；原生计数与 LHM 估算明显不符时判定为匹配错误并回退到 LHM；
+    ///  - 保留**首次计数初始化**（第一次只有基线，增量为 0）与**计数重置**（不产生负增量）；
+    ///  - **休眠 / 超长间隔**按重置策略处理：重建基线、本轮不计入流量，不补造流量尖峰；
+    ///  - **墙上时间回拨**不会得到负 delta（间隔被夹到 0）。
+    ///
+    /// 本类不依赖任何真实网卡对象，单元测试可以用假时钟 + 构造的字节数直接驱动。
+    /// </summary>
+    public sealed class TrafficAccumulator
+    {
+        /// <summary>默认的最大可信采样间隔（秒）。超过则按「超长间隔」重置处理。</summary>
+        public const double DefaultMaxSampleIntervalSeconds = 30.0;
+
+        /// <summary>单次增量安全阀：超过 10GB 视为异常丢弃。</summary>
+        public const long MaxSingleDeltaBytes = 10737418240L;
+
+        /// <summary>原生计数与 LHM 估算的失配阈值（50KB）。</summary>
+        private const long MismatchThresholdBytes = 51200;
+
+        private readonly TimeProvider _time;
+        private readonly double _maxSampleIntervalSeconds;
+
+        private long _lastSampleTimestamp;   // 上一次真实采样的单调时间戳
+        private bool _hasLastSample;
+        private long _baselineUp;            // 原生字节计数基线
+        private long _baselineDown;
+        private bool _hasBaseline;
+
+        /// <param name="timeProvider">可注入的单调时钟，默认 <see cref="TimeProvider.System"/>。</param>
+        /// <param name="maxSampleIntervalSeconds">最大可信采样间隔（秒），超过按超长间隔重置。</param>
+        public TrafficAccumulator(TimeProvider? timeProvider = null, double maxSampleIntervalSeconds = DefaultMaxSampleIntervalSeconds)
+        {
+            _time = timeProvider ?? TimeProvider.System;
+            _maxSampleIntervalSeconds = maxSampleIntervalSeconds > 0 ? maxSampleIntervalSeconds : DefaultMaxSampleIntervalSeconds;
+        }
+
+        /// <summary>上一次真实采样使用的间隔（秒）。</summary>
+        public double LastIntervalSeconds { get; private set; }
+
+        /// <summary>是否已经建立过原生字节计数基线。</summary>
+        public bool HasBaseline => _hasBaseline;
+
+        /// <summary>
+        /// 重新建立原生字节计数基线（网卡切换 / 首次匹配到网卡时调用）。
+        /// 之后的第一次采样增量为 0。
+        /// </summary>
+        public void ResetBaseline(long upBytes, long downBytes)
+        {
+            _baselineUp = upBytes;
+            _baselineDown = downBytes;
+            _hasBaseline = true;
+        }
+
+        /// <summary>
+        /// 累计一次采样。
+        /// </summary>
+        /// <param name="sample">本次采样数据。</param>
+        /// <param name="fallbackIntervalSeconds">
+        /// 调用方传入的采样间隔，仅在**第一次**采样（还没有上一次真实采样时间）时使用；
+        /// 之后一律使用单调时钟测得的真实经过时间。
+        /// </param>
+        /// <param name="smbEstimator">可选的 SMB 流量估算器（入参是本次间隔）。</param>
+        public TrafficAccumulationResult Accumulate(
+            TrafficSample sample,
+            double fallbackIntervalSeconds,
+            Func<double, (long Up, long Down)>? smbEstimator = null)
+        {
+            double interval = ResolveInterval(fallbackIntervalSeconds);
+            LastIntervalSeconds = interval;
+
+            bool longGap = interval > _maxSampleIntervalSeconds;
+            if (longGap)
+            {
+                // 超长间隔（休眠 / 长时间暂停）：按重置策略处理，不补造流量尖峰
+                bool hadNative = sample.NativeUpBytes.HasValue && sample.NativeDownBytes.HasValue;
+                if (hadNative)
+                {
+                    _baselineUp = sample.NativeUpBytes!.Value;
+                    _baselineDown = sample.NativeDownBytes!.Value;
+                    _hasBaseline = true;
+                }
+                return new TrafficAccumulationResult(0, 0, 0, hadNative, false, true);
+            }
+
+            // ---- 原生字节计数（优先） ----
+            bool nativeAvailable = sample.NativeUpBytes.HasValue && sample.NativeDownBytes.HasValue;
+            long nativeUp = 0;
+            long nativeDown = 0;
+
+            if (nativeAvailable)
+            {
+                long currentUp = sample.NativeUpBytes!.Value;
+                long currentDown = sample.NativeDownBytes!.Value;
+
+                if (!_hasBaseline)
+                {
+                    // 首次计数初始化：只建立基线，本轮增量为 0
+                    _baselineUp = currentUp;
+                    _baselineDown = currentDown;
+                    _hasBaseline = true;
+                }
+                else
+                {
+                    // 计数重置（换网卡 / 计数器回绕）不会产生负增量
+                    nativeUp = Math.Max(0, currentUp - _baselineUp);
+                    nativeDown = Math.Max(0, currentDown - _baselineDown);
+                    _baselineUp = currentUp;
+                    _baselineDown = currentDown;
+                }
+            }
+
+            // ---- LHM 速率估算（原生不可用或失配时使用） ----
+            long lhmUp = RateToBytes(sample.LhmUpRate, interval);
+            long lhmDown = RateToBytes(sample.LhmDownRate, interval);
+
+            long finalUp;
+            long finalDown;
+            bool nativeMismatch = false;
+
+            if (nativeAvailable)
+            {
+                if ((nativeUp + nativeDown == 0) && (lhmUp + lhmDown > MismatchThresholdBytes))
+                {
+                    // 原生计数为 0 但 LHM 说有流量 -> 认为匹配错了网卡，回退到 LHM 估算
+                    nativeMismatch = true;
+                    finalUp = lhmUp;
+                    finalDown = lhmDown;
+                }
+                else
+                {
+                    finalUp = nativeUp;
+                    finalDown = nativeDown;
+                }
+            }
+            else
+            {
+                finalUp = lhmUp;
+                finalDown = lhmDown;
+            }
+
+            // ---- SMB 扣除 ----
+            if (smbEstimator != null)
+            {
+                try
+                {
+                    var smb = smbEstimator(interval);
+                    if (smb.Up > 0) finalUp = Math.Max(0, finalUp - smb.Up);
+                    if (smb.Down > 0) finalDown = Math.Max(0, finalDown - smb.Down);
+                }
+                catch { }
+            }
+
+            // ---- 安全阀：单次增量超过 10GB 视为异常丢弃 ----
+            if (finalUp > MaxSingleDeltaBytes || finalDown > MaxSingleDeltaBytes)
+            {
+                finalUp = 0;
+                finalDown = 0;
+            }
+
+            return new TrafficAccumulationResult(finalUp, finalDown, interval, nativeAvailable, nativeMismatch, false);
+        }
+
+        /// <summary>
+        /// 解析本次采样间隔：
+        ///  - 已有上一次真实采样：用**单调时钟**测得的经过时间（墙上时间回拨不影响）；
+        ///  - 第一次采样：退回到调用方传入的间隔（负数/异常值按 0 处理）。
+        /// </summary>
+        private double ResolveInterval(double fallbackIntervalSeconds)
+        {
+            long now = _time.GetTimestamp();
+            double interval;
+
+            if (_hasLastSample)
+            {
+                interval = _time.GetElapsedTime(_lastSampleTimestamp, now).TotalSeconds;
+            }
+            else
+            {
+                interval = fallbackIntervalSeconds;
+            }
+
+            _lastSampleTimestamp = now;
+            _hasLastSample = true;
+
+            if (double.IsNaN(interval) || double.IsInfinity(interval) || interval < 0)
+            {
+                // 墙上时间回拨 / 异常值：不允许出现负间隔
+                interval = 0;
+            }
+
+            return interval;
+        }
+
+        private static long RateToBytes(double ratePerSecond, double seconds)
+        {
+            if (ratePerSecond <= 0 || seconds <= 0) return 0;
+            double bytes = ratePerSecond * seconds;
+            if (bytes >= long.MaxValue) return long.MaxValue;
+            return (long)bytes;
+        }
     }
 }

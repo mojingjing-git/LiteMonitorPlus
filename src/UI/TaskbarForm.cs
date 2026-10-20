@@ -1,4 +1,5 @@
 using LiteMonitor.src.Core;
+using LiteMonitor.src.SystemServices;
 using LiteMonitor.src.UI.Helpers;
 using System;
 using System.Collections.Generic;
@@ -25,6 +26,14 @@ namespace LiteMonitor
         private DateTime _lastFindHandleTime = DateTime.MinValue;
         private string _lastLayoutSignature = "";
         private readonly TaskbarTooltipHelper _tooltipHelper;
+
+        /// <summary>
+        /// 主题检查的**单调截止时间**触发器（约每 5 秒一次）。
+        /// 旧实现用 `Math.Abs(Environment.TickCount) % 5000 &lt; RefreshMs` 判断，
+        /// 在高刷新率下会反复读取系统主题、甚至反复应用分层样式。
+        /// </summary>
+        private readonly MonotonicPeriodicTrigger _themeCheckTrigger =
+            new MonotonicPeriodicTrigger(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
         
         // 公开属性
         public string TargetDevice { get; private set; } = "";
@@ -182,7 +191,9 @@ namespace LiteMonitor
                 _lastFindHandleTime = DateTime.Now;
             }
 
-            if (Math.Abs(Environment.TickCount) % 5000 < _cfg.RefreshMs) _bizHelper.CheckTheme();
+            // [限频] 主题检查改为单调截止时间驱动（约每 5 秒一次）：
+            // 正常重复 Tick 不再反复读取系统主题 / 反复应用分层样式。
+            if (_themeCheckTrigger.TryConsume()) _bizHelper.CheckTheme();
 
             // [Fix Part 1] 防空数据保护
             // 使用临时变量接收，先判断数据有效性，再赋值给成员变量 _cols
