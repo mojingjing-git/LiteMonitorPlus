@@ -589,25 +589,163 @@ namespace LiteMonitor.Tests
             var clock = new FakeTimeProvider();
             int collections = 0;
             using var release = new ManualResetEventSlim(false);
+            using var samplerStarted = new ManualResetEventSlim(false);
 
             var coordinator = NewCoordinator(clock, () => 1000, ct =>
             {
                 Interlocked.Increment(ref collections);
-                release.Wait(TimeSpan.FromSeconds(5));
+                // ★ 同步点：通知"采样动作真的开始了"。
+                //   原用例没有这一步，Dispose() 可能抢在采样动作之前执行；
+                //   线程池线程随后命中 ExecuteCollectionAsync 里的"已释放"早退，
+                //   采样动作根本没被调用 -> collections == 0 -> 断言红（flaky）。
+                samplerStarted.Set();
+                release.Wait(TimeSpan.FromSeconds(20));
                 return Task.CompletedTask;
             });
             coordinator.SetReady(true);
 
             var running = coordinator.RequestCollectionAsync();
+
+            // ★ 同步点：等采样动作真的开始，再关闭。
+            //   建立 happens-before：采样动作开始 -> Dispose -> 关闭。
+            //   不用 Thread.Sleep 碰运气，也不用依赖线程池调度快慢。
+            Assert.True(samplerStarted.Wait(TimeSpan.FromSeconds(20)),
+                "采样动作未在超时内启动，测试无法确定关闭时序");
+
             coordinator.Dispose();
 
             // 关闭之后到达的请求被拒绝
             Assert.False(await coordinator.RequestCollectionAsync());
 
             release.Set();
-            await running;
+            Assert.True(await running);
 
             Assert.Equal(1, collections);
+        }
+
+        // =========================================================
+        // 关闭期被跳过的采集 ≠ 失败采集
+        //
+        //    ExecuteCollectionAsync 在"已释放"时早退，这一轮采集**根本没有开始**。
+        //    它既不是成功也不是失败：如果被记成失败，FailedCollections 会凭空 +1，
+        //    实机跑完后读到的失败计数就是含噪的数字（"失败恰好 +1"这条护栏也会被打破）。
+        // =========================================================
+
+        [Fact]
+        public async Task 关闭期被跳过的采集不计入失败采集()
+        {
+            var clock = new FakeTimeProvider();
+            var statistics = new HardwareSamplingStatistics();
+            int samplerCalls = 0;
+            int disposed = 0;
+
+            // ★ 确定性地制造"请求已占位、但采集还没开始就关闭了"这个窗口。
+            //   periodProvider 是在 TryBeginCollection 内部（持 _gate 锁）被调用的，
+            //   而"是否已释放 / 是否就绪"的判定发生在它**之前**；
+            //   因此在 periodProvider 里调用 Dispose()（同线程重入锁，合法），
+            //   就能让"关闭"确定性地落在"请求已占位之后、采集动作开始之前"。
+            //   这样不依赖线程池调度时序：不需要 Sleep，也不需要靠运气。
+            HardwareSamplingCoordinator coordinator = null;
+            coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () =>
+                {
+                    if (Interlocked.Exchange(ref disposed, 1) == 0)
+                    {
+                        coordinator.Dispose();
+                    }
+                    return 1000;
+                },
+                sampler: ct =>
+                {
+                    Interlocked.Increment(ref samplerCalls);
+                    return Task.CompletedTask;
+                },
+                timeProvider: clock,
+                // 注入错误出口：测试输出目录必须保持干净，不能落错误日志文件
+                errorLogger: (source, ex) => { },
+                statistics: statistics);
+            coordinator.SetReady(true);
+
+            // 关闭期请求仍然返回 false（既有语义不回归）
+            Assert.False(await coordinator.RequestCollectionAsync());
+
+            // 采样动作根本没有被调用：这不是一次"采集"，更不是一次"失败"
+            Assert.Equal(0, samplerCalls);
+            Assert.Equal(0, statistics.CollectionRounds);
+            Assert.Equal(0, statistics.FailedCollections);
+        }
+
+        [Fact]
+        public async Task 真正的采集异常恰好让失败计数加一()
+        {
+            var clock = new FakeTimeProvider();
+            var statistics = new HardwareSamplingStatistics();
+            int attempts = 0;
+
+            var coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () => 1000,
+                sampler: ct =>
+                {
+                    Interlocked.Increment(ref attempts);
+                    throw new InvalidOperationException("模拟硬件采集异常");
+                },
+                timeProvider: clock,
+                // 注入错误出口：测试输出目录必须保持干净，不能落错误日志文件
+                errorLogger: (source, ex) => { },
+                statistics: statistics);
+            coordinator.SetReady(true);
+
+            Assert.Equal(0, statistics.FailedCollections);
+
+            // 第一次失败：恰好 +1（不得 +2，也不得 +0）
+            Assert.False(await coordinator.RequestCollectionAsync());
+            Assert.Equal(1, statistics.FailedCollections);
+            Assert.Equal(1, attempts);
+
+            // 再失败一次：仍然恰好 +1（累计 +2）
+            clock.Advance(TimeSpan.FromSeconds(1));
+            Assert.False(await coordinator.RequestCollectionAsync());
+            Assert.Equal(2, statistics.FailedCollections);
+            Assert.Equal(2, attempts);
+        }
+
+        [Fact]
+        public async Task 关闭期跳过与真实失败互不干扰()
+        {
+            var clock = new FakeTimeProvider();
+            var statistics = new HardwareSamplingStatistics();
+            int disposeOnNextPeriod = 0;
+
+            // 与上一条同样的确定性手法：恰好在"判定周期"的那一刻关闭，
+            // 于是这一轮采集被跳过（采样动作根本不会执行）。
+            HardwareSamplingCoordinator coordinator = null;
+            coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () =>
+                {
+                    if (Interlocked.Exchange(ref disposeOnNextPeriod, 0) == 1)
+                    {
+                        coordinator.Dispose();
+                    }
+                    return 1000;
+                },
+                sampler: ct => throw new InvalidOperationException("模拟硬件采集异常"),
+                timeProvider: clock,
+                // 注入错误出口：测试输出目录必须保持干净，不能落错误日志文件
+                errorLogger: (source, ex) => { },
+                statistics: statistics);
+            coordinator.SetReady(true);
+
+            // 1) 真正的失败 -> 失败计数恰好 +1
+            Assert.False(await coordinator.RequestCollectionAsync());
+            Assert.Equal(1, statistics.FailedCollections);
+
+            // 2) 到期后再次请求：这一轮在开始前就被关闭跳过
+            clock.Advance(TimeSpan.FromSeconds(1));
+            Interlocked.Exchange(ref disposeOnNextPeriod, 1);
+            Assert.False(await coordinator.RequestCollectionAsync());
+
+            // 3) 跳过的采集不是失败：失败计数保持 1（既没有 +1，也没有被清零）
+            Assert.Equal(1, statistics.FailedCollections);
         }
 
         // =========================================================
