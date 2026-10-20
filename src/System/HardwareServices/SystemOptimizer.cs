@@ -78,8 +78,12 @@ namespace LiteMonitor.src.SystemServices
         /// 状态保存在**实例**内部（见 <see cref="MaintenanceScheduler"/>），
         /// 而不是散落的全局静态时间戳；这里只是因为旧入口是静态方法，
         /// 才保留一个进程级默认实例。测试可以整体替换它。
+        ///
+        /// ★ 推荐用法：调用方持有**自己的**实例（见 <see cref="CreateScheduler"/>），
+        ///   以满足"周期状态属于正确的服务实例"；
+        ///   这里的默认实例只服务旧静态入口 <see cref="RunMaintenanceTasks(long)"/>。
         /// </summary>
-        private static MaintenanceScheduler _maintenanceScheduler = CreateDefaultScheduler();
+        private static MaintenanceScheduler _maintenanceScheduler = CreateScheduler();
 
         /// <summary>
         /// 维护任务调度器实例。
@@ -88,16 +92,39 @@ namespace LiteMonitor.src.SystemServices
         public static MaintenanceScheduler MaintenanceScheduler
         {
             get => _maintenanceScheduler;
-            set => _maintenanceScheduler = value ?? CreateDefaultScheduler();
+            set => _maintenanceScheduler = value ?? CreateScheduler();
         }
 
-        private static MaintenanceScheduler CreateDefaultScheduler()
+        /// <summary>
+        /// 创建一个**由调用方持有**的维护任务调度器实例（推荐路径）。
+        ///
+        /// 调用方（典型是 <c>HardwareMonitor</c>）持有自己的实例并调用
+        /// <see cref="MaintenanceScheduler.RunDueTasks"/>，
+        /// 即可获得"周期状态属于正确的服务实例"的行为：
+        ///
+        /// <code>
+        /// private readonly MaintenanceScheduler _maintenance = SystemOptimizer.CreateScheduler();
+        /// ...
+        /// var result = _maintenance.RunDueTasks();
+        /// if (result.TrafficSave) _samplingStatistics.RecordTrafficSaveTrigger();
+        /// if (result.GcRequest) _samplingStatistics.RecordGcRequestTrigger();
+        /// if (result.WorkingSetTrim) _samplingStatistics.RecordWorkingSetTrimTrigger();
+        /// </code>
+        /// </summary>
+        /// <param name="timeProvider">可注入的单调时钟，默认 <see cref="TimeProvider.System"/>。</param>
+        public static MaintenanceScheduler CreateScheduler(TimeProvider? timeProvider = null)
         {
             return new MaintenanceScheduler(
                 onTrafficSave: TrafficLogger.Save,
                 onGcRequest: RequestGarbageCollection,
-                onWorkingSetTrim: TrimWorkingSetIfNeeded);
+                onWorkingSetTrim: TrimWorkingSetIfNeeded,
+                timeProvider: timeProvider);
         }
+
+        /// <summary>
+        /// 距离下一次流量保存到期还有多久（诊断用；已经到期时为 <see cref="TimeSpan.Zero"/>）。
+        /// </summary>
+        public static TimeSpan NextTrafficSaveDelay => _maintenanceScheduler.NextTrafficSaveDelay;
 
         /// <summary>
         /// 执行定时维护任务 (流量保存、GC 优化、内存修剪)

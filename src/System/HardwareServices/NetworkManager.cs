@@ -37,10 +37,17 @@ namespace LiteMonitor.src.SystemServices
         
         // 网络智能缓存
         private IHardware? _cachedNetHw;
-        private DateTime _lastNetScan = DateTime.MinValue;
-        private readonly DateTime _startTime = DateTime.Now; // 启动时间
-        private static string _staticIPCache = "";// [修改] 增加IP静态缓存，切换主题/重启服务时不丢失，解决闪烁问题
-        private static DateTime _lastIPCheckTime = DateTime.MinValue; // 上次检查IP的时间
+        // 上次全盘扫描的时刻（单调时间戳；墙上时间回拨不会让缓存窗口失效）
+        private long _lastNetScan;
+        private bool _hasNetScan;
+        // 启动时刻（单调时间戳）
+        private readonly long _startTimestamp;
+        // [修改] IP 值静态缓存：切换主题/重启服务时不丢失，解决闪烁问题
+        //      （只缓存"值"；"多久之内可以复用"的时间窗是**实例级**的，避免全局静态时间戳互相污染）
+        private static string _staticIPCache = "";
+        // 上次检查IP的时间（单调时间戳，实例级）
+        private long _lastIPCheckTimestamp;
+        private bool _hasIPCheck;
         private volatile bool _shouldResetAdapters = false; // [Fix #287] 网络变更标记
 
         // ★★★ 依赖注入：性能计数器 (用于获取 SMB 流量) ★★★
@@ -61,6 +68,7 @@ namespace LiteMonitor.src.SystemServices
             // 允许为空 (为了兼容性)，如果为空则内部功能自动禁用
             _perfManager = perfManager ?? new PerformanceCounterManager(); 
             _time = timeProvider ?? TimeProvider.System;
+            _startTimestamp = _time.GetTimestamp();   // 启动时间（单调时钟）
             
             // [Fix #287] 监听网络地址变更事件，强制刷新 IP 和 网卡缓存
             // 当用户切换 WIFI 或插拔网线时，IP地址和网卡实例都会失效，必须重置
@@ -85,7 +93,7 @@ namespace LiteMonitor.src.SystemServices
                             (hw.Name == cfg.LastAutoNetwork) ||
                             (hw.Name == cfg.PreferredNetwork);
 
-            bool isStartupPhase = (DateTime.Now - _startTime).TotalSeconds < 3;
+            bool isStartupPhase = _time.GetElapsedTime(_startTimestamp, _time.GetTimestamp()).TotalSeconds < 3;
 
             if (isTarget)
             {
@@ -118,6 +126,34 @@ namespace LiteMonitor.src.SystemServices
             statistics.RecordDeviceUpdate(hw.HardwareType + ":" + hw.Name, category);
         }
 
+        /// <summary>记录一次网络全盘扫描时刻（单调时钟）。</summary>
+        private void MarkNetScanned()
+        {
+            _lastNetScan = _time.GetTimestamp();
+            _hasNetScan = true;
+        }
+
+        /// <summary>距上次网络全盘扫描是否还在 3 秒缓存期内（单调时钟判断）。</summary>
+        private bool IsNetScanFresh()
+        {
+            if (!_hasNetScan) return false;
+            return _time.GetElapsedTime(_lastNetScan, _time.GetTimestamp()).TotalSeconds < 3;
+        }
+
+        /// <summary>记录一次 IP 检查时刻（单调时钟，实例级）。</summary>
+        private void MarkIPChecked()
+        {
+            _lastIPCheckTimestamp = _time.GetTimestamp();
+            _hasIPCheck = true;
+        }
+
+        /// <summary>距上次 IP 检查是否还在 30 秒缓存期内（单调时钟判断）。</summary>
+        private bool IsIPCheckFresh()
+        {
+            if (!_hasIPCheck) return false;
+            return _time.GetElapsedTime(_lastIPCheckTimestamp, _time.GetTimestamp()).TotalSeconds < 30;
+        }
+
         // [新增] 获取当前 IP (带 10秒 缓存)
         public string GetCurrentIP()
         {
@@ -142,7 +178,8 @@ namespace LiteMonitor.src.SystemServices
 
             // 1. 缓存保护：只有当缓存了【有效IP】且距离上次检查不到 30 秒时，才直接返回
             // 关键修改：如果 _staticIPCache 是空的，忽略时间限制，强制重试
-            if (!string.IsNullOrEmpty(_staticIPCache) && (DateTime.Now - _lastIPCheckTime).TotalSeconds < 30)
+            // 时间窗用单调时钟判断（墙上时间回拨不会让缓存窗口永远不过期）
+            if (!string.IsNullOrEmpty(_staticIPCache) && IsIPCheckFresh())
             {
                 return _staticIPCache;
             }
@@ -203,7 +240,7 @@ namespace LiteMonitor.src.SystemServices
             if (!string.IsNullOrEmpty(foundIP))
             {
                 _staticIPCache = foundIP;
-                _lastIPCheckTime = DateTime.Now;
+                MarkIPChecked();
                 return foundIP;
             }
             
@@ -264,8 +301,8 @@ namespace LiteMonitor.src.SystemServices
                 {
                     float? cachedVal = ReadNetworkSensor(_cachedNetHw, key, lastValidMap, syncLock);
                     // 逻辑优化：如果有流量，直接用；如果没流量但距离上次全盘扫描 < 3秒，也直接用。
-                    if ((cachedVal.HasValue && cachedVal.Value > 0.1f) ||
-                        (DateTime.Now - _lastNetScan).TotalSeconds < 3)
+                    // （3 秒窗口用单调时钟判断：墙上时间回拨不会让窗口永远不过期）
+                    if ((cachedVal.HasValue && cachedVal.Value > 0.1f) || IsNetScanFresh())
                     {
                         return cachedVal;
                     }
@@ -281,7 +318,7 @@ namespace LiteMonitor.src.SystemServices
                 {
                     // 找到了！直接设为缓存，跳过全盘扫描
                     _cachedNetHw = savedHw;
-                    _lastNetScan = DateTime.Now;
+                    MarkNetScanned();
                     return ReadNetworkSensor(savedHw, key, lastValidMap, syncLock);
                 }
             }
@@ -315,7 +352,7 @@ namespace LiteMonitor.src.SystemServices
             if (bestHw != null)
             {
                 _cachedNetHw = bestHw;
-                _lastNetScan = DateTime.Now;
+                MarkNetScanned();
                 
                 // ★★★ [漏掉的部分] 记住这次的选择 ★★★
                 if (cfg.LastAutoNetwork != bestHw.Name)
@@ -563,10 +600,17 @@ namespace LiteMonitor.src.SystemServices
     {
         public TrafficAccumulationResult(long upBytes, long downBytes, double intervalSeconds,
             bool nativeAvailable, bool nativeMismatch, bool resetByLongGap)
+            : this(upBytes, downBytes, intervalSeconds, intervalSeconds, nativeAvailable, nativeMismatch, resetByLongGap)
+        {
+        }
+
+        public TrafficAccumulationResult(long upBytes, long downBytes, double intervalSeconds, double realIntervalSeconds,
+            bool nativeAvailable, bool nativeMismatch, bool resetByLongGap)
         {
             UpBytes = upBytes;
             DownBytes = downBytes;
             IntervalSeconds = intervalSeconds;
+            RealIntervalSeconds = realIntervalSeconds;
             NativeAvailable = nativeAvailable;
             NativeMismatch = nativeMismatch;
             ResetByLongGap = resetByLongGap;
@@ -576,8 +620,18 @@ namespace LiteMonitor.src.SystemServices
         public long UpBytes { get; }
         /// <summary>本次计入的下载字节。</summary>
         public long DownBytes { get; }
-        /// <summary>本次实际使用的时间间隔（秒）。</summary>
+        /// <summary>
+        /// 本次**换算实际使用**的时间间隔（秒）。
+        /// 超长间隔（重置）分支固定为 0（该轮不计入任何流量）。
+        /// 测得的真实经过时间见 <see cref="RealIntervalSeconds"/>。
+        /// </summary>
         public double IntervalSeconds { get; }
+        /// <summary>
+        /// 本次采样测得的**真实经过时间**（秒，单调时钟）。
+        /// 与 <see cref="IntervalSeconds"/> 的区别：超长间隔时这里是真实值，
+        /// 而换算用的 <see cref="IntervalSeconds"/> 为 0。
+        /// </summary>
+        public double RealIntervalSeconds { get; }
         /// <summary>本次是否拿到了原生字节计数。</summary>
         public bool NativeAvailable { get; }
         /// <summary>原生计数与 LHM 估算明显不符（调用方应丢弃当前网卡适配器）。</summary>
@@ -657,13 +711,14 @@ namespace LiteMonitor.src.SystemServices
             double fallbackIntervalSeconds,
             Func<double, (long Up, long Down)>? smbEstimator = null)
         {
-            double interval = ResolveInterval(fallbackIntervalSeconds);
-            LastIntervalSeconds = interval;
+            double realInterval = ResolveInterval(fallbackIntervalSeconds);
+            LastIntervalSeconds = realInterval;
 
-            bool longGap = interval > _maxSampleIntervalSeconds;
+            bool longGap = realInterval > _maxSampleIntervalSeconds;
             if (longGap)
             {
                 // 超长间隔（休眠 / 长时间暂停）：按重置策略处理，不补造流量尖峰
+                // 注意：换算用的间隔是 0（该轮不计入任何流量），真实间隔记录在 RealIntervalSeconds。
                 bool hadNative = sample.NativeUpBytes.HasValue && sample.NativeDownBytes.HasValue;
                 if (hadNative)
                 {
@@ -671,8 +726,10 @@ namespace LiteMonitor.src.SystemServices
                     _baselineDown = sample.NativeDownBytes!.Value;
                     _hasBaseline = true;
                 }
-                return new TrafficAccumulationResult(0, 0, 0, hadNative, false, true);
+                return new TrafficAccumulationResult(0, 0, 0, realInterval, hadNative, false, true);
             }
+
+            double interval = realInterval;
 
             // ---- 原生字节计数（优先） ----
             bool nativeAvailable = sample.NativeUpBytes.HasValue && sample.NativeDownBytes.HasValue;
@@ -749,7 +806,7 @@ namespace LiteMonitor.src.SystemServices
                 finalDown = 0;
             }
 
-            return new TrafficAccumulationResult(finalUp, finalDown, interval, nativeAvailable, nativeMismatch, false);
+            return new TrafficAccumulationResult(finalUp, finalDown, interval, realInterval, nativeAvailable, nativeMismatch, false);
         }
 
         /// <summary>

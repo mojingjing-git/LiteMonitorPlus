@@ -274,6 +274,10 @@ namespace LiteMonitor.Tests
             Assert.True(result.ResetByLongGap);
             Assert.Equal(0, result.UpBytes);
             Assert.Equal(0, result.DownBytes);
+            // 换算用的间隔是 0（该轮不计入流量），但真实经过时间被单独记录下来
+            Assert.Equal(0.0, result.IntervalSeconds, 6);
+            Assert.Equal(600.0, result.RealIntervalSeconds, 3);
+            Assert.Equal(600.0, accumulator.LastIntervalSeconds, 3);
 
             // 基线被重建：下一次从当前计数开始，不把休眠期间的字节一次性算进来
             clock.Advance(TimeSpan.FromSeconds(1));
@@ -337,6 +341,10 @@ namespace LiteMonitor.Tests
             // LHM 估算 30000 字节，扣除 SMB 3000 / 6000
             Assert.Equal(27_000, result.UpBytes);
             Assert.Equal(24_000, result.DownBytes);
+            // 正常路径：换算间隔与真实间隔一致
+            Assert.Equal(3.0, result.IntervalSeconds, 6);
+            Assert.Equal(3.0, result.RealIntervalSeconds, 6);
+            Assert.Equal(3.0, accumulator.LastIntervalSeconds, 6);
         }
 
         [Fact]

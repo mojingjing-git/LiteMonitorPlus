@@ -1,10 +1,20 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using LiteMonitor.src.SystemServices;
 using Xunit;
 
 namespace LiteMonitor.Tests
 {
+    /// <summary>
+    /// 需要独占进程级静态状态（SystemOptimizer.MaintenanceScheduler）的用例集合。
+    /// 显式禁用并行，避免与将来其它触碰该静态的用例互相污染。
+    /// </summary>
+    [CollectionDefinition("SystemOptimizerStatic", DisableParallelization = true)]
+    public sealed class SystemOptimizerStaticCollection
+    {
+    }
+
     /// <summary>
     /// 维护任务调度（计划 §4.3 / §6.1）的行为测试。
     ///
@@ -14,7 +24,11 @@ namespace LiteMonitor.Tests
     ///
     /// 覆盖的已实测缺陷：旧实现用 `secondsCounter % 60 == 5` 判断到期，
     /// 同一个到期秒里被调用十次就会真正执行十次（十次文件重写）。
+    ///
+    /// ★ 本类会改写进程级静态 `SystemOptimizer.MaintenanceScheduler`，
+    ///   因此归入禁并行 collection，避免与将来其它触碰该静态的用例互相污染。
     /// </summary>
+    [Collection("SystemOptimizerStatic")]
     public class MaintenanceScheduleTests
     {
         /// <summary>
@@ -316,6 +330,114 @@ namespace LiteMonitor.Tests
             // 同一秒内再次调用：什么都不到期
             var second = scheduler.RunDueTasks();
             Assert.False(second.Any);
+        }
+
+        // =========================================================
+        // 同一到期时间只消费一次：并发调用也必须成立
+        // =========================================================
+
+        [Fact]
+        public void 同一到期时间并发消费只成功一次()
+        {
+            var clock = new FakeTimeProvider();
+            var trigger = new MonotonicPeriodicTrigger(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), clock);
+
+            clock.Advance(TimeSpan.FromSeconds(5));
+
+            int consumed = 0;
+            using var start = new ManualResetEventSlim(false);
+            var threads = new List<Thread>();
+            for (int i = 0; i < 8; i++)
+            {
+                var thread = new Thread(() =>
+                {
+                    start.Wait();
+                    if (trigger.TryConsume()) Interlocked.Increment(ref consumed);
+                });
+                threads.Add(thread);
+                thread.Start();
+            }
+
+            start.Set();
+            foreach (var thread in threads) thread.Join();
+
+            // 核心不变量：同一个到期时间最多被消费一次
+            Assert.Equal(1, consumed);
+        }
+
+        [Fact]
+        public void 调度器并发调用同一到期时间只执行一次()
+        {
+            var clock = new FakeTimeProvider();
+            int saves = 0;
+            var scheduler = new MaintenanceScheduler(onTrafficSave: () => Interlocked.Increment(ref saves), timeProvider: clock);
+
+            clock.Advance(TimeSpan.FromSeconds(5));
+
+            using var start = new ManualResetEventSlim(false);
+            var threads = new List<Thread>();
+            for (int i = 0; i < 8; i++)
+            {
+                var thread = new Thread(() =>
+                {
+                    start.Wait();
+                    scheduler.RunDueTasks();
+                });
+                threads.Add(thread);
+                thread.Start();
+            }
+
+            start.Set();
+            foreach (var thread in threads) thread.Join();
+
+            Assert.Equal(1, saves);
+        }
+
+        // =========================================================
+        // 剩余时间（诊断用）与"调用方持有自己的实例"
+        // =========================================================
+
+        [Fact]
+        public void 剩余时间反映下一次到期点()
+        {
+            var clock = new FakeTimeProvider();
+            var trigger = new MonotonicPeriodicTrigger(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(60), clock);
+
+            // 刚创建：距首次到期还有 5 秒
+            Assert.Equal(5.0, trigger.Remaining.TotalSeconds, 3);
+
+            clock.Advance(TimeSpan.FromSeconds(2));
+            Assert.Equal(3.0, trigger.Remaining.TotalSeconds, 3);
+
+            // 消费之后：距下一次到期 60 秒
+            clock.Advance(TimeSpan.FromSeconds(3));
+            Assert.True(trigger.TryConsume());
+            Assert.Equal(60.0, trigger.Remaining.TotalSeconds, 3);
+
+            // 已经到期时剩余时间为 0
+            clock.Advance(TimeSpan.FromSeconds(60));
+            Assert.Equal(0.0, trigger.Remaining.TotalSeconds, 3);
+        }
+
+        [Fact]
+        public void 调用方可以持有自己的调度器实例()
+        {
+            // A2b 的接线形状：SystemOptimizer.CreateScheduler() 返回一个独立实例，
+            // 周期状态属于调用方，而不是进程级静态单例。
+            var clock = new FakeTimeProvider();
+            var first = SystemOptimizer.CreateScheduler(clock);
+            var second = SystemOptimizer.CreateScheduler(clock);
+
+            // 每次调用得到的是**不同**实例：调用方之间的周期状态互不影响
+            Assert.NotSame(first, second);
+            Assert.NotSame(first, SystemOptimizer.MaintenanceScheduler);
+
+            // 实例各自排定自己的截止时间（首次流量保存在 5 秒后）
+            Assert.Equal(5.0, first.NextTrafficSaveDelay.TotalSeconds, 3);
+            Assert.Equal(5.0, second.NextTrafficSaveDelay.TotalSeconds, 3);
+
+            // 注意：这里不调用 RunDueTasks()——CreateScheduler 接入的是生产动作
+            //（写流量历史文件 / 真实 GC），单元测试不应触发它们。
         }
     }
 }

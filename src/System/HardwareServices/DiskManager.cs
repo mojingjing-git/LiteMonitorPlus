@@ -71,6 +71,18 @@ namespace LiteMonitor.src.SystemServices
         // ===========================================================
         // 更新逻辑 (原 UpdateAll 中的部分)
         // ===========================================================
+        /// <summary>
+        /// 处理单个磁盘的更新。
+        /// </summary>
+        /// <param name="hw">磁盘硬件对象。</param>
+        /// <param name="cfg">当前设置。</param>
+        /// <param name="isSlowScanTick">
+        /// 调用方的"慢扫描轮"标志。**已不再作为限频依据**（保留仅为兼容既有调用点）：
+        /// 后台磁盘的更新节奏改由本类内部的单调截止时间决定（活跃 3 秒 / 冷却 10 秒）。
+        /// </param>
+        /// <param name="needDiskBgScan">
+        /// 调用方的"后台扫描轮"标志。**已不再作为限频依据**（保留仅为兼容既有调用点）。
+        /// </param>
         public void ProcessUpdate(IHardware hw, Settings cfg, bool isSlowScanTick, bool needDiskBgScan)
         {
             // 1. 严格遵守首选磁盘锁定（手动指定设备的语义保持不变）
@@ -90,6 +102,7 @@ namespace LiteMonitor.src.SystemServices
                             (hw.Name == cfg.PreferredDisk);
             
             bool shouldUpdate = false;
+            // 空闲时长：从「首次被观测」或「最后一次检测到流量」算起（单调时钟）
             double idleSeconds = state.HasActive
                 ? _time.GetElapsedTime(state.LastActiveTimestamp, now).TotalSeconds
                 : 0;
@@ -158,7 +171,16 @@ namespace LiteMonitor.src.SystemServices
         {
             if (!_diskStates.TryGetValue(hw, out var state))
             {
-                state = new DiskState();
+                state = new DiskState
+                {
+                    // ★ 空闲计时从**首次被观测**起算（等价于旧实现的
+                    //   `_diskLastActiveTime[hw] = DateTime.Now`）。
+                    //   这一步很关键：没有它，从未观测到流量的磁盘（无 Throughput 传感器、
+                    //   空盘、长期静默的数据盘）idleSeconds 会恒为 0，
+                    //   永远落在「活跃」分支 → 每 3 秒被轮询一次，永远进不了冷却/深睡。
+                    LastActiveTimestamp = _time.GetTimestamp(),
+                    HasActive = true
+                };
                 _diskStates[hw] = state;
             }
             return state;

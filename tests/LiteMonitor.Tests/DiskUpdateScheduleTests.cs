@@ -183,6 +183,54 @@ namespace LiteMonitor.Tests
         // =========================================================
 
         [Fact]
+        public void 无流量无传感器的后台盘先冷却后深睡()
+        {
+            // 回归：空闲计时必须"从首次被观测起算"。
+            // 旧实现：_diskLastActiveTime[hw] = DateTime.Now（首次观测即开始计时）。
+            // 如果状态创建时不写活跃基准，从未观测到流量的盘 idleSeconds 恒为 0，
+            // 会永远落在「活跃」分支 → 每 3 秒被轮询，永远进不了冷却/深睡。
+            var clock = new FakeTimeProvider();
+            var manager = new DiskManager(clock);
+            var disk = new FakeStorageHardware("E: SilentDisk");   // 没有任何传感器 -> 永远观测不到流量
+            var cfg = new Settings();
+
+            // 首次观测：允许一次更新
+            manager.ProcessUpdate(disk, cfg, true, true);
+            Assert.Equal(1, disk.UpdateCount);
+
+            // 活跃档：3 秒内不重复更新
+            clock.Advance(TimeSpan.FromSeconds(2));
+            manager.ProcessUpdate(disk, cfg, true, true);
+            Assert.Equal(1, disk.UpdateCount);
+
+            clock.Advance(TimeSpan.FromSeconds(1));    // t = 3s
+            manager.ProcessUpdate(disk, cfg, true, true);
+            Assert.Equal(2, disk.UpdateCount);
+
+            // 空闲 1 分钟 -> 进入冷却档（不快于每 10 秒一次）
+            clock.Advance(TimeSpan.FromSeconds(58));   // t = 61s
+            manager.ProcessUpdate(disk, cfg, true, true);
+            Assert.Equal(3, disk.UpdateCount);
+
+            clock.Advance(TimeSpan.FromSeconds(1));    // t = 62s：距上次更新 1 秒
+            manager.ProcessUpdate(disk, cfg, true, true);
+            Assert.Equal(3, disk.UpdateCount);
+
+            clock.Advance(TimeSpan.FromSeconds(9));    // t = 71s：距上次更新 10 秒
+            manager.ProcessUpdate(disk, cfg, true, true);
+            Assert.Equal(4, disk.UpdateCount);
+
+            // 空闲超过 5 分钟 -> 深睡，不再更新
+            clock.Advance(TimeSpan.FromMinutes(5));    // t = 371s
+            manager.ProcessUpdate(disk, cfg, true, true);
+            Assert.Equal(4, disk.UpdateCount);
+
+            clock.Advance(TimeSpan.FromMinutes(1));
+            manager.ProcessUpdate(disk, cfg, true, true);
+            Assert.Equal(4, disk.UpdateCount);
+        }
+
+        [Fact]
         public void 深睡磁盘不再更新()
         {
             var clock = new FakeTimeProvider();

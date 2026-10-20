@@ -8,8 +8,13 @@ namespace LiteMonitor.Tests
     /// <summary>
     /// 任务栏主题检查节奏（计划 §4.3 / §6.1）的行为测试。
     ///
+    /// ★ 这里**不再自己复制一份 5 秒配置**：
+    ///   周期来自生产代码的 `TaskbarForm.ThemeCheckInterval`，
+    ///   触发器来自生产代码的 `TaskbarForm.CreateThemeCheckTrigger(...)`，
+    ///   因此"把 TaskbarForm 的周期改成 10 秒/1 秒"会被本用例直接测出来。
+    ///
     /// 主题检查本身在 WinForms 窗体里（TaskbarForm.Tick → TaskbarBizHelper.CheckTheme），
-    /// 这里直接测它依赖的**单调截止时间触发器**：
+    /// 这里测的是它依赖的**单调截止时间触发器**：
     /// - 正常重复 Tick 不反复读取主题 / 反复应用分层样式；
     /// - 约每 5 秒检查一次；
     /// - 墙上时间回拨不影响检查节奏。
@@ -51,8 +56,16 @@ namespace LiteMonitor.Tests
 
         private static MonotonicPeriodicTrigger NewThemeTrigger(FakeTimeProvider clock)
         {
-            // 与 TaskbarForm 中使用的周期保持一致：约每 5 秒一次
-            return new MonotonicPeriodicTrigger(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), clock);
+            // ★ 用生产代码的工厂方法与周期常量，不在测试里复制配置
+            return TaskbarForm.CreateThemeCheckTrigger(clock);
+        }
+
+        [Fact]
+        public void 主题检查周期由生产代码的唯一常量决定()
+        {
+            // 计划 §4.3：任务栏主题检查「约每 5 秒一次」。
+            // 如果有人把 TaskbarForm 的周期改成别的值，这条用例会直接失败。
+            Assert.Equal(TimeSpan.FromSeconds(5), TaskbarForm.ThemeCheckInterval);
         }
 
         [Fact]
