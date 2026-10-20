@@ -298,6 +298,70 @@ dotnet tests/LiteMonitor.PerformanceProbe/output/LiteMonitor.PerformanceProbe.dl
 `WebSamplingDemandTests.有可信FPS数据时输出真实数值`）。
 **场景①（无需求 → 不读）依然有效**，且是本轮唯一可用的行为级证据。
 
+### 6.9 ⚠ 外观探针：经过时间 vs CPU 时间（两种口径，**不可混用**）
+
+外观探针（`--appearance-only`）的配对测量里同时存在**两种口径**，字段名必须看得出区别：
+
+| 口径 | 含义 | 来源 | 用在哪 |
+|---|---|---|---|
+| **经过时间**（elapsed / wall clock） | 渲染**延迟** | `Stopwatch.GetTimestamp()` | p95 处理延迟判据（≤ 30 ms） |
+| **CPU 时间**（处理器时间） | 真正占用的**处理器**时间 | `Process.TotalProcessorTime` | CPU 预算（≤ 40 ms/秒）、整机 CPU 占用推算 |
+
+⚠ 旧字段 `extraMsPerDraw` / `legacyMedianMsPerDraw` / `wiredMedianMsPerDraw` 是**经过时间**口径
+（旧键名保留、值不变）。**不能**把它们当成 CPU 时间去推算整机 CPU 百分比。
+新增的 `legacyElapsedMsPerDraw` / `wiredElapsedMsPerDraw` / `extraElapsedMsPerDraw`
+是同值的**显式命名**，与旧键并存，便于新旧结果对照。
+
+CPU 时间口径由 `--appearance-paired-cpu` 单独产出，放在配对结果的 `pairedCpu` 段：
+
+| 字段 | 口径 | 说明 |
+|---|---|---|
+| `pairedCpu.legacyCpuMsPerDraw` / `pairedCpu.wiredCpuMsPerDraw` | CPU 时间 | 旧/新入口每帧的处理器时间 |
+| `pairedCpu.extraCpuMsPerDraw` | CPU 时间 | 新 − 旧差值；**落在噪声内时为 `null`（不可判定），不是 0** |
+| `pairedCpu.extraCpuMsPerDrawMeasured` | CPU 时间 | 实测均值（永远有值），供噪声判定 |
+| `pairedCpu.extraCpuMsPerDrawMin/Max/Range/StdDev` | CPU 时间 | 轮间离散度（极差 = 噪声量级的主要来源） |
+| `pairedCpu.noiseFloorMsPerDraw` / `pairedCpu.withinMeasurementNoise` / `pairedCpu.verdict` | — | 噪声门槛与判定结论 |
+| `pairedCpu.legacyProjectedWholeMachineCpuAt12_5Hz` / `wiredProjectedWholeMachineCpuAt12_5Hz` / `projectedWholeMachineCpuAt12_5Hz` | CPU 时间 | 整机占用推算（%）；差值落在噪声内时为 `null` |
+| `pairedCpu.*BatchElapsedMsPerDraw` | 经过时间 | 同一批次的墙钟值，与 CPU 值并列对照 |
+
+整机占用推算公式：**整机占用(%) = 12.5 帧/秒 × 每帧 CPU 毫秒 ÷ 1000 ÷ CPU 核心数 × 100**
+（**只能用 CPU 时间口径**；经过时间不能用于整机 CPU 占用推算。）
+
+#### CPU 口径测量的方法
+
+Windows 上 `Process.TotalProcessorTime` 的量化步长约 **15.6 ms**，单帧绝对值不可用，所以：
+
+1. 每批次绘制 **≥ 2000 次**（`--appearance-paired-cpu-draws`，默认 2000），让 CPU 差值远超量化步长；
+2. **同进程同刻配对**：同一段内背靠背测旧入口与新入口，而不是跨批次比绝对值；
+3. **交替执行顺序**：段内交替 + 逐轮翻转起始顺序（奇数轮旧→新、偶数轮新→旧）；
+4. **至少 3 轮**（复用 `--appearance-paired-rounds`，CPU 口径强制下限 3 轮），
+   逐轮记录 old/new 的 CPU 差值与经过时间差值，并给出均值与轮间离散度；
+5. 差值绝对值落在噪声门槛（轮间极差 / 量化步长 / 0.1 ms 三者取大）以内 →
+   **如实报告「不可判定」**：`extraCpuMsPerDraw` 为 `null`，**不报告成 0**。
+
+| 开关 | 默认 | 说明 |
+|---|---|---|
+| `--appearance-paired-cpu` | 关 | 开启 CPU 口径配对测量。**单独使用** = 只跑 CPU 口径测量（跳过常规夹具矩阵与经过时间配对测量）；与 `--appearance-paired` 同用 = 在既有配对流程里一并产出 CPU 口径字段 |
+| `--appearance-paired-cpu-draws <n>` | 2000 | 每个批次的绘制次数（需远超 15.6 ms 的量化步长） |
+| `--appearance-paired-cpu-segments <n>` | 2 | 每轮的配对段数（取偶数时，一轮之内旧/新各当一次先测的） |
+| `--appearance-paired-cpu-max-measurements <n>` | 1 | 单次运行最多做多少次 CPU 口径测量（矩阵流程里 = 前 N 个夹具；其余夹具的 `pairedCpu` 为 `null` 并附 `pairedCpuNote`） |
+
+⚠ **CPU 口径测量很贵**（每帧离屏渲染本身就要数毫秒到数十毫秒，
+默认参数下一次完整 CPU 口径运行是**分钟级**），因此**默认关闭**、由开关显式开启。
+
+```powershell
+# 只跑 CPU 口径配对测量（跳过常规夹具矩阵与经过时间配对测量）
+dotnet tests/LiteMonitor.PerformanceProbe/output/LiteMonitor.PerformanceProbe.dll `
+    --appearance-only --appearance-paired-cpu `
+    --out tests/LiteMonitor.PerformanceProbe/output/paired-cpu
+
+# 在既有配对流程里一并产出 CPU 口径字段（矩阵里默认只测第一个夹具）
+dotnet tests/LiteMonitor.PerformanceProbe/output/LiteMonitor.PerformanceProbe.dll `
+    --appearance-only --appearance-paired --appearance-paired-cpu `
+    --appearance-set quick --appearance-filter "DarkFlat_Classic__vertical__gpu1__dpi96" `
+    --out tests/LiteMonitor.PerformanceProbe/output/paired-cpu-in-matrix
+```
+
 ---
 
 ## 7. 已知限制

@@ -30,7 +30,7 @@ namespace LiteMonitor.PerformanceProbe;
 ///   这里的 DPI 是**离屏模拟**（见 <see cref="ApplySimulatedDpiFonts"/>），
 ///   不能替代 v4 §7.2 要求的真实高 DPI 窗口测试。
 /// </summary>
-internal static class AppearanceProbeRunner
+internal static partial class AppearanceProbeRunner
 {
     private const string ResultFileName = "appearance-results.json";
     private const string LogFileName = "appearance-run.txt";
@@ -41,6 +41,7 @@ internal static class AppearanceProbeRunner
     public static int Run(ProbeOptions options)
     {
         Log.Clear();
+        _pairedCpuMeasurementsDone = 0;   // CPU 口径配对测量的次数预算（每次运行重新计）
         Write("LiteMonitor++ 外观探针 (--appearance-only) 启动于 " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
         Write("参数: " + string.Join(' ', options.RawArgs));
         Write("结果目录: " + options.OutputDir);
@@ -121,7 +122,7 @@ internal static class AppearanceProbeRunner
             var specs = AppearanceFixtureMatrix.Build(data, options.AppearanceFixtureSet, themes);
             if (!string.IsNullOrWhiteSpace(options.AppearanceDecompose))
             {
-                // ★ 装饰分解模式：只回答"额外 CPU 花在哪一层"，不跑常规夹具矩阵。
+                // ★ 装饰分解模式：只回答"额外经过时间花在哪一层"，不跑常规夹具矩阵。
                 Write($"模式: 装饰分解测量（主题 {options.AppearanceDecompose}）");
                 results["decomposition"] = RunDecompose(data, cfg, options);
                 results["fixtureSummary"] = new JsonObject
@@ -130,17 +131,21 @@ internal static class AppearanceProbeRunner
                     ["note"] = "分解模式只跑变体测量，不跑常规夹具矩阵。",
                 };
                 results["metadata"] = BuildMetadata();
-                results["finishedAt"] = DateTime.Now.ToString("o");
-                results["log"] = Log.ToString();
-                results["exitCode"] = 0;
-
-                Directory.CreateDirectory(options.OutputDir);
-                string decomposePath = Path.Combine(options.OutputDir, ResultFileName);
-                string decomposeLog = Path.Combine(options.OutputDir, LogFileName);
-                File.WriteAllText(decomposePath, results.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
-                File.WriteAllText(decomposeLog, Log.ToString(), new UTF8Encoding(false));
-                Write($"结果已写入: {decomposePath}");
-                return 0;
+                return WriteAppearanceResults(results, options);
+            }
+            if (options.AppearancePairedCpuOnly)
+            {
+                // ★ CPU 口径模式（--appearance-paired-cpu 单独使用时）：
+                //   只跑 CPU 时间口径的配对测量，跳过常规夹具矩阵与经过时间配对测量。
+                Write("模式: CPU 口径配对测量（只跑 CPU 时间口径，跳过常规夹具矩阵）");
+                results["pairedCpu"] = RunPairedCpuOnly(data, cfg, options, themes);
+                results["fixtureSummary"] = new JsonObject
+                {
+                    ["mode"] = "paired-cpu-only",
+                    ["note"] = "CPU 口径模式只跑 CPU 时间配对测量，不跑常规夹具矩阵与经过时间配对测量。",
+                };
+                results["metadata"] = BuildMetadata();
+                return WriteAppearanceResults(results, options);
             }
             if (!string.IsNullOrWhiteSpace(options.AppearanceFilter))
             {
@@ -238,6 +243,26 @@ internal static class AppearanceProbeRunner
 
         if (exitCode != 0) Write($"!! 退出码 {exitCode}");
         return exitCode;
+    }
+
+    /// <summary>
+    /// 写外观探针的结果文件与日志文件（早退分支共用：装饰分解模式 / CPU 口径模式）。
+    /// </summary>
+    private static int WriteAppearanceResults(JsonObject results, ProbeOptions options)
+    {
+        results["finishedAt"] = DateTime.Now.ToString("o");
+        results["log"] = Log.ToString();
+        results["exitCode"] = 0;
+        results["exitCodeMeaning"] = "0=正常；1=外观探针异常";
+
+        Directory.CreateDirectory(options.OutputDir);
+        string resultPath = Path.Combine(options.OutputDir, ResultFileName);
+        string logPath = Path.Combine(options.OutputDir, LogFileName);
+        File.WriteAllText(resultPath, results.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+        File.WriteAllText(logPath, Log.ToString(), new UTF8Encoding(false));
+        Write($"结果已写入: {resultPath}");
+        Write($"日志已写入: {logPath}");
+        return 0;
     }
 
     // ==================================================================
@@ -374,6 +399,13 @@ internal static class AppearanceProbeRunner
             ["allocatedBytesPerDraw"] = Math.Round((double)allocated / Math.Max(1, draws), 1),
             ["paired"] = paired,
             ["projectedWholeMachineCpuAt12_5Hz"] = Math.Round(cpuMsPerDraw * 12.5 / 1000 / Environment.ProcessorCount * 100, 4),
+            ["wallMsPerDrawMeaning"] = "⚠ **经过时间**（wall clock，Stopwatch）口径：反映延迟，不反映 CPU 占用。",
+            ["cpuMsPerDrawMeaning"] =
+                "CPU 时间（处理器时间，Process.TotalProcessorTime）口径。但默认只有 " + draws + " 次绘制，" +
+                "Windows 约 15.6 ms 的量化步长下该值基本不可用；可信的 CPU 口径请用 --appearance-paired-cpu 的 pairedCpu 段。",
+            ["projectedWholeMachineCpuAt12_5HzMeaning"] =
+                "整机占用推算（%），公式 = 12.5 帧/秒 × 每帧 CPU 毫秒 ÷ 1000 ÷ CPU 核心数 × 100。" +
+                "口径是 **CPU 时间**（不是经过时间）；但受 cpuMsPerDraw 的量化问题影响，可靠性同样有限。",
             ["pngPath"] = RelativeToOutput(pngPath, options.OutputDir),
             ["pngSha256"] = pngHash,
             ["pixelSha256"] = pixelHash,
@@ -391,7 +423,7 @@ internal static class AppearanceProbeRunner
     /// <summary>
     /// 配对测量（A14 / v4 §7.4）：**同一夹具、同一帧数据**，分别用
     /// 旧入口（不含新外观）与新入口（A13 接线后的生产路径）渲染，
-    /// 报告"新入口相对旧入口的额外 CPU 与额外托管分配"。
+    /// 报告"新入口相对旧入口的额外**经过时间**与额外托管分配"。
     /// <para>
     /// ★ 两条路径画的是**同一张图**（固定帧号）→ 差值只反映渲染路径本身的成本。
     /// ★ **帧级交替**：每一帧都先测一条路径、紧接着测另一条，
@@ -401,6 +433,12 @@ internal static class AppearanceProbeRunner
     /// ★ 主判据用**逐帧配对差值的中位数**（抗单帧抖动）；
     ///   Windows 进程 CPU 时间粒度约 15.6ms，不适合判 0.1ms 级差异，故不作主判据。
     /// ★ 托管分配是**硬判据**：v4 §7.4「新效果关闭 → 热路径不增加托管分配」。
+    /// </para>
+    /// <para>
+    /// ⚠ **口径**：本方法产出的是**经过时间**（wall clock，Stopwatch）——它是**延迟**判据
+    ///   （p95 处理延迟 ≤ 30 ms）的来源，**不是 CPU 时间**。
+    ///   CPU 预算（≤ 40 ms/秒）与整机 CPU 占用推算必须用 <c>--appearance-paired-cpu</c>
+    ///   产出的 <c>pairedCpu</c> 段（Process.TotalProcessorTime 口径）。
     /// </para>
     /// </summary>
     private static JsonObject? MeasurePaired(
@@ -413,10 +451,7 @@ internal static class AppearanceProbeRunner
         int rounds = Math.Max(1, options.AppearancePairedRounds);
         int draws = Math.Max(1, options.AppearanceDraws);
 
-        using var runtime = new AppearanceRuntime();
-        float dpiScale = spec.Dpi / 96f;
-        float userScale = (float)spec.UserScale;
-        runtime.Update(ctx.Theme, dpiScale, userScale, new Rectangle(0, 0, ctx.Width, ctx.Height));
+        using var runtime = CreatePairedRuntime(ctx, spec);
 
         // 固定帧号 → 两条路径画的是同一张图
         const int fixedFrame = 1;
@@ -476,10 +511,15 @@ internal static class AppearanceProbeRunner
             {
                 ["round"] = r + 1,
                 ["order"] = oldFirst ? "legacy→wired" : "wired→legacy",
+                ["caliber"] = "elapsed（经过时间 / wall clock）",
                 ["legacyMedianMsPerDraw"] = Round(oldMedian, 4),
                 ["wiredMedianMsPerDraw"] = Round(newMedian, 4),
                 ["extraMsPerDraw"] = Round(diffMedian, 4),
                 ["extraMsPerDrawMean"] = Round(diffs.Average(), 4),
+                ["legacyElapsedMsPerDraw"] = Round(oldMedian, 4),
+                ["wiredElapsedMsPerDraw"] = Round(newMedian, 4),
+                ["extraElapsedMsPerDraw"] = Round(diffMedian, 4),
+                ["extraElapsedMsPerDrawMean"] = Round(diffs.Average(), 4),
             });
         }
 
@@ -492,25 +532,70 @@ internal static class AppearanceProbeRunner
         double extra = Median(allDiffs.ToArray());
         double extraMean = allDiffs.Average();
 
+        // ★ CPU 口径配对测量（可选，由 --appearance-paired-cpu 开启）。
+        //   上面的逐帧差值是**经过时间**（Stopwatch，墙钟）口径 —— 它是延迟判据（p95 ≤ 30 ms）的来源，
+        //   **不能**当成 CPU 时间用于整机 CPU 占用推算。CPU 口径见 pairedCpu 段。
+        JsonObject? pairedCpu = null;
+        string? pairedCpuNote = null;
+        if (options.AppearancePairedCpu)
+        {
+            int maxMeasurements = Math.Max(1, options.AppearancePairedCpuMaxMeasurements);
+            if (_pairedCpuMeasurementsDone < maxMeasurements)
+            {
+                _pairedCpuMeasurementsDone++;
+                pairedCpu = MeasurePairedCpu(ctx, spec, g, runtime, options);
+            }
+            else
+            {
+                pairedCpuNote = $"未测量：已达 --appearance-paired-cpu-max-measurements 上限（{maxMeasurements}）。" +
+                                "CPU 口径测量很贵（每批次数千次绘制），矩阵流程里默认只测第一个夹具；" +
+                                "需要更多请调高该开关。";
+            }
+        }
+        else
+        {
+            pairedCpuNote = "未开启 --appearance-paired-cpu：本次没有做 CPU 时间口径的配对测量。";
+        }
+
         return new JsonObject
         {
             ["rounds"] = rounds,
             ["drawsPerRound"] = draws,
+            // ---- 旧键名保留（值不变），但语义是**经过时间**（wall clock）----
             ["legacyMedianMsPerDraw"] = Round(legacyMedian, 4),
             ["wiredMedianMsPerDraw"] = Round(wiredMedian, 4),
             ["extraMsPerDraw"] = Round(extra, 4),
             ["extraMsPerDrawMean"] = Round(extraMean, 4),
             ["extraMsPerDrawP10"] = Round(Percentile(allDiffs, 0.10), 4),
             ["extraMsPerDrawP90"] = Round(Percentile(allDiffs, 0.90), 4),
+            // ---- 新键名：明确「经过时间」语义（与旧键同值，便于新旧结果对照）----
+            ["legacyElapsedMsPerDraw"] = Round(legacyMedian, 4),
+            ["wiredElapsedMsPerDraw"] = Round(wiredMedian, 4),
+            ["extraElapsedMsPerDraw"] = Round(extra, 4),
+            ["extraElapsedMsPerDrawMean"] = Round(extraMean, 4),
+            ["extraElapsedMsPerDrawP10"] = Round(Percentile(allDiffs, 0.10), 4),
+            ["extraElapsedMsPerDrawP90"] = Round(Percentile(allDiffs, 0.90), 4),
             ["legacyAllocBytesPerDraw"] = legacyAllocPerDraw,
             ["wiredAllocBytesPerDraw"] = wiredAllocPerDraw,
             ["extraAllocBytesPerDraw"] = wiredAllocPerDraw - legacyAllocPerDraw,
             ["perRound"] = perRound,
+            // ---- CPU 口径段（--appearance-paired-cpu 开启时才有值）----
+            ["pairedCpu"] = pairedCpu,
+            ["pairedCpuNote"] = pairedCpuNote,
+            ["elapsedTimeSemantics"] =
+                "⚠ 本对象的 *MsPerDraw / extraMsPerDraw / extraElapsedMsPerDraw 全部是**经过时间**（wall clock，Stopwatch）口径：" +
+                "它反映的是**延迟**，不是 CPU 占用。CPU 预算（≤ 40 ms/秒）与整机 CPU 占用推算**必须**用 pairedCpu 段的 CPU 时间口径。",
+            ["extraMsPerDrawMeaning"] =
+                "⚠ 旧键名，保留以兼容已存档结果：值等同 extraElapsedMsPerDraw，**是经过时间口径，不是 CPU 时间**。",
+            ["cpuTimeSemantics"] =
+                "CPU 时间（处理器时间）口径在 pairedCpu 段（Process.TotalProcessorTime）。" +
+                "pairedCpu 为 null 时看 pairedCpuNote：要么是没开启 --appearance-paired-cpu，要么是没测到（超出次数上限）。",
             ["frameMode"] = "fixed-frame + 帧级交替（两条路径画同一张图，逐帧配对取差值）",
             ["note"] = "主判据为逐帧配对差值的中位数（离屏渲染为 CPU-bound）；" +
                       "Windows 进程 CPU 时间粒度约 15.6ms，不适合判 0.1ms 级差异，故不作为主判据。" +
                       "托管分配为硬判据：v4 7.4 要求「新效果关闭 → 热路径不增加托管分配」。" +
-                      "遗留偏差：先画的那条路径略占便宜，已按轮翻转顺序抵消。",
+                      "遗留偏差：先画的那条路径略占便宜，已按轮翻转顺序抵消。" +
+                      "★ 口径提醒：本对象是**经过时间**口径；CPU 时间口径见 pairedCpu 段（需 --appearance-paired-cpu）。",
         };
     }
 
@@ -555,10 +640,10 @@ internal static class AppearanceProbeRunner
     // ==================================================================
 
     /// <summary>
-    /// 装饰分解测量（A14）：把"新入口相对旧入口的额外 CPU"**按层拆开**，
+    /// 装饰分解测量（A14）：把"新入口相对旧入口的额外**经过时间**"**按层拆开**，
     /// 回答"钱花在哪一层"。
     /// <para>
-    /// ★ 变体 00（所有新效果关闭）的额外 CPU 应当 ≈ 0 ——
+    /// ★ 变体 00（所有新效果关闭）的额外经过时间应当 ≈ 0 ——
     ///   它同时是**测量可信度自检**：如果 00 明显不为 0，说明配对测量本身不可信。
     /// </para>
     /// <para>
@@ -566,6 +651,11 @@ internal static class AppearanceProbeRunner
     ///   改动只涉及新外观字段（frameStyle / frameWidth / frameLength / scanline /
     ///   glow / grid / barStyle）以及 backdrop.mode —— 前者不参与布局计算，
     ///   所以各变体的**布局与画面结构完全一致**，差值可直接相减。
+    /// </para>
+    /// <para>
+    /// ⚠ **口径**：本模式默认产出的是**经过时间**（wall clock）口径；
+    ///   加 <c>--appearance-paired-cpu</c> 后，每个变体还会附带 CPU 时间口径
+    ///   （<c>extraCpuMsPerDraw</c>）与基于 CPU 口径的整机占用推算。
     /// </para>
     /// </summary>
     private static JsonObject RunDecompose(AppearanceFixtureData data, Settings cfg, ProbeOptions options)
@@ -609,7 +699,9 @@ internal static class AppearanceProbeRunner
                 JsonObject paired = MeasurePaired(ctx, data, spec, g, options)!;
                 ctx.Theme.DisposeFonts();
 
+                // ★ 口径：extraMsPerDraw 是**经过时间**（wall clock）口径，不是 CPU 时间。
                 double extra = paired["extraMsPerDraw"]?.GetValue<double>() ?? 0;
+                JsonObject? pairedCpu = paired["pairedCpu"] as JsonObject;
                 // ★ JsonNode 不能被挂到第二个父节点上，必须取出原始值再放。
                 variantArray.Add(new JsonObject
                 {
@@ -621,11 +713,29 @@ internal static class AppearanceProbeRunner
                     ["wiredMedianMsPerDraw"] = paired["wiredMedianMsPerDraw"]?.GetValue<double>(),
                     ["extraMsPerDraw"] = extra,
                     ["deltaFromPreviousMsPerDraw"] = Math.Round(extra - previousExtra, 4),
+                    // ---- 明确「经过时间」语义的新键名（与旧键同值）----
+                    ["legacyElapsedMsPerDraw"] = ReadDouble(paired, "legacyElapsedMsPerDraw"),
+                    ["wiredElapsedMsPerDraw"] = ReadDouble(paired, "wiredElapsedMsPerDraw"),
+                    ["extraElapsedMsPerDraw"] = extra,
+                    ["deltaFromPreviousElapsedMsPerDraw"] = Math.Round(extra - previousExtra, 4),
+                    // ---- CPU 口径（--appearance-paired-cpu 开启时才有值）----
+                    ["legacyCpuMsPerDraw"] = ReadDouble(pairedCpu, "legacyCpuMsPerDraw"),
+                    ["wiredCpuMsPerDraw"] = ReadDouble(pairedCpu, "wiredCpuMsPerDraw"),
+                    ["extraCpuMsPerDraw"] = ReadDouble(pairedCpu, "extraCpuMsPerDraw"),
+                    ["cpuWithinMeasurementNoise"] = ReadBool(pairedCpu, "withinMeasurementNoise"),
+                    ["projectedWholeMachineCpuAt12_5Hz"] = ReadDouble(pairedCpu, "projectedWholeMachineCpuAt12_5Hz"),
+                    ["cpuCaliberNote"] = pairedCpu == null
+                        ? "本变体**未做** CPU 口径配对测量（extraCpuMsPerDraw 为 null 是「没测」，不是「不可判定」）：" +
+                          (ReadString(paired, "pairedCpuNote") ?? "未开启 --appearance-paired-cpu。")
+                        : "已做 CPU 口径配对测量；extraCpuMsPerDraw 为 null 表示**落在测量噪声内、不可判定**，不是 0。",
                     ["extraAllocBytesPerDraw"] = paired["extraAllocBytesPerDraw"]?.GetValue<long>(),
+                    ["caliberNote"] =
+                        "extraMsPerDraw / extraElapsedMsPerDraw = **经过时间**（wall clock）口径，" +
+                        "extraCpuMsPerDraw = **CPU 时间**（处理器时间）口径 —— 两者不可混用、不可相减。",
                 });
                 previousExtra = extra;
 
-                Write($"  {level.Name} / {id}: 额外 {extra:F3} ms/帧, 分配 +{paired["extraAllocBytesPerDraw"]} 字节/帧");
+                Write($"  {level.Name} / {id}: 额外经过时间 {extra:F3} ms/帧, 分配 +{paired["extraAllocBytesPerDraw"]} 字节/帧");
             }
 
             levelArray.Add(new JsonObject
@@ -639,8 +749,9 @@ internal static class AppearanceProbeRunner
         {
             ["theme"] = themeName,
             ["levels"] = levelArray,
-            ["note"] = "deltaFromPreviousMsPerDraw = 相对上一个变体的增量，即「该层自己的成本」。" +
-                       "变体 00 的额外 CPU 应当 ≈ 0（测量可信度自检）。",
+            ["note"] = "deltaFromPreviousMsPerDraw = 相对上一个变体的增量，即「该层自己的成本」（**经过时间**口径）。" +
+                       "变体 00 的额外经过时间应当 ≈ 0（测量可信度自检）。" +
+                       "CPU 时间口径的同层增量见 extraCpuMsPerDraw（需 --appearance-paired-cpu）。",
         };
     }
 
@@ -649,7 +760,7 @@ internal static class AppearanceProbeRunner
     {
         return new List<(string, string, Action<Theme>)>
         {
-            ("00-全部关闭", "所有新效果关闭（额外 CPU 应当 ≈ 0，兼作测量可信度自检）", t =>
+            ("00-全部关闭", "所有新效果关闭（额外经过时间应当 ≈ 0，兼作测量可信度自检）", t =>
             {
                 t.Layout.FrameStyle = 0; t.Layout.FrameWidth = 0; t.Layout.FrameLength = 0;
                 t.Layout.Scanline = 0; t.Layout.Glow = 0; t.Layout.Grid = 0; t.Layout.BarStyle = 0;
@@ -1431,6 +1542,16 @@ internal static class AppearanceProbeRunner
             ["appearanceDraws"] = options.AppearanceDraws,
             ["appearanceInvalidation"] = options.AppearanceInvalidation,
             ["compareDir"] = options.CompareDir == "" ? null : options.CompareDir,
+            ["appearancePaired"] = options.AppearancePaired,
+            ["appearancePairedRounds"] = options.AppearancePairedRounds,
+            ["appearanceFilter"] = options.AppearanceFilter,
+            ["appearanceDecompose"] = options.AppearanceDecompose,
+            // ---- CPU 口径配对测量（N1 口径混用修正）----
+            ["appearancePairedCpu"] = options.AppearancePairedCpu,
+            ["appearancePairedCpuOnly"] = options.AppearancePairedCpuOnly,
+            ["appearancePairedCpuDraws"] = options.AppearancePairedCpuDraws,
+            ["appearancePairedCpuSegments"] = options.AppearancePairedCpuSegments,
+            ["appearancePairedCpuMaxMeasurements"] = options.AppearancePairedCpuMaxMeasurements,
         };
     }
 

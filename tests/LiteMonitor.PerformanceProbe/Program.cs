@@ -251,6 +251,31 @@ internal sealed class ProbeOptions
     public string AppearanceFilter { get; private set; } = "";
     /// <summary>装饰分解测量的主题名（非空 = 只跑分解模式，不跑常规夹具矩阵）。</summary>
     public string AppearanceDecompose { get; private set; } = "";
+    /// <summary>
+    /// 是否做 **CPU 时间口径** 的配对测量（N1「口径混用」修正）。
+    /// <para>
+    /// 与 <see cref="AppearancePaired"/> 搭配：在既有配对流程里一并产出 CPU 口径字段；
+    /// 单独使用：只跑 CPU 口径配对测量（跳过常规夹具矩阵与经过时间配对测量）。
+    /// </para>
+    /// </summary>
+    public bool AppearancePairedCpu { get; private set; }
+    /// <summary>
+    /// CPU 口径每个批次的绘制次数（默认 2000）。
+    /// <para>Windows 进程 CPU 时间的量化步长约 15.6 ms，批次太短则 CPU 差值不可用。</para>
+    /// </summary>
+    public int AppearancePairedCpuDraws { get; private set; } = 2000;
+    /// <summary>
+    /// CPU 口径每轮的配对段数（默认 2）。
+    /// <para>
+    /// 段数取偶数时，一轮之内旧/新各当一次"先测的"，先后顺序偏差在**轮内**就被抵消；
+    /// 再叠加逐轮翻转起始顺序（奇数轮旧→新、偶数轮新→旧），形成双重抵消。
+    /// </para>
+    /// </summary>
+    public int AppearancePairedCpuSegments { get; private set; } = 2;
+    /// <summary>单次运行里最多做多少次 CPU 口径配对测量（默认 1；矩阵流程里 = 前 N 个夹具）。</summary>
+    public int AppearancePairedCpuMaxMeasurements { get; private set; } = 1;
+    /// <summary>是否"只跑"CPU 口径配对测量（--appearance-paired-cpu 单独使用、未搭配 --appearance-paired）。</summary>
+    public bool AppearancePairedCpuOnly => AppearancePairedCpu && !AppearancePaired;
     /// <summary>原始命令行（写进结果 JSON 备查）。</summary>
     public string[] RawArgs { get; private set; } = Array.Empty<string>();
 
@@ -267,6 +292,12 @@ internal sealed class ProbeOptions
             ["renderSeconds"] = RenderSeconds,
             ["fpsObservedCycles"] = FpsObservedCycles,
             ["fpsCostSeconds"] = FpsCostSeconds,
+            // ===== A14 CPU 口径配对测量（默认关闭；开启会显著拉长探针运行时间）=====
+            ["appearancePairedCpu"] = AppearancePairedCpu,
+            ["appearancePairedCpuOnly"] = AppearancePairedCpuOnly,
+            ["appearancePairedCpuDraws"] = AppearancePairedCpuDraws,
+            ["appearancePairedCpuSegments"] = AppearancePairedCpuSegments,
+            ["appearancePairedCpuMaxMeasurements"] = AppearancePairedCpuMaxMeasurements,
         };
     }
 
@@ -301,6 +332,11 @@ internal sealed class ProbeOptions
                 case "--appearance-paired-rounds": options.AppearancePairedRounds = int.Parse(Next()); break;
                 case "--appearance-filter": options.AppearanceFilter = Next(); break;
                 case "--appearance-decompose": options.AppearanceDecompose = Next(); break;
+                // ===== A14 CPU 口径配对测量（N1 口径混用修正）=====
+                case "--appearance-paired-cpu": options.AppearancePairedCpu = true; break;
+                case "--appearance-paired-cpu-draws": options.AppearancePairedCpuDraws = int.Parse(Next()); break;
+                case "--appearance-paired-cpu-segments": options.AppearancePairedCpuSegments = int.Parse(Next()); break;
+                case "--appearance-paired-cpu-max-measurements": options.AppearancePairedCpuMaxMeasurements = int.Parse(Next()); break;
                 case "--quick":
                     options.WarmupSeconds = 3;
                     options.SteadySeconds = 10;
