@@ -1215,9 +1215,14 @@ namespace LiteMonitor.Tests
             //   "同一到期时间最多消费一次"，该承诺在并发下成立的**前提**是
             //   "比较 + 推进"被同一把锁保护住。
             //
-            //   并发压力用例（同上）对"去掉锁"并不敏感（竞争窗口只有几纳秒，实测抓不到），
-            //   所以这里用**结构断言**锁死：TryConsume 的方法体必须进入/退出 Monitor。
+            //   这里用**结构断言**锁死：TryConsume 的方法体必须进入/退出 Monitor。
             //   锁被去掉、被换成别的对象、或锁范围被缩小，这条用例都会变红。
+            //
+            // ★ 为什么不用"并发压力用例"：实测并发压力用例对"去掉锁"**并不敏感**
+            //   （竞争窗口只有几纳秒，实测 3/3 次都抓不到），它不构成护栏；
+            //   而它会额外制造上百个线程，扰动同进程内其它既有用例的时序
+            //   （SamplingCoordinatorTests 有一个既有的竞态用例，见报告 §6.4）。
+            //   → 因此本轮**不保留**并发压力用例，护栏由本条结构断言承担。
             var triggerType = typeof(HardwareSamplingSchedule).GetNestedType(
                 "MinGapTrigger", BindingFlags.NonPublic);
             Assert.NotNull(triggerType);
@@ -1231,44 +1236,6 @@ namespace LiteMonitor.Tests
 
             Assert.Contains(scan.Calls, c => c.DeclaringType == typeof(Monitor) && c.Name == "Enter");
             Assert.Contains(scan.Calls, c => c.DeclaringType == typeof(Monitor) && c.Name == "Exit");
-        }
-
-        [Fact]
-        public void 同一到期时间并发消费只成功一次()
-        {
-            // 公开类型 HardwareSamplingSchedule 的文档承诺"同一到期时间最多消费一次"，
-            // 这条承诺必须在**并发**下也成立：比较与推进必须在同一个临界区内完成。
-            //
-            // ★ 确定性由上一条用例（结构断言）保证；本条负责记录并发语义本身。
-            int threads = 8;
-            int rounds = 20;
-            int consumed = 0;
-
-            for (int round = 0; round < rounds; round++)
-            {
-                var clock = new FakeTimeProvider();
-                var schedule = new HardwareSamplingSchedule(clock);
-
-                int local = 0;
-                var start = new ManualResetEventSlim(false);
-                var workers = new Thread[threads];
-                for (int i = 0; i < threads; i++)
-                {
-                    workers[i] = new Thread(() =>
-                    {
-                        start.Wait();
-                        if (schedule.TryConsumeSlowScan()) Interlocked.Increment(ref local);
-                    });
-                    workers[i].Start();
-                }
-
-                start.Set();
-                foreach (var worker in workers) worker.Join();
-                consumed += local;
-            }
-
-            // 每轮只允许一个线程消费成功
-            Assert.Equal(rounds, consumed);
         }
     }
 }
