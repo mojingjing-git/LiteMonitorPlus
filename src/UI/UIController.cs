@@ -46,7 +46,7 @@ namespace LiteMonitor
 
             _layout = new UILayout(ThemeManager.Current);
 
-            _timer = new System.Windows.Forms.Timer { Interval = Math.Max(80, _cfg.RefreshMs) };
+            _timer = new System.Windows.Forms.Timer { Interval = ComputeUiRefreshIntervalMs(_cfg.RefreshMs) };
             _timer.Tick += (_, __) => Tick();
             _timer.Start();
 
@@ -119,7 +119,7 @@ namespace LiteMonitor
 
             _form.BackColor = ThemeManager.ParseColor(t.Color.Background);
 
-            _timer.Interval = Math.Max(80, _cfg.RefreshMs);
+            _timer.Interval = ComputeUiRefreshIntervalMs(_cfg.RefreshMs);
             _form.Invalidate();
             _form.Update();
         }
@@ -177,6 +177,16 @@ namespace LiteMonitor
         }
 
         private bool _busy = false;
+        private bool _disposed = false;
+
+        /// <summary>
+        /// 界面刷新间隔（毫秒）。
+        ///
+        /// ★ 这个值只决定"界面刷新多快"，与"硬件采集多快"是两件事：
+        ///   硬件采集由 <see cref="HardwareMonitor"/> 的采样协调器限频（最高 1 次/秒）。
+        ///   界面的取值、平滑、绘制仍然按这个频率跑，不能被改成每秒一次。
+        /// </summary>
+        public static int ComputeUiRefreshIntervalMs(int refreshMs) => Math.Max(80, refreshMs);
 
         private async void Tick()
         {
@@ -185,7 +195,14 @@ namespace LiteMonitor
 
             try
             {
-                await Task.Run(() => _mon.UpdateAll());
+                // ★ 只请求"到期才采"的一次硬件采集：
+                //   未到期时这里立即返回，不会创建任何硬件任务，
+                //   但下面的取值 / 平滑 / 绘制仍然按界面频率执行。
+                await _mon.UpdateIfDueAsync();
+
+                // ★ 关闭竞态：异步回调回来时窗体/控制器可能已经释放，
+                //   此时不能再触碰界面对象，也不能触发重建。
+                if (_disposed || _form.IsDisposed) return;
 
                 // ★★★ [多显卡] 实际显卡数少于配置数时 (例如拔掉了第二张卡),
                 // 夹紧配置并重建监控项, 否则会留下一组永远没有数据的空白指标。 ★★★
@@ -655,6 +672,7 @@ namespace LiteMonitor
         }
         public void Dispose()
         {
+            _disposed = true;
             _timer.Stop();
             _timer.Dispose();
             _mon.Dispose();
