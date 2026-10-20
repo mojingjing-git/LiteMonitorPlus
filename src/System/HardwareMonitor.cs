@@ -894,8 +894,13 @@ namespace LiteMonitor.src.SystemServices
                         {
                             _computer.Accept(new HardwareVisitor(h => { }));
                             _computer.Close();
-                            // ★★★ 核心修复：手动清空硬件列表 ★★★
-                            // LHM 的 Close() 不会清空列表，必须手动 Clear，否则再次 Open 会追加重复硬件
+                            // 手动清空硬件列表。
+                            // 【已核实的实现事实】LHM 0.9.6 的 Computer.Hardware 属性**每次返回副本**
+                            // （主控实测：两次 get_Hardware 返回**不同引用**，返回类型为 List<IHardware>），
+                            // 因此这里 Clear() 清到的是**临时副本**，**对 LHM 内部列表不生效**。
+                            // 旧注释"必须手动 Clear，否则再次 Open 会追加重复硬件"与该事实相反，已更正。
+                            // 是否真会在再次 Open 时追加重复硬件，取决于 LHM 的 Close()/Open() 内部实现，
+                            // **本轮未查证**，故**保留该调用、不改行为**（只改注释）。
                             _computer.Hardware.Clear();
                         }
                     }

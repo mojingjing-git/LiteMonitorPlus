@@ -756,7 +756,7 @@ WebSocket / HTTP 计数证据（三轮中位数）：
 | 4 | verification 文档：前后基线、实际配置/版本、计数证据、CPU 结果、限制 | **满足** | §1（环境与版本）、§3（实施前基线）、§9.1（本批次指纹与口径）、§9.2（CPU 结果）、§9.5（计数证据）、§9.11（限制） |
 | 5 | 报告明确区分**实际 CPU、经过时间、单核/整机百分比**，以及**模型/折算数据** | **满足** | §9.2/§9.7 明确标注 `wholeMachineCpuPercent`（整机）与折算单核百分比；`productionCollectionDurationMs`（实际经过时间）与 CPU 时间分列；§9.3/§9.7 的折算值均标明公式来源；模型/推算项标【推算】/【模型】 |
 | 6 | 说明 Web FPS 旧设置默认关闭的行为变化及新开关位置 | **满足** | §9.8 整节（含 master 侧 0 命中的实证） |
-| 7 | 无测试实例、意外 FPS 服务或临时监控会话残留；代码改动只含本轮范围 | **满足** | §9.7 卫生表：残留进程 0、FPS/PresentMon 服务 0、用户配置目录未被写入；**本轮 Task 6 未改任何 `src/**` 或测试代码**（工作区在测量前后均为 `b777ec0` 且干净），改动仅限 `docs/…/…-verification.md`、探针 README（核对）、`run-final-r1\|r2\|r3/` 三个新批次目录 |
+| 7 | 无测试实例、意外 FPS 服务或临时监控会话残留；代码改动只含本轮范围 | **满足** | §9.7 卫生表：残留进程 0、FPS/PresentMon 服务 0、用户配置目录未被写入；**本轮 Task 6 未改任何 `src/**` 或测试代码**（工作区在测量前后均为 `b777ec0` 且干净），改动仅限 `docs/…/…-verification.md`、探针 README（核对）、`run-final-r1\|r2\|r3/` 三个新批次目录。⚠ **测量之后**（终审之后）另有一笔**纯注释**改动（`HardwareMonitor.cs` 的 `Computer.Hardware.Clear()` 注释事实化，见 §9.11）与本文件的披露性补充；**均发生在三轮测量之后，未回灌到被测版本**，故 §9.2 的数据与其所测版本仍然一一对应 |
 
 ### 9.10 发现但未修的问题清单
 
@@ -786,6 +786,10 @@ WebSocket / HTTP 计数证据（三轮中位数）：
 | **Web 快照/广播取值的 CPU** | **【口径边界】** | 发生在应用进程内，不计入 `valueReads`，只计入进程 CPU 总量 |
 | **基线侧只有 2 轮、实施后 3 轮** | **【不对称，如实记录】** | 基线的 2 轮波动（A 组 ±20~28 %）正是计划要求三轮的原因；基线侧"中位数"按 2 轮算术平均取。§9.4 已同时给出"只与基线较低一轮比"会触发退化线的事实 |
 | **`updateDurationMs.avg` 的跨批次可比性** | **【口径提醒】** | 本批次该字段混入了"门限快速返回"的近零耗时；跨批次比较须用 `productionCollectionDurationMs / collectionRounds`（§9.5 口径提醒） |
+| **公开 API 面的实际净变化（口径更正）** | **【披露级·无功能回归】** | 本轮各阶段复审时用的口径是**"该阶段窄区间内公开面只增不改"**，该口径在**单个阶段内成立**，但**在 `master..HEAD` 全区间并不严格成立**。终审（P5）用 `git diff master..HEAD` 实测后，主控**独立复核**确认：<br>① **删除 1 个真正的公开成员**：`HardwareValueProvider.OnUpdateTickStarted()` —— master 上它有生产调用方（`HardwareMonitor.cs:189`），本轮按计划 §4.2「值缓存生命周期从"界面 Tick"改为"采集代次"」**有意替换**为 `OnCollectionStarted(generation)`（`HardwareMonitor.cs:375-377`），调用点随之迁移；<br>② **破坏性的公开签名变更：0 个** —— 4 处构造函数变更均为**追加可选参数**（`HardwareValueProvider` +3、`NetworkManager` +1、`TaskbarForm` +1、`WebSessionManager` +2），**源码兼容**；<br>③ 终审初报中列为"公开成员删除"的 `NetworkManager.LastNativeUpload` / `LastNativeDownload`，与列为"签名变更"的 `LastMatchAttempt`，**实测均声明在 `private class NetworkState` 内部**（`NetworkManager.cs:16-21`）—— private 嵌套类型的成员**不构成 `NetworkManager` 的公开 API 面**，故不计入公开面删改（`LastMatchAttempt` 由 `DateTime` 改为 `long` 是为改用单调时钟，属内部字段的类型调整）；<br>④ 本项目是 **WinExe 应用而非库**，没有外部编译期消费者；全量单测 **454/454** 证明无回归。<br>**结论**：本轮对外公开面是**净增**的；唯一被移除的成员已被计划 §4.2 的采集代次机制**等价替代**。此前"只增不改"的说法应理解为"**各阶段窄区间**"口径，**不是全分支口径**。 |
+| **`FpsCounter.StopService()` 会清空全部 FPS 状态** | **【行为变更·用户可见】** | 终审逐条读代码确认：`StopService()` 末尾 `_store.Clear()` 清空**帧计数、累加历史、平滑历史、结果与名称缓存**。因此**空闲停止 FPS 后**，需要 2~3 秒重建，期间**界面 FPS 显示为 0**。这是"停止时彻底清状态"这一既有实现的直接后果，本轮未改动该行为，**但此前未在限制里披露**。启用 FPS 功能时需知情 |
+| **`Computer.Hardware.Clear()` 的实际效果与旧注释相反** | **【注释已更正·行为未改】** | 终审发现 `HardwareMonitor.cs:897-898` 的旧注释称"必须手动 Clear，否则再次 Open 会追加重复硬件"。主控**独立实测**（反射读 LHM 0.9.6：两次 `get_Hardware` 返回**不同引用**，返回类型 `List<IHardware>`）确认该属性**每次返回副本** → `Clear()` 清到的是**临时副本**，对 LHM 内部列表**不生效**，注释所述的保护并不存在。**本轮只更正注释、保留调用不改行为**（是否真会重复硬件取决于 LHM `Close()`/`Open()` 内部，本轮**未查证**） |
+| **3 个新增公开成员暂无消费者** | **【已登记·待办】** | `HardwareMonitor.SamplingGeneration`（`:100`）、`HardwareMonitor.IsReady`（`:103`）、`LiteWebServer.GetDemandSnapshot()`（`:60`）—— 全仓（**含测试**）零消费者，属本轮"备好但没接"模式。**终审建议保留**（它们是 A1/B1 冻结契约的一部分，删除会再次触碰公开面），登记为后续接线待办 |
 
 ### 9.12 修订记录：§9 的"中位数"曾被误取为三轮**最大值**（2026-10-20 修订）
 
