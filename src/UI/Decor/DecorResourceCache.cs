@@ -20,11 +20,18 @@ namespace LiteMonitor.src.UI.Decor
     ///   字节按调用方<b>显式给出</b>的瓦片尺寸核算（不取画刷的 <c>Image</c>，
     ///   每取一次都会得到一个新的副本，取了不释放就是多留一份 GDI 图像）。
     ///
+    /// ★ 异常安全：纹理画刷的"源位图 → 画刷 → 入表"是一条
+    ///   <b>要么全成、要么全废</b>的链：入表成功之前，待接管的位图与画刷
+    ///   由当次调用兜底释放；只有入表成功才提交所有权与字节计数，
+    ///   失败时缓存计数保持调用前的状态。
+    ///
     /// ★ 容量与淘汰策略（可复核）：
     /// - 条目上限 <see cref="DefaultMaxEntries"/> = 128；
     /// - 位图 / 静态装饰位图总字节上限 <see cref="DefaultMaxBitmapBytes"/> = 16 MiB；
-    /// - 淘汰规则 = <b>LRU + 总量核算</b>：插入前先按"最久未使用"顺序淘汰，
-    ///   直到条目数低于上限且总字节 + 新条目字节不超过字节上限；
+    /// - 淘汰规则 = <b>LRU + 总量核算</b>：按"最久未使用"顺序淘汰，
+    ///   直到条目数不超过上限且总字节不超过字节上限；
+    ///   位图 / 路径条目在<b>插入前</b>淘汰，纹理画刷条目在<b>入表成功后</b>淘汰
+    ///   （资源没准备好就不淘汰旧条目），两者的最终口径一致；
     /// - 例外（已文档化）：<b>单个条目本身超过整个字节上限</b>时无法既缓存又守恒，
     ///   此时允许它单独存在并使总量暂时超限；由于它是最久未使用，
     ///   <b>下一次插入时一定会被优先淘汰</b>。
@@ -115,6 +122,32 @@ namespace LiteMonitor.src.UI.Decor
         /// （纹理条目的画刷与源位图是一起释放的）。
         /// </summary>
         public long ReleasedResourceCount { get { lock (_gate) return _releasedResourceCount; } }
+
+        // ============================================================
+        // 内部测试接缝（internal：生产路径上没有可被外部随意改写的公开开关）
+        // ============================================================
+
+        /// <summary>
+        /// 内部测试接缝：<b>从源位图创建纹理画刷</b>的入口。
+        /// 默认走 <c>new TextureBrush(source)</c>。
+        ///
+        /// ★ 用途：GDI+ 的画刷构造失败几乎无法自然复现，
+        ///   这里给出<b>可注入</b>的创建入口，让测试能在
+        ///   <b>不靠耗尽内存</b>的前提下稳定触发"画刷构造失败"这条异常路径。
+        /// ★ 可见性：保持 <c>internal</c>；测试工程通过
+        ///   <c>InternalsVisibleTo</c>（或反射）使用它，
+        ///   生产路径上<b>没有</b>可被外部随意改写的公开开关。
+        /// </summary>
+        internal Func<Bitmap, TextureBrush>? TextureBrushFactory { get; set; }
+
+        /// <summary>
+        /// 内部测试接缝：纹理画刷<b>入表前</b>的钩子（默认不触发）。
+        ///
+        /// ★ 用途：在"画刷已创建、条目尚未入表"这一步注入异常，
+        ///   用来验证失败路径会把<b>已创建的画刷与源位图一起释放</b>。
+        /// ★ 可见性：保持 <c>internal</c>（同 <see cref="TextureBrushFactory"/>）。
+        /// </summary>
+        internal Action? TextureBrushPreInsertHook { get; set; }
 
         // ============================================================
         // 读取
@@ -217,6 +250,14 @@ namespace LiteMonitor.src.UI.Decor
         ///   每取一次都会得到一个<b>新的副本</b>，取了不释放就是白留一份 GDI 图像；
         /// - 淘汰时释放的就是缓存自己创建的那一个画刷和它自己的那一张源位图，
         ///   <b>记账与释放指向同一份图像</b>。
+        ///
+        /// ★ 异常安全（所有权交接）：
+        /// - 源位图从工厂接手后，到<b>入表成功</b>之前由本次调用兜底：
+        ///   画刷构造失败、入表失败等任何异常，都会在 finally 里把
+        ///   <b>已创建的位图 / 画刷释放掉</b>，不让它们脱离缓存管理；
+        /// - <b>只有入表成功才提交所有权与字节计数</b>；失败时缓存的条目数、
+        ///   字节数、创建数与淘汰数都保持<b>调用前</b>的状态；
+        /// - 淘汰发生在<b>入表之后</b>：资源没准备好就不会白白淘汰掉旧条目。
         /// </summary>
         /// <param name="key">缓存键。</param>
         /// <param name="tileFactory">瓦片位图工厂（位图的所有权转移给缓存）。</param>
@@ -243,19 +284,59 @@ namespace LiteMonitor.src.UI.Decor
                 Bitmap source = tileFactory(key);
                 if (source == null) throw new InvalidOperationException("装饰缓存工厂返回了 null。");
 
-                long bytes = (long)Math.Max(1, tileWidthPx) * Math.Max(1, tileHeightPx) * 4;
-                _createdResourceCount++;
-                _createdBitmapBytes += bytes;
+                // ★ 异常安全（所有权交接的"要么全成、要么全废"）：
+                //   1) 待接管的源位图与已创建的画刷，在**入表成功之前**由本次调用兜底；
+                //   2) 只有**入表成功**才提交所有权与字节计数；
+                //   3) 失败时 finally 释放已创建的位图 / 画刷，缓存计数回到调用前的状态。
+                TextureBrush? brush = null;
+                bool committed = false;
+                try
+                {
+                    // 画刷与源位图同属缓存：淘汰时一起释放
+                    brush = CreateTextureBrush(source);
+                    if (brush == null) throw new InvalidOperationException("装饰缓存的纹理画刷工厂返回了 null。");
 
-                EvictFor(bytes);
+                    // 入表前的故障注入钩子（仅测试接缝，默认不触发）
+                    TextureBrushPreInsertHook?.Invoke();
 
-                // 画刷与源位图同属缓存：淘汰时一起释放
-                TextureBrush brush = new TextureBrush(source);
-                Entry entry = new Entry { Key = key, Value = brush, Owned = source, Bytes = bytes };
-                entry.Node = _lru.AddFirst(entry);
-                _map[key] = entry;
-                _totalBytes += bytes;
-                return brush;
+                    long bytes = (long)Math.Max(1, tileWidthPx) * Math.Max(1, tileHeightPx) * 4;
+
+                    Entry entry = new Entry { Key = key, Value = brush, Owned = source, Bytes = bytes };
+
+                    // 入表：先挂 LRU 再挂字典；任一步失败都要把半成品摘掉
+                    LinkedListNode<Entry> node = _lru.AddFirst(entry);
+                    entry.Node = node;
+                    try
+                    {
+                        _map[key] = entry;
+                    }
+                    catch
+                    {
+                        _lru.Remove(node);
+                        entry.Node = null;
+                        throw;
+                    }
+
+                    // ★ 只有入表成功才提交记账（失败时计数保持调用前的状态）
+                    _totalBytes += bytes;
+                    _createdResourceCount++;
+                    _createdBitmapBytes += bytes;
+                    committed = true;
+
+                    // ★ 淘汰放在入表之后：资源没准备好就不会白白淘汰掉旧条目
+                    EvictAfterInsert(entry);
+
+                    return brush;
+                }
+                finally
+                {
+                    if (!committed)
+                    {
+                        // 未入表：本次创建的画刷与源位图由本次调用释放，不让它们脱离管理
+                        SafeDispose(brush);
+                        SafeDispose(source);
+                    }
+                }
             }
         }
 
@@ -422,6 +503,62 @@ namespace LiteMonitor.src.UI.Decor
             // 若单个条目本身超过总预算，上面已经淘汰到空；
             // 此时允许该条目单独存在（总量暂时超限），
             // 它是最久未使用项，下一次插入必然先被淘汰。
+        }
+
+        /// <summary>
+        /// <b>入表之后</b>的淘汰：新条目已经在表内，按"最久未使用"顺序淘汰旧条目，
+        /// 直到条目数与位图字节总量回到上限内。
+        ///
+        /// ★ 与 <see cref="EvictFor"/> 的差别：核算口径已<b>包含新条目</b>
+        ///   （条目数按表内实际数量、字节按已含新条目的总量），
+        ///   因此<b>永不淘汰新条目本身</b>；
+        /// ★ 好处：资源还没准备好就失败时，旧条目不会被白白淘汰掉。
+        /// </summary>
+        /// <param name="keep">刚入表的新条目（不淘汰它）。</param>
+        private void EvictAfterInsert(Entry keep)
+        {
+            // 1) 条目数上限
+            while (_map.Count > _maxEntries && _lru.Last != null && !ReferenceEquals(_lru.Last.Value, keep))
+            {
+                RemoveEntry(_lru.Last.Value, countEviction: true);
+            }
+
+            // 2) 字节总量核算
+            while (_totalBytes > _maxBitmapBytes && _lru.Last != null && !ReferenceEquals(_lru.Last.Value, keep))
+            {
+                RemoveEntry(_lru.Last.Value, countEviction: true);
+            }
+
+            // 若单个条目本身超过总预算，上面已经淘汰到只剩它自己；
+            // 此时允许它单独存在（总量暂时超限），
+            // 它是最久未使用项，下一次插入必然先被淘汰。
+        }
+
+        /// <summary>
+        /// 按当前接缝创建纹理画刷（默认 <c>new TextureBrush(source)</c>）。
+        /// </summary>
+        /// <param name="source">源位图（所有权已转移给缓存）。</param>
+        private TextureBrush CreateTextureBrush(Bitmap source)
+        {
+            Func<Bitmap, TextureBrush>? factory = TextureBrushFactory;
+            return factory != null ? factory(source) : new TextureBrush(source);
+        }
+
+        /// <summary>
+        /// 安全释放：释放失败不能盖掉正在处理的原始异常。
+        /// </summary>
+        /// <param name="resource">待释放对象（可为 null）。</param>
+        private static void SafeDispose(object? resource)
+        {
+            if (resource is not IDisposable disposable) return;
+            try
+            {
+                disposable.Dispose();
+            }
+            catch
+            {
+                // 释放失败不再抛出：此刻正在清理失败路径，不能盖掉原始异常
+            }
         }
 
         private void RemoveEntry(Entry entry, bool countEviction)
