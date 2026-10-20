@@ -131,6 +131,8 @@
     "WebServerPasswordTip": "Vide pour aucun",
     "OpenWeb": "Ouvrir web",
     "WebServerTip": "Web actif. Accès mobile via LAN 'IP:Port' ou distant 'IPv6:Port'.",
+    "WebServerFps": "FPS sur le web",
+    "WebServerFpsTip": "Si activé, la page web collecte aussi le taux de rafraîchissement. Un outil supplémentaire est requis, ce qui augmente la charge de collecte.",
 
     "Appearance": "Apparence",
     "Theme": "Thème",
@@ -230,6 +232,7 @@
     "UseWinPerCounters": "Compteurs Système",
     "UseWinPerCountersTip": "Désactiver si inexact. CPU/GPU/RAM/DISK lues depuis capteurs.",
     "Refresh": "Taux",
+    "RefreshTip": "Ne règle que la fréquence de redessin de l'interface. Les données matérielles normales sont prélevées au plus une fois par seconde : une valeur plus faible n'augmente pas la fréquence de collecte.",
     "IgnoreSMBTraffic": "Ignorer SMB",
     "MemoryDisplayMode": "Aff. RAM",
 

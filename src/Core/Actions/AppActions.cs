@@ -244,6 +244,11 @@ namespace LiteMonitor.src.Core.Actions
                 string targetPwd = cfg.WebServerPassword;
                 string currentPwd = server.CurrentPassword;
 
+                // ★ 注意：WebFpsEnabled 不需要重启服务。
+                //   它只在"网页版帧率"开关里参与 FPS 需求判定（WebFpsDemand），
+                //   而需求判定是每次实时读取配置的，改完立即生效。
+                //   反过来，服务 Stop/重启会清空全部 Web 需求（连接 + HTTP 租期），见 WebSessionManager.Stop()。
+
                 if (shouldRun)
                 {
                     // 端口变更 或 密码变更 均触发重启

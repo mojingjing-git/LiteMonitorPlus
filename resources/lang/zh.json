@@ -130,6 +130,8 @@
     "WebServerPasswordTip": "留空即无密码",
     "OpenWeb": "打开网页版",
     "WebServerTip": "开启网页版后，手机可通过局域网“内网IP:端口”访问，或“IPv6:端口”远程访问",
+    "WebServerFps": "网页版显示帧率",
+    "WebServerFpsTip": "开启后网页版会额外采集帧率(FPS)数据；帧率采集需要额外的外部工具，会带来额外的采集开销",
 
     "Appearance": "外观设置",
     "Theme": "主题",
@@ -229,6 +231,7 @@
     "UseWinPerCounters": "优先使用系统计数器",
     "UseWinPerCountersTip": "如数据不准可关闭系统计数器，关闭后，CPU使用率、CPU频率、内存占用、磁盘读取将直读硬件传感器",
     "Refresh": "刷新频率",
+    "RefreshTip": "刷新频率只决定界面重绘的快慢；普通硬件数据最高每秒采集一次，调小刷新率不会提高硬件采集频率",
     "IgnoreSMBTraffic": "不统计局域网SMB流量",
     "MemoryDisplayMode": "内存/显存显示",
     

@@ -16,6 +16,7 @@ namespace LiteMonitor.src.WebServer
         private TcpListener? _listener;
         private volatile bool _isRunning = false;
         private int _currentRunningPort = -1;
+        private int _generation = 0;   // Start/Stop 代次：用来区分 Stop 前后的监听任务
 
         public string CurrentPassword { get;set; }
 
@@ -28,6 +29,15 @@ namespace LiteMonitor.src.WebServer
 
         public bool IsRunning => _isRunning;
         public int CurrentRunningPort => _isRunning ? _currentRunningPort : -1;
+
+        /// <summary>当前是否存在合法的 Web 数据需求（已鉴权连接或未过期的 HTTP 快照租期）。</summary>
+        public bool HasWebDataDemand => _sessionManager.HasWebDataDemand;
+
+        /// <summary>已鉴权且尚未关闭的 WebSocket 连接数。</summary>
+        public int AuthenticatedConnectionCount => _sessionManager.AuthenticatedConnectionCount;
+
+        /// <summary>Web 需求状态快照（连接数 + HTTP 租期，一次性读取，不撕裂）。</summary>
+        public WebDemandSnapshot GetDemandSnapshot() => _sessionManager.GetDemandSnapshot();
 
         public LiteWebServer(Settings cfg)
         {
@@ -66,7 +76,9 @@ namespace LiteMonitor.src.WebServer
                 CurrentPassword = _cfg.WebServerPassword;
 
                 // 1. 启动监听连接的循环
-                Task.Run(ListenLoop);
+                // ★ 代次：Stop 之后旧的监听循环必须自己退出，不能在重启后复活
+                int generation = Interlocked.Increment(ref _generation);
+                Task.Run(() => ListenLoop(generation));
                 
                 // 2. 启动 WebSocket 管理器 (广播循环在内部)
                 _sessionManager.Start();
@@ -85,9 +97,13 @@ namespace LiteMonitor.src.WebServer
         {
             _isRunning = false;
             _currentRunningPort = -1;
+
+            // 让旧监听循环退出（代次失效）
+            Interlocked.Increment(ref _generation);
+
             try { _listener?.Stop(); } catch { }
             
-            // 停止 WebSocket 管理器
+            // 停止 WebSocket 管理器（同时清空全部 Web 需求：连接 + HTTP 租期）
             _sessionManager.Stop();
         }
 
@@ -96,9 +112,10 @@ namespace LiteMonitor.src.WebServer
             Stop();
         }
 
-        private async Task ListenLoop()
+        private async Task ListenLoop(int generation)
         {
-            while (_isRunning && _listener != null)
+            // ★ 代次校验：Stop 之后本循环必须退出，避免重启后出现两个监听者
+            while (_isRunning && generation == Volatile.Read(ref _generation) && _listener != null)
             {
                 try
                 {
@@ -146,6 +163,10 @@ namespace LiteMonitor.src.WebServer
             }
 
             string localIp = hw.GetNetworkIP() ?? "127.0.0.1";
+
+            // ★ FPS 需求规则 (计划 §4.4)：本地启用 或 (有合法 Web 需求 且 显式开启网页版帧率)
+            //   没有需求时 Web 端输出 "--" 占位，不读取数值、不伪造 0。
+            bool fpsDemand = WebFpsDemand.IsFpsDemand(_cfg, _sessionManager.HasWebDataDemand);
 
             writer.WriteStartObject();
 
@@ -211,25 +232,35 @@ namespace LiteMonitor.src.WebServer
                 else
                 {
                     // 硬件监控项
-                    float? val = hw.Get(item.Key);
+                    // ★ FPS 需求规则 (计划 §4.4)：
+                    //   localFpsDemand = 本地 FPS 在面板或任务栏启用
+                    //   webFpsDemand    = 有合法 Web 数据需求 && WebFpsEnabled
+                    //   没有需求时：既不读取 FPS 数值（读取会触发外部 FPS 采集服务的惰性启动），
+                    //   也不把"未启动"伪报成 0，而是明确输出 "--"。
+                    var valueState = WebSnapshotValues.ResolveValue(item.Key, fpsDemand, k => hw.Get(k), out string valueStr, out float? rawValue);
 
                     // [Fix] 恢复过滤逻辑：跳过没有数据的监控项（如台式机的电池），以符合业务屏蔽需求
                     // 布局顺序问题已由 CSS order (gidx) 机制解决，即使数据晚到也会插入正确位置
-                    if (!val.HasValue) continue;
+                    if (valueState == WebSnapshotValueState.NoData) continue;
 
-                    if (val.HasValue)
+                    valStr = valueStr;
+                    if (valueState == WebSnapshotValueState.HasData && rawValue.HasValue)
                     {
                         // [Refactor] 使用 MetricUtils 统一格式化逻辑，确保与桌面端完全一致 (包括单位换算、颜色阈值、内存显示模式)
-                        valStr = MetricUtils.GetValueStr(item.Key, val.Value, false); // false = Panel Context (Standard)
-                        unit = MetricUtils.GetUnitStr(item.Key, val.Value, MetricUtils.UnitContext.Panel);
+                        unit = MetricUtils.GetUnitStr(item.Key, rawValue.Value, MetricUtils.UnitContext.Panel);
                         
                         // GetProgressValue 返回 0.0-1.0，Web端通常需要 0-100
-                        pct = MetricUtils.GetProgressValue(item.Key, val.Value) * 100.0;
+                        pct = MetricUtils.GetProgressValue(item.Key, rawValue.Value) * 100.0;
                         
                         // 状态判断 (0=Safe, 1=Warn, 2=Crit)
-                        status = MetricUtils.GetState(item.Key, val.Value);
+                        status = MetricUtils.GetState(item.Key, rawValue.Value);
                     }
-                
+                    else
+                    {
+                        // 明确未启用：单位与正常路径保持一致，数值是 "--" 占位
+                        unit = MetricUtils.GetUnitStr(item.Key, null, MetricUtils.UnitContext.Panel);
+                    }
+                    
                     // Primary Logic
                     if (item.Key == "BAT.Percent") isPrimary = true;
                     else if (item.Key == "CPU.Load") isPrimary = true;
@@ -259,6 +290,104 @@ namespace LiteMonitor.src.WebServer
 
             writer.WriteEndArray();
             writer.WriteEndObject();
+        }
+    }
+
+    /// <summary>
+    /// 快照里某个监控项的取值状态。
+    /// </summary>
+    public enum WebSnapshotValueState
+    {
+        /// <summary>没有数据：调用方应当跳过这一行（保持既有的"跳过无数据项"行为）。</summary>
+        NoData,
+
+        /// <summary>有数据：按取到的数值写出。</summary>
+        HasData,
+
+        /// <summary>明确未启用：写出占位值 <see cref="WebSnapshotValues.NotEnabled"/>，不伪报 0。</summary>
+        NotEnabled
+    }
+
+    /// <summary>
+    /// 快照取值的统一入口（保持既有字符串字段契约）。
+    ///
+    /// 关键约定：
+    ///  - FPS 未启用时 **不读取数值**（读取 FPS 会触发外部采集服务的惰性启动），
+    ///    输出明确的 "--" 占位，绝不把"未启动"伪报成 0；
+    ///  - 其它监控项没有数据时返回 <see cref="WebSnapshotValueState.NoData"/>，由调用方跳过该行
+    ///    （与改动前的过滤行为一致）。
+    /// </summary>
+    public static class WebSnapshotValues
+    {
+        /// <summary>未启用时的占位值（与快照里既有的 "--" 占位一致）。</summary>
+        public const string NotEnabled = "--";
+
+        /// <summary>
+        /// 计算某个硬件监控项在快照里的取值。
+        /// </summary>
+        /// <param name="key">监控项 Key（如 "CPU.Load" / "FPS"）。</param>
+        /// <param name="fpsDemand">当前是否存在 FPS 采集需求（见 <see cref="WebFpsDemand"/>）。</param>
+        /// <param name="readValue">读取实际数值的委托；FPS 未启用时**不会**被调用。</param>
+        /// <param name="value">写出的数值字符串（无值/未启用时为 "--"）。</param>
+        /// <param name="raw">读到的原始数值（无值/未启用时为 null）。</param>
+        public static WebSnapshotValueState ResolveValue(
+            string key,
+            bool fpsDemand,
+            Func<string, float?> readValue,
+            out string value,
+            out float? raw)
+        {
+            value = NotEnabled;
+            raw = null;
+
+            // ★ FPS 未启用：明确占位，不读数值（读 FPS 会触发外部采集服务的惰性启动）
+            if (!fpsDemand && string.Equals(key, "FPS", StringComparison.OrdinalIgnoreCase))
+            {
+                return WebSnapshotValueState.NotEnabled;
+            }
+
+            float? v = readValue(key);
+            if (!v.HasValue) return WebSnapshotValueState.NoData;
+
+            raw = v;
+            value = MetricUtils.GetValueStr(key, v.Value, false); // false = Panel Context (Standard)
+            return WebSnapshotValueState.HasData;
+        }
+    }
+
+    /// <summary>
+    /// FPS 需求规则（计划 §4.4）。
+    ///
+    /// 这是**唯一**的判定入口：网页快照的 "--" 占位判断与外部 FPS 采集服务的启停
+    /// 都必须用同一套规则，否则会出现"网页说有需求但采集服务没跑"（报 0）
+    /// 或"网页说没需求但采集服务在跑"（白跑）的不一致。
+    ///
+    /// <code>
+    /// localFpsDemand = 本地 FPS 在面板或任务栏启用
+    /// webFpsDemand    = 当前有合法 Web 数据需求 &amp;&amp; WebFpsEnabled
+    /// fpsDemand       = localFpsDemand || webFpsDemand
+    /// </code>
+    /// </summary>
+    public static class WebFpsDemand
+    {
+        /// <summary>本地 FPS 需求：FPS 监控项在面板或任务栏可见（已启用）。</summary>
+        public static bool IsLocalFpsDemand(Settings? cfg)
+        {
+            if (cfg == null) return false;
+            return cfg.IsAnyEnabled("FPS");
+        }
+
+        /// <summary>Web FPS 需求：有合法的 Web 数据需求，并且用户显式开启了网页版帧率。</summary>
+        public static bool IsWebFpsDemand(Settings? cfg, bool hasWebDataDemand)
+        {
+            if (cfg == null) return false;
+            return cfg.WebFpsEnabled && hasWebDataDemand;
+        }
+
+        /// <summary>总需求：本地或 Web 任一成立就需要采集 FPS。</summary>
+        public static bool IsFpsDemand(Settings? cfg, bool hasWebDataDemand)
+        {
+            return IsLocalFpsDemand(cfg) || IsWebFpsDemand(cfg, hasWebDataDemand);
         }
     }
 }
