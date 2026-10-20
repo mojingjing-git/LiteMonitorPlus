@@ -95,6 +95,35 @@ namespace LiteMonitor.src.Core
         /// <summary>客户区是否有有效宽高；为 false 时应跳过新几何绘制。</summary>
         public bool HasValidBounds => ClientBounds.Width > 0 && ClientBounds.Height > 0;
 
+        /// <summary>
+        /// 取用于**铺底 / 铺渐变 / 上色**的矩形：在客户区基础上四边各外扩
+        /// <paramref name="padding"/> 个像素。
+        /// <para>
+        /// ★ <b>为什么必须外扩</b>：绘制层为了文字与圆角开了
+        ///   <c>SmoothingMode.AntiAlias</c>，而 <c>PixelOffsetMode</c> 保持默认；
+        ///   对位图而言默认等价于 <c>Half</c>（坐标偏移半像素）。
+        ///   于是抗锯齿的填充**只覆盖目标矩形边界像素的约一半**（实测 alpha 仅 64~139/255）。
+        ///   若严格按 <see cref="ClientBounds"/> 填充，客户区最外一圈会留下半透明像素 ——
+        ///   背景"漏色"，局部重绘时底板也补不上。
+        /// <para>
+        /// ★ 旧的实心底板一直用 <c>(-5,-5, w+10, h+10)</c> 的溢出矩形正是为了躲开这个死角；
+        ///   新背景层改用精确客户区后丢掉了该保护，这里补回来。
+        /// <para>
+        /// ★ 外扩出来的像素会被 Graphics 的裁剪自动丢弃，不会画到窗口之外。
+        /// </para>
+        /// </summary>
+        /// <param name="clientBounds">完整客户区矩形。</param>
+        /// <param name="padding">四边外扩的像素数（默认 2，足够覆盖抗锯齿过渡带）。</param>
+        public static Rectangle GetEdgeCoveredBounds(Rectangle clientBounds, int padding = 2)
+        {
+            if (clientBounds.Width <= 0 || clientBounds.Height <= 0) return clientBounds;
+            return new Rectangle(
+                clientBounds.X - padding,
+                clientBounds.Y - padding,
+                clientBounds.Width + padding * 2,
+                clientBounds.Height + padding * 2);
+        }
+
         // ============================================================
         // 新外观标量（归一化后）
         // ============================================================

@@ -21,6 +21,12 @@ namespace LiteMonitor.src.SystemServices.Backdrop
     ///    本组件位图占用上限 256KiB（远低于与 A05 共用的 16MiB 预算），
     ///    超额按最近最少使用淘汰。
     /// 4. 纹理块是**平铺**使用的，不缓存整屏位图，因此与窗口尺寸无关。
+    /// 5. **新项永不自我淘汰**：新纹理块入表前先盖上时间戳，
+    ///    且淘汰时把刚创建的这一项排除在候选之外，
+    ///    杜绝"刚创建的画刷被自己淘汰并释放、却仍被返回"的缺陷。
+    /// 6. **画刷生命周期**：返回的画刷在下一次 <see cref="GetBrush"/> 调用之前有效，
+    ///    调用方必须**立即使用**（<c>BackdropRenderer.DrawNoise</c> 就是这么用的）；
+    ///    被淘汰的纹理块会连同画刷一起释放，不要跨调用长期持有。
     /// </summary>
     public sealed class BackdropNoiseCache : IDisposable
     {
@@ -57,6 +63,10 @@ namespace LiteMonitor.src.SystemServices.Backdrop
 
         /// <summary>
         /// 取指定强度的噪点画刷（同一强度复用同一块纹理）。
+        /// <para>
+        /// ★ 调用方合同：返回的画刷在下一次 <see cref="GetBrush"/> 调用之前有效，
+        ///   拿到后必须**立即使用**；被淘汰的纹理块会连同画刷一起释放。
+        /// </para>
         /// </summary>
         /// <param name="intensity">噪点强度（0–100，已归一化）。0 时返回 null。</param>
         public TextureBrush? GetBrush(int intensity)
@@ -71,9 +81,17 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             }
 
             Entry entry = CreateEntry(intensity);
+
+            // ★ 关键：新项必须**先盖时间戳再入表**。
+            //   否则新项的 LastUsed=0 会被淘汰逻辑当成"最久未使用"，
+            //   紧接着的淘汰会把刚创建的画刷自己释放掉，
+            //   而本方法仍把它返回给调用方 → 调用方 FillRectangle 抛
+            //   ArgumentException: Parameter is not valid.
+            entry.LastUsed = ++_clock;
+
             _entries[intensity] = entry;
             _totalBytes += (long)TileSize * TileSize * 4;
-            EvictIfNeeded();
+            EvictIfNeeded(intensity);
             return entry.Brush;
         }
 
@@ -145,7 +163,9 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         }
 
         // 超出上限时淘汰最久未使用的一块
-        private void EvictIfNeeded()
+        // protectedKey 是刚创建、正在返回给调用方的那一项：它绝不能成为淘汰对象，
+        // 否则调用方会拿到一块已经被释放的画刷
+        private void EvictIfNeeded(int protectedKey)
         {
             while (_entries.Count > MaxEntries)
             {
@@ -154,6 +174,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
                 bool found = false;
                 foreach (KeyValuePair<int, Entry> pair in _entries)
                 {
+                    if (pair.Key == protectedKey) continue;   // 刚创建的一项不参与淘汰
                     if (pair.Value.LastUsed < oldest)
                     {
                         oldest = pair.Value.LastUsed;

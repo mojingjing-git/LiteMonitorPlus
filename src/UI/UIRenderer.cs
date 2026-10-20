@@ -56,27 +56,47 @@ namespace LiteMonitor
             if (hasAppearance)
             {
                 BackdropStatus backdrop = appearance!.Backdrop.Render(g, options!);
-                // ★ 非 solid 模式下背景层自己铺了**不透明底板**（A08 的 DrawBasePlate），
-                //   旧的实心底板填充必须让位 —— 否则渐变 / 玻璃帧会被整个盖掉，
+                // ★ 非 solid 模式下背景层**接管了整块客户区**：
+                //   它要么铺不透明底板（A08 的 DrawBasePlate），
+                //   要么直接用不透明渐变盖满（NeedsBasePlate 跳过了底板那次浪费的填充）——
+                //   两种情况下旧的实心底板填充都必须让位，否则渐变 / 玻璃帧会被整个盖掉，
                 //   等于新背景白画。solid 模式背景层零绘制，底板仍走旧路径（旧主题像素不变）。
                 backdropOwnsBasePlate = backdrop.EffectiveMode != BackdropRenderMode.Solid;
             }
 
             // 1. 绘制背景（底板）
-            // ★★★ [核心修复] 扩大绘制区域，解决左侧和上侧漏黑边的问题 ★★★
-            // 原理：从 (-5, -5) 开始画，确保绝对覆盖掉 (0,0) 处的物理像素死角。
-            // 多余的部分会被系统自动裁剪，不会有副作用。
+            // ★ 旧路径（appearance == null）沿用老做法：从 (-5,-5) 开始画，
+            //   扩大绘制区域解决左侧和上侧漏黑边的问题 —— 确保绝对覆盖掉 (0,0) 处的物理像素死角。
+            //   多余的部分会被系统自动裁剪，不会有副作用。
             // ★ 注意：这里的 (-5,-5) 溢出策略**只用于把底板填满客户区**，
             //   绝不能拿来定位外框/装饰 —— 装饰一律用 options.ClientBounds。
             if (!backdropOwnsBasePlate)
             {
-                g.FillRectangle(UIUtils.GetBrush(t.Color.Background),
-                    new Rectangle(-5, -5, (int)g.VisibleClipBounds.Width + 10, (int)g.VisibleClipBounds.Height + 10));
+                if (hasAppearance)
+                {
+                    // ★ 新入口：底板锚定**完整客户区**，由 Graphics 裁剪限制实际写入范围。
+                    //   旧实现用 g.VisibleClipBounds —— 局部失效时它就是那块裁剪区，
+                    //   底板会从窗口原点偏移着画，失效区里补不上底色（独立验收 R5）。
+                    //   另需外扩 2px：抗锯齿下严格按客户区填充，最外一圈只被覆盖一半。
+                    g.FillRectangle(UIUtils.GetBrush(t.Color.Background),
+                        ThemeAppearanceOptions.GetEdgeCoveredBounds(options!.ClientBounds));
+                }
+                else
+                {
+                    // ★ 旧入口：保持原样。旧路径拿不到完整客户区（没有外观快照），
+                    //   改动会破坏"旧主题新旧入口逐像素一致"这条基线。
+                    g.FillRectangle(UIUtils.GetBrush(t.Color.Background),
+                        new Rectangle(-5, -5, (int)g.VisibleClipBounds.Width + 10, (int)g.VisibleClipBounds.Height + 10));
+                }
             }
 
             // 2. 窗口底纹（扫描线 / 网格）—— 铺在组块之外的区域，不覆盖数值文字
-            if (hasAppearance)
-                appearance!.Decor.RenderWindowTexture(g, options!, BuildGroupRegions(groups, t));
+            //    ★ 只在底纹**真的开启**时才构建组块区域列表：
+            //      旧主题的扫描线 / 网格全是关的，此时连列表都不该建 ——
+            //      否则每帧多 2 次托管分配（List + 内部数组），
+            //      违反 v4 §7.4「新效果关闭 → 热路径不增加托管分配」。
+            if (hasAppearance && (options!.ScanlineEnabled || options.GridEnabled))
+                appearance!.Decor.RenderWindowTexture(g, options!, appearance!.RentGroupRegions(groups, t));
 
             // 3. 绘制主标题
             DrawMainTitle(g, t);
@@ -115,20 +135,8 @@ namespace LiteMonitor
         }
 
         /// <summary>
-        /// 把分组布局转成装饰层需要的组块区域列表（窗口底纹据此排除组块区域）。
+        /// 绘制主标题。
         /// </summary>
-        private static List<DecorGroupRegion> BuildGroupRegions(List<GroupLayoutInfo> groups, Theme t)
-        {
-            var list = new List<DecorGroupRegion>(groups?.Count ?? 0);
-            if (groups == null) return list;
-            foreach (var gr in groups)
-            {
-                if (gr.Bounds.Width <= 0 || gr.Bounds.Height <= 0) continue;
-                list.Add(new DecorGroupRegion(gr.Bounds, t.Layout.GroupRadius));
-            }
-            return list;
-        }
-
         private static void DrawMainTitle(Graphics g, Theme t)
         {
             string title = LanguageManager.T("Title");
