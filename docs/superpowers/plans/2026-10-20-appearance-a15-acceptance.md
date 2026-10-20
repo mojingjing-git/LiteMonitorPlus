@@ -172,6 +172,20 @@ A15 **不改动**任何既有渲染或 UI 文件：`src/UI/**`、`src/System/Bac
 
 **由此产生的复验义务**（A15 收口时一并完成）：全部外观探针 + 单元测试复跑；A14 实机清单第 1~4、7 项需在**新 DPI 行为下**重做。
 
+**复验完成情况（2026-10-21）**：
+
+| 复验项 | 结果 |
+|---|---|
+| 主工程 Release 重建 | ✅ **0 错误 / 234 警告**（均为既有警告） |
+| 源生成器产物 | ✅ 确认产出 `Application.SetHighDpiMode(HighDpiMode.PerMonitorV2)`，未被 `app.manifest` 压回 |
+| 单元测试 | ✅ **583 / 583** 通过 |
+| M2 合同探针 | ✅ **10 / 10** 门槛通过（含本轮新增的加固项硬断言） |
+| 静态背景探针 | ✅ 21 / 21 |
+| 主题探针 | ✅ 335 / 335 |
+| 装饰 / 装饰渲染 / 窗口轮廓 / 接线探针 | ✅ 全部通过 |
+| A06 环境探针 | ✅ DISPLAY1 3840×2160@168、DISPLAY2 X=−1440@120、HDR 10bpc 开启、非 RDP |
+| A14 实机清单第 1~4、7 项 | ⏳ **需用户在交互会话重做**（本代理会话不合成到交互桌面） |
+
 ### 6.3 与其它未决项的关系
 
 A14 实机清单第 4 项（跨屏 DPI 往返：装饰是否随 DPI 变化）在 SystemAware 下其实是"被系统整体拉伸"，
@@ -193,6 +207,9 @@ A14 实机清单第 4 项（跨屏 DPI 往返：装饰是否随 DPI 变化）在
 | `tests/AppearanceDecorRendererProbe` | 全部通过 |
 | `tests/AppearanceWindowShapeProbe` | 全部通过 |
 | `tests/AppearanceWiringProbe` | 全部通过（回归证据：`docs/reviews/evidence/a14-9c16ad3/a15-regression/`） |
+| `tests/AppearanceBackdropProbe --scenario env` | 环境证据已生成（`a15-regression/backdrop-env/environment.json`） |
+| `pwsh -File scripts/run-livecheck.ps1 -NoLaunch` | exit 0（构建 → 资源平铺 → 配置备份 → 输出目录，全链路通） |
+| 源生成器产物导出（`-p:EmitCompilerGeneratedFiles=true`） | 确认 `Application.SetHighDpiMode(HighDpiMode.PerMonitorV2)` |
 
 ---
 
@@ -201,10 +218,11 @@ A14 实机清单第 4 项（跨屏 DPI 往返：装饰是否随 DPI 变化）在
 | 条件 | 状态 | 归属 |
 |---|---|---|
 | **真实抓屏**（本代理会话不合成到交互桌面，窗口不出现在屏幕捕获里） | **未在本会话验证**；引擎侧已由 worker 在交互会话做过冒烟（自排除生效、亲和性还原、p95 达标） | A16 接线后由用户在交互会话复验 |
-| **生产进程的 DPI 感知** | 见 §6，**未拍板** | 用户 |
+| **生产进程的 DPI 感知** | ✅ **已拍板并落地**（用户 2026-10-21 选 A，见 §6.3）：感知等级已由**生成代码实测确认** —— 源生成器产出 `Application.SetHighDpiMode(HighDpiMode.PerMonitorV2)`；但**实机行为**（高 DPI 屏上按 168 DPI 重绘、跨屏往返）需用户在交互会话看 | 用户（实机） |
+| **实机启动脚本的「启动 + DPI 自检」段** | 脚本的**构建 → 资源平铺 → 备份配置**全链路已实测通过（`pwsh -File scripts/run-livecheck.ps1 -NoLaunch` → exit 0）；窗口查找逻辑已用 explorer 实测验证（按客户区面积取最大，命中 3017×1462 / DPI 168）。但**真实 UAC 弹窗 + GUI 启动 + 读主窗口 DPI**这一段在本代理会话**无法完成**（需交互桌面 + 用户点 UAC） | 用户（交互会话） |
 | 真实录屏（OBS / 游戏栏）下瞬时排除是否闪动 | 未验证 | A17 |
 | Win10（任意版本）/ 真实 RDP / 锁屏恢复 | 未验证 | A17 |
-| 负坐标屏（DISPLAY2，X = −1440）实抓 | 未在本机复测 | A17 |
+| 负坐标屏（DISPLAY2，X = −1440）实抓 | 环境已确认（X = −1440、1440×2560 @120 DPI、`HasNegativeOrigin = true`），**实抓未做** | A17 |
 | 玻璃后端 CPU 预算（≤40ms/秒）与 p95（≤30ms） | **M2 未接入主面板，无法测量** | A16 |
 | 480×1576 / 480×3152 大档位的滤波 CPU 与 2fps 合计占用 | 未测（A06 §7 已标注该档位超预算） | A16 / A17 |
 | 旧主题（10 个）逐像素一致 | ✅ 已由 A14 接线探针覆盖，本轮回归复跑通过 | — |

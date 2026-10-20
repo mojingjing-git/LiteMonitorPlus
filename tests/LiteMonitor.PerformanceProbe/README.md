@@ -345,6 +345,11 @@ Windows 上 `Process.TotalProcessorTime` 的量化步长约 **15.6 ms**，单帧
 | `--appearance-paired-cpu-draws <n>` | 2000 | 每个批次的绘制次数（需远超 15.6 ms 的量化步长） |
 | `--appearance-paired-cpu-segments <n>` | 2 | 每轮的配对段数（取偶数时，一轮之内旧/新各当一次先测的） |
 | `--appearance-paired-cpu-max-measurements <n>` | 1 | 单次运行最多做多少次 CPU 口径测量（矩阵流程里 = 前 N 个夹具；其余夹具的 `pairedCpu` 为 `null` 并附 `pairedCpuNote`） |
+| `--appearance-paired-cpu-theme <主题名>` | 空（取主题清单里的第一个） | **CPU 口径「只跑」模式**要测的主题。⚠ 该模式会**绕过 `--appearance-filter`**（过滤逻辑在它之后才执行），主题只能取 `themes[0]` —— 而主题清单是**字母序动态发现**的，不指定就会测成 `AuroraDream_Purple`。**指定的主题不存在时直接报错**，绝不静默回退 |
+
+⚠ **未知参数一律 fail fast**（拼错参数名会直接抛 `ArgumentException` 并以非零码退出，不会被静默忽略）。
+2026-10-21 实测踩过：把轮数参数拼成 `--appearance-paired-cpu-rounds`（正确名是 `--appearance-paired-rounds`），
+探针只打了个警告就按默认 3 轮跑完，结果被当成 5 轮解读。用 `--help` 看简表。
 
 ⚠ **CPU 口径测量很贵**（每帧离屏渲染本身就要数毫秒到数十毫秒，
 默认参数下一次完整 CPU 口径运行是**分钟级**），因此**默认关闭**、由开关显式开启。

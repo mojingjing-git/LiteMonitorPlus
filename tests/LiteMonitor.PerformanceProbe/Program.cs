@@ -350,6 +350,11 @@ internal sealed class ProbeOptions
                 case "--appearance-paired-cpu-segments": options.AppearancePairedCpuSegments = int.Parse(Next()); break;
                 case "--appearance-paired-cpu-max-measurements": options.AppearancePairedCpuMaxMeasurements = int.Parse(Next()); break;
                 case "--appearance-paired-cpu-theme": options.AppearancePairedCpuTheme = Next(); break;
+                case "--help":
+                case "-h":
+                    PrintUsage();
+                    Environment.Exit(0);
+                    break;
                 case "--quick":
                     options.WarmupSeconds = 3;
                     options.SteadySeconds = 10;
@@ -358,10 +363,50 @@ internal sealed class ProbeOptions
                     options.FpsCostSeconds = 0.5;
                     break;
                 default:
-                    Console.WriteLine($"未知参数: {arg}");
-                    break;
+                    // ★ 未知参数**直接失败**，不再只打印一行警告就继续跑。
+                    //   静默忽略会让"我以为指定了 X、其实 X 根本没生效"变成常态 ——
+                    //   2026-10-21 实测踩过：把轮数参数拼成 --appearance-paired-cpu-rounds
+                    //   （正确名是 --appearance-paired-rounds），探针只打了个警告就按默认 3 轮跑完，
+                    //   结果被当成 5 轮的结果解读。参数名拼错必须是**响亮**的失败。
+                    throw new ArgumentException(
+                        $"未知参数: {arg}\n" +
+                        "探针对未知参数 fail fast（拼错参数名会直接失败，不会被静默忽略）。" +
+                        "完整参数表见 tests/LiteMonitor.PerformanceProbe/README.md 的「外观探针参数」一节，" +
+                        "或用 --help 查看简表。");
             }
         }
         return options;
+    }
+
+    private static void PrintUsage()
+    {
+        Console.WriteLine("LiteMonitor++ 性能/外观探针");
+        Console.WriteLine();
+        Console.WriteLine("  通用：");
+        Console.WriteLine("    --out <目录>              结果输出目录");
+        Console.WriteLine("    --groups <A,B,C>          只跑指定采集分组");
+        Console.WriteLine("    --warmup/--steady/--settle <秒>");
+        Console.WriteLine("    --quick                   冒烟（短时长，不可当基线）");
+        Console.WriteLine("    --help                    本帮助");
+        Console.WriteLine();
+        Console.WriteLine("  外观探针（--appearance-only）：");
+        Console.WriteLine("    --appearance-only             走外观探针入口");
+        Console.WriteLine("    --appearance-set <full|core|edge|quick>");
+        Console.WriteLine("    --appearance-draws <n>");
+        Console.WriteLine("    --appearance-invalidation <all|none>");
+        Console.WriteLine("    --appearance-filter <子串,子串>   夹具 id 子串过滤（逗号分隔）");
+        Console.WriteLine("    --appearance-decompose <主题>    装饰分解模式（经过时间口径）");
+        Console.WriteLine();
+        Console.WriteLine("  配对测量（经过时间口径）：");
+        Console.WriteLine("    --appearance-paired             开启旧入口 vs 新入口配对测量");
+        Console.WriteLine("    --appearance-paired-rounds <n>  轮数（★ CPU 口径也复用这个参数，下限 3）");
+        Console.WriteLine();
+        Console.WriteLine("  CPU 口径配对测量（--appearance-paired-cpu）：");
+        Console.WriteLine("    --appearance-paired-cpu                   开启 CPU 时间口径测量");
+        Console.WriteLine("    --appearance-paired-cpu-draws <n>         每批次绘制次数（默认 2000）");
+        Console.WriteLine("    --appearance-paired-cpu-segments <n>      每轮配对段数（默认 2）");
+        Console.WriteLine("    --appearance-paired-cpu-max-measurements <n>  单次运行最多测几次（默认 1）");
+        Console.WriteLine("    --appearance-paired-cpu-theme <主题名>      CPU 口径「只跑」模式要测的主题");
+        Console.WriteLine("                                              （不指定则取主题清单里的第一个）");
     }
 }
