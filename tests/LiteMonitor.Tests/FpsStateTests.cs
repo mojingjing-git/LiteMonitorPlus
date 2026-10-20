@@ -231,6 +231,120 @@ namespace LiteMonitor.Tests
             }
         }
 
+        /// <summary>
+        /// 假外部服务启动器：<see cref="EnsureAvailable"/>（慢准备）可被外部阻塞。
+        ///
+        /// 模拟真机上"下载 / 校验 PresentMon 组件"这一步（生产实现可达 120 秒），
+        /// 用于复现"释放发生在慢准备期间"的时序。
+        /// 不启动任何真实进程。
+        /// </summary>
+        private sealed class BlockingEnsureLauncher : IFpsServiceLauncher
+        {
+            private readonly ManualResetEventSlim _ensureEntered = new(false);
+            private readonly ManualResetEventSlim _ensureRelease = new(false);
+            private readonly ManualResetEventSlim _started = new(false);
+            private int _startCount;
+            private int _stopCount;
+            private int _isRunning;
+
+            /// <summary>进入 <see cref="EnsureAvailable"/> 时被置位</summary>
+            public ManualResetEventSlim EnsureEntered => _ensureEntered;
+
+            /// <summary>真正创建进程（<see cref="Start"/> 被调用）时被置位</summary>
+            public ManualResetEventSlim Started => _started;
+
+            public int StartCount => Volatile.Read(ref _startCount);
+            public int StopCount => Volatile.Read(ref _stopCount);
+
+            // 用 Volatile 读写：跨线程可见，避免"启动了但断言读到的还是旧值"这种假阴性
+            public bool IsRunning => Volatile.Read(ref _isRunning) != 0;
+
+            public bool EnsureAvailable()
+            {
+                _ensureEntered.Set();
+                _ensureRelease.Wait(StateWaitMs);
+                return true;
+            }
+
+            public bool Start(Action<string> onLine, out string? error)
+            {
+                Interlocked.Increment(ref _startCount);
+                error = null;
+                Volatile.Write(ref _isRunning, 1);
+                _started.Set();
+                return true;
+            }
+
+            public void Stop()
+            {
+                Interlocked.Increment(ref _stopCount);
+                Volatile.Write(ref _isRunning, 0);
+            }
+
+            /// <summary>放行被阻塞的慢准备</summary>
+            public void ReleaseEnsure() => _ensureRelease.Set();
+        }
+
+        /// <summary>
+        /// 假外部服务启动器：<see cref="Start"/>（真正创建外部进程）内部可被外部阻塞。
+        ///
+        /// 用于复现"检查通过之后、进程真正创建之前发生释放"的窗口
+        /// （复审明确指出：仅在 Start() 前增加一次无锁检查仍有竞态窗口）。
+        /// 不启动任何真实进程。
+        /// </summary>
+        private sealed class BlockingStartLauncher : IFpsServiceLauncher
+        {
+            private readonly ManualResetEventSlim _startEntered = new(false);
+            private readonly ManualResetEventSlim _startRelease = new(false);
+            private int _startCount;
+            private int _stopCount;
+            private int _createdCount;
+            private int _stopAfterCreateCount;
+            private int _isRunning;
+
+            /// <summary>进入 <see cref="Start"/> 时被置位</summary>
+            public ManualResetEventSlim StartEntered => _startEntered;
+
+            public int StartCount => Volatile.Read(ref _startCount);
+            public int StopCount => Volatile.Read(ref _stopCount);
+
+            /// <summary>外部进程真正被创建的次数</summary>
+            public int CreatedCount => Volatile.Read(ref _createdCount);
+
+            /// <summary>
+            /// "进程已经存在时"发生的停止次数。
+            /// &gt;0 ⇒ 刚创建出来的进程确实被停掉了（撤销创建生效）。
+            /// </summary>
+            public int StopAfterCreateCount => Volatile.Read(ref _stopAfterCreateCount);
+
+            // 用 Volatile 读写：跨线程可见，避免"启动了但断言读到的还是旧值"这种假阴性
+            public bool IsRunning => Volatile.Read(ref _isRunning) != 0;
+
+            public bool EnsureAvailable() => true;
+
+            public bool Start(Action<string> onLine, out string? error)
+            {
+                Interlocked.Increment(ref _startCount);
+                _startEntered.Set();
+                _startRelease.Wait(StateWaitMs);
+                // 外部进程在这一刻才真正被创建
+                Volatile.Write(ref _isRunning, 1);
+                Interlocked.Increment(ref _createdCount);
+                error = null;
+                return true;
+            }
+
+            public void Stop()
+            {
+                Interlocked.Increment(ref _stopCount);
+                if (Volatile.Read(ref _isRunning) != 0) Interlocked.Increment(ref _stopAfterCreateCount);
+                Volatile.Write(ref _isRunning, 0);
+            }
+
+            /// <summary>放行被阻塞的进程创建</summary>
+            public void ReleaseStart() => _startRelease.Set();
+        }
+
         private static FpsProcessStateStore NewStore(FakeProcessQuery query, FakeClock clock, FpsStateOptions? options = null)
         {
             options ??= new FpsStateOptions();
@@ -903,6 +1017,116 @@ namespace LiteMonitor.Tests
             counter.GetFps();
             Thread.Sleep(200);
             Assert.Equal(2, launcher.StartCount);
+        }
+
+        // ================================================================
+        // 18)~20) 启动与最终释放的互斥（回归：复审 R1）
+        // ================================================================
+
+        [Fact]
+        public void 慢准备期间释放后不得再创建外部进程()
+        {
+            // ★ 回归保护（复审 R1 —— FPS 启动操作与最终释放没有形成互斥）：
+            //   StartService 只在**入口**检查一次 _disposed，
+            //   随后的 EnsureAvailable（真机上可达 120 秒）阻塞期间发生 Dispose：
+            //   释放已经返回，而负责收尾它的后台健康检查循环已被取消，
+            //   慢准备返回后却仍会创建外部进程 ⇒ 留下一个**无人清理**的 FPS 进程。
+            //
+            //   期望：释放返回后，慢准备返回**不得**再创建外部进程。
+            var launcher = new BlockingEnsureLauncher();
+            var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
+            counter.FpsDemandProvider = () => true;
+            try
+            {
+                counter.GetFps();
+                Assert.True(launcher.EnsureEntered.Wait(StateWaitMs), "启动应当进入慢准备阶段");
+
+                // 最终释放（此时慢准备仍被阻塞）
+                counter.Dispose();
+
+                // 放行慢准备：若没有"慢操作返回后重新校验"，这里就会创建出外部进程
+                launcher.ReleaseEnsure();
+
+                Assert.False(launcher.Started.Wait(MustNotHappenWaitMs),
+                    "释放返回后不得再创建外部进程（慢操作返回后必须重新校验释放状态）");
+                Assert.Equal(0, launcher.StartCount);
+                Assert.False(launcher.IsRunning, "释放后不得留下运行中的启动器");
+            }
+            finally
+            {
+                launcher.ReleaseEnsure();
+                counter.Dispose();
+            }
+        }
+
+        [Fact]
+        public void 慢准备期间需求关闭后不得创建外部进程()
+        {
+            // ★ 复审 R1 的第二条验收：慢准备期间**关闭需求**同样不得留下运行中的启动器。
+            //   需求判定与释放状态一样，必须在慢操作返回后**重新校验**。
+            var launcher = new BlockingEnsureLauncher();
+            bool demand = true;
+            var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
+            counter.FpsDemandProvider = () => demand;
+            try
+            {
+                counter.GetFps();
+                Assert.True(launcher.EnsureEntered.Wait(StateWaitMs), "启动应当进入慢准备阶段");
+
+                demand = false;              // 需求在慢准备期间关闭
+                launcher.ReleaseEnsure();    // 慢准备返回
+
+                Assert.False(launcher.Started.Wait(MustNotHappenWaitMs),
+                    "需求关闭后不得创建外部进程（慢操作返回后必须重新校验需求）");
+                Assert.Equal(0, launcher.StartCount);
+                Assert.False(launcher.IsRunning, "不得留下运行中的启动器");
+            }
+            finally
+            {
+                launcher.ReleaseEnsure();
+                counter.Dispose();
+            }
+        }
+
+        [Fact]
+        public void 创建进程期间发生释放时必须撤销创建并停止进程()
+        {
+            // ★ 复审 R1 的第三条验收 + 复审者点名的竞态窗口：
+            //   "仅在 Start() 前增加一次无锁检查仍有竞态窗口" ——
+            //   也就是说，"检查通过之后、Start() 真正创建进程之前"发生 Dispose 的情况必须被覆盖。
+            //
+            //   期望：刚创建出来的进程必须被**撤销**（停掉），
+            //   释放返回后不得留下运行中的启动器。
+            var launcher = new BlockingStartLauncher();
+            var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
+            counter.FpsDemandProvider = () => true;
+            try
+            {
+                counter.GetFps();
+                Assert.True(launcher.StartEntered.Wait(StateWaitMs), "启动应当进入创建进程阶段");
+
+                // 另起线程放行"进程创建"，制造"释放与创建交错"的真实时序
+                var releaser = new Thread(() => { Thread.Sleep(200); launcher.ReleaseStart(); })
+                {
+                    IsBackground = true
+                };
+                releaser.Start();
+
+                counter.Dispose();
+
+                // 进程确实被创建过 → 说明确实走进了"创建与释放交错"的窗口
+                Assert.Equal(1, launcher.CreatedCount);
+                // 撤销创建：进程存在时必须被停掉
+                Assert.True(launcher.StopAfterCreateCount >= 1,
+                    "刚创建出来的进程必须被撤销（停止），否则会留下无人清理的外部进程");
+                Assert.False(launcher.IsRunning, "释放后不得留下运行中的启动器");
+                Assert.False(counter.IsServiceRunning);
+            }
+            finally
+            {
+                launcher.ReleaseStart();
+                counter.Dispose();
+            }
         }
 
         // ================================================================
