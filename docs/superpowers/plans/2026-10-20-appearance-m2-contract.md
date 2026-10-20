@@ -292,3 +292,48 @@ A06 实测：`WDA_EXCLUDEFROMCAPTURE` 是**窗口级**的，
 - 状态：**已冻结，可据此派发 A15**
 - 变更方式：任何对本文档 §2–§6 的修改都必须**先**改本文档并记录理由，再改代码；
   不得"先写代码再补文档"。
+
+---
+
+## 13. A15 实现裁定 —— 两套实现的取舍（2026-10-21 追加）
+
+### 13.1 事实
+
+A15 由两个并行 worker 交付，各自产出了一套**完整的**"帧来源 + 后台捕获循环"实现，功能重叠：
+
+| 实现 | 文件 | 实际角色 | 特点 |
+|---|---|---|---|
+| 服务式 | `src/System/Backdrop/BackdropCaptureService.cs`、`src/System/Backdrop/BackdropServiceRequest.cs` | 帧来源 + 后台服务 | 租约式**所有权转移**；`IBackdropCaptureBackend` / `IBackdropFrameProcessor` **可注入假后端**；`BackdropServiceMetrics` 同时含两种口径与五段耗时 |
+| 引擎式 | `src/System/Backdrop/ScreenCaptureFrameSource.cs`、`src/System/Backdrop/BackdropImageProcessor.cs`、`src/System/Backdrop/BackdropCaptureNative.cs` | 帧来源 + 后台循环（自带） | 真实抓屏（`CopyFromScreen`）+ **瞬时排除**（`WDA_EXCLUDEFROMCAPTURE`，`finally` 还原）+ 物理模糊合同；自带 pending/active 交接与 `BackdropCaptureMetrics` |
+
+两套实现的类型名已在命名空间 `LiteMonitor.src.SystemServices.Backdrop` 内互不冲突
+（服务侧 `BackdropService*`，引擎侧 `BackdropCapture*`），主工程 Release 构建 0 错误。
+
+### 13.2 裁定
+
+**采用服务式实现作为唯一的帧来源与后台服务；引擎式实现降级为「捕获引擎」。**
+
+1. `BackdropCaptureService` 是 A16 **唯一**允许注册给 `AppearanceRuntime` 的 `IBackdropFrameSource`。
+2. `ScreenCaptureFrameSource` **不得**直接注册为帧来源：否则会出现**两个后台捕获循环**
+   （重复抓屏，违反 v4 §3.4「不能为复用接口又重复抓屏」与 A16「无额外捕获/重复服务」）。
+3. 引擎必须提供**单次抓屏**入口（自身不驱动循环），由**适配器**接到服务上；服务是唯一的循环。
+
+### 13.3 理由
+
+1. **合同字面要求**：§4.2.3「后台不得释放已被 UI 接管的帧」—— 租约式所有权转移是唯一字面满足的模型。
+   引擎式实现在交接时由服务释放旧 active（`AdoptPending`）；它确实发生在 UI 线程的绘制间隙，
+   但其 active 帧是**借用**语义（`TryGetFrame` 返回的位图在下一次交接时被释放），
+   与 §4.1「active 帧由 UI 释放」的口径不同 —— 这正是 A14「已释放画刷抛异常」那类缺陷的同款形状。
+2. **可测性**：§9 的 #4（代次过期帧被丢弃且被回收）、#5（pending ≤ 1）、#6（取消后恢复显示亲和性）
+   都需要**注入假后端**才能稳定复现。引擎式实现把抓屏硬编码在类内部，没有注入点。
+3. **单一循环**：见 13.2 第 2 条。重复抓屏会直接击穿 §6.3 的 CPU 预算（后台 ≤40ms/秒）。
+
+### 13.4 后果与边界
+
+- **A16 接线**：`AppearanceRuntime(frameSource: captureService)`；
+  绘制时 `TryAcquireFrame` → 绘制 → 释放**上一个**租约（不是当前这一帧）。
+- **适配器**（`IBackdropCaptureBackend` 的实现）负责：`BackdropServiceRequest` → 引擎请求的字段映射、
+  单次抓屏、位图**所有权转移**、瞬时排除时长与分段耗时的回传、`RestoreDisplayAffinity` 转发。
+- 引擎自身的后台循环在 M2 路径下**不启动**（只调用单次抓屏入口）。
+- 引擎保留 `IsPreview => false`（合同 §2.2.1 硬性契约），适配器同样必须如此。
+- 若将来要放弃租约式模型、改用引擎自带的交接，必须**先改本节并记录理由**（沿用 §12 的变更纪律）。
