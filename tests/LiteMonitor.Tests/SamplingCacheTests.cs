@@ -338,5 +338,58 @@ namespace LiteMonitor.Tests
             f.Provider.GetValue("CPU.Temp");
             Assert.Equal(afterFirst + 1, f.Statistics.ValueComputations);
         }
+
+        // =========================================================
+        // ★ 复审 R2 [P2]：旧代次的收尾不能清掉新代次已经算好的值
+        // =========================================================
+
+        [Fact]
+        public void 旧代次的收尾不会清掉新代次的缓存()
+        {
+            var cache = new GenerationValueCache();
+            cache.BeginGeneration(2);
+            cache.SetValue("CPU.Load", 12f);
+
+            // 旧代次（1）的收尾晚到
+            cache.SettleGeneration(1);
+
+            // 新代次已经算好的值不能被清掉
+            Assert.True(cache.TryGetValue("CPU.Load", out float? value));
+            Assert.Equal(12f, value.Value);
+
+            // 代次也不能被往回写
+            Assert.Equal(2, cache.Generation);
+        }
+
+        [Fact]
+        public void 旧代次的落定不会作废新代次已经算好的值()
+        {
+            var f = NewFixture();
+            f.Provider.OnCollectionStarted(2);
+
+            f.Provider.GetValue("CPU.Temp");
+            long afterFirst = f.Statistics.ValueComputations;
+
+            // 旧代次（1）的收尾晚到：不能把新代次的值作废掉
+            f.Provider.OnCollectionSettled(1);
+
+            f.Provider.GetValue("CPU.Temp");
+            Assert.Equal(afterFirst, f.Statistics.ValueComputations);
+        }
+
+        [Fact]
+        public void 更旧的代次不能把缓存代次往回写()
+        {
+            var cache = new GenerationValueCache();
+            cache.BeginGeneration(5);
+            cache.SetValue("CPU.Load", 12f);
+
+            // 更旧的代次推进：代次不动、缓存也不清
+            cache.BeginGeneration(3);
+
+            Assert.Equal(5, cache.Generation);
+            Assert.True(cache.TryGetValue("CPU.Load", out float? value));
+            Assert.Equal(12f, value.Value);
+        }
     }
 }

@@ -474,7 +474,11 @@ namespace LiteMonitor.src.SystemServices
                     _hasDeadline = true;
                     _lastPeriodMs = periodMs;
                     _lastCollectionStart = effectiveStart;
-                    _running = null;
+                    // ★ 在途状态**不**在这里解除：
+                    //   "采集落定"（作废本代次缓存）也是这一轮的一部分，
+                    //   收尾没跑完就不算这轮结束。
+                    //   解除在途被挪到收尾之后的 finally（见下），
+                    //   这样 WaitForIdle 也会把收尾算进"这一轮还没结束"。
                 }
 
                 if (!skipped)
@@ -496,16 +500,39 @@ namespace LiteMonitor.src.SystemServices
                     }
                 }
 
-                // ★ 必须先完成 Task，再调用外部回调。
-                //   starter.Task 是 RequestCollectionAsync 返回给调用方的唯一完成信号，
-                //   UI 在 UIController.Tick 里 await 它；如果回调抛异常就会跳过下面的
-                //   TrySetResult，那个 await 永远不返回 -> Tick 的 finally 走不到 ->
-                //   _busy 永久为 true -> 界面彻底停止刷新。
-                starter.TrySetResult(success);
-
-                // 采集落定回调：把"采集中途被读到并写进缓存的旧值"作废掉（可选）
-                try { _onCollectionSettled?.Invoke(generation); }
-                catch (Exception ex) { _errorLogger?.Invoke("HardwareSamplingCoordinator.Settled", ex); }
+                // ★ 采集落定（收尾）必须**先于**发布完成信号。
+                //   理由：UI / Web 在 await 完成信号返回后**立刻**取值并写进本代次缓存；
+                //   如果先发信号再收尾，刚写进去的值会被收尾整个清掉，
+                //   下一次读取就会在**同一代次**重新计算
+                //   （用 PerformanceCounter 的指标会被连续调两次 NextValue()）。
+                try
+                {
+                    _onCollectionSettled?.Invoke(generation);
+                }
+                catch (Exception ex)
+                {
+                    _errorLogger?.Invoke("HardwareSamplingCoordinator.Settled", ex);
+                }
+                finally
+                {
+                    // ★ 无论收尾回调是否抛异常，完成信号都一定会发布。
+                    //   starter.Task 是 RequestCollectionAsync 返回给调用方的唯一完成信号，
+                    //   UI 在 UIController.Tick 里 await 它；漏掉 TrySetResult 的话，
+                    //   那个 await 永远不返回 -> Tick 的 finally 走不到 ->
+                    //   _busy 永久为 true -> 界面彻底停止刷新。
+                    try
+                    {
+                        // 在途状态覆盖收尾阶段：收尾跑完才解除在途
+                        lock (_gate)
+                        {
+                            _running = null;
+                        }
+                    }
+                    finally
+                    {
+                        starter.TrySetResult(success);
+                    }
+                }
 
                 // 结束回调：异常不能影响已经完成的 Task
                 try { _onCollectionCompleted?.Invoke(generation, success); }

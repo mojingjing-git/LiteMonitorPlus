@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using LibreHardwareMonitor.Hardware;
 using LiteMonitor.src.SystemServices;
 using Xunit;
 
@@ -358,6 +359,92 @@ namespace LiteMonitor.Tests
 
             await errorLogged.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Single(logged);
+        }
+
+        // =========================================================
+        // ★ 复审 R2 [P2]：完成信号必须晚于"采集落定"（缓存收尾）
+        // =========================================================
+        //   协调器曾**先**发布"采集完成"信号（starter.Task），**再**调 onCollectionSettled
+        //   作废本代次缓存。UI / Web 在 await 返回后立刻取值并写进缓存，
+        //   紧接着的收尾把刚写进去的值清空 -> 下一个读取在**同一代次**重新计算
+        //   （用 PerformanceCounter 的指标会被连续调两次 NextValue()）。
+
+        [Fact]
+        public async Task 完成信号必须晚于缓存收尾_否则同代次会重复计算()
+        {
+            // ★ 这条用例防的就是复审 R2：
+            //   收尾（作废本代次缓存）没跑完，完成信号就不能发布。
+            var statistics = new HardwareSamplingStatistics();
+            var cfg = new Settings { UseWinPerCounters = false };
+            using var provider = new HardwareValueProvider(
+                new Computer(), cfg, new SensorMap(), new NetworkManager(), new DiskManager(), null,
+                new PerformanceCounterManager(), new object(), new Dictionary<string, float>(), statistics);
+
+            using var settleEntered = new ManualResetEventSlim(false);
+            using var releaseSettle = new ManualResetEventSlim(false);
+
+            using var coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () => 1000,
+                sampler: ct => Task.CompletedTask,
+                onCollectionStarted: provider.OnCollectionStarted,
+                onCollectionSettled: generation =>
+                {
+                    // ★ 同步点：收尾回调真的进来了，并在里面卡住。
+                    settleEntered.Set();
+                    releaseSettle.Wait(TimeSpan.FromSeconds(20));
+                    provider.OnCollectionSettled(generation);
+                },
+                statistics: statistics);
+            coordinator.SetReady(true);
+
+            Task<bool> request = coordinator.RequestCollectionAsync();
+
+            // ★ 同步点（happens-before）：收尾回调进入 -> 测试继续。
+            //   不用 Thread.Sleep 碰运气，也不依赖线程池调度快慢。
+            Assert.True(settleEntered.Wait(TimeSpan.FromSeconds(20)), "采集落定回调未在超时内进入");
+
+            // ★ 收尾还没跑完 -> 完成信号**不能**发布。
+            //   否则 UI 在 await 返回后写进缓存的值会被随后的收尾清掉，
+            //   下一次读取就在同一代次重新计算。
+            Assert.False(request.IsCompleted,
+                "完成信号在缓存收尾之前就发布了：同代次会重复计算（复审 R2）");
+
+            releaseSettle.Set();
+            Assert.True(await request.WaitAsync(TimeSpan.FromSeconds(20)));
+
+            // ★ 验收口径：等待采集完成后，同一代次连续读同一普通指标只计算一次。
+            provider.GetValue("CPU.Load");
+            provider.GetValue("CPU.Load");
+            Assert.Equal(1, statistics.ValueComputations);
+        }
+
+        [Fact]
+        public async Task 释放等待会涵盖缓存收尾()
+        {
+            using var settleEntered = new ManualResetEventSlim(false);
+            using var releaseSettle = new ManualResetEventSlim(false);
+
+            using var coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () => 1000,
+                sampler: ct => Task.CompletedTask,
+                onCollectionSettled: generation =>
+                {
+                    settleEntered.Set();
+                    releaseSettle.Wait(TimeSpan.FromSeconds(20));
+                });
+            coordinator.SetReady(true);
+
+            Task<bool> request = coordinator.RequestCollectionAsync();
+            Assert.True(settleEntered.Wait(TimeSpan.FromSeconds(20)), "采集落定回调未在超时内进入");
+
+            // ★ 收尾还没结束 -> 释放等待不能提前返回"已空闲"，
+            //   否则关闭流程会在收尾期间继续操作硬件。
+            Assert.False(coordinator.WaitForIdle(TimeSpan.FromMilliseconds(200)),
+                "收尾还没跑完 WaitForIdle 就返回了：在途状态没有覆盖收尾阶段");
+
+            releaseSettle.Set();
+            Assert.True(await request.WaitAsync(TimeSpan.FromSeconds(20)));
+            Assert.True(coordinator.WaitForIdle(TimeSpan.FromSeconds(5)));
         }
 
         [Fact]
