@@ -127,6 +127,8 @@
     "WebServerPasswordTip": "留空即無密碼",
     "OpenWeb": "開啟網頁",
     "WebServerTip": "開啟網頁版後，手機可透過區網「內網IP:連接埠」訪問，或「IPv6:連接埠」遠端訪問",
+    "WebServerFps": "網頁版顯示影格率",
+    "WebServerFpsTip": "開啟後網頁版會額外採集影格率(FPS)資料；影格率採集需要額外的外部工具，會帶來額外的採集開銷",
 
     "Appearance": "外觀設定",
     "Theme": "主題",
@@ -227,6 +229,7 @@
     "UseWinPerCounters": "優先使用系統計數器",
     "UseWinPerCountersTip": "如數據不準可關閉系統計數器，關閉後，CPU使用率、CPU頻率、記憶體占用、磁碟讀取將直讀硬體感測器",
     "Refresh": "重新整理頻率",
+    "RefreshTip": "重新整理頻率只決定介面重繪的快慢；一般硬體資料最高每秒採集一次，調小重新整理頻率不會提高硬體採集頻率",
     "IgnoreSMBTraffic": "不統計局域網SMB流量",
     "MemoryDisplayMode": "記憶體/顯示記憶體顯示",
 

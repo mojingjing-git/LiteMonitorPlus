@@ -130,6 +130,8 @@
     "WebServerPasswordTip": "공백 시 없음",
     "OpenWeb": "웹 열기",
     "WebServerTip": "활성화 시 모바일은 '내부IP:포트' 또는 'IPv6:포트'로 접속 가능",
+    "WebServerFps": "웹에서 FPS 표시",
+    "WebServerFpsTip": "켜면 웹 페이지도 프레임 레이트를 수집합니다. 별도 도구가 필요해 수집 부하가 늘어납니다.",
 
     "Appearance": "테마 설정",
     "Theme": "테마",
@@ -229,6 +231,7 @@
     "UseWinPerCounters": "시스템 카운터 우선",
     "UseWinPerCountersTip": "부정확시 끄세요. CPU/GPU/RAM/디스크는 센서에서 직접 읽습니다.",
     "Refresh": "갱신 주기",
+    "RefreshTip": "갱신 주기는 화면을 다시 그리는 간격만 정합니다. 일반 하드웨어 데이터는 최대 초당 한 번만 수집되므로 값을 낮춰도 수집 횟수는 늘지 않습니다.",
     "IgnoreSMBTraffic": "SMB 트래픽 무시",
     "MemoryDisplayMode": "메모리 표시",
 

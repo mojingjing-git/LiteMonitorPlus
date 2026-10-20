@@ -159,6 +159,15 @@ namespace LiteMonitor.src.UI.SettingsPage
                 v => Config.WebServerEnabled = v
             );
 
+            // ★ 网页版帧率开关 (默认关闭)
+            //   帧率需要额外的外部采集服务，开启会带来额外的采集开销，
+            //   所以默认不勾选，由用户显式决定是否让网页端显示 FPS。
+            group.AddToggle(this, "Menu.WebServerFps",
+                () => Config.WebFpsEnabled,
+                v => Config.WebFpsEnabled = v
+            );
+            group.AddHint(LanguageManager.T("Menu.WebServerFpsTip"));
+
             group.AddInt(this, "Menu.WebServerPort", "", 
                 () => Config.WebServerPort, 
                 v => Config.WebServerPort = v,

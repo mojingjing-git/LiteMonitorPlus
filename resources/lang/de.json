@@ -130,6 +130,8 @@
     "WebServerPasswordTip": "Leer lassen für keins",
     "OpenWeb": "Web öffnen",
     "WebServerTip": "Web aktiv. Mobilzugriff über LAN 'IP:Port' oder 'IPv6:Port'.",
+    "WebServerFps": "Web-FPS",
+    "WebServerFpsTip": "Aktiviert sammelt die Webseite die Bildrate. Dafür ist ein zusätzliches Werkzeug nötig, das die Abtastlast erhöht.",
 
     "Appearance": "Design",
     "Theme": "Thema",
@@ -229,6 +231,7 @@
     "UseWinPerCounters": "Sys Zähler",
     "UseWinPerCountersTip": "Deaktivieren bei Ungenauigkeit. CPU/GPU/RAM/DISK von Sensoren gelesen.",
     "Refresh": "Rate",
+    "RefreshTip": "Legt nur fest, wie oft die Oberfläche neu gezeichnet wird. Normale Hardwaredaten werden höchstens einmal pro Sekunde abgetastet – ein kleinerer Wert tastet nicht häufiger ab.",
     "IgnoreSMBTraffic": "SMB ignorieren",
     "MemoryDisplayMode": "RAM Anzeige",
 
