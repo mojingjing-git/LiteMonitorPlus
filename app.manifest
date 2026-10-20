@@ -62,6 +62,24 @@
   </application>
   -->
 
+  <!--
+  ⚠️ 上面那段 windowsSettings **故意保持注释状态**，不要直接启用（2026-10-21 用户拍板：改用 Per-Monitor-V2）。
+
+  原因：清单里的 dpiAware 声明**优先于**运行期的 Application.SetHighDpiMode()。
+  启用旧的 <dpiAware>true</dpiAware>（= 系统感知）会把进程的 DPI 感知等级压回 SystemAware(1)，
+  而液态玻璃的抓屏路线要求 PerMonitor / PerMonitorV2 —— 结果是玻璃一帧也抓不到，
+  只能降级为渐变/纯色。
+
+  现在的做法：感知等级由 LiteMonitor.csproj 的 <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  决定，WinForms SDK 生成的 ApplicationConfiguration.Initialize() 会在创建任何窗口之前
+  调用 Application.SetHighDpiMode(PerMonitorV2)。这条路径与 A06 验证捕获路线时用的探针
+  （tests/AppearanceBackdropProbe）**完全一致**。
+
+  若将来确实要改用清单声明，必须用现代写法而不是上面的旧写法：
+  <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+  （不要与 <dpiAware> 混用）。
+  -->
+
   <!-- 启用 Windows 公共控件和对话框的主题(Windows XP 和更高版本) -->
   <!--
   <dependency>

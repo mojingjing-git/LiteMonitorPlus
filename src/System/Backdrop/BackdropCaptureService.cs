@@ -116,6 +116,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
     {
         internal BackdropCaptureStatus(
             BackdropServiceState state,
+            string? stateText,
             bool isRunning,
             bool isReady,
             bool liveFrameAvailable,
@@ -131,6 +132,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             string? backendUnavailableReason)
         {
             State = state;
+            StateText = stateText;
             IsRunning = isRunning;
             IsReady = isReady;
             LiveFrameAvailable = liveFrameAvailable;
@@ -148,6 +150,14 @@ namespace LiteMonitor.src.SystemServices.Backdrop
 
         /// <summary>服务当前状态。</summary>
         public BackdropServiceState State { get; }
+
+        /// <summary>
+        /// 当前状态的说明文字（如"捕获服务已停止。"）。
+        /// <para>★ 与 <see cref="DegradeReason"/> / <see cref="DegradeReasonText"/> **分列**：
+        /// 降级原因码与降级原因文本永远成对出现（要么都指向一次降级，要么都为空），
+        /// 状态说明只描述"现在处于什么状态"，不会冒充降级原因（合同 §7 可诊断性要求）。</para>
+        /// </summary>
+        public string? StateText { get; }
 
         /// <summary>后台任务是否在运行。</summary>
         public bool IsRunning { get; }
@@ -491,6 +501,12 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         /// <summary>默认等待 UI 接管的上限（毫秒）。实际取"与帧间隔的较小者"。</summary>
         private const double DefaultTakeoverTimeoutMs = 1000d;
 
+        /// <summary>单帧像素上限（合同 §6.3：初始捕获面积预算 2,000,000 物理像素）。</summary>
+        public const long DefaultMaxFramePixels = 2_000_000L;
+
+        /// <summary>单帧字节上限（合同 §6.3：帧缓冲预算 32MiB）。</summary>
+        public const long DefaultMaxFrameBytes = 32L * 1024 * 1024;
+
         // ============================================================
         // 依赖与固定资源
         // ============================================================
@@ -507,6 +523,12 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         private readonly object _metricsGate = new();
 
         private readonly double _takeoverTimeoutMs;
+
+        /// <summary>单帧像素上限（缓冲预算闸门，合同 §6.3）。</summary>
+        private readonly long _maxFramePixels;
+
+        /// <summary>单帧字节上限（缓冲预算闸门，合同 §6.3）。</summary>
+        private readonly long _maxFrameBytes;
 
         // ============================================================
         // 帧交接状态（受 _gate 保护）
@@ -545,6 +567,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         // ============================================================
 
         private BackdropServiceState _state = BackdropServiceState.Stopped;
+        private string? _stateText;
         private BackdropDegradeReason _degradeReason = BackdropDegradeReason.None;
         private string? _degradeReasonText;
         private string? _lastFailureReason;
@@ -588,14 +611,20 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         /// <param name="backend">捕获后端（**注入**，服务不 new 任何具体实现）。</param>
         /// <param name="processor">图像处理（可空）。为 null 时直接发布捕获到的原始帧（不滤波）。</param>
         /// <param name="takeoverTimeout">等待 UI 接管的单轮上限（毫秒，默认 1000，实际与帧间隔取小）。</param>
+        /// <param name="maxFramePixels">单帧像素上限（合同 §6.3：初始捕获面积预算 2,000,000 物理像素）。</param>
+        /// <param name="maxFrameBytes">单帧字节上限（合同 §6.3：帧缓冲预算 32MiB）。</param>
         public BackdropCaptureService(
             IBackdropCaptureBackend backend,
             IBackdropFrameProcessor? processor = null,
-            double takeoverTimeoutMs = DefaultTakeoverTimeoutMs)
+            double takeoverTimeoutMs = DefaultTakeoverTimeoutMs,
+            long maxFramePixels = DefaultMaxFramePixels,
+            long maxFrameBytes = DefaultMaxFrameBytes)
         {
             _backend = backend ?? throw new ArgumentNullException(nameof(backend));
             _processor = processor;
             _takeoverTimeoutMs = takeoverTimeoutMs > 0d ? takeoverTimeoutMs : DefaultTakeoverTimeoutMs;
+            _maxFramePixels = maxFramePixels > 0 ? maxFramePixels : DefaultMaxFramePixels;
+            _maxFrameBytes = maxFrameBytes > 0 ? maxFrameBytes : DefaultMaxFrameBytes;
             _process = Process.GetCurrentProcess();
         }
 
@@ -961,6 +990,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
 
                     return new BackdropCaptureStatus(
                         _state,
+                        _stateText,
                         IsRunning,
                         liveFrame,
                         liveFrame,
@@ -1179,6 +1209,31 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             double filterMs = _clock.Elapsed.TotalMilliseconds - t1;
 
             // --------------------------------------------------------
+            // 缓冲预算闸门（合同 §6.3：初始捕获面积预算 2,000,000 物理像素、帧缓冲预算 32MiB）
+            // ★ 放在**发布之前**：超预算的帧一律不进入 pending，也不交给 UI。
+            //   这一道闸门在服务层，与是否配置了 processor 无关 ——
+            //   否则 processor == null 时会照单全收超限帧（A15 复核发现的缺口）。
+            // ★ 尺寸必须在释放**之前**读取：位图释放后读 Width/Height 会抛异常。
+            // --------------------------------------------------------
+            int frameWidth = processed!.Width;
+            int frameHeight = processed.Height;
+            long framePixels = (long)frameWidth * frameHeight;
+            long frameBytes = framePixels * 4;   // 32bpp 估计
+            // ★ 两条限制里**像素是约束性的**：2,000,000 px × 4B = 7.6MiB，永远低于 32MiB 上限。
+            //   字节闸门是兜底（防止将来放宽像素预算时踩到缓冲上限）；按 4B 估算在 48bpp HDR 下偏小，
+            //   但最坏情况 2,000,000 px × 6B = 11.4MiB 仍远在 32MiB 之内，不会误拒。
+            if (framePixels > _maxFramePixels || frameBytes > _maxFrameBytes)
+            {
+                processed.Dispose();
+                RecordFailure(
+                    BackdropDegradeReason.BackendFrameInvalid,
+                    $"捕获帧 {frameWidth}×{frameHeight}（{framePixels} 像素 / 约 {frameBytes / 1024 / 1024}MiB）" +
+                    $"超出缓冲预算（{_maxFramePixels} 像素 / {_maxFrameBytes / 1024 / 1024}MiB），本帧已丢弃。",
+                    true);
+                return;
+            }
+
+            // --------------------------------------------------------
             // 发布（代次校验 + pending 替换）
             // --------------------------------------------------------
             double t2 = _clock.Elapsed.TotalMilliseconds;
@@ -1338,6 +1393,10 @@ namespace LiteMonitor.src.SystemServices.Backdrop
                 _degradeReasonText = text;
                 _lastFailureReason = text;
                 _lastFailureUtc = DateTime.UtcNow;
+                // ★ 状态说明同步更新：RecordFailure 直接改 _state（绕过 SetState），
+                //   若不更新 _stateText，Faulted/Degraded 状态下 UI 会显示上一条状态文字
+                //   （如"正在启动实时捕获……"），与真实原因不符。失败说明本身即状态说明。
+                _stateText = text;
                 _state = backendFailure ? BackdropServiceState.Faulted : BackdropServiceState.Degraded;
                 if (backendFailure) _captureFailures++;
             }
@@ -1353,7 +1412,19 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             lock (_metricsGate)
             {
                 _state = state;
-                if (text is not null) _degradeReasonText = text;
+                // ★ 无条件覆盖：text 参数就是"当前状态说明"。
+                //   传 null 表示本状态没有说明文字，不应残留上一条状态的文案。
+                _stateText = text;
+
+                // ★ 原因码与原因文本必须**成对**（合同 §7：降级必须可诊断，不能自相矛盾）。
+                //   状态不是"降级/故障"时，把降级原因码与降级原因文本**一起清空**：
+                //   否则会出现「原因码 = BackendFrameInvalid、原因文本 = 捕获服务已停止。」的错配，
+                //   让 A17 的支持矩阵按错误原因归档。历史失败原因仍保留在 LastFailureReason。
+                if (state != BackdropServiceState.Degraded && state != BackdropServiceState.Faulted)
+                {
+                    _degradeReason = BackdropDegradeReason.None;
+                    _degradeReasonText = null;
+                }
             }
         }
 

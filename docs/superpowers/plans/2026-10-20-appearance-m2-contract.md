@@ -166,6 +166,21 @@ A06 实测：`WDA_EXCLUDEFROMCAPTURE` 是**窗口级**的，
 ⇒ 若产品将来需要"只排除面板背景、保留文字"，当前 API 做不到，必须另找方案。
 ⇒ A15 **不得**自行扩大排除范围到其它窗口。
 
+### 5.4 DPI 感知前置条件（2026-10-21 追加，已由用户拍板）
+
+抓屏路线要求进程能拿到**物理像素**坐标：DPI 不感知（DPI-unaware）进程的
+`ClientToScreen` 返回被系统虚拟化的坐标，而 `CopyFromScreen` 按物理坐标取屏 ⇒ **抓到的区域会错位**。
+
+| 项 | 结论 |
+|---|---|
+| A06 验证捕获路线时的探针 | `tests/AppearanceBackdropProbe` 用 `<ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>` ⇒ 该路线的成功结论**只在 Per-Monitor-V2 下成立** |
+| 改动前的主工程 | 实际为 SystemAware(1) ⇒ 捕获引擎的前置守卫会**逐帧放弃**，玻璃永远不工作 |
+| **决策（用户，2026-10-21）** | **改为 Per-Monitor-V2**：`LiteMonitor.csproj` 增 `<ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>`；`app.manifest` 的旧 `<dpiAware>` 段**保持注释**（清单声明优先于运行期 `SetHighDpiMode`，启用会压回 SystemAware） |
+
+⇒ **A16 的硬前提**：生产进程必须实测为 PerMonitor/PerMonitorV2 感知等级，否则玻璃路径不得启用。
+⇒ 该改动同时改变全应用渲染（高 DPI 屏上按原生分辨率重绘），**A14 实机清单需在新 DPI 行为下重做**。
+⇒ 详细背景与复验义务见 `2026-10-20-appearance-a15-acceptance.md` §6。
+
 ---
 
 ## 6. 测量字段 —— 已冻结（含口径区分）

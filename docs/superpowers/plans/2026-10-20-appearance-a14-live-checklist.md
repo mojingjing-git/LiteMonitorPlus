@@ -15,15 +15,41 @@
 
 ---
 
+## 0.1 启动脚本 `scripts/run-livecheck.ps1` —— 历史故障与已修项
+
+> 2026-10-21 用户两次反馈「运行不了 / 还是不行」。逐条定位并修复如下，**全部是脚本自身的问题，不是产品代码的问题**。
+
+| 现象 | 根因 | 修法 |
+|---|---|---|
+| 脚本报「找不到类型 `[LiveCheck.Native+RECT]`」 | `Add-Type` 生成的类型默认是 `internal`，PowerShell 访问不到 | 互操作类型改为 `public` |
+| DPI 自检报「40 秒内没找到可见主窗口」 | 旧逻辑按**窗口标题**筛选（`IsNullOrEmpty(title)` 就跳过）。但主窗体是 `FormBorderStyle.None` + 无边框分层透明窗口，项目里**没有 `MainForm.Designer.cs`** ⇒ `Form.Text` 保持默认的**空字符串**；且进程跑在高完整性级别，非提权会话连别的进程的标题都读不到 | 改为枚举该进程**全部可见顶层窗口，取客户区面积最大者**（主面板 480×2660 物理像素，远大于任何辅助窗口）。**已实测**：explorer 的 12 个可见顶层窗口里只有 1 个有标题、11 个为空 —— 按标题筛的旧逻辑对无标题窗口必然落空 |
+| 旧做法用 `Process.MainWindowHandle` | 主界面是分层透明窗口（`WS_EX_LAYERED` / `WS_EX_TRANSPARENT`），`MainWindowHandle` 在这类窗口上经常返回 0 | 改用 `EnumWindows` + `GetWindowThreadProcessId` |
+| 构建报「文件被占用」 | 上一轮实例还在跑，占用 exe/dll | 新增 `-StopExisting`；并在检测不到同目录实例时**额外提示**：非提权 PowerShell 读不到高完整性进程的 `.Path`，也结束不了它 —— 此时应改用**管理员** PowerShell |
+| 脚本报「无法加载文件…禁止运行脚本」 | 脚本文件带 `Zone.Identifier`（下载/复制来的），执行策略直接拒绝 | 推荐命令加 `-ExecutionPolicy Bypass`（脚本自身无法绕过——执行策略在脚本解析前生效） |
+
+**推荐启动命令**（管理员 PowerShell）：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run-livecheck.ps1 -StopExisting
+```
+
+---
+
 ## 0. 前置条件
 
 | 项 | 说明 |
 |---|---|
 | 提权 | 主工程 manifest 是 `requireAdministrator` → 启动时弹 UAC，需要确认 |
-| 配置 | 主工程读 `%APPDATA%\LiteMonitor\settings.json`；**测前先备份**（用户已有 `LiteMonitor-old-config-20261020.zip`） |
+| 启动方式 | **管理员** PowerShell 里执行：`pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run-livecheck.ps1 -StopExisting` —— 构建 Release + 备份配置 + 启动 + **自动判定 Per-Monitor-V2 是否生效**（读主窗口 `GetDpiForWindow`，>96 即已生效）。`-ExecutionPolicy Bypass` 是为了绕开"文件带 Zone.Identifier 被执行策略拒绝"；`-StopExisting` 先结束同目录旧实例（exe 被占用会导致构建失败）。**必须用管理员 PowerShell**：主程序自身也是高完整性级别，非提权会话读不到它的 exe 路径、也结束不了它 |
+| 配置 | 主工程读的是 **exe 同目录**的 `settings.json`（`SettingsHelper` 用 `AppContext.BaseDirectory`），**不是** `%APPDATA%\LiteMonitor\settings.json`；`run-livecheck.ps1` 会在启动前把输出目录里那一份备份成 `settings.json.bak-<时间戳>`（用户另有整体备份 `LiteMonitor-old-config-20261020.zip`） |
 | 显示器 | DISPLAY1 主屏 3840×2160 @168 DPI（HDR 10bpc）；DISPLAY2 1440×2560 @**X = −1152**（负坐标）@120 DPI |
 | 硬件采集 | 主程序会访问硬件（PawnIO 驱动）；驱动不可用时会提示，但**不影响外观验证** |
 | 录屏 | 可选；用于留证。**不要**为了抓屏去移动/隐藏窗口或改 Opacity（v4 明确禁止） |
+
+> ⚠️ **2026-10-21 起 DPI 感知改为 Per-Monitor-V2**（用户拍板，见
+> `2026-10-20-appearance-a15-acceptance.md` §6）。本清单的第 4 项验收含义随之改变：
+> 改动前是"被系统整体拉伸"，改动后应当是"**按目标屏 DPI 重新渲染**"。
+> 第 1~3、5~7 项也需要在新行为下重做。
 
 ---
 
