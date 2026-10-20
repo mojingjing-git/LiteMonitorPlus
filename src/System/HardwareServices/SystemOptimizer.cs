@@ -73,37 +73,86 @@ namespace LiteMonitor.src.SystemServices
         }
 
         /// <summary>
-        /// 执行定时维护任务 (流量保存、GC 优化、内存修剪)
+        /// 维护任务调度器（单调截止时间驱动）。
+        ///
+        /// 状态保存在**实例**内部（见 <see cref="MaintenanceScheduler"/>），
+        /// 而不是散落的全局静态时间戳；这里只是因为旧入口是静态方法，
+        /// 才保留一个进程级默认实例。测试可以整体替换它。
         /// </summary>
-        /// <param name="secondsCounter">系统运行秒数计数器</param>
+        private static MaintenanceScheduler _maintenanceScheduler = CreateDefaultScheduler();
+
+        /// <summary>
+        /// 维护任务调度器实例。
+        /// 需要注入假时钟 / 自定义动作的测试可以整体替换它。
+        /// </summary>
+        public static MaintenanceScheduler MaintenanceScheduler
+        {
+            get => _maintenanceScheduler;
+            set => _maintenanceScheduler = value ?? CreateDefaultScheduler();
+        }
+
+        private static MaintenanceScheduler CreateDefaultScheduler()
+        {
+            return new MaintenanceScheduler(
+                onTrafficSave: TrafficLogger.Save,
+                onGcRequest: RequestGarbageCollection,
+                onWorkingSetTrim: TrimWorkingSetIfNeeded);
+        }
+
+        /// <summary>
+        /// 执行定时维护任务 (流量保存、GC 优化、内存修剪)
+        ///
+        /// ★ 调度语义已改为**单调截止时间**（计划 §4.3）：
+        ///   - 流量保存：首次约 5 秒，此后每 60 秒；
+        ///   - 自动 GC：首次约 30 秒，此后每 180 秒；
+        ///   - 自动工作集检查：首次约 45 秒，此后每 300 秒。
+        ///
+        /// 旧实现用「整数秒计数器取模」判断到期，同一个到期秒内被调用十次
+        /// 就会真正执行十次（实测：十次文件重写）。现在同一到期时间最多消费一次，
+        /// 跳过若干周期也只执行一次，不补跑一串。
+        ///
+        /// <paramref name="secondsCounter"/> 仅为兼容既有调用点保留，**不再参与调度判断**。
+        /// </summary>
+        /// <param name="secondsCounter">系统运行秒数计数器（已不再使用，保留以兼容旧调用点）</param>
         public static void RunMaintenanceTasks(long secondsCounter)
         {
-            // 1. 流量保存: 每 60 秒 (Offset 5s: 避开整点)
-            if (secondsCounter % 60 == 5)
-            {
-                TrafficLogger.Save();
-            }
+            _ = secondsCounter;   // 调度改由单调截止时间驱动
+            _maintenanceScheduler.RunDueTasks();
+        }
 
-            // 2. 内存软清理: 每 180 秒 (Offset 30s)
-            if (secondsCounter % 180 == 30)
-            {
-                GC.Collect(2, GCCollectionMode.Optimized);
-            }
+        /// <summary>
+        /// 执行定时维护任务，并返回**本次真正到期并被消费**的任务。
+        ///
+        /// 调用方（例如 HardwareMonitor）可以用它把统计计数器记在真实执行上，
+        /// 而不是记在「计数器取模刚好命中」这种可能与实际执行脱节的地方。
+        /// </summary>
+        public static MaintenanceRunResult RunMaintenanceTasksAndReport()
+        {
+            return _maintenanceScheduler.RunDueTasks();
+        }
 
-            // 3. 内存硬清理: 每 300 秒 (5分钟) (Offset 45s)
-            if (secondsCounter % 300 == 45)
+        /// <summary>自动 GC 请求（保留旧行为：Optimized 模式，不阻塞式完整回收）。</summary>
+        private static void RequestGarbageCollection()
+        {
+            GC.Collect(2, GCCollectionMode.Optimized);
+        }
+
+        /// <summary>
+        /// 自动工作集检查（保留旧行为：工作集超过 30MB 才裁剪，
+        /// 避免以反复清空工作集制造「低内存」假象）。
+        /// </summary>
+        private static void TrimWorkingSetIfNeeded()
+        {
+            try
             {
-                try
+                using var proc = Process.GetCurrentProcess();
+                // 阈值 30MB，确保极致轻量
+                if (proc.WorkingSet64 > 30 * 1024 * 1024)
                 {
-                    using var proc = Process.GetCurrentProcess();
-                    // 阈值 30MB，确保极致轻量
-                    if (proc.WorkingSet64 > 30 * 1024 * 1024) 
-                    {
-                        EmptyWorkingSet(proc.Handle);
-                    }
+                    EmptyWorkingSet(proc.Handle);
                 }
-                catch { }
             }
+            catch { }
         }
     }
 }
