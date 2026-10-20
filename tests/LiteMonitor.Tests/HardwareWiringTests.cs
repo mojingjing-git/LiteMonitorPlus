@@ -5,6 +5,7 @@ using System.Threading;
 using LibreHardwareMonitor.Hardware;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices;
+using LiteMonitor.src.WebServer;   // WebFpsDemand（网页侧的 FPS 需求规则）
 using Xunit;
 
 namespace LiteMonitor.Tests
@@ -156,6 +157,31 @@ namespace LiteMonitor.Tests
             public int UpdateCount { get; private set; }
 
             public override void Update() => UpdateCount++;
+        }
+
+        /// <summary>
+        /// 假外部 FPS 服务启动器：只做计数，**不启动任何真实进程**
+        /// （不触碰 PresentMon / ETW / 网络 / 驱动）。
+        /// </summary>
+        private sealed class FakeFpsLauncher : IFpsServiceLauncher
+        {
+            public bool EnsureAvailable() => true;
+
+            public bool Start(Action<string> onLine, out string error)
+            {
+                error = null;
+                return false;
+            }
+
+            public void Stop() { }
+
+            public bool IsRunning => false;
+        }
+
+        /// <summary>假进程查询器：不触碰真实进程列表。</summary>
+        private sealed class FakeFpsProcessQuery : IFpsProcessQuery
+        {
+            public FpsProcessQueryResult Query(int pid) => FpsProcessQueryResult.CreateExited();
         }
 
         /// <summary>模拟"界面 100 ms 一次请求"的采集节奏。</summary>
@@ -648,6 +674,118 @@ namespace LiteMonitor.Tests
             Assert.NotNull(method);
             Assert.True(method.IsPublic);
             Assert.Equal(typeof(void), method.ReturnType);
+        }
+
+        // =========================================================
+        // 6. FPS 需求接线（硬件侧 ↔ 网页侧共用同一套规则）
+        // =========================================================
+
+        /// <summary>造一份"本地 FPS 是否启用 + 网页版帧率开关"的设置。</summary>
+        private static Settings MakeFpsSettings(bool localFpsEnabled, bool webFpsEnabled)
+        {
+            var cfg = new Settings { WebFpsEnabled = webFpsEnabled };
+            if (localFpsEnabled)
+                cfg.MonitorItems.Add(new MonitorItemConfig { Key = "FPS", VisibleInPanel = true });
+            return cfg;
+        }
+
+        [Fact]
+        public void 本地启用FPS时硬件侧需求为真()
+        {
+            var cfg = MakeFpsSettings(localFpsEnabled: true, webFpsEnabled: false);
+            var probe = HardwareMonitor.CreateFpsDemandProbe(cfg, () => false);
+
+            Assert.True(probe());
+        }
+
+        [Fact]
+        public void 有合法Web需求且WebFpsEnabled为真时硬件侧需求为真()
+        {
+            var cfg = MakeFpsSettings(localFpsEnabled: false, webFpsEnabled: true);
+            var probe = HardwareMonitor.CreateFpsDemandProbe(cfg, () => true);
+
+            Assert.True(probe());
+        }
+
+        [Fact]
+        public void 有合法Web需求但WebFpsEnabled为假时硬件侧需求为假()
+        {
+            // 本地也没启用 FPS
+            var cfg = MakeFpsSettings(localFpsEnabled: false, webFpsEnabled: false);
+            var probe = HardwareMonitor.CreateFpsDemandProbe(cfg, () => true);
+
+            Assert.False(probe());
+        }
+
+        [Fact]
+        public void 没有Web需求时硬件侧需求只由本地启用决定()
+        {
+            // 本地启用 -> 有需求（与 Web 无关）
+            var localOn = HardwareMonitor.CreateFpsDemandProbe(
+                MakeFpsSettings(localFpsEnabled: true, webFpsEnabled: true), () => false);
+            Assert.True(localOn());
+
+            // 本地没启用 -> 没需求（哪怕 WebFpsEnabled 开着，因为没有合法 Web 需求）
+            var localOff = HardwareMonitor.CreateFpsDemandProbe(
+                MakeFpsSettings(localFpsEnabled: false, webFpsEnabled: true), () => false);
+            Assert.False(localOff());
+        }
+
+        [Fact]
+        public void 硬件侧FPS需求规则与网页占位规则完全一致()
+        {
+            // 防"两处规则漂移"的关键用例：硬件侧探针与网页 "--" 占位判断必须逐组合相等。
+            for (int local = 0; local <= 1; local++)
+            {
+                for (int webDemand = 0; webDemand <= 1; webDemand++)
+                {
+                    for (int webFps = 0; webFps <= 1; webFps++)
+                    {
+                        bool localEnabled = local == 1;
+                        bool demand = webDemand == 1;
+                        bool webFpsEnabled = webFps == 1;
+
+                        var cfg = MakeFpsSettings(localEnabled, webFpsEnabled);
+                        var probe = HardwareMonitor.CreateFpsDemandProbe(cfg, () => demand);
+
+                        bool hardwareSide = probe();
+                        bool webSide = WebFpsDemand.IsFpsDemand(cfg, demand);
+
+                        Assert.True(hardwareSide == webSide,
+                            $"local={localEnabled}, webDemand={demand}, WebFpsEnabled={webFpsEnabled} 时两侧不一致：" +
+                            $"硬件侧={hardwareSide}, 网页侧={webSide}");
+                    }
+                }
+            }
+        }
+
+        [Fact]
+        public void FPS需求探针注入后FpsCounter按同一规则判定需求()
+        {
+            // 走**真实接线路径**：AttachFpsDemandProbe -> FpsCounter.FpsDemandProvider
+            // 用假启动器/假进程查询器，不触碰真实 PresentMon / ETW / 网络 / 驱动。
+            var launcher = new FakeFpsLauncher();
+            using var counter = new FpsCounter(null, launcher, new FakeFpsProcessQuery(), () => false);
+
+            var cfg = MakeFpsSettings(localFpsEnabled: false, webFpsEnabled: true);
+            bool demand = false;
+            HardwareMonitor.AttachFpsDemandProbe(counter, cfg, () => demand);
+
+            // 没有 Web 需求 -> 没需求
+            Assert.False(counter.IsFpsDemandActive);
+
+            // 有 Web 需求且 WebFpsEnabled -> 有需求
+            demand = true;
+            Assert.True(counter.IsFpsDemandActive);
+
+            // 关掉网页版帧率开关 -> 又没有需求
+            cfg.WebFpsEnabled = false;
+            Assert.False(counter.IsFpsDemandActive);
+
+            // 打开本地 FPS -> 需求与 Web 无关，仍然为真
+            cfg.MonitorItems.Add(new MonitorItemConfig { Key = "FPS", VisibleInPanel = true });
+            demand = false;
+            Assert.True(counter.IsFpsDemandActive);
         }
     }
 }
