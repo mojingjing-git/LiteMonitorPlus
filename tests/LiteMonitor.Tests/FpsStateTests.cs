@@ -13,7 +13,7 @@ namespace LiteMonitor.Tests
     /// <summary>
     /// FPS PID 状态清理与查询重试的单元测试。
     ///
-    /// 全部使用注入的进程查询器与假时钟：
+    /// 全部使用注入的进程查询器、假时钟与假启动器：
     /// - 不依赖真实进程列表
     /// - 不启动真实 PresentMon / ETW
     /// - 不发起任何外网请求
@@ -42,6 +42,14 @@ namespace LiteMonitor.Tests
             /// <summary>可选的动态行为（优先于预设结果）</summary>
             public Func<int, FpsProcessQueryResult>? Handler { get; set; }
 
+            /// <summary>
+            /// 模拟进程查询耗时（毫秒）。
+            /// 真实环境里 Process.GetProcessById 可能耗时数毫秒，
+            /// 这里用它拉开"统计线程取走帧"与"封存后收走残留帧"之间的窗口，
+            /// 让并发测试真正走到残留帧转移路径。
+            /// </summary>
+            public int DelayMs { get; set; }
+
             public int Calls => Volatile.Read(ref _calls);
 
             public void Set(int pid, FpsProcessQueryResult result) => _results[pid] = result;
@@ -49,6 +57,7 @@ namespace LiteMonitor.Tests
             public FpsProcessQueryResult Query(int pid)
             {
                 Interlocked.Increment(ref _calls);
+                if (DelayMs > 0) Thread.Sleep(DelayMs);
                 if (Handler != null) return Handler(pid);
                 return _results.TryGetValue(pid, out FpsProcessQueryResult r)
                     ? r
@@ -57,12 +66,23 @@ namespace LiteMonitor.Tests
         }
 
         /// <summary>假外部服务启动器：只计数，不启动任何真实进程</summary>
-        private sealed class FakeLauncher : IFpsServiceLauncher
+        private sealed class FakeLauncher : IFpsServiceLauncher, IFpsServiceExitNotifier
         {
+            private readonly ManualResetEventSlim _startEntered = new(false);
+            private readonly ManualResetEventSlim _startRelease = new(false);
             private int _startCount;
             private int _stopCount;
             private int _ensureCount;
             private CancellationTokenSource? _cts;
+
+            /// <summary>外部服务进程退出时触发</summary>
+            public event Action? Exited;
+
+            /// <summary>为 true 时 Start() 会阻塞在 <see cref="ReleaseStart"/> 上（用于确定性并发测试）</summary>
+            public bool BlockStart { get; set; }
+
+            /// <summary>进入 Start() 时被置位</summary>
+            public ManualResetEventSlim StartEntered => _startEntered;
 
             public int StartCount => Volatile.Read(ref _startCount);
             public int StopCount => Volatile.Read(ref _stopCount);
@@ -80,6 +100,9 @@ namespace LiteMonitor.Tests
                 Interlocked.Increment(ref _startCount);
                 error = null;
                 IsRunning = true;
+                _startEntered.Set();
+
+                if (BlockStart) _startRelease.Wait(5000);
 
                 // 模拟数据心跳，避免健康检查把服务判成僵死而重启
                 var cts = new CancellationTokenSource();
@@ -102,6 +125,18 @@ namespace LiteMonitor.Tests
                 IsRunning = false;
                 try { _cts?.Cancel(); } catch { }
                 _cts = null;
+            }
+
+            /// <summary>放行被 <see cref="BlockStart"/> 阻塞的 Start()</summary>
+            public void ReleaseStart() => _startRelease.Set();
+
+            /// <summary>模拟外部服务进程退出</summary>
+            public void RaiseExited()
+            {
+                IsRunning = false;
+                try { _cts?.Cancel(); } catch { }
+                _cts = null;
+                Exited?.Invoke();
             }
         }
 
@@ -222,6 +257,33 @@ namespace LiteMonitor.Tests
         }
 
         [Fact]
+        public void 一百条Unknown记录在规模下同样遵守负缓存()
+        {
+            var clock = new FakeClock();
+            var query = new FakeProcessQuery { Handler = _ => FpsProcessQueryResult.CreateUnknown() };
+            var store = NewStore(query, clock);
+
+            for (int pid = 1000; pid < 1100; pid++) store.RecordFrame(pid);
+
+            store.AdvanceCycle(0.5);
+            Assert.Equal(100, query.Calls);
+
+            // 负缓存期内：100 个 PID 一次都不再查（旧实现是每轮 100 次）
+            clock.Advance(1000);
+            store.AdvanceCycle(0.5);
+            Assert.Equal(100, query.Calls);
+
+            clock.Advance(3000);
+            store.AdvanceCycle(0.5);
+            Assert.Equal(100, query.Calls);
+
+            // 超过 5 秒：每个 PID 各重试一次
+            clock.Advance(5000);
+            store.AdvanceCycle(0.5);
+            Assert.Equal(200, query.Calls);
+        }
+
+        [Fact]
         public void 查询未知的进程不参与FPS统计()
         {
             var clock = new FakeClock();
@@ -298,6 +360,47 @@ namespace LiteMonitor.Tests
 
             // 超过 30 秒：清理
             clock.Advance(2_000);
+            store.AdvanceCycle(0.5);
+            Assert.Equal(0, store.ProcessCount);
+        }
+
+        [Fact]
+        public void 查询持续失败的记录同样按闲置期限回收()
+        {
+            var clock = new FakeClock();
+            // 查询一直失败（权限不足 / 瞬时失败），且不再产生新帧
+            var query = new FakeProcessQuery { Handler = _ => FpsProcessQueryResult.CreateUnknown() };
+            var store = NewStore(query, clock);
+
+            for (int pid = 2000; pid < 2100; pid++) store.RecordFrame(pid);
+            Assert.Equal(100, store.ProcessCount);
+
+            // 查询失败不影响统计，但记录仍然存在
+            store.AdvanceCycle(0.5);
+            Assert.Equal(100, store.ProcessCount);
+
+            // 超过闲置期限后必须被回收（否则 _entries 单调增长）
+            clock.Advance(31_000);
+            store.AdvanceCycle(0.5);
+            Assert.Equal(0, store.ProcessCount);
+        }
+
+        [Fact]
+        public void 排除进程的记录同样按闲置期限回收()
+        {
+            var clock = new FakeClock();
+            var query = new FakeProcessQuery { Handler = _ => FpsProcessQueryResult.CreateFound("PresentMon", 1) };
+            var options = new FpsStateOptions
+            {
+                ExcludedProcesses = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "PresentMon" }
+            };
+            var store = NewStore(query, clock, options);
+
+            store.RecordFrame(3001);
+            store.AdvanceCycle(0.5);
+            Assert.Equal(1, store.ProcessCount);
+
+            clock.Advance(31_000);
             store.AdvanceCycle(0.5);
             Assert.Equal(0, store.ProcessCount);
         }
@@ -379,74 +482,170 @@ namespace LiteMonitor.Tests
         }
 
         // ================================================================
-        // 8) 解析与统计并发：不丢帧、不抛集合异常
+        // 8) 解析与统计并发：清理/封存与新帧真正交错，且不丢帧
         // ================================================================
 
         [Fact]
-        public void 解析与统计并发不会永久丢帧也不会抛集合异常()
+        public void 解析与统计并发时清理封存与新帧交错不会永久丢帧()
         {
             var clock = new FakeClock();
-            var query = new FakeProcessQuery { Handler = _ => FpsProcessQueryResult.CreateFound("game.exe", 1) };
+            // 4243 的进程已退出（每轮都会被 retire → 封存 + 残留帧转移），
+            // 4242 / 4244 正常存活；4244 早早停止产生帧 → 30 秒后走闲置清理路径。
+            var query = new FakeProcessQuery
+            {
+                // 模拟进程查询耗时：拉开"取帧"与"封存收残留帧"之间的窗口
+                DelayMs = 1,
+                Handler = pid => pid == 4243
+                    ? FpsProcessQueryResult.CreateExited()
+                    : FpsProcessQueryResult.CreateFound("game.exe", 1)
+            };
             var store = NewStore(query, clock);
 
-            const int writerCount = 4;
-            const int framesPerWriter = 2_000;
+            const int liveFrames = 20_000;
+            const int exitedFrames = 20_000;
+            const int earlyFrames = 10_000;
+            int cleaned = 0;
+            int writersDone = 0;
             var errors = new ConcurrentBag<Exception>();
             var start = new ManualResetEventSlim(false);
 
-            var writers = Enumerable.Range(0, writerCount).Select(_ => Task.Run(() =>
+            var writers = new List<Task>
             {
-                start.Wait();
-                try
+                Task.Run(() =>
                 {
-                    for (int i = 0; i < framesPerWriter; i++) store.RecordLine("game.exe,4242,1,2,3");
-                }
-                catch (Exception ex) { errors.Add(ex); }
-            })).ToArray();
-
-            var readers = Enumerable.Range(0, 2).Select(_ => Task.Run(() =>
-            {
-                start.Wait();
-                try
-                {
-                    for (int i = 0; i < 200; i++)
+                    start.Wait();
+                    try
                     {
-                        clock.Advance(10);
-                        store.AdvanceCycle(0.01);
+                        for (int i = 0; i < liveFrames; i++)
+                        {
+                            store.RecordLine("game.exe,4242,1,2,3");
+                            Thread.Yield(); // 让统计线程有机会在"取帧"与"封存"之间插入
+                        }
                     }
-                }
-                catch (Exception ex) { errors.Add(ex); }
-            })).ToArray();
+                    catch (Exception ex) { errors.Add(ex); }
+                }),
+                Task.Run(() =>
+                {
+                    start.Wait();
+                    try
+                    {
+                        for (int i = 0; i < exitedFrames; i++)
+                        {
+                            store.RecordLine("game.exe,4243,1,2,3");
+                            Thread.Yield();
+                        }
+                    }
+                    catch (Exception ex) { errors.Add(ex); }
+                }),
+                Task.Run(() =>
+                {
+                    start.Wait();
+                    try
+                    {
+                        for (int i = 0; i < earlyFrames; i++)
+                        {
+                            store.RecordLine("game.exe,4244,1,2,3");
+                            Thread.Yield();
+                        }
+                    }
+                    catch (Exception ex) { errors.Add(ex); }
+                })
+            };
+
+            // 统计线程：时钟每轮 +100ms，一直跑到写线程全部结束，
+            // 保证 retire/seal 与 RecordLine 真正交错（而不是写线程先跑完）。
+            var readers = new List<Task>
+            {
+                Task.Run(() =>
+                {
+                    start.Wait();
+                    try
+                    {
+                        for (int i = 0; i < 20000 && Volatile.Read(ref writersDone) < 3; i++)
+                        {
+                            clock.Advance(100);
+                            cleaned += store.AdvanceCycle(0.1);
+                        }
+                    }
+                    catch (Exception ex) { errors.Add(ex); }
+                }),
+                Task.Run(() =>
+                {
+                    start.Wait();
+                    try
+                    {
+                        for (int i = 0; i < 20000 && Volatile.Read(ref writersDone) < 3; i++)
+                        {
+                            clock.Advance(100);
+                            cleaned += store.AdvanceCycle(0.1);
+                        }
+                    }
+                    catch (Exception ex) { errors.Add(ex); }
+                })
+            };
 
             start.Set();
-            Task.WaitAll(writers.Concat(readers).ToArray());
+            Task.WaitAll(writers.ToArray());
+            Volatile.Write(ref writersDone, 3);
+            Task.WaitAll(readers.ToArray());
 
             Assert.Empty(errors);
+            Assert.True(cleaned > 0, "本测试必须真的触发过 retire/封存路径");
 
-            // 再跑一轮把剩余帧消费掉：总帧数必须与写入帧数完全一致（没有永久丢失）
-            clock.Advance(10);
-            store.AdvanceCycle(0.01);
+            // 排空残留帧 + 让停止产生帧的 PID 跨过 30 秒闲置期限：
+            // 时钟每次 +1 秒，40 轮足以让 4244 走闲置清理路径。
+            for (int i = 0; i < 40; i++)
+            {
+                clock.Advance(1000);
+                cleaned += store.AdvanceCycle(1.0);
+            }
 
-            Assert.Equal(writerCount * framesPerWriter, store.TotalFramesObserved);
+            // ★ 关键断言：封存后确实发生过"残留帧转移"，说明封存+转移协议真的被走到了
+            Assert.True(store.RetiredTransferredFrames > 0, "本测试必须真的触发过'封存后转移残留帧'路径");
+
+            // 全部写入的帧都必须被统计消费，一帧都不能少
+            Assert.Equal(liveFrames + exitedFrames + earlyFrames, store.TotalFramesObserved);
         }
 
         // ================================================================
-        // 9)~11) FpsCounter 级别：启动防重入、需求接线缝、可恢复停止
+        // 9)~14) FpsCounter 级别：启动防重入、需求接线缝、可恢复停止
         // ================================================================
 
         [Fact]
         public void 多消费者并发请求不会重复启动外部服务()
         {
-            var launcher = new FakeLauncher();
-            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery());
+            var launcher = new FakeLauncher { BlockStart = true };
+            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
             counter.FpsDemandProvider = () => true;
 
-            var tasks = Enumerable.Range(0, 16).Select(_ => Task.Run(() => counter.GetFps())).ToArray();
-            Task.WaitAll(tasks);
+            const int callers = 16;
+            var ready = new CountdownEvent(callers);
+            var release = new ManualResetEventSlim(false);
+
+            var tasks = Enumerable.Range(0, callers).Select(_ => Task.Run(() =>
+            {
+                ready.Signal();
+                release.Wait();
+                counter.GetFps();
+            })).ToArray();
+
+            // 16 个调用者全部就位后同时放行 → 制造真实重叠
+            Assert.True(ready.Wait(5000));
+            release.Set();
+
+            // 第一次启动进入假启动器后被阻塞：此时其余启动任务都撞上启动闸门
+            Assert.True(launcher.StartEntered.Wait(5000));
+            Thread.Sleep(200);
+            launcher.ReleaseStart();
 
             WaitUntil(() => launcher.StartCount >= 1, 3000);
-            Thread.Sleep(300); // 给可能的重复启动留出时间窗
+            Thread.Sleep(300);
 
+            Assert.Equal(1, launcher.StartCount);
+
+            // 服务已在运行：后续再请求也不会重复启动
+            for (int i = 0; i < 10; i++) counter.GetFps();
+            Thread.Sleep(200);
             Assert.Equal(1, launcher.StartCount);
         }
 
@@ -454,7 +653,7 @@ namespace LiteMonitor.Tests
         public void 没有需求时不启动也不下载()
         {
             var launcher = new FakeLauncher();
-            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery());
+            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
             counter.FpsDemandProvider = () => false;
 
             for (int i = 0; i < 5; i++) counter.GetFps();
@@ -467,10 +666,27 @@ namespace LiteMonitor.Tests
         }
 
         [Fact]
+        public void 非管理员时不启动也不下载外部服务()
+        {
+            var launcher = new FakeLauncher();
+            // 模拟非提权运行（PresentMon 需要管理员权限）
+            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => false);
+            counter.FpsDemandProvider = () => true;
+
+            for (int i = 0; i < 5; i++) counter.GetFps();
+            Thread.Sleep(300);
+
+            // 既不检查可用性（不下载），也不拉起进程
+            Assert.Equal(0, launcher.EnsureCount);
+            Assert.Equal(0, launcher.StartCount);
+            Assert.False(counter.IsServiceRunning);
+        }
+
+        [Fact]
         public void 需求为真时健康检查会补启动未运行的服务()
         {
             var launcher = new FakeLauncher();
-            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery());
+            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
             counter.FpsDemandProvider = () => true;
 
             // 没有调用 GetFps()，服务尚未启动
@@ -485,7 +701,7 @@ namespace LiteMonitor.Tests
         public void 关闭全部需求后可恢复停止并能再次启动()
         {
             var launcher = new FakeLauncher();
-            var counter = new FpsCounter(null, launcher, new FakeProcessQuery());
+            var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
             bool demand = true;
             counter.FpsDemandProvider = () => demand;
 
@@ -513,6 +729,63 @@ namespace LiteMonitor.Tests
             counter.GetFps();
             Thread.Sleep(200);
             Assert.Equal(2, launcher.StartCount);
+        }
+
+        // ================================================================
+        // 15)~16) 外部进程退出与最终释放
+        // ================================================================
+
+        [Fact]
+        public void 外部服务进程退出后运行状态立刻回落()
+        {
+            var launcher = new FakeLauncher();
+            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
+            counter.FpsDemandProvider = () => true;
+
+            counter.GetFps();
+            WaitUntil(() => launcher.StartCount == 1, 3000);
+            Assert.True(counter.IsServiceRunning);
+
+            // 外部进程退出（PresentMon 因无权限/异常退出）
+            launcher.RaiseExited();
+
+            // 运行状态必须立刻回落，Web 侧才能区分"未启动"与"启动但为 0"
+            Assert.False(counter.IsServiceRunning);
+        }
+
+        [Fact]
+        public void Dispose后不会产生未观测的后台任务异常()
+        {
+            var observed = new ConcurrentBag<Exception>();
+            void Handler(object? sender, UnobservedTaskExceptionEventArgs e)
+            {
+                if (e.Exception.InnerException is ObjectDisposedException) observed.Add(e.Exception);
+            }
+
+            TaskScheduler.UnobservedTaskException += Handler;
+            try
+            {
+                // 反复创建/释放，逼出"后台循环读取已释放的 CancellationTokenSource"的竞态
+                for (int i = 0; i < 30; i++)
+                {
+                    var counter = new FpsCounter(null, new FakeLauncher(), new FakeProcessQuery(), () => true);
+                    Thread.Sleep(7);
+                    counter.Dispose();
+                }
+
+                // 等待后台循环（500ms 统计循环 / 3s 健康检查）走到下一次读取 Token 的位置
+                Thread.Sleep(3500);
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+                Thread.Sleep(200);
+            }
+            finally
+            {
+                TaskScheduler.UnobservedTaskException -= Handler;
+            }
+
+            Assert.Empty(observed);
         }
     }
 }

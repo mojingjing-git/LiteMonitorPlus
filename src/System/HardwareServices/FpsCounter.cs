@@ -105,6 +105,18 @@ namespace LiteMonitor.src.SystemServices
     }
 
     /// <summary>
+    /// 外部 FPS 采集服务启动器的可选扩展：进程退出通知。
+    ///
+    /// 实现该接口后，外部服务进程一退出就会立刻回调，
+    /// 调用方可以马上把"服务运行中"状态回落（而不是等下一轮健康检查）。
+    /// </summary>
+    public interface IFpsServiceExitNotifier
+    {
+        /// <summary>外部服务进程退出时触发（在任意线程回调）</summary>
+        event Action? Exited;
+    }
+
+    /// <summary>
     /// FPS 状态存储选项
     /// </summary>
     public sealed class FpsStateOptions
@@ -191,6 +203,9 @@ namespace LiteMonitor.src.SystemServices
         /// <summary>低于该 FPS 不上报</summary>
         private const float MinReportedFps = 1.0f;
 
+        /// <summary>查询状态：已确认进程退出（不作为"查询成功"缓存）</summary>
+        private const int QueryStateExited = 3;
+
         /// <summary>一次采样的记录：帧数与持续时间</summary>
         private struct FrameSample
         {
@@ -201,11 +216,22 @@ namespace LiteMonitor.src.SystemServices
         /// <summary>单个 PID 的状态记录</summary>
         private sealed class Entry
         {
-            private int _frames;           // 未消费的帧数
+            /// <summary>帧计数的封存标志位（最高位）</summary>
+            private const int FrameSealedMask = int.MinValue;
+
+            /// <summary>帧计数的数值位</summary>
+            private const int FrameCountMask = int.MaxValue;
+
+            /// <summary>
+            /// 帧计数与封存标志打包在一个 int 里：
+            /// 最高位=已封存，其余位=未消费帧数。
+            /// 这样"加一帧"与"取走帧数"都是单次 CAS，不会出现
+            /// "加一帧→被取走→再回退"导致计数变负、同一帧被统计两次的问题。
+            /// </summary>
+            private int _frameWord;
             private long _lastFrameTicks;  // 最后一次收到帧的单调时刻
             private long _lastQueryTicks;  // 最后一次发起进程查询的单调时刻
             private int _queryState;       // 0=未查询 1=成功 2=失败
-            private int _sealed;           // 1=已封存（清理流程占用，禁止再写入帧）
             private string _name = string.Empty;
             private long _identity;        // 进程身份标识（创建时间），0=未知
             private float _fps;            // 当前算出的 FPS
@@ -228,26 +254,46 @@ namespace LiteMonitor.src.SystemServices
             public long LastQueryTicks => Interlocked.Read(ref _lastQueryTicks);
             public bool HasHistory => Accumulator.Count > 0 || Olympic.Count > 0;
 
-            /// <summary>记录一帧；条目已封存时返回 false（调用方需换新条目）</summary>
+            /// <summary>
+            /// 记录一帧；条目已封存时返回 false（调用方需换新条目）。
+            /// 用 CAS 保证"加帧"与"封存"互斥：要么这一帧计入本条目，
+            /// 要么明确失败交给调用方重试，不会出现计数被回退的情况。
+            /// </summary>
             public bool TryAddFrame(long ticks)
             {
-                if (Volatile.Read(ref _sealed) != 0) return false;
-                Interlocked.Increment(ref _frames);
-                Interlocked.Exchange(ref _lastFrameTicks, ticks);
-                if (Volatile.Read(ref _sealed) != 0)
+                while (true)
                 {
-                    // 与封存流程竞争：撤销本次计数，交由调用方重试，避免帧被丢进已退休条目
-                    Interlocked.Decrement(ref _frames);
-                    return false;
+                    int cur = Volatile.Read(ref _frameWord);
+                    if ((cur & FrameSealedMask) != 0) return false;   // 已封存
+                    if (cur == FrameCountMask) return false;          // 计数饱和，放弃这一帧
+                    if (Interlocked.CompareExchange(ref _frameWord, cur + 1, cur) == cur)
+                    {
+                        Interlocked.Exchange(ref _lastFrameTicks, ticks);
+                        return true;
+                    }
                 }
-                return true;
             }
 
-            /// <summary>原子取走当前未消费的帧数</summary>
-            public int TakeFrames() => Interlocked.Exchange(ref _frames, 0);
+            /// <summary>原子取走当前未消费的帧数（封存标志保持不变）</summary>
+            public int TakeFrames()
+            {
+                while (true)
+                {
+                    int cur = Volatile.Read(ref _frameWord);
+                    int count = cur & FrameCountMask;
+                    int next = cur & FrameSealedMask;
+                    if (Interlocked.CompareExchange(ref _frameWord, next, cur) == cur)
+                    {
+                        return count;
+                    }
+                }
+            }
 
-            /// <summary>把帧数放回（清理流程决定不清理时使用）</summary>
-            public void RestoreFrames(int count) { if (count > 0) Interlocked.Add(ref _frames, count); }
+            /// <summary>把帧数放回（清理流程决定不清理、或转移残留帧时使用）</summary>
+            public void RestoreFrames(int count)
+            {
+                if (count > 0) Interlocked.Add(ref _frameWord, count);
+            }
 
             public void SetQueryState(int state) => Volatile.Write(ref _queryState, state);
             public void SetLastQueryTicks(long ticks) => Interlocked.Exchange(ref _lastQueryTicks, ticks);
@@ -263,11 +309,17 @@ namespace LiteMonitor.src.SystemServices
                 _fps = 0f;
             }
 
-            /// <summary>封存条目；成功返回 true</summary>
-            public bool Seal() => Interlocked.Exchange(ref _sealed, 1) == 0;
+            /// <summary>
+            /// 封存条目（禁止再写入帧）；首次封存成功返回 true。
+            /// 注意：判断依据是"封存位"，不是整个字（帧数非 0 时整个字也非 0）。
+            /// </summary>
+            public bool Seal() => (Interlocked.Or(ref _frameWord, FrameSealedMask) & FrameSealedMask) == 0;
 
-            /// <summary>解除封存</summary>
-            public void Unseal() => Volatile.Write(ref _sealed, 0);
+            /// <summary>解除封存（帧数保持不变）</summary>
+            public void Unseal() => Interlocked.And(ref _frameWord, FrameCountMask);
+
+            /// <summary>条目是否已封存</summary>
+            public bool IsSealed => (Volatile.Read(ref _frameWord) & FrameSealedMask) != 0;
         }
 
         private readonly ConcurrentDictionary<int, Entry> _entries = new();
@@ -282,6 +334,8 @@ namespace LiteMonitor.src.SystemServices
 
         private int _queryCount;            // 累计发起过的进程查询次数
         private long _totalFramesObserved;  // 累计被统计消费的帧数
+        private long _retiredTransferred;   // 清理流程转移出去的残留帧数
+        private long _revivedCarried;       // 复活流程搬迁走的帧数
 
         /// <summary>构造状态存储</summary>
         /// <param name="query">进程查询器（可注入）</param>
@@ -306,6 +360,12 @@ namespace LiteMonitor.src.SystemServices
 
         /// <summary>累计被统计消费的帧数（用于观测是否丢帧）</summary>
         public long TotalFramesObserved => Interlocked.Read(ref _totalFramesObserved);
+
+        /// <summary>清理流程（封存后）转移给存活条目的残留帧数（用于观测转移路径是否被执行）</summary>
+        public long RetiredTransferredFrames => Interlocked.Read(ref _retiredTransferred);
+
+        /// <summary>复活流程搬迁到新条目的帧数（用于观测复活路径是否被执行）</summary>
+        public long RevivedCarriedFrames => Interlocked.Read(ref _revivedCarried);
 
         /// <summary>是否存在可上报的 FPS 数据</summary>
         public bool HasActiveFps
@@ -360,6 +420,7 @@ namespace LiteMonitor.src.SystemServices
                 if (current.TryAddFrame(now)) return;
 
                 int carried = current.TakeFrames();
+                Interlocked.Add(ref _revivedCarried, carried);
                 var fresh = new Entry(pid) { Generation = current.Generation };
                 fresh.RestoreFrames(carried);
                 fresh.TryAddFrame(now);
@@ -399,18 +460,21 @@ namespace LiteMonitor.src.SystemServices
                         continue;
                     }
 
+                    // 闲置清理：长期不再产生帧的记录按期限有界移除。
+                    // ★ 必须放在 Unknown / 排除进程分支之前：
+                    //   否则"查询持续失败"或"被排除"的记录会先被 continue 掉，
+                    //   永远得不到回收，_entries 就会单调增长。
+                    if (now - entry.LastFrameTicks >= _idleTimeoutMs)
+                    {
+                        if (RetireEntry(pid, entry, force: false)) cleaned++;
+                        continue;
+                    }
+
                     string processName = query.Name;
                     if (query.Status == FpsProcessQueryStatus.Unknown || _excluded.Contains(processName))
                     {
                         // 排除进程 / 查询未知的进程：不参与统计（保持原实现语义）
                         entry.SetFps(0f);
-                        continue;
-                    }
-
-                    // 闲置清理：长期不再产生帧的记录按期限有界移除
-                    if (now - entry.LastFrameTicks >= _idleTimeoutMs)
-                    {
-                        if (RetireEntry(pid, entry, force: false)) cleaned++;
                         continue;
                     }
 
@@ -602,7 +666,9 @@ namespace LiteMonitor.src.SystemServices
                     break;
 
                 case FpsProcessQueryStatus.Exited:
-                    entry.SetQueryState(1);
+                    // ★ 退出结果不能当作"查询成功"缓存：否则后续几轮会按缓存当成进程仍存在，
+                    //   "已退出 PID 立即移除"就会落空。退出状态单独记，下一轮会重新确认。
+                    entry.SetQueryState(QueryStateExited);
                     break;
 
                 default:
@@ -624,9 +690,16 @@ namespace LiteMonitor.src.SystemServices
         {
             lock (_gate)
             {
-                if (!_entries.TryGetValue(pid, out Entry? current) || !ReferenceEquals(current, entry))
+                if (!_entries.TryGetValue(pid, out Entry? current))
                 {
-                    return false; // 已经被其他流程替换或移除
+                    return false; // 已经被其他流程移除
+                }
+
+                if (!ReferenceEquals(current, entry))
+                {
+                    // 条目已被"复活"流程换新（帧已搬迁到新条目）。
+                    // 这里要清理的是同一个 PID 的当前条目，否则"已退出 PID 立即移除"会被跳过。
+                    entry = current;
                 }
 
                 if (!entry.Seal()) return false; // 已被其他流程封存
@@ -645,6 +718,7 @@ namespace LiteMonitor.src.SystemServices
                 if (pending > 0)
                 {
                     // 残留帧转移到存活条目，避免真实新增帧被过期清理永久丢弃
+                    Interlocked.Add(ref _retiredTransferred, pending);
                     var fresh = new Entry(pid) { Generation = entry.Generation };
                     if (_entries.TryAdd(pid, fresh))
                     {
@@ -703,6 +777,9 @@ namespace LiteMonitor.src.SystemServices
         // 后台任务的取消源：只用于最终 Dispose，空闲停止不会取消（保证可恢复）
         private readonly CancellationTokenSource _cts = new();
 
+        // 管理员权限判定（可注入，便于单元测试；默认使用 Windows 身份判断）
+        private readonly Func<bool> _administratorProbe;
+
         // 秒表计时，用于计算采样周期
         private Stopwatch _cycleTimer = new Stopwatch();
 
@@ -739,7 +816,7 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         /// <param name="installer">注入 DriverInstaller 以复用下载逻辑</param>
         public FpsCounter(DriverInstaller installer)
-            : this(installer, null, null)
+            : this(installer, null, null, null)
         {
         }
 
@@ -750,10 +827,32 @@ namespace LiteMonitor.src.SystemServices
         /// <param name="launcher">外部 FPS 采集服务启动器；为 null 时使用默认的 PresentMon 启动器</param>
         /// <param name="processQuery">进程查询器；为 null 时使用基于 Process 的默认实现</param>
         public FpsCounter(DriverInstaller installer, IFpsServiceLauncher? launcher, IFpsProcessQuery? processQuery)
+            : this(installer, launcher, processQuery, null)
+        {
+        }
+
+        /// <summary>
+        /// FPS 构造函数（可注入外部服务启动器、进程查询器与管理员权限判定）
+        /// </summary>
+        /// <param name="installer">注入 DriverInstaller 以复用下载逻辑</param>
+        /// <param name="launcher">外部 FPS 采集服务启动器；为 null 时使用默认的 PresentMon 启动器</param>
+        /// <param name="processQuery">进程查询器；为 null 时使用基于 Process 的默认实现</param>
+        /// <param name="administratorProbe">
+        /// 管理员权限判定；为 null 时使用 <see cref="IsAdministrator"/>。
+        /// PresentMon 需要管理员权限（ETW 会话），非管理员不得启动外部服务。
+        /// </param>
+        public FpsCounter(DriverInstaller installer, IFpsServiceLauncher? launcher, IFpsProcessQuery? processQuery, Func<bool>? administratorProbe)
         {
             _driverInstaller = installer;
-            _launcher = launcher ?? new PresentMonServiceLauncher(installer);
+            _administratorProbe = administratorProbe ?? IsAdministrator;
+            _launcher = launcher ?? new PresentMonServiceLauncher(installer, _administratorProbe);
             _processQuery = processQuery ?? new SystemProcessQuery();
+
+            // 外部服务进程退出时立刻回落"服务运行中"状态（基线行为）
+            if (_launcher is IFpsServiceExitNotifier exitNotifier)
+            {
+                exitNotifier.Exited += OnExternalServiceExited;
+            }
 
             _store = new FpsProcessStateStore(_processQuery, new FpsStateOptions
             {
@@ -770,10 +869,11 @@ namespace LiteMonitor.src.SystemServices
             Task.Run(async () =>
             {
                 _cycleTimer.Start();
-                while (!_cts.IsCancellationRequested)
+                while (Volatile.Read(ref _disposed) == 0)
                 {
                     try { await Task.Delay(500, _cts.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
+                    catch (ObjectDisposedException) { break; }
                     CalculateFps();
                 }
             });
@@ -781,10 +881,11 @@ namespace LiteMonitor.src.SystemServices
             // 3秒检查一次服务健康状态和生命周期
             Task.Run(async () =>
             {
-                while (!_cts.IsCancellationRequested)
+                while (Volatile.Read(ref _disposed) == 0)
                 {
                     try { await Task.Delay(3000, _cts.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
+                    catch (ObjectDisposedException) { break; }
                     CheckHealth();
                 }
             });
@@ -807,7 +908,7 @@ namespace LiteMonitor.src.SystemServices
         public bool IsFpsDemandActive => ResolveDemand();
 
         /// <summary>FPS 采集服务当前是否正在运行（外部可查询）</summary>
-        public bool IsServiceRunning => _isRunning;
+        public bool IsServiceRunning => _isRunning && _launcher.IsRunning;
 
         /// <summary>当前是否存在可上报的 FPS 数据（外部可查询；false 时不应把 FPS 报成 0）</summary>
         public bool HasFpsData => _store.HasActiveFps;
@@ -815,6 +916,22 @@ namespace LiteMonitor.src.SystemServices
         private void Log(string msg)
         {
             try { File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss}] {msg}\n"); } catch { }
+        }
+
+        /// <summary>
+        /// 外部服务进程意外退出时的回调：立刻把"服务运行中"状态回落。
+        /// </summary>
+        private void OnExternalServiceExited()
+        {
+            _isRunning = false;
+        }
+
+        /// <summary>
+        /// 外部进程已退出但退出事件未送达时的兜底：把运行状态回落。
+        /// </summary>
+        private void SyncServiceState()
+        {
+            if (_isRunning && !_launcher.IsRunning) _isRunning = false;
         }
 
         /// <summary>
@@ -832,6 +949,10 @@ namespace LiteMonitor.src.SystemServices
 
             // 没有需求：不启动外部服务
             if (!ResolveDemand()) return 0f;
+
+            // 外部进程意外退出时立刻回落状态（事件未送达时的兜底），
+            // 否则要等下一轮健康检查才自愈。
+            SyncServiceState();
 
             // 如果没运行且没在启动中，尝试启动服务
             EnsureServiceStarted();
@@ -945,6 +1066,9 @@ namespace LiteMonitor.src.SystemServices
 
             bool demand = ResolveDemand();
 
+            // 外部进程已退出时先回落状态，避免"以为还在跑"而漏掉重启
+            SyncServiceState();
+
             // ★★★ [修改] 没有需求时做可恢复停止（不是最终释放），需求恢复后可再次启动 ★★★
             if (_isRunning && !demand)
             {
@@ -967,8 +1091,13 @@ namespace LiteMonitor.src.SystemServices
                 bool isDead = (Environment.TickCount64 - _lastDataTicks) > 3000;
                 if (!_launcher.IsRunning) isDead = true;
 
-                // 异常时重启服务
-                if (isDead) Task.Run(() => RestartService());
+                // 异常时重启服务。
+                // 先记一次启动失败退避：进程"秒退"时不能让重启变成每几秒一次的忙循环。
+                if (isDead)
+                {
+                    ScheduleStartRetry();
+                    Task.Run(() => RestartService());
+                }
             }
         }
 
@@ -1003,6 +1132,7 @@ namespace LiteMonitor.src.SystemServices
                 // 短暂延迟确保资源完全释放
                 try { await Task.Delay(1000, _cts.Token).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
+                catch (ObjectDisposedException) { return; }
                 // 重新启动服务
                 StartService();
             }
@@ -1041,6 +1171,11 @@ namespace LiteMonitor.src.SystemServices
 
                 // 没有需求：不启动、不下载
                 if (!ResolveDemand()) return;
+
+                // ★★★ [恢复基线] PresentMon 需要管理员权限（ETW 会话）。
+                // 非管理员时必须在这里挡住：否则组件已存在的情况下会反复拉起一个
+                // 立刻因无权限退出的 PresentMon，形成"每几秒拉起一次失败进程"的忙循环。
+                if (!_administratorProbe()) return;
 
                 // 确保外部服务可用（必要时下载组件，带退避避免失败重试忙循环）
                 if (!_launcher.EnsureAvailable())
@@ -1164,8 +1299,10 @@ namespace LiteMonitor.src.SystemServices
 
             StopService();
 
+            // 只取消，不释放 CancellationTokenSource：
+            // 后台循环与 RestartService 仍会读取 _cts.Token，
+            // 释放后读取会抛 ObjectDisposedException（只捕 OperationCanceledException 会漏成未观测异常）。
             try { _cts.Cancel(); } catch { }
-            try { _cts.Dispose(); } catch { }
         }
 
         // ================================================================
@@ -1206,15 +1343,20 @@ namespace LiteMonitor.src.SystemServices
         // ================================================================
         // 默认实现：PresentMon 启动器
         // ================================================================
-        private sealed class PresentMonServiceLauncher : IFpsServiceLauncher
+        private sealed class PresentMonServiceLauncher : IFpsServiceLauncher, IFpsServiceExitNotifier
         {
             private readonly DriverInstaller? _installer;
+            private readonly Func<bool> _administratorProbe;
             private Process? _process;
             private long _nextEnsureTicks;
 
-            public PresentMonServiceLauncher(DriverInstaller? installer)
+            /// <summary>外部服务进程退出时触发</summary>
+            public event Action? Exited;
+
+            public PresentMonServiceLauncher(DriverInstaller? installer, Func<bool>? administratorProbe = null)
             {
                 _installer = installer;
+                _administratorProbe = administratorProbe ?? IsAdministrator;
             }
 
             public bool IsRunning
@@ -1230,15 +1372,17 @@ namespace LiteMonitor.src.SystemServices
 
             public bool EnsureAvailable()
             {
+                // ★★★ [修复] PresentMon 需要管理员权限（ETW 会话）。
+                // 这个检查必须对"组件已存在"的分支同样生效，否则非管理员会拉起一个
+                // 立刻因无权限退出的 PresentMon。
+                if (!_administratorProbe()) return false;
+
                 if (File.Exists(ExePath)) return true;
 
                 // 下载退避：失败时不要每 500ms 重复发起下载
                 long now = Environment.TickCount64;
                 if (now < Interlocked.Read(ref _nextEnsureTicks)) return false;
                 Interlocked.Exchange(ref _nextEnsureTicks, now + 60000);
-
-                // PresentMon 需要管理员权限
-                if (!IsAdministrator()) return false;
 
                 try
                 {
@@ -1286,8 +1430,12 @@ namespace LiteMonitor.src.SystemServices
                     proc.ErrorDataReceived += (s, e) => { };
                     proc.BeginErrorReadLine();
 
-                    // 监控进程退出状态
-                    Task.Run(async () => { try { await proc.WaitForExitAsync(); } catch { } });
+                    // 监控进程退出状态：进程一退出就通知调用方回落"服务运行中"状态
+                    Task.Run(async () =>
+                    {
+                        try { await proc.WaitForExitAsync(); } catch { }
+                        try { Exited?.Invoke(); } catch { }
+                    });
 
                     // 异步处理 PresentMon 输出数据
                     Task.Run(async () =>
