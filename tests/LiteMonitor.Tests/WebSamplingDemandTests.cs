@@ -5,8 +5,10 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using LibreHardwareMonitor.Hardware;
@@ -467,6 +469,78 @@ namespace LiteMonitor.Tests
         }
 
         /// <summary>
+        /// 找到第 n 个（0 基）形如 "Name(" 的**声明**位置（跳过成员访问与标识符的一部分）。
+        /// </summary>
+        /// <remarks>
+        /// 用于区分同一个类里的**多个构造函数**：例如 <c>LiteWebServer</c> 的
+        /// 第 0 个声明是 1 参 ctor，第 1 个是 3 参 ctor
+        /// （类声明 <c>class LiteWebServer : IDisposable</c> 后面不是 '('，会被跳过）。
+        /// </remarks>
+        private static int FindNthDeclaration(string code, string name, int n)
+        {
+            int search = 0;
+            int count = 0;
+            while (search <= code.Length)
+            {
+                int idx = code.IndexOf(name, search, StringComparison.Ordinal);
+                if (idx < 0) return -1;
+
+                if (idx > 0 && (code[idx - 1] == '.' || char.IsLetterOrDigit(code[idx - 1]) || code[idx - 1] == '_'))
+                {
+                    search = idx + name.Length;
+                    continue;
+                }
+
+                int p = idx + name.Length;
+                while (p < code.Length && char.IsWhiteSpace(code[p])) p++;
+                if (p >= code.Length || code[p] != '(')
+                {
+                    search = idx + name.Length;
+                    continue;
+                }
+
+                if (count == n) return idx;
+                count++;
+                search = idx + name.Length;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// 取某个构造函数的**初始化器**（参数列表右括号之后、方法体左括号之前的那段文本）。
+        /// </summary>
+        /// <remarks>
+        /// 例如 <c>public LiteWebServer(Settings cfg) : this(cfg, A, B) { }</c> 的初始化器是
+        /// <c>: this(cfg, A, B)</c>。构造器初始化器**不在**方法体里，必须单独取。
+        /// </remarks>
+        private static string ExtractConstructorInitializer(string code, int declIndex)
+        {
+            if (declIndex < 0) return null;
+            int open = code.IndexOf('(', declIndex);
+            if (open < 0) return null;
+            int close = FindMatchingParen(code, open);
+            if (close < 0) return null;
+            int bodyOpen = code.IndexOf('{', close);
+            if (bodyOpen < 0) return null;
+            return code.Substring(close + 1, bodyOpen - close - 1);
+        }
+
+        /// <summary>
+        /// 取某个构造函数的**方法体**（大括号配对，跳过字符串/字符字面量）。
+        /// </summary>
+        private static string ExtractConstructorBody(string code, int declIndex)
+        {
+            if (declIndex < 0) return null;
+            int open = code.IndexOf('(', declIndex);
+            if (open < 0) return null;
+            int close = FindMatchingParen(code, open);
+            if (close < 0) return null;
+            int bodyOpen = code.IndexOf('{', close);
+            if (bodyOpen < 0) return null;
+            return ScanBracedBlock(code, bodyOpen);
+        }
+
+        /// <summary>
         /// 截取方法体里**最外层**的 catch 块（深度 0 的那个 catch 关键字起，到方法体结束）。
         /// </summary>
         /// <remarks>
@@ -508,6 +582,52 @@ namespace LiteMonitor.Tests
             probe.Start();
             try { return ((IPEndPoint)probe.LocalEndpoint).Port; }
             finally { probe.Stop(); }
+        }
+
+        /// <summary>
+        /// 测试专用强口令（每次运行随机生成）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 不用仓库里写死的弱口令：即使监听地址被误改成"所有网卡"，
+        /// 也不该有一个人人可猜的口令留在源码里。
+        /// 只用十六进制字符 → 可以直接拼进 URL 查询串，不需要 URL 编码。
+        /// </remarks>
+        private static string NewStrongPassword() => Guid.NewGuid().ToString("N");
+
+        /// <summary>
+        /// 让被测服务器**只监听回环地址**（F7 卫生：测试期间不在局域网上暴露服务）。
+        /// </summary>
+        /// <remarks>
+        /// <c>LiteWebServer.Start()</c> 硬编码监听 <c>IPAddress.IPv6Any</c>（所有网卡），
+        /// 生产代码提供了一个 <c>internal</c> 接缝 <c>ListenAddress</c>；
+        /// 测试通过反射设置它（internal 成员对测试程序集不可见）。
+        /// 接缝找不到时**响亮失败**，不能静默退回"监听所有网卡"。
+        /// </remarks>
+        private static void UseLoopbackListener(LiteWebServer server)
+        {
+            var prop = typeof(LiteWebServer).GetProperty("ListenAddress",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.True(prop != null,
+                "LiteWebServer 必须提供 internal ListenAddress 测试接缝（否则测试会监听所有网卡）");
+            var setter = prop.GetSetMethod(nonPublic: true);
+            Assert.True(setter != null, "LiteWebServer.ListenAddress 必须可写");
+            setter.Invoke(server, new object[] { IPAddress.Loopback });
+        }
+
+        /// <summary>
+        /// 复位 <c>LiteWebServer.Instance</c>（生产代码本来就不复位，测试里显式复位）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 生产代码**不能**在 Stop()/Dispose() 里复位：<c>MainForm_Transparent</c> 正是靠
+        /// <c>Instance</c> 反复 Start/Stop，复位会让它再也起不来。
+        /// 但测试构造完服务器后必须复位，否则静态字段里会留着一个已 Dispose 的实例。
+        /// </remarks>
+        private static void ResetLiteWebServerInstance()
+        {
+            var prop = typeof(LiteWebServer).GetProperty("Instance",
+                BindingFlags.Public | BindingFlags.Static);
+            var setter = prop?.GetSetMethod(nonPublic: true);
+            setter?.Invoke(null, new object[] { null });
         }
 
         // ================================================================
@@ -1205,6 +1325,87 @@ namespace LiteMonitor.Tests
         }
 
         [Fact]
+        public void 单参构造函数显式转发到生产默认实现()
+        {
+            // ★ F1 的护栏（M1c 变异必须让本用例变红）。
+            //   变异：把 1 参 ctor 的委派改成 this(cfg, null, (bool __h) => true)
+            //        → 之前 34/34 全绿（"生产默认需求传播路径"零覆盖）。
+            //   ★ 只加断言**不**改委派是不够的（M1c 仍然全绿）；
+            //     只改委派**不**加断言也一样危险（谁改回 no-op 都没人发现）→ 两者都要。
+            //   生产代码已改成显式转发：public LiteWebServer(Settings cfg)
+            //       : this(cfg, DefaultSamplingRequester, ApplyWebDataDemandToHardware)
+            //   （行为等价：与"传 null 再走 ??"最终得到的委托目标完全相同 → 零行为变化）
+            string path = FindRepoFile(Path.Combine("src", "System", "WebServer", "LiteWebServer.cs"));
+            Assert.True(path != null && File.Exists(path), "找不到 LiteWebServer.cs（仓库根定位失败）");
+            string code = StripComments(File.ReadAllText(path));
+
+            // 第 0 个 "LiteWebServer(" 声明 = 1 参 ctor（类声明后面不是 '('，会被跳过）
+            int oneArgIdx = FindNthDeclaration(code, "LiteWebServer", 0);
+            Assert.True(oneArgIdx >= 0, "LiteWebServer.cs 里找不到 1 参构造函数声明");
+            string init = ExtractConstructorInitializer(code, oneArgIdx);
+            Assert.True(init != null, "取不到 1 参构造函数的初始化器（构造器初始化器不在方法体里）");
+
+            // ★ 初始化器必须**同时**显式转发两个生产默认实现
+            Assert.True(init.Contains("DefaultSamplingRequester"),
+                "1 参构造函数必须显式转发默认采样入口 DefaultSamplingRequester（否则生产路径无覆盖）");
+            Assert.True(init.Contains("ApplyWebDataDemandToHardware"),
+                "1 参构造函数必须显式转发默认需求写入 ApplyWebDataDemandToHardware（否则 Web 需求永远到不了采集层）");
+
+            // 3 参 ctor 的 ?? 兜底必须保留（直接传 null 的调用方仍要拿到默认实现）
+            int threeArgIdx = FindNthDeclaration(code, "LiteWebServer", 1);
+            Assert.True(threeArgIdx >= 0, "LiteWebServer.cs 里找不到 3 参构造函数声明");
+            string threeArgBody = ExtractConstructorBody(code, threeArgIdx);
+            Assert.True(threeArgBody != null, "取不到 3 参构造函数的方法体");
+            Assert.True(threeArgBody.Contains("?? ApplyWebDataDemandToHardware"),
+                "3 参构造函数必须保留 ?? ApplyWebDataDemandToHardware 兜底");
+            Assert.True(threeArgBody.Contains("?? DefaultSamplingRequester"),
+                "3 参构造函数必须保留 ?? DefaultSamplingRequester 兜底");
+        }
+
+        [Fact]
+        public void Start方法启动需求监视()
+        {
+            // ★ F2① 的护栏（M9 / M15 变异必须让本用例变红）：
+            //   变异：删掉 Start() 里的 _demandSync.Start();  → 之前 34/34 全绿。
+            //   200ms 周期监视是**唯一**能发现 HTTP 租期到期的机制
+            //   （租期到期不触发任何事件；DemandChanged 只在连接增删 / 租期授予时触发）
+            //   → 删掉它 = 采集层需求**永久停在 true** = 永久白采集（不崩不红无日志）。
+            // ★ 断言必须精确到 "_demandSync.Start()"：
+            //   Start() 里同时有 _demandSync.Start(); 与 _demandSync.SyncNow();
+            //   用更宽松的匹配会把两者一起匹配上 → M9 变异仍可能全绿。
+            string path = FindRepoFile(Path.Combine("src", "System", "WebServer", "LiteWebServer.cs"));
+            Assert.True(path != null && File.Exists(path), "找不到 LiteWebServer.cs（仓库根定位失败）");
+            string code = StripComments(File.ReadAllText(path));
+
+            string startBody = ExtractMethodBody(code, "Start");
+            Assert.True(startBody != null, "LiteWebServer.cs 里找不到 Start 方法");
+            Assert.True(startBody.Contains("_demandSync.Start()"),
+                "Start() 必须启动需求监视 _demandSync.Start()（HTTP 租期到期只能靠它发现）");
+        }
+
+        [Fact]
+        public void 构造函数挂上需求变化钩子()
+        {
+            // ★ F3 的护栏（M10 变异必须让本用例变红）：
+            //   变异：删掉构造函数里的 _sessionManager.DemandChanged = () => _demandSync.SyncNow();
+            //   ★ 两条需求送达机制**互为掩蔽**：
+            //     事件驱动（DemandChanged 钩子）与周期监视（_demandSync.Start()）
+            //     之前只有"两者至少有一个活着"的护栏（M10+M15 同删才红），
+            //     各自单删都全绿 → 必须**各自独立**地锁住。
+            string path = FindRepoFile(Path.Combine("src", "System", "WebServer", "LiteWebServer.cs"));
+            Assert.True(path != null && File.Exists(path), "找不到 LiteWebServer.cs（仓库根定位失败）");
+            string code = StripComments(File.ReadAllText(path));
+
+            // 第 1 个 "LiteWebServer(" 声明 = 3 参 ctor（钩子挂在这里）
+            int threeArgIdx = FindNthDeclaration(code, "LiteWebServer", 1);
+            Assert.True(threeArgIdx >= 0, "LiteWebServer.cs 里找不到 3 参构造函数声明");
+            string body = ExtractConstructorBody(code, threeArgIdx);
+            Assert.True(body != null, "取不到 3 参构造函数的方法体");
+            Assert.True(body.Contains("_sessionManager.DemandChanged ="),
+                "构造函数必须挂上需求变化钩子 _sessionManager.DemandChanged（连接增删 / 租期授予要立刻同步）");
+        }
+
+        [Fact]
         public void 生产默认需求写入路径真的调用SetWebDataDemand()
         {
             // ★ 复审重要#1 的护栏（M1 变异必须让本用例变红）。
@@ -1235,6 +1436,20 @@ namespace LiteMonitor.Tests
                 "LiteWebServer.cs 里找不到默认采样入口 DefaultSamplingRequester");
             Assert.True(requester.Contains("UpdateIfDueAsync("),
                 "默认采样入口必须走 HardwareMonitor.UpdateIfDueAsync（共享限频采样）");
+
+            // ④ ★ F6：语义必须正确 —— 把"是否有需求"**原样**写进采集层。
+            //   之前的护栏只查 token 存在性，变异 M11（SetWebDataDemand(!hasDemand) 语义反转）
+            //   仍然 34/34 全绿。这里查的是**实参**，不是 API 名字。
+            //   为什么必须是源码级：SetWebDataDemand 全工程只有 LiteWebServer.cs:122 一个调用点，
+            //   它在**默认** applier 里，而默认 applier 的目标是 HardwareMonitor.Instance ——
+            //   那个类是 sealed、构造函数会建 LHM Computer（碰驱动）、静态 Instance 是私有 setter，
+            //   单测里**无法实例化也无法注入** → 默认 applier 的运行时取值在单测中根本观测不到。
+            //   （行为侧的"applier 收到的值"由 LiteWebServer生产接线把Web需求送达采集层 覆盖，
+            //     两者互补：行为级盯"接线"，源码级盯"默认实现的语义"。）
+            Assert.False(Regex.IsMatch(applier, @"SetWebDataDemand\(\s*!"),
+                "默认需求写入不得对需求取反（SetWebDataDemand(!hasDemand) 会让语义完全颠倒：有需求时反而缩小采集）");
+            Assert.True(Regex.IsMatch(applier, @"SetWebDataDemand\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\)"),
+                "默认需求写入必须把需求值原样传给 SetWebDataDemand（不能取反、不能传常量）");
         }
 
         [Fact]
@@ -1244,6 +1459,9 @@ namespace LiteMonitor.Tests
             //   生产接线（LiteWebServer → WebDemandSynchronizer → 采集层）零覆盖。
             //   这里构造真实的 LiteWebServer（只替换"写进采集层"的那一端），
             //   走真实的监听 / 握手 / 需求传播链路，断言 Web 需求真的被送达采集层。
+            // ★ F6：不只断言"applier 被调用过"，还要断言它收到的**值本身**
+            //   （无需求 → false；有需求 → true）。
+            // ★ F7 卫生：只监听**回环**、随机强口令、finally 复位 LiteWebServer.Instance。
             int port = FindFreePort();
             var sink = new RecordingDemandSink();
             int samplingCalls = 0;
@@ -1251,24 +1469,33 @@ namespace LiteMonitor.Tests
             bool oldEnabled = _cfg.WebServerEnabled;
             int oldPort = _cfg.WebServerPort;
             string oldPassword = _cfg.WebServerPassword;
-            const string localPassword = "b2fix2-local";
+            string localPassword = NewStrongPassword();
             _cfg.WebServerEnabled = true;
             _cfg.WebServerPort = port;
-            _cfg.WebServerPassword = localPassword;   // 端口会短暂监听在所有网卡上 → 必须带口令
+            _cfg.WebServerPassword = localPassword;
             try
             {
                 using var server = new LiteWebServer(
                     _cfg,
                     samplingRequester: ct => { Interlocked.Increment(ref samplingCalls); return Task.FromResult(true); },
                     demandApplier: sink.Apply);
+                UseLoopbackListener(server);   // ★ F7：只监听回环，不在局域网上暴露服务
 
                 Assert.True(server.Start(out string err), "LiteWebServer 启动失败: " + err);
                 Assert.True(server.IsRunning, "启动成功后 IsRunning 必须为 true");
+
+                // ★ 无需求 → applier 收到 false
+                Assert.True(sink.Count >= 1, "启动后必须至少同步过一次需求");
+                Assert.False(sink.Last, "没有 Web 需求时，采集层必须收到 false（applier 收到的值本身）");
 
                 using (var client = await OpenWebSocketAsync(port, "?pwd=" + localPassword))
                 {
                     Assert.True(await WaitUntilAsync(() => sink.Last, 5000),
                         "WebSocket 连接建立后，Web 需求必须被送达采集层（生产接线回归护栏）");
+                    // ★ 有需求 → applier 收到 true
+                    Assert.True(sink.Last, "存在 Web 需求时，采集层必须收到 true（applier 收到的值本身）");
+                    Assert.True(sink.Snapshot().Contains(true),
+                        "采集层必须收到过 true（不能只收到 false 或常量）");
                     Assert.True(server.HasWebDataDemand, "服务端应报告存在 Web 需求");
                     Assert.Equal(1, server.AuthenticatedConnectionCount);
 
@@ -1277,8 +1504,9 @@ namespace LiteMonitor.Tests
                         "广播路径应当走过共享采样入口");
                 }
 
-                Assert.True(await WaitUntilAsync(() => sink.Count >= 2 && !sink.Last, 5000),
+                Assert.True(await WaitUntilAsync(() => sink.Count >= 3 && !sink.Last, 5000),
                     "最后一个连接断开后，必须把 false 送达采集层");
+                Assert.False(sink.Last, "连接断开后，最后一次写入的需求值必须是 false");
                 Assert.False(server.HasWebDataDemand, "连接断开后不应再有 Web 需求");
             }
             finally
@@ -1286,6 +1514,65 @@ namespace LiteMonitor.Tests
                 _cfg.WebServerEnabled = oldEnabled;
                 _cfg.WebServerPort = oldPort;
                 _cfg.WebServerPassword = oldPassword;
+                ResetLiteWebServerInstance();   // ★ F7：不要把已 Dispose 的实例留在静态字段里
+            }
+        }
+
+        [Fact]
+        public async Task HTTP租期到期后采集层最终收到false()
+        {
+            // ★ F2② 的**行为级**护栏（M9 / M15 变异必须让本用例变红）：
+            //   HTTP 租期到期**没有任何事件可挂靠**（DemandChanged 只在连接增删 / 租期授予时触发），
+            //   唯一能发现它的机制就是 Start() 里的 _demandSync.Start()（200ms 周期监视）。
+            //   删掉它 → 租期到期无人发现 → 采集层需求**永久停在 true** → 永久白采集
+            //   （不崩、不红、无日志 —— 与上一轮重要#1 同类的静默失效）。
+            // ★ 这里用**真实**的 LiteWebServer（走真实 Start() 接线）+ **HTTP-only** 客户端
+            //   （不建立 WebSocket 连接 → 没有任何事件路径能发现租期到期），
+            //   静默等到租期过期（默认 2 秒），断言采集层最终收到 false。
+            int port = FindFreePort();
+            var sink = new RecordingDemandSink();
+
+            bool oldEnabled = _cfg.WebServerEnabled;
+            int oldPort = _cfg.WebServerPort;
+            string oldPassword = _cfg.WebServerPassword;
+            string localPassword = NewStrongPassword();
+            _cfg.WebServerEnabled = true;
+            _cfg.WebServerPort = port;
+            _cfg.WebServerPassword = localPassword;
+            try
+            {
+                using var server = new LiteWebServer(
+                    _cfg,
+                    samplingRequester: ct => Task.FromResult(true),
+                    demandApplier: sink.Apply);
+                UseLoopbackListener(server);   // ★ F7：只监听回环
+
+                Assert.True(server.Start(out string err), "LiteWebServer 启动失败: " + err);
+
+                // 无需求 → 先收到 false
+                Assert.True(sink.Count >= 1, "启动后必须至少同步过一次需求");
+                Assert.False(sink.Last, "没有 Web 需求时，采集层必须收到 false");
+
+                // ★ HTTP-only 请求一次（不建立 WebSocket 连接）
+                string resp = await SendHttpAsync(port, "/api/snapshot?pwd=" + localPassword);
+                Assert.Contains("200", resp);
+
+                // 租期授予 → 采集层收到 true
+                Assert.True(await WaitUntilAsync(() => sink.Last, 5000),
+                    "HTTP 租期授予后必须把 true 送达采集层");
+                int countAtTrue = sink.Count;
+
+                // ★ 静默等到租期过期 → 周期监视必须把 false 送达采集层
+                Assert.True(await WaitUntilAsync(() => sink.Count > countAtTrue && !sink.Last, 15000),
+                    "HTTP 租期到期后必须把 false 送达采集层（否则需求永久停在 true → 永久白采集）");
+                Assert.False(server.HasWebDataDemand, "租期到期后服务端不应再有 Web 需求");
+            }
+            finally
+            {
+                _cfg.WebServerEnabled = oldEnabled;
+                _cfg.WebServerPort = oldPort;
+                _cfg.WebServerPassword = oldPassword;
+                ResetLiteWebServerInstance();   // ★ F7
             }
         }
 
@@ -1349,7 +1636,6 @@ namespace LiteMonitor.Tests
                 demandProvider: () => Volatile.Read(ref demandFlag) == 1,
                 applyDemand: v =>
                 {
-                    lock (written) written.Add(v);
                     int n = Interlocked.Increment(ref writeCount);
                     if (n == 1)
                     {
@@ -1361,6 +1647,11 @@ namespace LiteMonitor.Tests
                     {
                         secondWriteDone.TrySetResult(true);
                     }
+                    // ★ F4：记录必须放在**阻塞点之后**。
+                    //   放在之前时，无论实现修没修好，记录顺序恒为 [true, false]，
+                    //   下面的 Assert.False(last) 恒成立 → 护栏是恒真断言、不承重。
+                    //   放在之后：未修好时（写入发生在锁外）第二次写会**先**完成 → 顺序 [false, true] → 变红。
+                    lock (written) written.Add(v);
                     return true;
                 });
 
@@ -1373,8 +1664,12 @@ namespace LiteMonitor.Tests
             // 第二次同步并发进入
             var second = Task.Run(() => sync.SyncNow());
 
-            // 修好后第二次同步会被锁挡住（最多等 1.5 秒）；未修好时它会立刻写完
-            await Task.WhenAny(secondWriteDone.Task, Task.Delay(1500));
+            // 修好后第二次同步会被锁挡住（最多等 1 秒）；未修好时它会立刻写完
+            await Task.WhenAny(secondWriteDone.Task, Task.Delay(1000));
+
+            // ★ F4：修好后第二次写入必须**仍然被锁挡住**（读 + 比较 + 写在同一把锁里）
+            Assert.False(secondWriteDone.Task.IsCompleted,
+                "第二次同步必须被同步器的锁挡住（读 + 比较 + 写必须在同一把锁里）");
 
             releaseFirstWrite.TrySetResult(true);
             await Task.WhenAll(first, second);
@@ -1420,10 +1715,17 @@ namespace LiteMonitor.Tests
         [Fact]
         public async Task 快速重启后在途HTTP请求仍能得到响应()
         {
-            // ★ 次要#6 的护栏：Start() 原来会 Dispose 上一轮的 _lifetimeCts，
-            //   而在途请求仍持有 lifetime.Token → CreateLinkedTokenSource(token)
-            //   会对**已释放**的 CTS 注册回调 → 抛 ObjectDisposedException
-            //   → 该请求被 HandleClientAsync 的 catch 吞掉 → **客户端收不到任何响应**。
+            // ★ 次要#6 的护栏 —— 它真正防的是"**快速重启丢响应**"：
+            //   Stop → Start 之后，之前连上但还没发请求的客户端再发请求时，
+            //   必须仍然收到 200（而不是被静默吞掉、连一个响应都没有）。
+            // ★ 定位更正（B2 修复轮 3 / F5）：上一轮把它写成"防 ObjectDisposedException 回归"是**错的** ——
+            //   .NET 8 上（目标框架 net8.0-windows / SDK 8.0.426）实测 4 种组合
+            //   （Cancel→Dispose + CreateLinkedTokenSource / Dispose only + CreateLinkedTokenSource /
+            //     Dispose only + token.Register / Cancel→Dispose + token.Register）**全部不抛 ODE**
+            //   （CTS 先 Cancel → token 已取消 → 注册走"立即回调"分支）。
+            //   上一轮的实现者是被自己代码注释里那句未经证实的断言带偏的。
+            //   生产代码"退役 CTS 只 Cancel 不 Dispose"仍然保留，
+            //   但它的理由是"不指向已释放对象"这个确定性，**不是**防 ODE。
             var manager = NewManager(samplingRequester: ct => Task.FromResult(false));
             manager.Start();
 
