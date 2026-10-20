@@ -53,14 +53,31 @@ namespace LiteMonitor
         /// 实时背景帧来源（可空）。为 null 时，主题若请求 glass 会按 A08 的降级链
         /// 明确回退到 gradient → solid，并给出可诊断原因。**A15 接入真实后端后在此传入。**
         /// </param>
-        public AppearanceRuntime(IBackdropFrameSource? frameSource = null)
+        /// <param name="previewSource">
+        /// **预览固定源**（可空，**借用**引用 —— 本类不释放它）。
+        /// <para>
+        /// ★ 存在时，背景层会直接把它当作底图，**完全不访问 <paramref name="frameSource"/>**
+        ///   （A08 已验证的路径：<c>options.PreviewSource != null</c> ⇒ 底图就是它，
+        ///   后端调用次数 = 0），并且来源诊断为 <c>PreviewFrame</c> 而不是 <c>LiveFrame</c>。
+        /// <para>
+        /// ★ 这条路径是**编辑器预览的保证**：预览用固定样例图，既不抓屏、
+        ///   也不会被误记成"实时玻璃真的在工作"（独立复核 N2）。
+        /// <para>
+        /// ★ 主窗口**不要**传这个参数 —— 传了就会让玻璃背景永远走固定图。
+        /// </para>
+        /// </param>
+        public AppearanceRuntime(IBackdropFrameSource? frameSource = null, Image? previewSource = null)
         {
             _host = new DecorResourceHost();
             // 两个渲染器共用同一个宿主 → 缓存与配额是共享的
             _decor = new DecorRenderer(_host);
             _bars = new BarRenderer(_host);
             _backdrop = new BackdropRenderer(frameSource);
+            _previewSource = previewSource;
         }
+
+        /// <summary>预览固定源（借用引用；null = 走实时后端）。</summary>
+        private readonly Image? _previewSource;
 
         /// <summary>当前外观快照（未初始化时为 null）。</summary>
         public ThemeAppearanceOptions? Options => _options;
@@ -110,7 +127,8 @@ namespace LiteMonitor
 
             if (unchanged) return _options!;
 
-            _options = ThemeAppearanceOptions.Create(theme, dpiScale, userScale, clientBounds, _themeGeneration);
+            _options = ThemeAppearanceOptions.Create(
+                theme, dpiScale, userScale, clientBounds, _themeGeneration, null, _previewSource);
             _lastTheme = theme;
             _lastDpiScale = dpiScale;
             _lastUserScale = userScale;

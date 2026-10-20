@@ -33,6 +33,16 @@ namespace LiteMonitor.AppearanceStaticBackdropProbe
         public int TryGetFrameCalls { get; private set; }
         public double LastBlurPx { get; private set; } = -1;
 
+        /// <summary>
+        /// 本来源提供的帧是不是预览用的。
+        /// <para>
+        /// ★ 默认 false（= 真实捕获后端语义）：诊断里报 <c>LiveFrame</c>。
+        ///   固定图 / 假帧提供者必须显式置 true，诊断才报 <c>PreviewFrame</c>
+        ///   （独立复核 N2：来源必须由帧提供者自己声明）。
+        /// </para>
+        /// </summary>
+        public bool IsPreview { get; set; }
+
         public bool TryGetFrame(double blurPx, out Image? frame)
         {
             TryGetFrameCalls++;
