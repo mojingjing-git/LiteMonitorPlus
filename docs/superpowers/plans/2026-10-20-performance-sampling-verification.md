@@ -1,7 +1,8 @@
 # 硬件采集限频与调度修复 —— 验证记录
 
 > 状态：§1–§7 是 Task 0 的「**实施前基线**」；**§8 是实施后第一次重跑**（另一批次，口径有别，单独标注）；
-> **§9 是 Task 6 的「实施后三轮复测 + 完整程序功能检查」**（第三个批次，**最终验收口径**）。
+> **§9 是 Task 6 的「实施后三轮复测 + 完整程序功能检查」**（第三个批次，**最终验收口径**）；
+> **§10 是 R1 启动准入原子化修复的归档**（性能测量之后的代码修正批次，含红绿验证与全量回归）。
 >
 > ⚠ **修订：§9.2 / §9.5 / §9.6 的「中位数」曾被误取为三轮最大值**，已于 2026-10-20 改回真中位数
 > 并重算全部派生结论（**原始测量数据未改动、结论方向未变**）。详见 **§9.12**。
@@ -841,4 +842,136 @@ WebSocket / HTTP 计数证据（三轮中位数）：
 > §9.2 的"生产侧真实采集耗时"表（9 组中位数本来就正确）、§9.5 的 WebSocket 计数表（三轮数值完全相同）、
 > §9.6 的 `trafficRewriteAgreesWithDueRounds`（三轮恒为 true）、§9.7 的单设备成本表（原始三值，非中位数）、
 > §3 与 §8（§3 是基线 2 轮逐轮列出、§8 是单轮批次，均无"三轮取中位数"这一步）。
+
+---
+
+## 10. R1 启动准入原子化修复（归档批次，2026-10-20）
+
+> **本节与 §9 不是同一批次**：§9 是**性能测量批次**（被测版本 `b777ec0`）；本节是
+> **测量之后**发现的一个生命周期缺陷的修复与其验证。**本节不产生新的性能数字**，
+> 只记录代码修正、复审结论、红绿验证与限制。
+
+### 10.1 版本与范围
+
+| 项 | 值 |
+|---|---|
+| 修复提交 | `4b9ed83b1516df986eaf4ef92677649f892811e0` |
+| 父提交 | `15e1fc64f1b5ac740c41c0ab61f0d2d0c1b0c8a9`（§9 之后的性能分支 HEAD） |
+| 提交说明 | `fix(fps): make startup admission atomic with lifecycle changes` |
+| 变更文件 | `src/System/HardwareServices/FpsCounter.cs`、`tests/LiteMonitor.Tests/FpsStateTests.cs`（+82 / −14） |
+| 相对 `master` 的提交数 | **43**（功能分支独有 43，主线独有 0；主线是功能分支祖先） |
+| 本节不改动 | R2、R3 补丁；采样协调逻辑；任何 `src/**` 之外的生产代码 |
+
+### 10.2 缺陷（`15e1fc6` 复审的 P2 项）
+
+位置：`src/System/HardwareServices/FpsCounter.cs:1308-1318`。原顺序：
+
+1. 检查 `_disposed`、生命周期代次以及需求；
+2. `Interlocked.Increment(ref _processCreationInFlight)`；
+3. 调用 `_launcher.Start()`。
+
+**前两步没有与停止/释放共享同一个临界区。** 线程在第 1 步通过后暂停，另一个线程可以完整执行
+`Dispose`：置释放标记、停止启动器、在途计数读到 0、跳过 drain 等待并返回。原线程恢复后**仍登记在途并调用 `Start()`**。
+
+这不是已披露的"创建卡住超过 5 秒后超时返回"的情形——**不需要任何超时即可复现**。表现为
+**释放后仍创建、之后被清理的短暂进程**，不能描述成已证明的永久孤儿进程；但实际启动器的 `Start`
+在创建进程前还会执行 `ForceKillZombies`，同一窗口也意味着最终释放后仍可能执行这些外部副作用。
+
+独立复现装置的结果（注入的需求回调作同步点，在 `EnsureAvailable` 已完成之后的第二次需求检查中
+暂停启动线程；主线程执行 `Dispose` 并记录其已返回，然后放行需求回调）：
+
+```text
+disposeInGap=True, starts=1, startsAfterDispose=1, stops=2, running=False
+Expected: 0
+Actual:   1
+```
+
+同装置不执行 `Dispose` 的阳性对照通过（正常创建一次并进入运行状态）。用例使用事件和 `Join`，
+**没有 `Thread.Sleep`**，也没有真实 PresentMon、ETW 或硬件。
+
+### 10.3 修复内容
+
+- 在 `_lifecycleGate` 下把**"最终复查释放状态/生命周期代次"与"登记在途创建"合并为一个准入动作**完成。
+  释放路径必须与该动作互斥，确保它要么禁止准入，要么看见已登记的创建并等待/撤销。
+  需求回调、组件准备和实际进程创建**仍在锁外**执行。
+- 保留创建后撤销、在途计数 `finally` 归零及原有有界等待。
+- **更正注释**：5 秒等待超时后，撤销由启动线程恢复后完成，**不能无条件承诺** `Dispose` 返回瞬间已无在途创建。
+- 新增 `FpsStateTests.StartupAdmissionMustRespectLifecycleChange`：用事件及专用线程覆盖
+  **释放、停止、正常启动**三种时序；没有新增 `Thread.Sleep`，也没有真实外部进程。
+
+### 10.4 R2 / R3 复审结论（`15e1fc6` 复审）
+
+| 补丁 | 结论 |
+|---|---|
+| **R2** | 必要缓存收尾已移到完成信号之前，在途状态覆盖收尾；完成信号放在 `finally` 中，避免回调异常使 UI 永久等待；新增的代次守卫覆盖旧代次清空新缓存的问题。**覆盖了上轮报告的缺陷。** |
+| **R3** | 等待采集后及序列化后校验当前代次，收件人记录并匹配连接代次，覆盖检查与枚举之间的窗口。**覆盖了上轮报告的缺陷。** |
+| **R1** | 已补上慢准备阶段的复查和创建后的撤销，但**缺少"最后检查与登记在途创建"的原子性** → 本节修复。 |
+| 原 `Review_CompletedSamplingMustHaveSettledCache` | 是面向旧代码的**失败复现**（它等待请求完成后才释放收尾），修复后**不能直接用作通过验收**；已替换为"收尾阻塞时 Task 不完成；放行后同代次只计算一次"的用例 |
+| 覆盖缺口 | 此次发现的 R1 窗口位于 **`EnsureAvailable` 返回之后、`Start` 进入之前**；原有 R1 用例分别暂停在 `EnsureAvailable` 内和 `Start` 内，**没有覆盖该准入窗口** |
+
+### 10.5 红绿验证
+
+隔离副本：`C:/Users/wrz20/AppData/Local/Temp/litemonitor-review-15e1fc6-20261020`。
+命令（每个命令单独检查退出码；`--no-build` 必须在强制重建成功之后执行）：
+
+```powershell
+dotnet build tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Release --no-incremental
+dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Release --no-build --filter FullyQualifiedName~StartupAdmissionMustRespectLifecycleChange
+dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Release --no-build --filter 'FullyQualifiedName!~ReviewAdmissionGapTests'
+```
+
+| 步骤 | 状态 | 结果 |
+|---|---|---|
+| 1. 生产代码保持 `15e1fc6`，只放入新测试；`git hash-object` 与基线 blob 均为 `b4be8a5c0c4e35a0e03625169584d4ad63a9c204` | 红 | 定向用例 **2 失败 / 1 通过**（释放与停止场景均为 `Expected 0 / Actual 1`；正常启动阳性对照通过） |
+| 2. 复制修复后的生产文件到副本，重新 `--no-incremental` 构建 | — | 0 错误 |
+| 3. 新用例 + 上轮外部复现 `ReviewAdmissionGapTests` | 绿 | **5 通过 / 0 失败** |
+| 4. 全量回归（排除**仅存在于审查副本**的 `ReviewAdmissionGapTests`） | 绿 | **467 通过 / 0 失败 / 0 跳过**，退出码 0，约 48 秒 |
+
+### 10.6 源码与产物核对
+
+工作树与验证副本的两个文件 blob 哈希一致：
+
+| 文件 | Git blob |
+|---|---|
+| `src/System/HardwareServices/FpsCounter.cs` | `e519409ca2e6157c5270c9a170b6203ada1e1692` |
+| `tests/LiteMonitor.Tests/FpsStateTests.cs` | `d0ffe74928fc1706d1f315a00af7262bf5fa3e0b` |
+
+强制重建后测试输出目录内的 SHA-256：
+
+| DLL | SHA-256 |
+|---|---|
+| `LiteMonitor++.dll` | `0DFAEF83347D74D1809F30D75A8B257EF8B8C2BD8DE52CE8D425484DB111CCD7` |
+| `LiteMonitor.Tests.dll` | `CC8962D45979BE6F1D827D7852183B9164EA24568826A55A7F5F778A72D66349` |
+
+`git diff --check` 通过。
+
+### 10.7 测试数口径说明（重要）
+
+- §9.9 第 2 行与 §9.11 公开 API 条目中的 **"454/454"** 是 **Task 6 三轮测量批次**（被测版本 `b777ec0`）的口径，
+  **保持原样、不改写**——那是那一批次的真实记录。
+- 本节（§10）是 R1 修复后的**当前口径：467/467**。两者不矛盾：修复新增了准入时序测试，并补齐了此前不在库内的用例。
+- **合并提交自身的强制重建与全量回归结果，以合并计划
+  `docs/superpowers/plans/2026-10-20-performance-sampling-merge.md` 的验收记录为准**；
+  不得以功能分支上的绿灯代替合并提交的验收。
+
+### 10.8 未验证项与限制（如实标注，不填 0、不估算）
+
+| 项 | 标记 | 说明 |
+|---|---|---|
+| **真机 PresentMon / ETW 行为** | **【未验证】** | 本机**非管理员**（`isAdministrator=false`），且禁止下载外部程序。**本修复只改生命周期准入，未使该限制缩小。** |
+| **§6.2 的 I 组（本地/Web FPS 需求组合）** | **【未验证】** | 同上，需下载 `LiteMonitorPlusFPS.exe`。**这是实际 FPS 验收的剩余限制，不能由假启动器测试替代。** |
+| **`FpsCounter.CheckHealth` 的 isDead 分支在真机是否触发** | **【未验证】** | 取决于 PresentMon 的真实输出节拍；本机非管理员 + 禁下载 → 必然无法实测。**不得引用未经证实的假设当结论。** |
+| **§9 的性能数字是否仍适用于当前 HEAD** | **【口径边界】** | §9 的 CPU 与计数结论对应 Task 6 批次被测版本 `b777ec0`。本修复**只改 FPS 生命周期准入，未改采样协调逻辑**，采样路径未变；但这些数字**不自动成为合并提交的实测结论**。合并提交若无代码冲突与采样逻辑变化，无需机械重跑全部三轮性能矩阵。 |
+| **真实 FPS 生命周期"完全验证"** | **【不可宣称】** | 在真机 PresentMon / ETW 场景补齐之前，**不得**对外宣称 FPS 生命周期已完全验证。 |
+| §9.9 提到的 `task-6-report.md` | **【披露级·悬空引用】** | 该文件在仓库与本地账本中**均不存在**，属悬空引用；不影响 §9 的任何数字与结论。 |
+
+### 10.9 证据归档位置
+
+- 本地完整证据保留在 **gitignored** 的 `.review-scratch/performance-admission-fix/`：
+  `verification.md`、`fix-admission-red.txt`、`fix-admission-green.txt`、`fix-admission-full-suite.txt`
+  及各自的 `*-build.txt`。
+- 复审记录保留在 `.review-scratch/performance-review-15e1fc6/review.md` 与
+  `.review-scratch/performance-review-54febdc/review.md`。
+- `.review-scratch/` 内的克隆、`bin/obj` 与临时产物**不随仓库提交**；如需入库原始日志，
+  须先选定必要文件并检查机器路径、配置与秘密信息。
 
