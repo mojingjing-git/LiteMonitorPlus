@@ -370,6 +370,146 @@ namespace LiteMonitor.Tests
             return sb.ToString();
         }
 
+        /// <summary>
+        /// 从（已去注释的）源码里截取某个**方法声明**的方法体（大括号配对，跳过字符串/字符字面量）。
+        /// </summary>
+        /// <remarks>
+        /// 只认"方法声明"（名字后面紧跟 '('、且不是成员访问），因此不会命中同名调用点
+        /// （例如构造函数体里的 <c>?? ApplyWebDataDemandToHardware</c> 不会被当成方法体）。
+        /// </remarks>
+        private static string ExtractMethodBody(string code, string methodName)
+        {
+            int search = 0;
+            while (search <= code.Length)
+            {
+                int idx = code.IndexOf(methodName, search, StringComparison.Ordinal);
+                if (idx < 0) return null;
+
+                // 跳过成员访问（xxx.MethodName）与标识符的一部分（MyMethodName）
+                if (idx > 0 && (code[idx - 1] == '.' || char.IsLetterOrDigit(code[idx - 1]) || code[idx - 1] == '_'))
+                {
+                    search = idx + methodName.Length;
+                    continue;
+                }
+
+                // 必须是声明：方法名后面紧跟 '('
+                int p = idx + methodName.Length;
+                while (p < code.Length && char.IsWhiteSpace(code[p])) p++;
+                if (p >= code.Length || code[p] != '(')
+                {
+                    search = idx + methodName.Length;
+                    continue;
+                }
+
+                int close = FindMatchingParen(code, p);
+                if (close < 0) return null;
+                int open = code.IndexOf('{', close);
+                if (open < 0) return null;
+                return ScanBracedBlock(code, open);
+            }
+            return null;
+        }
+
+        /// <summary>找到与 openIndex 处 '(' 配对的 ')'（跳过字符串/字符字面量）。</summary>
+        private static int FindMatchingParen(string code, int openIndex)
+        {
+            int depth = 0;
+            for (int i = openIndex; i < code.Length; i++)
+            {
+                char c = code[i];
+                if (c == '"' || c == '\'')
+                {
+                    char quote = c;
+                    i++;
+                    while (i < code.Length && code[i] != quote)
+                    {
+                        if (code[i] == '\\') i++;
+                        i++;
+                    }
+                    continue;
+                }
+                if (c == '(') depth++;
+                else if (c == ')')
+                {
+                    depth--;
+                    if (depth == 0) return i;
+                }
+            }
+            return -1;
+        }
+
+        /// <summary>截取大括号块的内容（跳过字符串/字符字面量）。</summary>
+        private static string ScanBracedBlock(string code, int openIndex)
+        {
+            int depth = 0;
+            for (int i = openIndex; i < code.Length; i++)
+            {
+                char c = code[i];
+                if (c == '"' || c == '\'')
+                {
+                    char quote = c;
+                    i++;
+                    while (i < code.Length && code[i] != quote)
+                    {
+                        if (code[i] == '\\') i++;
+                        i++;
+                    }
+                    continue;
+                }
+                if (c == '{') depth++;
+                else if (c == '}')
+                {
+                    depth--;
+                    if (depth == 0) return code.Substring(openIndex + 1, i - openIndex - 1);
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 截取方法体里**最外层**的 catch 块（深度 0 的那个 catch 关键字起，到方法体结束）。
+        /// </summary>
+        /// <remarks>
+        /// 不能用"最后一个 catch"：方法体里还有 <c>try { ... } catch { }</c> 这种内联语句，
+        /// 它们的 catch 关键字位置更靠后，会把真正的外层 catch 盖掉。
+        /// </remarks>
+        private static string ExtractOuterCatchBlock(string body)
+        {
+            if (body == null) return null;
+            int depth = 0;
+            for (int i = 0; i < body.Length; i++)
+            {
+                char c = body[i];
+                if (c == '"' || c == '\'')
+                {
+                    char quote = c;
+                    i++;
+                    while (i < body.Length && body[i] != quote)
+                    {
+                        if (body[i] == '\\') i++;
+                        i++;
+                    }
+                    continue;
+                }
+                if (c == '{') { depth++; continue; }
+                if (c == '}') { depth--; continue; }
+                if (depth == 0 && body.AsSpan(i).StartsWith("catch"))
+                {
+                    return body.Substring(i);
+                }
+            }
+            return null;
+        }
+
+        /// <summary>取一个当前空闲的回环端口（避免与真实实例 / 其它测试抢端口）。</summary>
+        private static int FindFreePort()
+        {
+            var probe = new TcpListener(IPAddress.Loopback, 0);
+            probe.Start();
+            try { return ((IPEndPoint)probe.LocalEndpoint).Port; }
+            finally { probe.Stop(); }
+        }
+
         // ================================================================
         // 1. 需求传播（Web 需求 → 采集层 SetWebDataDemand）
         // ================================================================
@@ -497,16 +637,20 @@ namespace LiteMonitor.Tests
             using var c1 = await OpenWebSocketAsync(host.Port);
             using var c2 = await OpenWebSocketAsync(host.Port);
 
-            Assert.True(await WaitUntilAsync(() => manager.AuthenticatedConnectionCount == 2, 5000));
-            Assert.True(await WaitUntilAsync(() => sink.Last, 5000));
+            Assert.True(await WaitUntilAsync(() => manager.AuthenticatedConnectionCount == 2, 5000),
+                "两个连接都应被登记为有效需求");
+            Assert.True(await WaitUntilAsync(() => sink.Last, 5000),
+                "有需求后必须把 true 送达采集层");
 
             c1.Close();
-            Assert.True(await WaitUntilAsync(() => manager.AuthenticatedConnectionCount == 1, 5000));
+            Assert.True(await WaitUntilAsync(() => manager.AuthenticatedConnectionCount == 1, 5000),
+                "断开一个连接后计数应减到 1");
             Assert.True(manager.HasWebDataDemand, "断开一个后仍有需求");
             Assert.True(sink.Last, "需求仍为真，不应被回收");
 
             c2.Close();
-            Assert.True(await WaitUntilAsync(() => !manager.HasWebDataDemand, 5000));
+            Assert.True(await WaitUntilAsync(() => !manager.HasWebDataDemand, 5000),
+                "最后一个连接断开后需求必须被回收");
             Assert.True(await WaitUntilAsync(() => sink.Count >= 2 && !sink.Last, 5000),
                 "最后一个连接断开后需求必须被回收");
         }
@@ -604,7 +748,8 @@ namespace LiteMonitor.Tests
 
             using var host = new LoopbackHost(manager);
             using var client = await OpenWebSocketAsync(host.Port);
-            Assert.True(await WaitUntilAsync(() => sink.Last, 5000));
+            Assert.True(await WaitUntilAsync(() => sink.Last, 5000),
+                "连接建立后需求应被送达采集层");
 
             manager.Stop();
 
@@ -702,7 +847,8 @@ namespace LiteMonitor.Tests
             try
             {
                 for (int i = 0; i < 3; i++) clients.Add(await OpenWebSocketAsync(host.Port));
-                Assert.True(await WaitUntilAsync(() => manager.AuthenticatedConnectionCount == 3, 5000));
+                Assert.True(await WaitUntilAsync(() => manager.AuthenticatedConnectionCount == 3, 5000),
+                    "三个网页连接都应被登记为有效需求");
 
                 // 等广播真的发生（序列化次数超过 HTTP 请求的 8 次）
                 Assert.True(await WaitUntilAsync(() => Volatile.Read(ref serializations) > 8, 8000),
@@ -783,10 +929,24 @@ namespace LiteMonitor.Tests
         {
             // ★ 源码级不变量（HardwareMonitor 构造函数会 Computer.Open()，无法在单测里实例化，
             //   因此用源码扫描把"快照路径不触发 hw.Update()"锁死）。
+            // ★ 等价全量入口必须**一并**纳入黑名单（次要#8）：
+            //   RequestCollection() / RequestCollectionAsync() 与 UpdateAll() 走同一条采集通道，
+            //   漏掉它们就能照样触发全量采集而不让本用例变红。
+            //   注意：UpdateIfDueAsync( 是**允许**的 —— 它就是共享限频采样的唯一入口。
+            //   行为侧的对应护栏见「两种消费者共用采样_并发HTTP与网页不叠加真实采集」
+            //   （用真实的 HardwareSamplingCoordinator 统计真实采集轮数）。
             string[] files =
             {
                 Path.Combine("src", "System", "WebServer", "LiteWebServer.cs"),
                 Path.Combine("src", "System", "WebServer", "WebSessionManager.cs")
+            };
+
+            string[] forbidden =
+            {
+                "UpdateAll(",        // 全量采集入口
+                ".Update(",          // 直接调用硬件的 Update()
+                "hw.Update(",        // 直接调用硬件的 hw.Update()
+                "RequestCollection"  // 等价全量入口：RequestCollection() / RequestCollectionAsync()
             };
 
             foreach (var rel in files)
@@ -795,9 +955,10 @@ namespace LiteMonitor.Tests
                 Assert.True(path != null && File.Exists(path), "找不到源文件（仓库根定位失败）: " + rel);
                 string code = StripComments(File.ReadAllText(path));
 
-                Assert.False(code.Contains("UpdateAll("), rel + " 不得调用 UpdateAll（全量采集入口）");
-                Assert.False(code.Contains(".Update("), rel + " 不得直接调用硬件的 .Update()");
-                Assert.False(code.Contains("hw.Update("), rel + " 不得直接调用硬件的 hw.Update()");
+                foreach (var token in forbidden)
+                {
+                    Assert.False(code.Contains(token), rel + " 不得调用 " + token + "（等价全量采集入口）");
+                }
             }
         }
 
@@ -947,7 +1108,8 @@ namespace LiteMonitor.Tests
 
             using var host = new LoopbackHost(manager);
             using var client = await OpenWebSocketAsync(host.Port);
-            Assert.True(await WaitUntilAsync(() => sink.Last, 5000));
+            Assert.True(await WaitUntilAsync(() => sink.Last, 5000),
+                "连接建立后需求应被送达采集层");
 
             _cfg.WebFpsEnabled = true;
             Assert.True(WebFpsDemand.IsFpsDemand(_cfg, hasWebDataDemand: true));
@@ -1011,6 +1173,284 @@ namespace LiteMonitor.Tests
             if (GpuUpdateSelection.ShouldUpdate(gpu0, gpu0, monitoredTwo)) updatedTwo++;
             if (GpuUpdateSelection.ShouldUpdate(gpu1, gpu0, monitoredTwo)) updatedTwo++;
             Assert.Equal(2, updatedTwo);
+        }
+
+        // ================================================================
+        // 5. 生产接线回归护栏（B2 修复轮 2）
+        //    覆盖复审"重要#1"：生产默认需求传播路径此前**零回归覆盖** ——
+        //    把默认 ApplyWebDataDemandToHardware 改成 no-op，27/27 仍然全绿。
+        // ================================================================
+
+        [Fact]
+        public void 生产默认需求写入路径真的调用SetWebDataDemand()
+        {
+            // ★ 复审重要#1 的护栏（M1 变异必须让本用例变红）。
+            //   变异：把默认 ApplyWebDataDemandToHardware 改成 no-op
+            //        （注释掉 hw.SetWebDataDemand(hasDemand);）→ 本用例必须红。
+            //   为什么用源码级不变量：HardwareMonitor 的构造函数会 Computer.Open()（会碰驱动），
+            //   单测里无法实例化它 → 默认实现无法在运行时被直接调用（只能用源码扫描锁死）。
+            string path = FindRepoFile(Path.Combine("src", "System", "WebServer", "LiteWebServer.cs"));
+            Assert.True(path != null && File.Exists(path), "找不到 LiteWebServer.cs（仓库根定位失败）");
+            string code = StripComments(File.ReadAllText(path));
+
+            // ① 默认需求写入实现必须真的把需求写进采集层
+            string applier = ExtractMethodBody(code, "ApplyWebDataDemandToHardware");
+            Assert.True(applier != null,
+                "LiteWebServer.cs 里找不到默认需求写入实现 ApplyWebDataDemandToHardware");
+            Assert.True(applier.Contains("SetWebDataDemand("),
+                "默认需求写入实现必须调用 SetWebDataDemand（否则 Web 需求永远不会送达采集层）");
+
+            // ② 构造函数必须把默认实现接成兜底（注入为空时用默认实现，不能换成 no-op）
+            Assert.True(code.Contains("?? ApplyWebDataDemandToHardware"),
+                "构造函数必须把 ApplyWebDataDemandToHardware 作为 demandApplier 的默认实现");
+            Assert.True(code.Contains("?? DefaultSamplingRequester"),
+                "构造函数必须把 DefaultSamplingRequester 作为 samplingRequester 的默认实现");
+
+            // ③ 默认采样入口必须走共享限频采样（不是各自为政的全量采集）
+            string requester = ExtractMethodBody(code, "DefaultSamplingRequester");
+            Assert.True(requester != null,
+                "LiteWebServer.cs 里找不到默认采样入口 DefaultSamplingRequester");
+            Assert.True(requester.Contains("UpdateIfDueAsync("),
+                "默认采样入口必须走 HardwareMonitor.UpdateIfDueAsync（共享限频采样）");
+        }
+
+        [Fact]
+        public async Task LiteWebServer生产接线把Web需求送达采集层()
+        {
+            // ★ 复审重要#1 的**行为**护栏：此前**没有任何用例构造过 LiteWebServer**，
+            //   生产接线（LiteWebServer → WebDemandSynchronizer → 采集层）零覆盖。
+            //   这里构造真实的 LiteWebServer（只替换"写进采集层"的那一端），
+            //   走真实的监听 / 握手 / 需求传播链路，断言 Web 需求真的被送达采集层。
+            int port = FindFreePort();
+            var sink = new RecordingDemandSink();
+            int samplingCalls = 0;
+
+            bool oldEnabled = _cfg.WebServerEnabled;
+            int oldPort = _cfg.WebServerPort;
+            string oldPassword = _cfg.WebServerPassword;
+            const string localPassword = "b2fix2-local";
+            _cfg.WebServerEnabled = true;
+            _cfg.WebServerPort = port;
+            _cfg.WebServerPassword = localPassword;   // 端口会短暂监听在所有网卡上 → 必须带口令
+            try
+            {
+                using var server = new LiteWebServer(
+                    _cfg,
+                    samplingRequester: ct => { Interlocked.Increment(ref samplingCalls); return Task.FromResult(true); },
+                    demandApplier: sink.Apply);
+
+                Assert.True(server.Start(out string err), "LiteWebServer 启动失败: " + err);
+                Assert.True(server.IsRunning, "启动成功后 IsRunning 必须为 true");
+
+                using (var client = await OpenWebSocketAsync(port, "?pwd=" + localPassword))
+                {
+                    Assert.True(await WaitUntilAsync(() => sink.Last, 5000),
+                        "WebSocket 连接建立后，Web 需求必须被送达采集层（生产接线回归护栏）");
+                    Assert.True(server.HasWebDataDemand, "服务端应报告存在 Web 需求");
+                    Assert.Equal(1, server.AuthenticatedConnectionCount);
+
+                    // 广播路径应当也走共享采样入口（连接还在时才有广播）
+                    Assert.True(await WaitUntilAsync(() => Volatile.Read(ref samplingCalls) > 0, 8000),
+                        "广播路径应当走过共享采样入口");
+                }
+
+                Assert.True(await WaitUntilAsync(() => sink.Count >= 2 && !sink.Last, 5000),
+                    "最后一个连接断开后，必须把 false 送达采集层");
+                Assert.False(server.HasWebDataDemand, "连接断开后不应再有 Web 需求");
+            }
+            finally
+            {
+                _cfg.WebServerEnabled = oldEnabled;
+                _cfg.WebServerPort = oldPort;
+                _cfg.WebServerPassword = oldPassword;
+            }
+        }
+
+        [Fact]
+        public async Task HTTP租期在等待采样期间就已授予()
+        {
+            // ★ 次要#2 的护栏（M6 变异必须让本用例变红）。
+            //   变异：把"授予 HTTP 租期"挪到"共享采样"之后 → 本用例必须红。
+            //   原因：等待采样期间如果还没有需求，采集层会误判成"没人要数据"，
+            //   采样请求就可能落在"无需求"的采集范围上（拿到旧值/空值）。
+            var fakeTime = new FakeTimeProvider();
+            var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            int samplingEntered = 0;
+
+            var manager = NewManager(
+                demandState: new WebDemandState(fakeTime, TimeSpan.FromSeconds(2)),
+                timeProvider: fakeTime,
+                // ★ 阻塞式采样入口：让请求停在"等待采样"这一步
+                samplingRequester: ct => { Interlocked.Increment(ref samplingEntered); return gate.Task; });
+            manager.Start();
+
+            using var host = new LoopbackHost(manager);
+            Task<string> http = SendHttpAsync(host.Port, "/api/snapshot");
+
+            try
+            {
+                Assert.True(await WaitUntilAsync(() => Volatile.Read(ref samplingEntered) > 0, 5000),
+                    "请求应当进入共享采样等待（否则本用例的前提不成立）");
+
+                // ★ 关键断言：等待采样期间租期已经授予
+                Assert.True(manager.HasHttpLease,
+                    "等待采样期间必须已经授予 HTTP 租期（授权点必须在采样之前）");
+                Assert.True(manager.HasWebDataDemand, "等待采样期间必须存在 Web 需求");
+
+                gate.TrySetResult(true);
+                string resp = await http;
+                Assert.Contains("200", resp);
+            }
+            finally
+            {
+                gate.TrySetResult(false);
+                manager.Stop();
+            }
+        }
+
+        [Fact]
+        public async Task 并发同步不会写入陈旧需求值()
+        {
+            // ★ 次要#4 的护栏：WebDemandSynchronizer.SyncNow() 原来"读在锁外、写在锁内"，
+            //   事件线程与 200ms 监视线程可能读到不同的需求值并**乱序写入**
+            //   （陈旧的 true 落在 false 之后）→ 采集层瞬时过度采集。
+            //   场景：第一次同步卡在"写入"内部，需求 meanwhile 变成 false，第二次同步并发进入。
+            int demandFlag = 1;   // 1 = 有需求
+            var firstWriteEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseFirstWrite = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondWriteDone = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            int writeCount = 0;
+            var written = new List<bool>();
+
+            var sync = new WebDemandSynchronizer(
+                demandProvider: () => Volatile.Read(ref demandFlag) == 1,
+                applyDemand: v =>
+                {
+                    lock (written) written.Add(v);
+                    int n = Interlocked.Increment(ref writeCount);
+                    if (n == 1)
+                    {
+                        // 第一次写入卡住（模拟"读到了旧需求、还没写下去"的窗口）
+                        firstWriteEntered.TrySetResult(true);
+                        releaseFirstWrite.Task.GetAwaiter().GetResult();
+                    }
+                    else
+                    {
+                        secondWriteDone.TrySetResult(true);
+                    }
+                    return true;
+                });
+
+            var first = Task.Run(() => sync.SyncNow());
+            await firstWriteEntered.Task;
+
+            // 需求消失
+            Volatile.Write(ref demandFlag, 0);
+
+            // 第二次同步并发进入
+            var second = Task.Run(() => sync.SyncNow());
+
+            // 修好后第二次同步会被锁挡住（最多等 1.5 秒）；未修好时它会立刻写完
+            await Task.WhenAny(secondWriteDone.Task, Task.Delay(1500));
+
+            releaseFirstWrite.TrySetResult(true);
+            await Task.WhenAll(first, second);
+
+            Assert.Equal(2, writeCount);
+            bool last = false;
+            lock (written) last = written[written.Count - 1];
+            Assert.False(last,
+                "最后写入的需求值必须等于当前需求（不能写入陈旧值：读到的必须是写入时的需求）");
+        }
+
+        [Fact]
+        public void Web服务启动失败时不留下运行中的会话管理器()
+        {
+            // ★ 次要#5 的护栏：Start() 的 catch 原来只复位 _isRunning、停 listener，
+            //   **没有**停 _sessionManager → 异常发生在 _sessionManager.Start() 之后时
+            //   会留下一个仍在跑的广播循环，而需求监视又没启动
+            //   → HTTP 租期到期没人发现 → 采集层需求**永久停在 true**（永久白采集）。
+            //   为什么用源码级不变量：Start() 在 _sessionManager.Start() 之后没有可注入的失败点，
+            //   单测无法让"启动失败"正好落在那个窗口（不为此改生产启动顺序）。
+            string path = FindRepoFile(Path.Combine("src", "System", "WebServer", "LiteWebServer.cs"));
+            Assert.True(path != null && File.Exists(path), "找不到 LiteWebServer.cs（仓库根定位失败）");
+            string code = StripComments(File.ReadAllText(path));
+
+            string startBody = ExtractMethodBody(code, "Start");
+            Assert.True(startBody != null, "LiteWebServer.cs 里找不到 Start 方法");
+            string catchBlock = ExtractOuterCatchBlock(startBody);
+            Assert.True(catchBlock != null, "Start 方法里找不到最外层的 catch 块");
+
+            Assert.True(catchBlock.Contains("_sessionManager.Stop()"),
+                "Start 失败时必须停掉会话管理器（否则留下仍在跑的广播循环 → 需求永久停在 true）");
+            Assert.True(catchBlock.Contains("_demandSync.Stop()"),
+                "Start 失败时必须停掉需求监视（否则失败后监视线程还在跑）");
+
+            // 清理必须发生在"已经启动之后"（否则这段代码永远走不到）
+            int startIdx = startBody.IndexOf("_sessionManager.Start()", StringComparison.Ordinal);
+            int stopIdx = catchBlock.IndexOf("_sessionManager.Stop()", StringComparison.Ordinal);
+            Assert.True(startIdx >= 0 && stopIdx >= 0, "Start 里应当能找到会话管理器的启动与停止调用");
+            Assert.True(startBody.IndexOf("_sessionManager.Stop()", StringComparison.Ordinal) > startIdx,
+                "会话管理器的停止必须排在启动之后（失败清理路径）");
+        }
+
+        [Fact]
+        public async Task 快速重启后在途HTTP请求仍能得到响应()
+        {
+            // ★ 次要#6 的护栏：Start() 原来会 Dispose 上一轮的 _lifetimeCts，
+            //   而在途请求仍持有 lifetime.Token → CreateLinkedTokenSource(token)
+            //   会对**已释放**的 CTS 注册回调 → 抛 ObjectDisposedException
+            //   → 该请求被 HandleClientAsync 的 catch 吞掉 → **客户端收不到任何响应**。
+            var manager = NewManager(samplingRequester: ct => Task.FromResult(false));
+            manager.Start();
+
+            using var host = new LoopbackHost(manager);
+
+            // 先连上但**不发送请求**：让服务器先捕获 lifetime.Token
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, host.Port);
+            await Task.Delay(300);   // 等服务器 accept 并捕获令牌
+
+            // 快速 Stop → Start（复现"上一轮 CTS 被释放"的窗口）
+            manager.Stop();
+            manager.Start();
+
+            // 现在才发请求：服务器用的是 Stop 之前捕获的令牌
+            string resp;
+            using (var stream = client.GetStream())
+            {
+                var req = Encoding.ASCII.GetBytes(
+                    $"GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1:{host.Port}\r\nConnection: close\r\n\r\n");
+                await stream.WriteAsync(req, 0, req.Length);
+                await stream.FlushAsync();
+
+                var sb = new StringBuilder();
+                var buf = new byte[4096];
+                using var cts = new CancellationTokenSource(10000);
+                try
+                {
+                    while (true)
+                    {
+                        int n = await stream.ReadAsync(buf.AsMemory(0, buf.Length), cts.Token);
+                        if (n <= 0) break;
+                        sb.Append(Encoding.UTF8.GetString(buf, 0, n));
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (IOException) { }
+                catch (ObjectDisposedException) { }
+
+                resp = sb.ToString();
+            }
+
+            // 前提校验：连接确实是在 Stop 之前被接收的
+            //   （跨越 Stop 边界的在途请求按设计不授予租期 → HasHttpLease 必须为 false）
+            Assert.False(manager.HasHttpLease,
+                "连接必须在 Stop 之前被服务器接收（否则本用例的前提不成立）");
+
+            Assert.Contains("200", resp);
+
+            manager.Stop();
         }
     }
 }
