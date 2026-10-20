@@ -70,10 +70,19 @@ namespace LiteMonitor.Tests
 
             public int Port { get; }
 
-            public LoopbackHost(WebSessionManager manager)
+            /// <param name="socketBufferSize">
+            /// &gt;0 时把监听套接字的收发缓冲都调小：客户端不读数据时，
+            /// 服务器的写操作会真的被卡住（用来测"写失败"这条回收路径）。
+            /// </param>
+            public LoopbackHost(WebSessionManager manager, int socketBufferSize = 0)
             {
                 _manager = manager;
                 _listener = new TcpListener(IPAddress.Loopback, 0);
+                if (socketBufferSize > 0)
+                {
+                    _listener.Server.SendBufferSize = socketBufferSize;
+                    _listener.Server.ReceiveBufferSize = socketBufferSize;
+                }
                 _listener.Start();
                 Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
                 _ = Task.Run(AcceptLoop);
@@ -99,11 +108,17 @@ namespace LiteMonitor.Tests
         }
 
         /// <summary>发一个普通 HTTP 请求并把响应读回来（服务器读完会关闭连接）</summary>
-        private static async Task<string> SendHttpAsync(int port, string pathAndQuery)
+        /// <param name="sendDelayMs">
+        /// 请求的发送延迟：服务器此时已经进入 HandleClientAsync 并阻塞在读请求头上，
+        /// 用来制造"请求跨越 Stop 边界"的时间窗。
+        /// </param>
+        private static async Task<string> SendHttpAsync(int port, string pathAndQuery, int sendDelayMs = 0)
         {
             using var client = new TcpClient();
             await client.ConnectAsync(IPAddress.Loopback, port);
             using var stream = client.GetStream();
+
+            if (sendDelayMs > 0) await Task.Delay(sendDelayMs);
 
             var req = Encoding.ASCII.GetBytes(
                 $"GET {pathAndQuery} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
@@ -130,11 +145,22 @@ namespace LiteMonitor.Tests
         }
 
         /// <summary>完成一次 WebSocket 握手，返回保持连接的客户端</summary>
-        private static async Task<TcpClient> OpenWebSocketAsync(int port, string query = "")
+        /// <param name="sendDelayMs">
+        /// 握手请求的发送延迟：服务器此时已经进入 HandleClientAsync 并阻塞在读请求头上，
+        /// 用来制造"握手跨越 Stop 边界"的时间窗。
+        /// </param>
+        /// <param name="receiveBufferSize">
+        /// 客户端接收缓冲大小（调小后，客户端不读数据时服务器的写操作会真的卡住）。
+        /// </param>
+        private static async Task<TcpClient> OpenWebSocketAsync(
+            int port, string query = "", int sendDelayMs = 0, int receiveBufferSize = 0)
         {
             var client = new TcpClient();
+            if (receiveBufferSize > 0) client.Client.ReceiveBufferSize = receiveBufferSize;
             await client.ConnectAsync(IPAddress.Loopback, port);
             var stream = client.GetStream();
+
+            if (sendDelayMs > 0) await Task.Delay(sendDelayMs);
 
             var req = Encoding.ASCII.GetBytes(
                 $"GET /{query} HTTP/1.1\r\n" +
@@ -180,7 +206,8 @@ namespace LiteMonitor.Tests
             return condition();
         }
 
-        private static WebSessionManager NewManager(WebDemandState? demand = null)
+        // 注意：测试项目是 <Nullable>disable</Nullable>，这里不能用可空引用类型注解（会报 CS8632）
+        private static WebSessionManager NewManager(WebDemandState demand = null)
         {
             // 空的快照内容：只关心需求状态，不关心 JSON
             return new WebSessionManager(writer =>
@@ -202,7 +229,8 @@ namespace LiteMonitor.Tests
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             Assert.True(doc.RootElement.TryGetProperty("Menu", out var menu), lang + " 缺少 Menu 节点");
 
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // ★ 大小写敏感：key 名必须逐字一致（"webserverfps" 这种大小写错误也要被抓出来）
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var prop in menu.EnumerateObject())
             {
                 if (prop.Value.ValueKind == JsonValueKind.String)
@@ -367,31 +395,35 @@ namespace LiteMonitor.Tests
         }
 
         [Fact]
-        public async Task 需求状态并发读写不抛异常且计数不为负()
+        public async Task 需求状态并发读写不抛异常且快照不撕裂()
         {
             var demand = new WebDemandState(new FakeTimeProvider());
             var errors = new List<Exception>();
             using var cts = new CancellationTokenSource();
 
-            var workers = new List<Task>();
-            for (int i = 0; i < 4; i++)
+            // 写线程只在三个**合法**状态之间切换：
+            //   Clear()            -> (0 个连接, 无租期)   ← 原子地把两个字段一起清零
+            //   AddConnection()    -> (1 个连接, 无租期)
+            //   GrantHttpLease()   -> (1 个连接, 有租期)
+            // 因此 "0 个连接却有租期" 永远不可能合法出现 —— 读线程一旦看到就是撕裂。
+            var writer = Task.Run(() =>
             {
-                workers.Add(Task.Run(() =>
+                try
                 {
-                    try
+                    while (!cts.IsCancellationRequested)
                     {
-                        while (!cts.IsCancellationRequested)
-                        {
-                            demand.AddAuthenticatedConnection();
-                            demand.RemoveAuthenticatedConnection();
-                        }
+                        demand.Clear();
+                        demand.AddAuthenticatedConnection();
+                        demand.GrantHttpLease();
                     }
-                    catch (Exception ex) { lock (errors) errors.Add(ex); }
-                }));
-            }
+                }
+                catch (Exception ex) { lock (errors) errors.Add(ex); }
+            });
+
+            var readers = new List<Task>();
             for (int i = 0; i < 4; i++)
             {
-                workers.Add(Task.Run(() =>
+                readers.Add(Task.Run(() =>
                 {
                     try
                     {
@@ -400,8 +432,10 @@ namespace LiteMonitor.Tests
                             var snap = demand.GetSnapshot();
                             if (snap.AuthenticatedConnections < 0)
                                 throw new InvalidOperationException("连接数出现负值: " + snap.AuthenticatedConnections);
-                            if (snap.HasAnyDemand != (snap.AuthenticatedConnections > 0 || snap.HasHttpLease))
-                                throw new InvalidOperationException("需求快照内部不一致");
+                            if (snap.AuthenticatedConnections > 1)
+                                throw new InvalidOperationException("连接数出现不可能的值: " + snap.AuthenticatedConnections);
+                            if (snap.AuthenticatedConnections == 0 && snap.HasHttpLease)
+                                throw new InvalidOperationException("快照撕裂: 0 个连接却读到有效租期");
                         }
                     }
                     catch (Exception ex) { lock (errors) errors.Add(ex); }
@@ -410,10 +444,14 @@ namespace LiteMonitor.Tests
 
             await Task.Delay(300);
             cts.Cancel();
-            await Task.WhenAll(workers);
+            await Task.WhenAll(readers);
+            await writer;
 
             Assert.Empty(errors);
+
+            demand.Clear();
             Assert.Equal(0, demand.AuthenticatedConnectionCount);
+            Assert.False(demand.HasHttpLease);
         }
 
         // ================================================================
@@ -424,6 +462,7 @@ namespace LiteMonitor.Tests
         public async Task 已鉴权的快照请求产生短需求租期()
         {
             var manager = NewManager();
+            manager.Start();
             using var host = new LoopbackHost(manager);
 
             string resp = await SendHttpAsync(host.Port, "/api/snapshot");
@@ -436,11 +475,31 @@ namespace LiteMonitor.Tests
         }
 
         [Fact]
+        public async Task 跨越Stop边界的快照请求不再授予租期()
+        {
+            // 请求在服务器"等请求头"时发生 Stop：
+            // Stop 已经清空全部需求，就不该再被这次在途请求补上一个 2 秒租期。
+            var manager = NewManager();
+            manager.Start();
+            using var host = new LoopbackHost(manager);
+
+            var request = SendHttpAsync(host.Port, "/api/snapshot", sendDelayMs: 400);
+            await Task.Delay(150);        // 服务器已进入 HandleClientAsync，在等请求头
+            manager.Stop();               // 代次失效 + 需求清零
+
+            string resp = await request;
+            Assert.Contains("200", resp);
+            Assert.False(manager.HasHttpLease);
+            Assert.False(manager.HasWebDataDemand);
+        }
+
+        [Fact]
         public async Task 未鉴权的快照请求不产生任何需求()
         {
             _cfg.WebServerPassword = "s3cret";
 
             var manager = NewManager();
+            manager.Start();
             using var host = new LoopbackHost(manager);
 
             string resp = await SendHttpAsync(host.Port, "/api/snapshot");
@@ -459,6 +518,7 @@ namespace LiteMonitor.Tests
             _cfg.WebServerPassword = "s3cret";
 
             var manager = NewManager();
+            manager.Start();
             using var host = new LoopbackHost(manager);
 
             string html = await SendHttpAsync(host.Port, "/");
@@ -478,6 +538,7 @@ namespace LiteMonitor.Tests
         public async Task WebSocket连接计入需求_断开后需求被回收()
         {
             var manager = NewManager();
+            manager.Start();               // 未启动的会话管理器不登记任何连接需求
             using var host = new LoopbackHost(manager);
 
             using var ws = await OpenWebSocketAsync(host.Port);
@@ -497,6 +558,7 @@ namespace LiteMonitor.Tests
         public async Task 多个WebSocket连接时断开一个仍保留需求()
         {
             var manager = NewManager();
+            manager.Start();
             using var host = new LoopbackHost(manager);
 
             using var ws1 = await OpenWebSocketAsync(host.Port);
@@ -519,6 +581,7 @@ namespace LiteMonitor.Tests
         public async Task Stop清空全部需求_重启不残留旧需求()
         {
             var manager = NewManager();
+            manager.Start();
             using var host = new LoopbackHost(manager);
 
             using var ws = await OpenWebSocketAsync(host.Port);
@@ -533,6 +596,101 @@ namespace LiteMonitor.Tests
             // 重启：不能留下任何旧需求
             manager.Start();
             await Task.Delay(100);
+            Assert.Equal(0, manager.AuthenticatedConnectionCount);
+            Assert.False(manager.HasWebDataDemand);
+
+            manager.Stop();
+        }
+
+        // ------------------------------------------------------------
+        // 需求回收：Stop 边界 / 发送异常
+        // ------------------------------------------------------------
+
+        [Fact]
+        public async Task 握手跨越Stop边界时连接不计入需求()
+        {
+            // 复现评审指出的竞态：
+            //   客户端已连上，服务器正阻塞在读握手请求头（代次 = G），
+            //   此时 Stop() 发生（代次变成 G+1，需求被清零），
+            //   随后握手才成功 —— 这时绝不能把连接重新登记成需求。
+            //   否则 Stop 不会再遍历一次集合去关闭它，需求会永久卡住。
+            var manager = NewManager();
+            manager.Start();
+            using var host = new LoopbackHost(manager);
+
+            // 客户端连上后延迟 400ms 才发握手请求
+            var handshake = OpenWebSocketAsync(host.Port, sendDelayMs: 400);
+            await Task.Delay(150);            // 服务器此时已进入 HandleClientAsync，在等请求头
+            manager.Stop();                   // 代次失效 + 需求清零
+
+            using var ws = await handshake;   // 握手此刻才成功返回
+            await Task.Delay(300);            // 等服务器侧处理完这次握手
+
+            Assert.Equal(0, manager.AuthenticatedConnectionCount);
+            Assert.False(manager.HasWebDataDemand);
+        }
+
+        [Fact]
+        public async Task 停止后到达的连接不计入需求()
+        {
+            var manager = NewManager();
+            manager.Start();
+            using var host = new LoopbackHost(manager);
+
+            manager.Stop();                   // 服务已停
+
+            using var ws = await OpenWebSocketAsync(host.Port);
+            await Task.Delay(300);
+
+            Assert.Equal(0, manager.AuthenticatedConnectionCount);
+            Assert.False(manager.HasWebDataDemand);
+        }
+
+        [Fact]
+        public async Task 广播写失败时需求被回收()
+        {
+            // 专门盯"写失败"这条回收路径（SendFrameSafeAsync 的 catch -> RemoveClient）：
+            //  - 快照内容接近广播缓冲上限（32KB），客户端的接收缓冲被调小；
+            //  - 客户端握手之后**不再读取**任何数据，服务器的写操作必然被卡住；
+            //  - 写超时（2 秒）触发 catch -> RemoveClient -> 需求回收。
+            // 客户端连接始终保持打开，所以"读"路径不会先触发，这条用例只可能由写失败回收。
+            var manager = new WebSessionManager(writer =>
+            {
+                writer.WriteStartObject();
+                writer.WriteString("k", new string('x', 30000));
+                writer.WriteEndObject();
+            });
+            manager.Start();
+            using var host = new LoopbackHost(manager, socketBufferSize: 4096);
+
+            using var ws = await OpenWebSocketAsync(host.Port, receiveBufferSize: 4096);
+            Assert.True(await WaitUntilAsync(() => manager.AuthenticatedConnectionCount == 1));
+
+            // 写失败后需求必须被回收
+            Assert.True(await WaitUntilAsync(() => manager.AuthenticatedConnectionCount == 0, 30000));
+            Assert.False(manager.HasWebDataDemand);
+
+            manager.Stop();
+        }
+
+        [Fact]
+        public async Task 连接被重置时需求被回收且计数不重复扣减()
+        {
+            // LingerOption(true, 0) 让 close() 发 RST 而不是 FIN：
+            // 服务器的读路径与广播写路径会同时失败，两条路径都会调用 RemoveClient，
+            // 这里断言需求归零且**不会**被扣成负数（计数配平）。
+            var manager = NewManager();
+            manager.Start();
+            using var host = new LoopbackHost(manager);
+
+            var ws = await OpenWebSocketAsync(host.Port);
+            Assert.True(await WaitUntilAsync(() => manager.AuthenticatedConnectionCount == 1));
+
+            ws.Client.LingerState = new LingerOption(true, 0);   // close 时发 RST
+            ws.Close();
+
+            Assert.True(await WaitUntilAsync(() => manager.AuthenticatedConnectionCount == 0));
+            await Task.Delay(500);            // 给广播写路径一点时间（它也会失败并再次 RemoveClient）
             Assert.Equal(0, manager.AuthenticatedConnectionCount);
             Assert.False(manager.HasWebDataDemand);
 
@@ -653,8 +811,9 @@ namespace LiteMonitor.Tests
             foreach (var lang in AllLangs)
             {
                 var keys = LoadMenu(lang).Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
-                var missing = reference.Except(keys, StringComparer.OrdinalIgnoreCase).ToList();
-                var extra = keys.Except(reference, StringComparer.OrdinalIgnoreCase).ToList();
+                // ★ 大小写敏感比较：key 名必须逐字一致
+                var missing = reference.Except(keys, StringComparer.Ordinal).ToList();
+                var extra = keys.Except(reference, StringComparer.Ordinal).ToList();
 
                 Assert.True(missing.Count == 0, lang + " 缺少 key: " + string.Join(", ", missing.Take(10)));
                 Assert.True(extra.Count == 0, lang + " 多出 key: " + string.Join(", ", extra.Take(10)));
