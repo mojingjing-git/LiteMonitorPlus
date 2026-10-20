@@ -22,6 +22,14 @@ internal static class Program
     private static int Main(string[] args)
     {
         var options = ProbeOptions.Parse(args);
+
+        // ★ A04 外观探针入口（独立入口，不改变既有采集语义）。
+        //   --appearance-only 走完全不同的路径：不创建 HardwareMonitor、不 Open 硬件、
+        //   不做驱动就绪检查、不安装/卸载驱动、不启动 PresentMon/ETW。
+        //   既有采集路径（默认分支）完全不进入这里，行为保持不变。
+        if (options.AppearanceOnly)
+            return AppearanceProbeRunner.Run(options);
+
         Write($"LiteMonitor++ 性能探针 启动于 {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         Write($"参数: {string.Join(' ', args)}");
         Write($"隔离输出目录 (AppContext.BaseDirectory): {AppContext.BaseDirectory}");
@@ -221,6 +229,20 @@ internal sealed class ProbeOptions
     public int FpsObservedCycles { get; private set; } = 12;
     public double FpsCostSeconds { get; private set; } = 1.5;
 
+    // ===== A04 外观探针专用参数（不影响既有采集路径） =====
+    /// <summary>是否走"只做外观"的独立入口（不创建 HardwareMonitor）。</summary>
+    public bool AppearanceOnly { get; private set; }
+    /// <summary>夹具集合：full | core | edge | quick。</summary>
+    public string AppearanceFixtureSet { get; private set; } = "full";
+    /// <summary>每个夹具的测量绘制次数。</summary>
+    public int AppearanceDraws { get; private set; } = 20;
+    /// <summary>局部失效场景：all | sample | none。</summary>
+    public string AppearanceInvalidation { get; private set; } = "all";
+    /// <summary>与哪一份基线做逐像素对比（结果目录）。</summary>
+    public string CompareDir { get; private set; } = "";
+    /// <summary>原始命令行（写进结果 JSON 备查）。</summary>
+    public string[] RawArgs { get; private set; } = Array.Empty<string>();
+
     public JsonObject ToJson()
     {
         return new JsonObject
@@ -239,7 +261,7 @@ internal sealed class ProbeOptions
 
     public static ProbeOptions Parse(string[] args)
     {
-        var options = new ProbeOptions();
+        var options = new ProbeOptions { RawArgs = args };
         for (int i = 0; i < args.Length; i++)
         {
             string arg = args[i];
@@ -257,6 +279,12 @@ internal sealed class ProbeOptions
                 case "--render-seconds": options.RenderSeconds = double.Parse(Next()); break;
                 case "--fps-cycles": options.FpsObservedCycles = int.Parse(Next()); break;
                 case "--fps-cost-seconds": options.FpsCostSeconds = double.Parse(Next()); break;
+                // ===== A04 外观探针 =====
+                case "--appearance-only": options.AppearanceOnly = true; break;
+                case "--appearance-set": options.AppearanceFixtureSet = Next(); break;
+                case "--appearance-draws": options.AppearanceDraws = int.Parse(Next()); break;
+                case "--appearance-invalidation": options.AppearanceInvalidation = Next(); break;
+                case "--compare": options.CompareDir = Path.GetFullPath(Next()); break;
                 case "--quick":
                     options.WarmupSeconds = 3;
                     options.SteadySeconds = 10;

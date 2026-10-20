@@ -43,4 +43,14 @@
     <Content Include="..\..\resources\lang\*.json" Link="resources\lang\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!--
+    A04 外观探针的固定夹具数据。
+    唯一事实来源是 tests/AppearanceFixtures/appearance-fixtures.json；
+    这里只做一次"复制到输出目录"，不新增任何程序集引用。
+    探针运行时优先从输出目录读，读不到再按仓库根回溯找同一份文件。
+  -->
+  <ItemGroup>
+    <Content Include="..\AppearanceFixtures\*.json" Link="appearance-fixtures\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

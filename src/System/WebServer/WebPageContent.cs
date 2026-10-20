@@ -2,6 +2,13 @@ namespace LiteMonitor.src.WebServer
 {
     public static class WebPageContent
     {
+        /// <summary>
+        /// 主题 CSS 变量块的占位符（A11 挂载点）。
+        /// 由 <c>WebSessionManager</c> 在组装 HTML 时替换成
+        /// <c>WebThemeCss.BuildCssVariables(...)</c> 的结果。
+        /// </summary>
+        public const string ThemeCssPlaceholder = "{{THEME_CSS}}";
+
         public static string GetAppIconBase64()
         {
             if (_cachedFaviconBase64 != null) return _cachedFaviconBase64;
@@ -42,6 +49,11 @@ namespace LiteMonitor.src.WebServer
             --c-1: #f59e0b; /* Orange */
             --c-2: #ef4444; /* Red */
         }
+
+        /* --- 运行时主题变量（挂载点：由 WebThemeCss 在服务端注入） ---
+           UI 层发布颜色快照后，这里会被替换成一段 :root 变量块。
+           未发布快照时保持上面那组默认值 → 页面外观与注入前完全一致。 */
+        {{THEME_CSS}}
 
         body { 
             margin: 0; padding: 20px; 

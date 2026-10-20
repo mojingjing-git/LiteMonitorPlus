@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A06 玻璃技术验证试验工程（只读探针，不属于生产构建）。
+    - 不参与 LiteMonitor.sln（由主集成者按需接入）
+    - 不引入任何新的 NuGet 依赖：仅 BCL + WindowsDesktop 引用
+    - 默认 asInvoker 运行，避免自动化运行触发 UAC 阻塞；
+      需要提权复测时用 -p:RequireAdmin=true 切到 app.manifest.admin
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>AppearanceBackdropProbe</AssemblyName>
+    <RootNamespace>AppearanceBackdropProbe</RootNamespace>
+    <ApplicationManifest Condition="'$(RequireAdmin)' != 'true'">app.manifest</ApplicationManifest>
+    <ApplicationManifest Condition="'$(RequireAdmin)' == 'true'">app.manifest.admin</ApplicationManifest>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+</Project>

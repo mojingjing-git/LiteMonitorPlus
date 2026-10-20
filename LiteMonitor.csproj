@@ -94,4 +94,15 @@
   <ItemGroup>
     <Folder Include="src\UI\Settings\" />
   </ItemGroup>
+
+  <!--
+    内部测试钩子的可见性出口。
+    · LiteMonitor.Tests          —— 单元测试工程（ThemeFileService 的故障注入钩子）
+    · AppearanceWindowShapeProbe —— 窗口轮廓自证探针（DWM 调用拦截接缝）
+    这些成员在生产代码里收为 internal，避免扩大对外公开面。
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="LiteMonitor.Tests" />
+    <InternalsVisibleTo Include="AppearanceWindowShapeProbe" />
+  </ItemGroup>
 </Project>

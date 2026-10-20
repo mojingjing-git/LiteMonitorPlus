@@ -324,3 +324,93 @@ dotnet tests/LiteMonitor.PerformanceProbe/output/LiteMonitor.PerformanceProbe.dl
 - `*Recomputed` 系列是**旧取模语义推算值**，与生产侧真实计数**不可相减**（§6.1、§6.6）。
 - 退出码：0 = 正常；1 = 探针异常；**2 = 硬件层不可用 / 驱动未就绪，没有产出硬件测量数据**。
   退出码 2 的结果文件不能当基线用，先看 `hardwareReady.ready`。
+
+---
+
+## 8. 外观探针入口（`--appearance-only`，A04）
+
+> 这是**独立入口**，不是既有功能。默认路径（不传 `--appearance-only`）的行为**完全不变**。
+
+### 8.1 它和默认路径的区别
+
+| | 默认路径（采集探针） | `--appearance-only`（外观探针） |
+|---|---|---|
+| 创建 `HardwareMonitor` | ✅ | ❌ **完全不创建** |
+| `Open()` 真实硬件 / 读驱动 | ✅ | ❌ |
+| PawnIO 驱动就绪检查 / 装卸驱动 | ✅（只读检查） | ❌ **连检查都不做** |
+| 启动 PresentMon / ETW / 下载外部程序 | ❌ | ❌ |
+| 读 / 写用户 `settings.json` | ❌ | ❌ |
+| 输出目录 | `--out` | `--out`（建议 `output\appearance-baseline`） |
+| 退出码含义 | 0/1/2（见 §7） | 0 = 正常；1 = 外观探针异常 |
+
+外观探针自己 `new Settings()` 并注入 `Settings._instance` 单例（复用
+`ProbeEnvironment.InstallSettingsSingleton`），因此**不读也不写**用户常用配置目录；
+所有产物都落在自己的 `--out` 目录里。
+
+### 8.2 怎么跑
+
+```powershell
+# 构建
+dotnet build tests/LiteMonitor.PerformanceProbe/LiteMonitor.PerformanceProbe.csproj -c Release
+
+# 完整外观基线（10 个旧主题 × 竖/横 × 1/4 卡 × 4 个 DPI × 2 个用户缩放 + 4 个边界场景）
+dotnet tests/LiteMonitor.PerformanceProbe/output/LiteMonitor.PerformanceProbe.dll `
+    --appearance-only `
+    --out tests/LiteMonitor.PerformanceProbe/output/appearance-baseline
+
+# 与上一份基线逐像素对比（改完代码后复跑用）
+dotnet tests/LiteMonitor.PerformanceProbe/output/LiteMonitor.PerformanceProbe.dll `
+    --appearance-only `
+    --out tests/LiteMonitor.PerformanceProbe/output/appearance-after `
+    --compare tests/LiteMonitor.PerformanceProbe/output/appearance-baseline
+```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--appearance-only` | — | 走外观探针入口 |
+| `--appearance-set` | `full` | `full` 完整叉乘 / `core` 只取 96+144 DPI / `edge` 只跑边界场景 / `quick` 只取 96 DPI+1.0（冒烟，**不可当基线**） |
+| `--appearance-draws` | 20 | 每个夹具的测量绘制次数（指标值持续变化） |
+| `--appearance-invalidation` | `all` | `all` / `sample`（只跑第一个主题）/ `none` |
+| `--compare <dir>` | — | 与某份基线结果做逐像素对比（读 `<dir>\appearance-results.json`） |
+
+### 8.3 产出物
+
+```
+<out>\
+├── appearance-results.json   结果（夹具矩阵 + 每个夹具的指标 + 局部失效证据 + 可选的对比结果）
+├── appearance-run.txt        运行日志
+└── png\
+    ├── <fixtureId>.png       每个夹具一张离屏位图
+    └── ...
+```
+
+`fixtureId` 形如 `DarkFlat_Classic__vertical__gpu4__dpi144__scale2.0__w240`，
+边界场景会再追加 `__<edgeId>`。
+
+### 8.4 逐像素对比怎么用
+
+每个夹具都有两个哈希：
+
+- `pixelSha256` —— **原始 ARGB 像素**的哈希（未编码），**前后对比以此为准**；
+- `pngSha256` —— PNG 文件哈希（附加证据）。
+
+跑 `--compare <基线目录>` 后，结果 JSON 的 `comparison` 段会给出
+`identical` / `changed` / `newInCurrent` / `missingInCurrent` 四个计数和逐夹具明细。
+
+### 8.5 夹具数据
+
+固定夹具数据在 `tests/AppearanceFixtures/appearance-fixtures.json`（唯一事实来源），
+构建时复制到探针输出目录的 `appearance-fixtures\` 下。详见该目录的 README。
+
+### 8.6 已知限制（必须随结果一起读）
+
+- 离屏渲染**不包含** DWM / 窗口呈现 / 桌面合成 / 窗口透明度 / 任务栏。
+  结果 JSON 的 `surfaceDeclaration` 段会显式声明这一点。
+- `dpi` 与 `userScale` 都是**离屏模拟**（`dpiSource` / `userScaleSource` =
+  `offscreen-simulated`）。布局尺寸走生产同一条 `Theme.Scale(dpiScale, userScale)` 路径，
+  字形点值再乘 `dpiScale` 逼近真实高 DPI 窗口的 GDI 光栅化。
+  **这不能替代 v4 §7.2 要求的真实 96/120/144/192 DPI 窗口测试。**
+- 横屏的列间距由 `HorizontalLayout` 内部按**进程真实系统 DPI** 缩放
+  （`Graphics.FromHwnd(IntPtr.Zero)`），离屏模拟改写不了。
+- `--appearance-set quick` 的数据**不可当基线**。
+

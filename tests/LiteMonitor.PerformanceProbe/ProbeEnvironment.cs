@@ -78,8 +78,11 @@ internal sealed class ProbeEnvironment : IDisposable
     /// <summary>
     /// 把探针配置注入 Settings 单例。Settings.Load() 命中单例后直接返回内存对象，
     /// 因此 WebSessionManager.CheckAuth() 等内部调用也不会去读磁盘上的 settings.json。
+    ///
+    /// ★ 外观探针（A04）也复用这个方法 —— 它同样需要"不读不写用户 settings.json"的隔离，
+    ///   但**不**创建 HardwareMonitor（外观探针没有 ProbeEnvironment 实例）。
     /// </summary>
-    private static void InstallSettingsSingleton(Settings cfg)
+    internal static void InstallSettingsSingleton(Settings cfg)
     {
         var field = typeof(Settings).GetField("_instance", BindingFlags.NonPublic | BindingFlags.Static)
                     ?? throw new InvalidOperationException("Settings._instance 字段不存在，无法注入探针隔离配置。");

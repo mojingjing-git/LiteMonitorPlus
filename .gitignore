@@ -21,3 +21,7 @@ tests/LiteMonitor.PerformanceProbe/output/
 
 # 发布产物（由 scripts/pack-release.ps1 生成）
 dist/
+
+# 外观改造各探针/校验工程的隔离输出目录（构建产物 + 运行期证据，不进版本库）
+# 这些目录可由探针工程重新生成；各包的结论数据已写入 docs/superpowers/plans/ 下的结果文档。
+tests/Appearance*/output/

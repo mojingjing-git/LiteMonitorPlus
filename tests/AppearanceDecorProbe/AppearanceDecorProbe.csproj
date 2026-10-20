@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    LiteMonitor++ 装饰几何 / 资源缓存自证探针（A05）。
+
+    设计约束：
+    - 不新增任何 NuGet 包 / 测试框架 / 运行时依赖，只引用主项目与 BCL。
+    - 输出目录固定为本项目下的 output\ ，即 AppContext.BaseDirectory；
+      证据 JSON 落在 output\evidence\ 下，不污染用户常用实例目录。
+    - 主项目已有 <Compile Remove="tests\**" />，本项目不会被主项目编译进去。
+    - 本探针不创建 HardwareMonitor、不 Open 硬件、不做屏幕捕获，
+      全部在离屏位图上完成。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>LiteMonitor.AppearanceDecorProbe</RootNamespace>
+    <AssemblyName>AppearanceDecorProbe</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- 隔离输出目录：探针自己的运行期产物目录（相对本项目目录） -->
+    <OutputPath>output\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+
+    <!-- 探针自身不追求零警告 -->
+    <NoWarn>$(NoWarn);CS8600;CS8602;CS8603;CS8604;CS8618;CS8619;CS8625</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\LiteMonitor.csproj" />
+  </ItemGroup>
+
+</Project>
