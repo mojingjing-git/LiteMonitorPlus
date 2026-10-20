@@ -5,6 +5,7 @@ using System.Runtime.InteropServices; // ★★★ 新增：引用用于内存�
 using System.Reflection; // ★★★ 新增：用于反射关闭历史记录
 using LibreHardwareMonitor.Hardware;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.WebServer; // ★ FPS 需求规则的**单一来源**（WebFpsDemand）
 using System.Linq;
 using System.Threading;
 
@@ -157,6 +158,12 @@ namespace LiteMonitor.src.SystemServices
             _driverInstaller = new DriverInstaller(cfg, ReloadComputerSafe, ReleaseComputerForDriverInstall);
             _fpsCounter = new FpsCounter(_driverInstaller); // <--- 新增
 
+            // ★ FPS 需求探针（计划 §4.4）：
+            //   FpsCounter 用它决定"要不要启动 / 保持外部 FPS 采集服务"。
+            //   规则**单一来源**：直接复用 WebFpsDemand.IsFpsDemand（网页 "--" 占位用同一套规则），
+            //   否则会出现「网页显示 -- 但服务在跑」或「网页报 0 但服务没跑」的不一致。
+            AttachFpsDemandProbe(_fpsCounter, _cfg, () => _webDataDemand);
+
             // ★★★ [修改] 2. 采集统计计数器 + 调度 + 设备计数入口 ★★★
             _samplingStatistics = new HardwareSamplingStatistics();
 
@@ -294,6 +301,50 @@ namespace LiteMonitor.src.SystemServices
         public void SetWebDataDemand(bool hasDemand)
         {
             _webDataDemand = hasDemand;
+        }
+
+        /// <summary>
+        /// 把 FPS 需求探针接到 <see cref="FpsCounter"/> 上（生产路径：构造函数里调用）。
+        ///
+        /// ★ 规则**单一来源**：探针内部直接复用 <see cref="WebFpsDemand.IsFpsDemand"/>，
+        ///   不在硬件侧另写一份 `local || (web &amp;&amp; WebFpsEnabled)`。
+        ///   网页端的 "--" 占位判断用的就是同一套规则，两边一旦漂移就会出现
+        ///   「网页显示 -- 但服务在跑」或「网页报 0 但服务没跑」的不一致。
+        /// </summary>
+        /// <param name="fpsCounter">目标 FPS 计数器（其 <see cref="FpsCounter.FpsDemandProvider"/> 会被覆盖）。</param>
+        /// <param name="cfg">当前设置（本地 FPS 可见性 + 网页版帧率开关）。</param>
+        /// <param name="webDemand">返回"当前是否有合法的 Web 数据需求"的委托。</param>
+        public static void AttachFpsDemandProbe(FpsCounter fpsCounter, Settings cfg, Func<bool> webDemand)
+        {
+            if (fpsCounter == null) throw new ArgumentNullException(nameof(fpsCounter));
+            fpsCounter.FpsDemandProvider = CreateFpsDemandProbe(cfg, webDemand);
+        }
+
+        /// <summary>
+        /// 创建 FPS 需求探针（供 <see cref="FpsCounter.FpsDemandProvider"/> 使用）。
+        ///
+        /// ★ 规则**单一来源**：直接调用 <see cref="WebFpsDemand.IsFpsDemand"/>，
+        ///   规则本身只有一份实现（网页占位判断与硬件侧启停共用）。
+        ///
+        /// 语义（计划 §4.4）：
+        /// <code>
+        /// localFpsDemand = 本地 FPS 在面板或任务栏启用
+        /// webFpsDemand  = 当前有合法 Web 数据需求 &amp;&amp; WebFpsEnabled
+        /// fpsDemand     = localFpsDemand || webFpsDemand
+        /// </code>
+        ///
+        /// 抽成静态方法是为了能在**不构造 <see cref="HardwareMonitor"/>**（它会打开真实硬件树）
+        /// 的前提下做单元测试 —— 与本文件已有的
+        /// <see cref="HardwareUpdateRequirements.Compute"/> / <see cref="GpuUpdateSelection.ShouldUpdate"/> 同风格。
+        /// </summary>
+        /// <param name="cfg">当前设置（本地 FPS 可见性 + 网页版帧率开关）。</param>
+        /// <param name="webDemand">返回"当前是否有合法的 Web 数据需求"的委托。</param>
+        public static Func<bool> CreateFpsDemandProbe(Settings cfg, Func<bool> webDemand)
+        {
+            if (cfg == null) throw new ArgumentNullException(nameof(cfg));
+            if (webDemand == null) throw new ArgumentNullException(nameof(webDemand));
+
+            return () => WebFpsDemand.IsFpsDemand(cfg, webDemand());
         }
 
         /// <summary>
