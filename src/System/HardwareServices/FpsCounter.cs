@@ -364,7 +364,19 @@ namespace LiteMonitor.src.SystemServices
         /// <summary>清理流程（封存后）转移给存活条目的残留帧数（用于观测转移路径是否被执行）</summary>
         public long RetiredTransferredFrames => Interlocked.Read(ref _retiredTransferred);
 
-        /// <summary>复活流程搬迁到新条目的帧数（用于观测复活路径是否被执行）</summary>
+        /// <summary>
+        /// 复活流程搬迁到新条目的帧数（用于观测复活路径是否被执行）。
+        ///
+        /// ★ 登记说明（本轮新增，保留计数 —— 当前实现下不可达）：
+        /// 该计数在"复活"路径（条目已被封存 → 换新条目并搬迁残留帧）被累加。
+        /// 但封存只发生在清理流程里，而清理流程本身会先把残留帧转移给存活条目
+        /// （见 <see cref="RetiredTransferredFrames"/>），因此复活路径的搬迁量恒为 0。
+        /// 复审实测：20 万次并发写入 + 实际发生 886 次转移后，该计数仍恒为 0。
+        /// 唯一理论可达路径是 <see cref="Entry.TryAddFrame"/> 的**计数饱和**分支
+        /// （单 PID 积压 21 亿帧，实践中不可达）。
+        /// 之所以保留这个公开成员：本轮契约是"公开 API 只许新增，不许改既有成员签名"，
+        /// 删除它等于移除公开成员。这里只登记它不可达的事实，不改其行为。
+        /// </summary>
         public long RevivedCarriedFrames => Interlocked.Read(ref _revivedCarried);
 
         /// <summary>是否存在可上报的 FPS 数据</summary>
@@ -755,7 +767,6 @@ namespace LiteMonitor.src.SystemServices
         private long _lastDataTicks = 0;               // 最后一次收到数据的时间（单调毫秒）
         private long _nextStartAttemptTicks = 0;       // 启动失败后的重试退避截止时间
         private int _serviceStarted = 0;               // 外部服务已成功启动且尚未观察到退出（1=已启动）
-        private int _lastKnownDemand = -1;             // 最近一次已知的 FPS 需求状态（-1=未知 0=无需求 1=有需求）
         private long _startBlockedByBackoff = 0;       // 因"启动失败退避"被拒绝的拉起次数（观测限频效果）
 
         // ★★★ [新增] 静态关机标志 ★★★
@@ -1083,6 +1094,9 @@ namespace LiteMonitor.src.SystemServices
         /// <summary>
         /// 解析当前是否存在 FPS 需求。
         /// 未注入 <see cref="FpsDemandProvider"/> 时保持历史行为：最近被访问过即视为有需求。
+        ///
+        /// ★ 本方法**不触碰**"启动失败退避"（<c>_nextStartAttemptTicks</c>）：
+        /// 退避的成因是"上次启动失败"，与当前有无需求无关，需求跃迁也不清零它。
         /// </summary>
         private bool ResolveDemand()
         {
@@ -1099,14 +1113,11 @@ namespace LiteMonitor.src.SystemServices
                 demand = last != 0 && _clock() - last <= IdleStopSeconds * 1000L;
             }
 
-            // ★ 需求消失时清理启动失败退避：
-            //   否则这条退避会把"需求重新开启"一起挡住（重新启用需求后拉不起服务）。
-            //   需求仍在时不动退避，保证"失败一次后窗口内不再拉起"这条不变量。
-            if (Interlocked.Exchange(ref _lastKnownDemand, demand ? 1 : 0) == 1 && !demand)
-            {
-                Interlocked.Exchange(ref _nextStartAttemptTicks, 0);
-            }
-
+            // ★ 需求跃迁**不**清零启动失败退避：
+            //   退避的成因是"上次启动失败"，与"当前有没有需求"无关。
+            //   需求抖动（true→false→true）若能清掉退避，30 秒窗口就会被击穿，
+            //   外部 PresentMon 会按需求抖动频率被反复重拉起（每次还带一个 logman 子进程）。
+            //   需求恢复时若仍在退避窗口内被挡住是**正确**行为：30 秒后自动恢复。
             return demand;
         }
 
@@ -1254,9 +1265,13 @@ namespace LiteMonitor.src.SystemServices
                 }
 
                 // 更新服务状态
-                _isRunning = true;
-                // 标记"已成功启动"：之后若观察到进程退出，即按"启动失败"记一次退避
+                // ★ 标记"已成功启动"必须**先于** _isRunning = true：
+                //   退出回调若恰好落在这两行之间（纳秒级窗口），
+                //   旧顺序下 RecordUnexpectedExitBackoff 会看到 _serviceStarted 仍为 0 而提前返回
+                //   → 这次失败**没被记账** → 下一次 GetFps() 会多拉起一次。
+                //   先置位则无论退出回调何时到达，都必然记上一条退避（Interlocked.Exchange 幂等，不会记两条）。
                 Interlocked.Exchange(ref _serviceStarted, 1);
+                _isRunning = true;
                 Interlocked.Exchange(ref _lastDataTicks, _clock());
             }
             catch
@@ -1278,13 +1293,25 @@ namespace LiteMonitor.src.SystemServices
         }
 
         /// <summary>
-        /// 记录"外部服务意外退出"（进程起来即退 / 崩溃）导致的启动失败退避。
+        /// 记录"外部服务意外退出"（进程起来即退 / 崩溃 / 正常退出）导致的启动失败退避。
         ///
         /// 不变量：<b>一旦因为启动失败或进程秒退而失败过一次，
-        /// 后续在退避窗口（<see cref="StartRetryBackoffMs"/>）内不得再次拉起外部进程。</b>
+        /// 后续在退避窗口（<see cref="StartRetryBackoffMs"/>）内不得因任何原因再次拉起外部进程
+        /// （含需求重新恢复、需求抖动 true→false→true）。</b>
+        /// 真实保证的范围**仅限**"退避窗口内不拉起"；
+        /// 退避到期后是否拉起，仍取决于当时是否存在需求 —— 这一点不要写成"绝对不变量"。
         ///
         /// 主动停止（<see cref="StopService"/> / <see cref="Dispose"/>）不算失败：
         /// 那两条路径会先清掉 <c>_serviceStarted</c> 标记，因此这里不会误记退避。
+        ///
+        /// ★ 取舍说明（本轮新增行为 —— 不区分"正常退出 vs 崩溃"）：
+        /// 本方法对**任何**意外退出都记一条 30s 退避，包括 PresentMon 正常退出。
+        /// 代价：正常退出后 30 秒内不会重启（改前是下次 GetFps() 立即重启）。
+        /// 理由：要区分退出原因就得额外判定（例如按退出码/退出时长区分"正常收尾"与"崩溃"），
+        /// 那会引入"看起来正常、其实启动失败"的漏判窗口，
+        /// 削弱"秒退必须记退避"这条刚修好的不变量；
+        /// 且 PresentMon 通常常驻运行，该代价的实际影响很低。
+        /// 因此本轮**只补文档，不新增行为判定**。
         /// </summary>
         private void RecordUnexpectedExitBackoff()
         {

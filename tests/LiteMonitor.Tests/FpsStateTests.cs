@@ -28,6 +28,26 @@ namespace LiteMonitor.Tests
         /// </summary>
         private const int StateWaitMs = 20000;
 
+        /// <summary>
+        /// "服务应当及时进入运行状态"的短预算（毫秒，真实单调时钟）。
+        ///
+        /// 与 <see cref="StateWaitMs"/> 的分工（两条断言并存，不靠放宽预算糊过去）：
+        /// - <see cref="StateWaitMs"/> 只保证"该状态最终发生"，
+        ///   用来兜住高负载下 .NET 线程池调度被推迟的情况，不约束快慢；
+        /// - 本预算是一条**及时性**护栏：防止"启动耗时 5–20s"的性能回归
+        ///   被上面那条宽松预算掩盖。
+        /// 取值依据：健康检查每 3 秒一轮，服务最迟应在下一轮检查内进入运行状态，
+        /// 因此给到 5s（≈ 3s 检查周期 + 2s 余量）。
+        /// </summary>
+        private const int StartLatencyBudgetMs = 5000;
+
+        /// <summary>
+        /// "某个状态**不得**发生"的等待窗（毫秒）。
+        /// 用于"退避窗口内不会再被拉起"这类否定性结论：
+        /// 必须给被测系统一个真实时间窗，否则断言可能跑在后台启动任务之前而假通过。
+        /// </summary>
+        private const int MustNotHappenWaitMs = 1500;
+
         // ================================================================
         // 测试替身
         // ================================================================
@@ -926,8 +946,14 @@ namespace LiteMonitor.Tests
         }
 
         [Fact]
-        public void 需求消失后清理退避且需求恢复时能重新拉起()
+        public void 需求恢复在退避窗口内不拉起且越过窗口后能拉起()
         {
+            // ★ 本用例的语义在修复轮 3 被改写：
+            //   旧用例"需求消失后清理退避且需求恢复时能重新拉起"断言的是**本轮废止的行为**
+            //   （需求跃迁清零退避 ⇒ 需求抖动可以击穿 30s 退避窗口）。
+            //   新语义：退避的成因是"上次启动失败"，与当前有无需求无关 →
+            //           需求恢复时若仍在退避窗口内 → **不得**拉起；
+            //           推进时钟越过窗口后 → 必须能拉起。
             var launcher = new FakeLauncher();
             var clock = new FakeClock();
             using var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true, () => clock.Now);
@@ -938,26 +964,107 @@ namespace LiteMonitor.Tests
             Assert.True(launcher.WaitForStart(1, StateWaitMs), "第一次启动应当发生");
             Assert.True(WaitUntil(() => counter.IsServiceRunning, StateWaitMs), "服务应当处于运行状态");
 
-            // 进程退出 → 记一次启动失败退避
+            // 进程退出 → 记一次 30s 启动失败退避
             launcher.RaiseExited();
+            Assert.False(counter.IsServiceRunning, "进程退出后运行状态必须立刻回落");
 
-            // 退避窗口内不拉起
+            // 退避窗口内：需求仍在 → 拉起被拦下
             counter.GetFps();
             Assert.True(counter.StartBlockedByBackoffCount >= 1,
                 "退避窗口内的拉起请求应当被拦下");
             Assert.Equal(1, launcher.StartCount);
 
-            // 需求消失 → 退避状态必须被清理
-            // （否则这条退避会把"需求重新开启"一起挡住，重新启用需求后拉不起服务）
+            // 需求消失 → **不得**清掉退避
+            // （退避的成因是"上次启动失败"，与当前有没有需求无关）
             demand = false;
             counter.GetFps();
-            Assert.False(counter.IsFpsDemandActive);
+            Assert.False(counter.IsFpsDemandActive, "需求应当处于关闭状态");
+            Assert.True(launcher.StartCount == 1, "需求消失不得拉起外部服务");
 
-            // 需求恢复 → 即使仍在原退避窗口内也能重新拉起
+            // 需求恢复，但仍在退避窗口内 → 依然不得拉起
             demand = true;
+            long blockedBefore = counter.StartBlockedByBackoffCount;
             counter.GetFps();
-            Assert.True(launcher.WaitForStart(2, StateWaitMs), "需求恢复后应当能重新拉起外部服务");
+            Assert.True(counter.IsFpsDemandActive, "需求应当处于开启状态");
+            Assert.True(counter.StartBlockedByBackoffCount > blockedBefore,
+                "需求恢复时若仍在退避窗口内，拉起请求必须被退避拦下");
+            Assert.False(launcher.WaitForStart(2, MustNotHappenWaitMs),
+                "退避窗口内不得因需求恢复而再次拉起外部服务");
+            Assert.True(launcher.StartCount == 1, "退避窗口内不得再次拉起外部服务");
+
+            // 假时钟推进过 30 秒退避窗口（无需真实等待 30 秒）→ 需求仍在 → 必须能重新拉起
+            clock.Advance(30_001);
+            counter.GetFps();
+            Assert.True(launcher.WaitForStart(2, StateWaitMs), "退避窗口过后应当允许重新拉起");
             Assert.Equal(2, launcher.StartCount);
+        }
+
+        [Fact]
+        public void 需求抖动不会击穿退避窗口()
+        {
+            // 场景 S7（修复轮 2 复审复现）：秒退并记退避后，
+            // demand=false → GetFps() → demand=true → GetFps()
+            // → 30s 窗口内 StartCount 由 1 变成 2（退避被需求抖动击穿）。
+            //
+            // 生产可达性：webFpsDemand 的 HTTP 租期只有 2 秒，
+            // 轮询间隔 > 2s 的外部消费者会让需求每轮抖动一次。
+            var launcher = new FakeLauncher();
+            var clock = new FakeClock();
+            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true, () => clock.Now);
+            bool demand = true;
+            counter.FpsDemandProvider = () => demand;
+
+            counter.GetFps();
+            Assert.True(launcher.WaitForStart(1, StateWaitMs), "第一次启动应当发生");
+            Assert.True(WaitUntil(() => counter.IsServiceRunning, StateWaitMs), "服务应当处于运行状态");
+
+            // 进程秒退 → 记一次 30s 启动失败退避
+            launcher.RaiseExited();
+            Assert.False(counter.IsServiceRunning, "进程退出后运行状态必须立刻回落");
+
+            // 需求抖动 3 轮（每轮 false→true）：退避窗口内每一次拉起请求都仍被拦下
+            for (int round = 1; round <= 3; round++)
+            {
+                demand = false;
+                counter.GetFps();
+                Assert.False(counter.IsFpsDemandActive, $"第 {round} 轮抖动：需求应当处于关闭状态");
+
+                demand = true;
+                long blockedBefore = counter.StartBlockedByBackoffCount;
+                counter.GetFps();
+                Assert.True(counter.IsFpsDemandActive, $"第 {round} 轮抖动：需求应当处于开启状态");
+                Assert.True(counter.StartBlockedByBackoffCount > blockedBefore,
+                    $"第 {round} 轮需求抖动时，拉起请求必须仍被退避拦下（抖动不得击穿退避窗口）");
+            }
+
+            // 整个抖动过程中不得再拉起一次外部进程
+            Assert.False(launcher.WaitForStart(2, MustNotHappenWaitMs),
+                "需求抖动不得击穿退避窗口（退避的成因是上次启动失败，与需求无关）");
+            Assert.True(launcher.StartCount == 1, "退避窗口内不得再次拉起外部服务");
+        }
+
+        [Fact]
+        public void 服务应当在短时间内进入运行状态而不是拖到宽松预算上限()
+        {
+            // 背景：修复轮 2 把等待预算从 3s/5s/8s 放宽到 20s（健康检查 40s）。
+            // 断言语义没被削弱（仍是"该状态最终发生"），但"启动耗时 5–20s"的性能回归不再被发现。
+            // 这里保留一条**短**的及时性断言（真实单调时钟；假时钟测不出"慢"），
+            // 与上面那条宽松的"最终发生"断言并存。
+            var launcher = new FakeLauncher();
+            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
+
+            // 预热线程池：避免"首次注入线程"的延迟被算进启动耗时
+            Task.Run(() => { }).GetAwaiter().GetResult();
+
+            var sw = Stopwatch.StartNew();
+            counter.GetFps();
+            Assert.True(launcher.WaitForStart(1, StateWaitMs), "第一次启动应当发生");
+            Assert.True(WaitUntil(() => counter.IsServiceRunning, StateWaitMs), "服务应当处于运行状态");
+            long elapsed = sw.ElapsedMilliseconds;
+
+            Assert.True(elapsed < StartLatencyBudgetMs,
+                $"服务应当在 {StartLatencyBudgetMs}ms 内进入运行状态（实际 {elapsed}ms）；" +
+                "否则'启动变慢'的性能回归会被宽松的'最终发生'预算掩盖");
         }
 
         [Fact]
