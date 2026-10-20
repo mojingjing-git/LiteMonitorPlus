@@ -57,31 +57,37 @@ namespace LiteMonitor.src.WebServer
             {
                 int port = _cfg.WebServerPort;
 
+                TcpListener listener;
                 try
                 {
                     // [Fix] 优先尝试绑定 IPv6Any 并开启 DualMode，以同时支持 IPv4 和 IPv6
-                    _listener = new TcpListener(IPAddress.IPv6Any, port);
-                    _listener.Server.DualMode = true;
-                    _listener.Start();
+                    listener = new TcpListener(IPAddress.IPv6Any, port);
+                    listener.Server.DualMode = true;
+                    listener.Start();
                 }
                 catch (Exception)
                 {
                     // 如果系统不支持 IPv6，回退到 IPv4
-                    _listener = new TcpListener(IPAddress.Any, port);
-                    _listener.Start();
+                    listener = new TcpListener(IPAddress.Any, port);
+                    listener.Start();
                 }
+                _listener = listener;
 
                 _isRunning = true;
                 _currentRunningPort = port;
                 CurrentPassword = _cfg.WebServerPassword;
 
+                // 2. 先启动 WebSocket 管理器 (广播循环在内部)
+                //    ★ 必须在开始监听之前：会话管理器没启动时不会登记任何连接需求，
+                //      否则"刚连上就 Stop"的客户端会被当成僵尸连接，需求永远卡住。
+                _sessionManager.Start();
+
                 // 1. 启动监听连接的循环
                 // ★ 代次：Stop 之后旧的监听循环必须自己退出，不能在重启后复活
+                // ★ 监听器用局部变量传进去：循环体不再读可变的 _listener 字段，
+                //   避免"条件检查通过之后 Stop+Start"导致旧循环 accept 到新监听器上。
                 int generation = Interlocked.Increment(ref _generation);
-                Task.Run(() => ListenLoop(generation));
-                
-                // 2. 启动 WebSocket 管理器 (广播循环在内部)
-                _sessionManager.Start();
+                Task.Run(() => ListenLoop(generation, listener));
                 
                 return true;
             }
@@ -112,19 +118,32 @@ namespace LiteMonitor.src.WebServer
             Stop();
         }
 
-        private async Task ListenLoop(int generation)
+        private async Task ListenLoop(int generation, TcpListener listener)
         {
             // ★ 代次校验：Stop 之后本循环必须退出，避免重启后出现两个监听者
-            while (_isRunning && generation == Volatile.Read(ref _generation) && _listener != null)
+            while (_isRunning && generation == Volatile.Read(ref _generation) && listener != null)
             {
+                // ★ 捕获"接收前"的会话代次：
+                //   如果接收期间发生过 Stop，这次连接属于旧一代，不能再登记成需求。
+                int sessionGeneration = _sessionManager.Generation;
+
+                TcpClient client;
                 try
                 {
-                    var client = await _listener.AcceptTcpClientAsync();
-                    // [Refactor] All connection handling logic moved to WebSessionManager (now serving as unified ConnectionManager)
-                    _ = _sessionManager.HandleClientAsync(client);
+                    client = await listener.AcceptTcpClientAsync();
                 }
                 catch (ObjectDisposedException) { break; }
-                catch (Exception ex) { Debug.WriteLine(ex.Message); }
+                catch (Exception ex) { Debug.WriteLine(ex.Message); continue; }
+
+                if (sessionGeneration != _sessionManager.Generation)
+                {
+                    // 跨越 Stop 边界的连接：直接丢弃，不交给会话管理器
+                    try { client.Close(); } catch { }
+                    continue;
+                }
+
+                // [Refactor] All connection handling logic moved to WebSessionManager (now serving as unified ConnectionManager)
+                _ = _sessionManager.HandleClientAsync(client);
             }
         }
 

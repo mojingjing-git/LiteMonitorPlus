@@ -182,6 +182,12 @@ namespace LiteMonitor.src.WebServer
         /// <summary>一次性读取需求状态（连接数 + 租期，不撕裂）。</summary>
         public WebDemandSnapshot GetDemandSnapshot() => _demand.GetSnapshot();
 
+        /// <summary>
+        /// 当前运行代次（每次 Start / Stop 都会 +1）。
+        /// 用来识别"跨越 Stop 边界"的连接与请求：它们不再登记为需求。
+        /// </summary>
+        public int Generation => Volatile.Read(ref _generation);
+
         public void Start()
         {
             if (_isRunning) return;
@@ -196,7 +202,11 @@ namespace LiteMonitor.src.WebServer
             var old = Interlocked.Exchange(ref _broadcastCts, cts);
             try { old?.Dispose(); } catch { }
 
-            Task.Run(() => BroadcastLoop(generation, cts.Token));
+            // ★ 先把 token 取出来再进任务体：
+            //   cts.Token 是在 lambda **执行时**才求值的，
+            //   如果任务体在 Start() 释放旧 CTS 之后才启动，就会读到已释放的 CTS -> ObjectDisposedException。
+            var token = cts.Token;
+            Task.Run(() => BroadcastLoop(generation, token));
         }
 
         public void Stop()
@@ -227,6 +237,10 @@ namespace LiteMonitor.src.WebServer
         /// </summary>
         public async Task HandleClientAsync(TcpClient client)
         {
+            // ★ 捕获本次连接的代次。
+            //   Stop 之后才完成的握手 / 才到达的请求一律不再登记需求（见 AddClient / HandleHttpRequest）。
+            int connectionGeneration = Volatile.Read(ref _generation);
+
             byte[] buffer = null;
             try
             {
@@ -247,13 +261,13 @@ namespace LiteMonitor.src.WebServer
                     if (Handshake(stream, requestStr))
                     {
                         // 握手成功 = 已鉴权，登记为有效 Web 需求
-                        AddClient(client);
+                        AddClient(client, connectionGeneration);
                         await ReceiveLoop(client); // 进入 WS 循环
                     }
                 }
                 else
                 {
-                    HandleHttpRequest(stream, requestStr);
+                    HandleHttpRequest(stream, requestStr, connectionGeneration);
                     client.Close(); // HTTP 是短连接
                 }
             }
@@ -276,10 +290,22 @@ namespace LiteMonitor.src.WebServer
         /// 登记一个已鉴权的 WebSocket 连接（同时计入需求）。
         /// 与 <see cref="Stop"/> 的清空动作互斥，避免"刚 Clear 又被加回来"的脏状态。
         /// </summary>
-        private void AddClient(TcpClient client)
+        /// <param name="client">要登记的连接。</param>
+        /// <param name="connectionGeneration">该连接建立时的运行代次（由 HandleClientAsync 捕获）。</param>
+        private void AddClient(TcpClient client, int connectionGeneration)
         {
             lock (_clientsGate)
             {
+                // ★ Stop 之后不再登记连接。
+                //   Stop 已经清空过集合，不会再遍历一次去 Close 这个客户端：
+                //   如果这里仍然把它加回来，客户端会一直挂在 ReceiveLoop 上，
+                //   需求计数长期为 1，硬件采集永远进不了空闲停止（§4.4「Stop 清理全部旧需求」）。
+                if (!_isRunning || connectionGeneration != Volatile.Read(ref _generation))
+                {
+                    try { client.Close(); } catch { }
+                    return;
+                }
+
                 if (_wsClients.TryAdd(client, true))
                 {
                     _demand.AddAuthenticatedConnection();
@@ -337,7 +363,7 @@ namespace LiteMonitor.src.WebServer
                    Regex.IsMatch(req, "Upgrade: websocket", RegexOptions.IgnoreCase);
         }
 
-        private void HandleHttpRequest(NetworkStream stream, string request)
+        private void HandleHttpRequest(NetworkStream stream, string request, int connectionGeneration)
         {
             string[] lines = request.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
             if (lines.Length == 0) return;
@@ -355,7 +381,12 @@ namespace LiteMonitor.src.WebServer
 
                 // ★ 已鉴权的快照请求获得一个短需求租期（默认 2 秒）。
                 //   连续 HTTP 轮询会不断延长租期；未鉴权请求 / HTML / favicon 都不会走到这里。
-                _demand.GrantHttpLease();
+                //   跨越 Stop 边界的在途请求不再授予租期：Stop 已经清空过全部需求，
+                //   再补一个 2 秒租期等于把已停止的服务又变成"有需求"。
+                if (connectionGeneration == Volatile.Read(ref _generation))
+                {
+                    _demand.GrantHttpLease();
+                }
 
                 using var ms = new MemoryStream();
                 using var writer = new Utf8JsonWriter(ms);

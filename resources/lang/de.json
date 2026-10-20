@@ -131,7 +131,7 @@
     "OpenWeb": "Web öffnen",
     "WebServerTip": "Web aktiv. Mobilzugriff über LAN 'IP:Port' oder 'IPv6:Port'.",
     "WebServerFps": "Web-FPS",
-    "WebServerFpsTip": "Aktiviert sammelt die Webseite die Bildrate. Dafür ist ein zusätzliches Werkzeug nötig, das die Abtastlast erhöht.",
+    "WebServerFpsTip": "Wenn aktiviert, sammelt die Webseite die Bildrate. Dafür ist ein zusätzliches Werkzeug nötig, das die Abtastlast erhöht.",
 
     "Appearance": "Design",
     "Theme": "Thema",
