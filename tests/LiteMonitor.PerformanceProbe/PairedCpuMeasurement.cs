@@ -375,10 +375,31 @@ internal static partial class AppearanceProbeRunner
         ProbeOptions options,
         IReadOnlyList<string> themes)
     {
-        string themeName = !string.IsNullOrWhiteSpace(options.AppearanceDecompose)
-                           && themes.Contains(options.AppearanceDecompose, StringComparer.OrdinalIgnoreCase)
-            ? themes.First(t => string.Equals(t, options.AppearanceDecompose, StringComparison.OrdinalIgnoreCase))
-            : themes[0];
+        // ★ 主题选择（2026-10-21 修正）：
+        //   CPU 口径"只跑"模式会绕过 --appearance-filter（过滤逻辑在该分支之后才执行），
+        //   主题原本只能取 themes[0] —— 而主题清单是**字母序动态发现**的，
+        //   于是"想测 CyberPunk_Mech"实际测成了 AuroraDream_Purple。
+        //   现在优先用 --appearance-paired-cpu-theme 显式指定；指定的主题不存在时**直接报错**，
+        //   绝不静默回退到 themes[0]（静默回退会让两次测量张冠李戴，比测错更危险）。
+        string requestedTheme = !string.IsNullOrWhiteSpace(options.AppearancePairedCpuTheme)
+            ? options.AppearancePairedCpuTheme
+            : options.AppearanceDecompose;
+
+        string themeName;
+        if (!string.IsNullOrWhiteSpace(requestedTheme))
+        {
+            if (!themes.Contains(requestedTheme, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"指定的主题 '{requestedTheme}' 不在可用主题清单里。" +
+                    $"可用主题：{string.Join(", ", themes)}");
+            }
+            themeName = themes.First(t => string.Equals(t, requestedTheme, StringComparison.OrdinalIgnoreCase));
+        }
+        else
+        {
+            themeName = themes[0];
+        }
 
         var levels = new (string Name, int Gpu, int Dpi, double Scale)[]
         {

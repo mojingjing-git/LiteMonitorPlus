@@ -276,6 +276,17 @@ internal sealed class ProbeOptions
     public int AppearancePairedCpuMaxMeasurements { get; private set; } = 1;
     /// <summary>是否"只跑"CPU 口径配对测量（--appearance-paired-cpu 单独使用、未搭配 --appearance-paired）。</summary>
     public bool AppearancePairedCpuOnly => AppearancePairedCpu && !AppearancePaired;
+    /// <summary>
+    /// CPU 口径**只跑**模式下要测的主题名（默认空 = 取主题清单里的第一个）。
+    /// <para>
+    /// ★ 为什么需要它：<c>--appearance-paired-cpu</c> 单独使用时会走"CPU 口径只跑"分支，
+    /// 该分支**绕过 <c>--appearance-filter</c>（过滤逻辑在它之后才执行），
+    /// 主题只能取 <c>themes[0]</c> —— 而主题清单是**字母序动态发现**的，
+    /// 于是"想测 CyberPunk_Mech"却测成了 AuroraDream_Purple，与 §6.4 的数字对不上。
+    /// 本参数让 CPU 口径只跑模式可以显式指定主题。
+    /// </para>
+    /// </summary>
+    public string AppearancePairedCpuTheme { get; private set; } = "";
     /// <summary>原始命令行（写进结果 JSON 备查）。</summary>
     public string[] RawArgs { get; private set; } = Array.Empty<string>();
 
@@ -298,6 +309,7 @@ internal sealed class ProbeOptions
             ["appearancePairedCpuDraws"] = AppearancePairedCpuDraws,
             ["appearancePairedCpuSegments"] = AppearancePairedCpuSegments,
             ["appearancePairedCpuMaxMeasurements"] = AppearancePairedCpuMaxMeasurements,
+            ["appearancePairedCpuTheme"] = AppearancePairedCpuTheme,
         };
     }
 
@@ -337,6 +349,7 @@ internal sealed class ProbeOptions
                 case "--appearance-paired-cpu-draws": options.AppearancePairedCpuDraws = int.Parse(Next()); break;
                 case "--appearance-paired-cpu-segments": options.AppearancePairedCpuSegments = int.Parse(Next()); break;
                 case "--appearance-paired-cpu-max-measurements": options.AppearancePairedCpuMaxMeasurements = int.Parse(Next()); break;
+                case "--appearance-paired-cpu-theme": options.AppearancePairedCpuTheme = Next(); break;
                 case "--quick":
                     options.WarmupSeconds = 3;
                     options.SteadySeconds = 10;

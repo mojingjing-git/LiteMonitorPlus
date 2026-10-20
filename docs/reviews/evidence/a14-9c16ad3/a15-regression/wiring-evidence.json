@@ -1,10 +1,10 @@
 {
   "kind": "appearance_wiring_probe_result",
   "probeVersion": 1,
-  "startedAt": "2026-10-21T00:31:11.0876001\u002B08:00",
+  "startedAt": "2026-10-21T01:13:32.7399800\u002B08:00",
   "assembly": "1.0.0.0",
   "baseDirectory": "G:\\TOOL\\LiteMonitor-fork\\tests\\AppearanceWiringProbe\\output\\",
-  "elapsedMs": 6082,
+  "elapsedMs": 5999,
   "purpose": "\u9A8C\u8BC1 A13 \u63A5\u7EBF\uFF1A\u65E7\u4E3B\u9898\u8D70\u65B0\u5165\u53E3\u65F6\u9010\u50CF\u7D20\u7B49\u4E8E\u65E7\u5165\u53E3\uFF1B\u673A\u80FD\u4E3B\u9898\u7684\u65B0\u88C5\u9970\u771F\u7684\u751F\u6548\uFF1B\u80CC\u666F\u5C42\u63A5\u7BA1\u540E\u65E7\u5E95\u677F\u8BA9\u4F4D\uFF1B\u7A97\u53E3\u8F6E\u5ED3\u7684\u5207\u89D2 / \u5706\u89D2\u5207\u6362\u6B63\u786E\u3002",
   "isolation": {
     "hardwareMonitorCreated": false,

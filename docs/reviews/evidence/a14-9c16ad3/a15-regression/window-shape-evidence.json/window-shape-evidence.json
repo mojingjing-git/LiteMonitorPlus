@@ -1,0 +1,581 @@
+{
+  "kind": "appearance_window_shape_probe_result",
+  "probeVersion": 1,
+  "startedAt": "2026-10-21T01:13:16.7018469\u002B08:00",
+  "os": "10.0.26300.0",
+  "assembly": "1.0.0.0",
+  "baseDirectory": "G:\\TOOL\\LiteMonitor-fork\\tests\\AppearanceWindowShapeProbe\\output\\",
+  "elapsedMs": 1063,
+  "cases": [
+    {
+      "name": "style_mapping",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "mapping": [
+          {
+            "frameStyle": 0,
+            "label": "none",
+            "strategy": "SystemRounded",
+            "dwmCornerPreference": 2,
+            "regionApplied": false,
+            "clientBounds": "240x160",
+            "cornerLengthPx": 16,
+            "radiusPx": 16,
+            "note": "\u65E0\u81EA\u5B9A\u4E49\u5F62\u72B6\uFF1ARegion \u4EA4\u56DE\u7CFB\u7EDF\uFF0CDWM=ROUND(2)"
+          },
+          {
+            "frameStyle": 1,
+            "label": "chamfer",
+            "strategy": "Chamfered",
+            "dwmCornerPreference": 1,
+            "regionApplied": true,
+            "clientBounds": "240x160",
+            "cornerLengthPx": 16,
+            "radiusPx": 16,
+            "note": "\u5207\u89D2\uFF1ARegion=\u5207\u89D2\u8DEF\u5F84\uFF0CDWM=DONOTROUND(1)"
+          },
+          {
+            "frameStyle": 2,
+            "label": "rounded_stroke",
+            "strategy": "Rounded",
+            "dwmCornerPreference": 2,
+            "regionApplied": true,
+            "clientBounds": "240x160",
+            "cornerLengthPx": 16,
+            "radiusPx": 16,
+            "note": "\u5706\u89D2\uFF1ARegion=\u5706\u89D2\u8DEF\u5F84\uFF0CDWM=ROUND(2)"
+          },
+          {
+            "frameStyle": 3,
+            "label": "holographic",
+            "strategy": "Chamfered",
+            "dwmCornerPreference": 1,
+            "regionApplied": true,
+            "clientBounds": "240x160",
+            "cornerLengthPx": 16,
+            "radiusPx": 16,
+            "note": "\u5207\u89D2\uFF1ARegion=\u5207\u89D2\u8DEF\u5F84\uFF0CDWM=DONOTROUND(1)"
+          },
+          {
+            "frameStyle": 99,
+            "label": "unknown",
+            "strategy": "SystemRounded",
+            "dwmCornerPreference": 2,
+            "regionApplied": false,
+            "clientBounds": "240x160",
+            "cornerLengthPx": 16,
+            "radiusPx": 16,
+            "note": "\u65E0\u81EA\u5B9A\u4E49\u5F62\u72B6\uFF1ARegion \u4EA4\u56DE\u7CFB\u7EDF\uFF0CDWM=ROUND(2)"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chamfer_uses_do_not_round_one",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "cornerPreferenceValues": [
+          1
+        ],
+        "dwmAttribute": 33
+      }
+    },
+    {
+      "name": "reversible_style_switch",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "initialState": "strategy=SystemRounded,corner=2,hasRegion=False",
+        "finalState": "strategy=SystemRounded,corner=2,hasRegion=False",
+        "initialCornerPreference": 2
+      }
+    },
+    {
+      "name": "region_ownership_no_leak",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "cycles": 200,
+        "gdiBefore": 16,
+        "gdiRound1": 16,
+        "gdiAfter": 16,
+        "userBefore": 16,
+        "userRound1": 16,
+        "userAfter": 16,
+        "handleBefore": 261,
+        "handleRound1": 262,
+        "handleAfter": 262,
+        "pathsCreated": 407,
+        "pathsDisposed": 407,
+        "regionsCreated": 407,
+        "regionsDisposedByController": 0,
+        "releaseDetail": "ArgumentException"
+      }
+    },
+    {
+      "name": "boundary_sizes",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "sizes": [
+          {
+            "size": "1x1",
+            "style": 0,
+            "strategy": "SystemRounded",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "1x1",
+            "style": 1,
+            "strategy": "Chamfered",
+            "regionApplied": true,
+            "regionBounds": "1x1@(0,0)"
+          },
+          {
+            "size": "1x1",
+            "style": 2,
+            "strategy": "Rounded",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "1x1",
+            "style": 3,
+            "strategy": "Chamfered",
+            "regionApplied": true,
+            "regionBounds": "1x1@(0,0)"
+          },
+          {
+            "size": "0x0",
+            "style": 0,
+            "strategy": "SystemRounded",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "0x0",
+            "style": 1,
+            "strategy": "Chamfered",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "0x0",
+            "style": 2,
+            "strategy": "Rounded",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "0x0",
+            "style": 3,
+            "strategy": "Chamfered",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "0x120",
+            "style": 0,
+            "strategy": "SystemRounded",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "0x120",
+            "style": 1,
+            "strategy": "Chamfered",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "0x120",
+            "style": 2,
+            "strategy": "Rounded",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "0x120",
+            "style": 3,
+            "strategy": "Chamfered",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "240x0",
+            "style": 0,
+            "strategy": "SystemRounded",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "240x0",
+            "style": 1,
+            "strategy": "Chamfered",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "240x0",
+            "style": 2,
+            "strategy": "Rounded",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "240x0",
+            "style": 3,
+            "strategy": "Chamfered",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "2x2",
+            "style": 0,
+            "strategy": "SystemRounded",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "2x2",
+            "style": 1,
+            "strategy": "Chamfered",
+            "regionApplied": true,
+            "regionBounds": "2x2@(0,0)"
+          },
+          {
+            "size": "2x2",
+            "style": 2,
+            "strategy": "Rounded",
+            "regionApplied": true,
+            "regionBounds": "2.0000002x2.0000007@(-3.5762787E-07,-8.34465E-07)"
+          },
+          {
+            "size": "2x2",
+            "style": 3,
+            "strategy": "Chamfered",
+            "regionApplied": true,
+            "regionBounds": "2x2@(0,0)"
+          },
+          {
+            "size": "60x40",
+            "style": 0,
+            "strategy": "SystemRounded",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "60x40",
+            "style": 1,
+            "strategy": "Chamfered",
+            "regionApplied": true,
+            "regionBounds": "60x40@(0,0)"
+          },
+          {
+            "size": "60x40",
+            "style": 2,
+            "strategy": "Rounded",
+            "regionApplied": true,
+            "regionBounds": "60.000004x40.00002@(-9.536743E-06,-1.9073486E-05)"
+          },
+          {
+            "size": "60x40",
+            "style": 3,
+            "strategy": "Chamfered",
+            "regionApplied": true,
+            "regionBounds": "60x40@(0,0)"
+          },
+          {
+            "size": "240x160",
+            "style": 0,
+            "strategy": "SystemRounded",
+            "regionApplied": false,
+            "regionBounds": "none"
+          },
+          {
+            "size": "240x160",
+            "style": 1,
+            "strategy": "Chamfered",
+            "regionApplied": true,
+            "regionBounds": "240x160@(0,0)"
+          },
+          {
+            "size": "240x160",
+            "style": 2,
+            "strategy": "Rounded",
+            "regionApplied": true,
+            "regionBounds": "240x160.00003@(-2.2888184E-05,-5.340576E-05)"
+          },
+          {
+            "size": "240x160",
+            "style": 3,
+            "strategy": "Chamfered",
+            "regionApplied": true,
+            "regionBounds": "240x160@(0,0)"
+          }
+        ]
+      }
+    },
+    {
+      "name": "physical_pixels_used_once",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "dpi192TopScanX": 16,
+        "dpi96TopScanX": 8,
+        "dpi192FrameLengthPx": 16,
+        "dpi96FrameLengthPx": 8,
+        "appliedCornerLengthPx": 8
+      }
+    },
+    {
+      "name": "geometry_diagnostic",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "pathPoints": [
+          {
+            "x": 16,
+            "y": 0
+          },
+          {
+            "x": 224,
+            "y": 0
+          },
+          {
+            "x": 240,
+            "y": 16
+          },
+          {
+            "x": 240,
+            "y": 144
+          },
+          {
+            "x": 224,
+            "y": 160
+          },
+          {
+            "x": 16,
+            "y": 160
+          },
+          {
+            "x": 0,
+            "y": 144
+          },
+          {
+            "x": 0,
+            "y": 16
+          }
+        ],
+        "pointCount": 8,
+        "fillMode": "Alternate",
+        "isVisibleScanTopEdge": [
+          {
+            "x": 0.5,
+            "y": 0.5,
+            "visible": false
+          },
+          {
+            "x": 4.5,
+            "y": 0.5,
+            "visible": false
+          },
+          {
+            "x": 8.5,
+            "y": 0.5,
+            "visible": false
+          },
+          {
+            "x": 12.5,
+            "y": 0.5,
+            "visible": false
+          },
+          {
+            "x": 14.5,
+            "y": 0.5,
+            "visible": true
+          },
+          {
+            "x": 15.5,
+            "y": 0.5,
+            "visible": true
+          },
+          {
+            "x": 16.5,
+            "y": 0.5,
+            "visible": true
+          },
+          {
+            "x": 20.5,
+            "y": 0.5,
+            "visible": true
+          },
+          {
+            "x": 100.5,
+            "y": 0.5,
+            "visible": true
+          }
+        ],
+        "equalsRef16": false,
+        "equalsRef8": false,
+        "equalsRef32": false,
+        "scanCount": 32,
+        "firstScans": [
+          {
+            "index": 0,
+            "x": 16,
+            "y": 0,
+            "w": 208,
+            "h": 1
+          },
+          {
+            "index": 1,
+            "x": 15,
+            "y": 1,
+            "w": 210,
+            "h": 1
+          },
+          {
+            "index": 2,
+            "x": 14,
+            "y": 2,
+            "w": 212,
+            "h": 1
+          }
+        ],
+        "firstScanX": 16,
+        "firstScanX_c8": 8,
+        "firstScanX_c16": 16,
+        "firstScanX_c32": 32,
+        "isVisibleScanWithGraphics": [
+          {
+            "x": 0.5,
+            "y": 0.5,
+            "visible": false
+          },
+          {
+            "x": 8.5,
+            "y": 0.5,
+            "visible": false
+          },
+          {
+            "x": 14.5,
+            "y": 0.5,
+            "visible": true
+          },
+          {
+            "x": 15.5,
+            "y": 0.5,
+            "visible": true
+          },
+          {
+            "x": 16.5,
+            "y": 0.5,
+            "visible": true
+          },
+          {
+            "x": 20.5,
+            "y": 0.5,
+            "visible": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ui_thread_only",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "caught": "InvalidOperationException"
+      }
+    },
+    {
+      "name": "path_copied_into_region",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "boundsAfterPathDisposed": "100x50"
+      }
+    },
+    {
+      "name": "dwm_corner_preference_readback",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "chamferReadbackSupported": true,
+        "chamferReadback": 1,
+        "roundedReadbackSupported": true,
+        "roundedReadback": 2,
+        "noneReadbackSupported": true,
+        "noneReadback": 2
+      }
+    },
+    {
+      "name": "handle_destroyed_no_win32",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "recreateHandleInvoked": true,
+        "dwmCallsBeforeDispose": 2,
+        "dwmCallsAfterDispose": 2,
+        "skippedNoHandle": 1
+      }
+    },
+    {
+      "name": "resize_reclamps_corner_length",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "initialCornerLengthPx": 40,
+        "grownCornerLengthPx": 64,
+        "shrunkCornerLengthPx": 40,
+        "resizeEvents": 2
+      }
+    },
+    {
+      "name": "theme_switch_updates_corner_length",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "themeACornerLengthPx": 16,
+        "themeBCornerLengthPx": 48
+      }
+    },
+    {
+      "name": "layout_switch_updates_corner_length",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "portraitCornerLengthPx": 50,
+        "landscapeCornerLengthPx": 64,
+        "resizeEvents": 2
+      }
+    },
+    {
+      "name": "resize_binding_unique",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "files": [
+          {
+            "file": "MainForm_Transparent.cs",
+            "resizeSubscriptions": 1
+          },
+          {
+            "file": "MainFormWinHelper.cs",
+            "resizeSubscriptions": 0
+          },
+          {
+            "file": "WindowAppearanceController.cs",
+            "resizeSubscriptions": 0
+          }
+        ],
+        "total": 1
+      }
+    }
+  ],
+  "allPassed": true
+}

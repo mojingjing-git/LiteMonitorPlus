@@ -980,15 +980,46 @@ namespace LiteMonitor.AppearanceM2Probe
                     $"超预算帧被拒绝后仍应被释放，实际还有 {liveAfterStop} 张未释放。");
             }
 
-            // ---- 4) 记录"无处理器直通"这一未被预算检查覆盖的路径（供集成者复核） ----
+            // ---- 4) 无处理器直通路径：服务层**自身**的缓冲预算闸门（§6.3 加固项） ----
+            // ★ 2026-10-21 加固后语义反转：原先这里只"记录缺口"（服务在 processor == null 时
+            //   不查预算，会把后端给出的超限尺寸原样发布）。现在服务层已有**发布前**闸门，
+            //   这条路径必须**同样**拒收超限帧 —— 闸门与是否配置 processor 无关。
             FakeCaptureBackend rawBackend = new FakeCaptureBackend { FrameWidth = overWidth, FrameHeight = overHeight };
             long rawPublished;
+            long rawCaptureFailures;
+            BackdropDegradeReason rawDegradeReason;
+            string rawDegradeText;
+            bool rawStopped;
             using (BackdropCaptureService rawService = new BackdropCaptureService(rawBackend, processor: null, takeoverTimeoutMs: 20d))
             {
                 rawService.Start(CreateRequest(theme: 1, handle: 1, size: 1));
-                WaitUntil(() => rawService.Metrics.FramesPublished >= 1, 5000);
+                bool rawFailed = WaitUntil(() => rawService.Metrics.CaptureFailures >= 1, 8000);
+                BackdropCaptureStatus rawStatus = rawService.Status;
+
                 rawPublished = rawService.Metrics.FramesPublished;
-                rawService.Stop(TimeSpan.FromSeconds(3));
+                rawCaptureFailures = rawService.Metrics.CaptureFailures;
+                rawDegradeReason = rawStatus.DegradeReason;
+                rawDegradeText = rawStatus.DegradeReasonText ?? "";
+
+                c.Require(rawFailed,
+                    "无处理器直通路径没有记录超预算帧的失败（CaptureFailures 仍为 0）——服务层闸门可能未生效。");
+                c.Require(rawPublished == 0,
+                    $"无处理器直通路径不应发布超限帧，实际发布了 {rawPublished} 帧。");
+                c.Require(rawCaptureFailures >= 1,
+                    $"无处理器直通路径应计入捕获失败，实际 CaptureFailures={rawCaptureFailures}。");
+                c.Require(rawDegradeReason != BackdropDegradeReason.None,
+                    $"无处理器直通路径的超预算帧应带降级原因码，实际为 {rawDegradeReason}。");
+                c.Require(!string.IsNullOrWhiteSpace(rawDegradeText),
+                    "无处理器直通路径的超预算帧应带可读降级原因文本（实际为空）。");
+
+                rawStopped = rawService.Stop(TimeSpan.FromSeconds(3));
+            }
+
+            int rawLiveAfterStop = CountLive(rawBackend.Produced);
+            if (BitmapReleaseProbe.Reliable)
+            {
+                c.Require(rawLiveAfterStop == 0,
+                    $"无处理器直通路径拒收超限帧后仍应被释放，实际还有 {rawLiveAfterStop} 张未释放。");
             }
 
             c.Detail("gate", "M2 合同 §9 第 9 条");
@@ -1010,14 +1041,22 @@ namespace LiteMonitor.AppearanceM2Probe
             c.Detail("liveFramesAfterStop", liveAfterStop);
             c.Detail("stopCompletedWithinTimeout", stopped);
             c.Detail("rawPathWithoutProcessor.PublishedFrames", rawPublished);
+            c.Detail("rawPathWithoutProcessor.CaptureFailures", rawCaptureFailures);
+            c.Detail("rawPathWithoutProcessor.DegradeReason", rawDegradeReason.ToString());
+            c.Detail("rawPathWithoutProcessor.DegradeReasonText", rawDegradeText);
+            c.Detail("rawPathWithoutProcessor.LiveFramesAfterStop", rawLiveAfterStop);
+            c.Detail("rawPathWithoutProcessor.StopCompletedWithinTimeout", rawStopped);
             c.Detail("rawPathNote",
-                "服务在 processor == null 时不自己做缓冲预算检查，会把后端给出的超限尺寸原样发布" +
-                $"（实测 published={rawPublished}）。预算检查由 BackdropImageProcessor 承担" +
-                "（超限直接失败、不分配临时缓冲）；接入该处理器后服务不再发布超限帧。");
+                "无处理器直通路径（processor == null）现在**同样**被服务层的发布前缓冲预算闸门拦下：" +
+                $"实测 published={rawPublished}、CaptureFailures={rawCaptureFailures}、" +
+                $"原因码={rawDegradeReason}。闸门与是否配置 processor 无关" +
+                "（这正是 2026-10-21 加固项修掉的缺口：原先该路径会把超限尺寸原样发布）。");
             c.Detail("releaseProbeReliable", BitmapReleaseProbe.Reliable);
             c.Detail("releaseProbeNote", BitmapReleaseProbe.Note);
             c.Detail("rule", "MaxBufferPixels == 2000000 且 MaxBufferBytes == 32 MiB；" +
-                             "超限源图必须被拒绝（先判后分配）；接入预算处理器后服务不得发布超限帧，且该帧被释放。");
+                             "超限源图必须被拒绝（先判后分配）；" +
+                             "服务在**配置了**处理器和**未配置**处理器（processor == null）两种情况下，"+
+                             "都不得发布超限帧，且被拒绝的帧必须被释放。");
             c.Detail("screenCapturePerformed", false);
             return c;
         }

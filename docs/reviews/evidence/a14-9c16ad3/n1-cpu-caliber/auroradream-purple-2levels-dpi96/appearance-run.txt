@@ -1,0 +1,8 @@
+[00:33:11] LiteMonitor++ 外观探针 (--appearance-only) 启动于 2026-10-21 00:33:11
+[00:33:11] 参数: --appearance-only --appearance-paired-cpu --appearance-paired-cpu-max-measurements 1 --out G:\TOOL\LiteMonitor-fork\docs\reviews\evidence\a14-9c16ad3\n1-cpu-caliber\cyberpunk-4gpu-dpi96 --appearance-filter CyberPunk_Mech__vertical__gpu4__dpi96
+[00:33:11] 结果目录: G:\TOOL\LiteMonitor-fork\docs\reviews\evidence\a14-9c16ad3\n1-cpu-caliber\cyberpunk-4gpu-dpi96
+[00:33:11] 隔离输出目录 (AppContext.BaseDirectory): G:\TOOL\LiteMonitor-fork\tests\LiteMonitor.PerformanceProbe\output\
+[00:33:11] 夹具数据: G:\TOOL\LiteMonitor-fork\tests\LiteMonitor.PerformanceProbe\output\appearance-fixtures\appearance-fixtures.json (sha256 F307099E7DFB18D7DEBD266975CA7FD18D79DB0E7F6FDB45B6CD6069C9F16DAF)
+[00:33:11] 隔离配置已就绪: PanelWidth=240 MemoryDisplayMode=0 Skin=DarkFlat_Classic
+[00:33:11] 发现主题 11 个: AuroraDream_Purple, CyberBlue_Neon, CyberPunk_Mech, DarkFlat_Classic, DarkNeo_Modern, DeepOcean_Blue, Dracula_Vampire, LightPure_Elegant, MatrixGreen_Terminal, Monokai_Pro, SolarAmber_Warm
+[00:33:11] 模式: CPU 口径配对测量（只跑 CPU 时间口径，跳过常规夹具矩阵）
