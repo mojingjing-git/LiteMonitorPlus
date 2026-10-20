@@ -29,9 +29,28 @@ namespace LiteMonitor.src.SystemServices
         public int Count => _values.Count;
 
         /// <summary>推进到新的采集代次（旧代次的缓存整体作废）。</summary>
+        /// <remarks>
+        /// ★ 单调性守卫：更旧的代次会被**忽略**（既不把代次往回写，也不清空缓存）。
+        ///   否则"晚到的旧代次收尾"会把代次回退，并顺手清掉新代次已经算好的值。
+        /// </remarks>
         public void BeginGeneration(int generation)
         {
+            if (generation < _generation) return;
             _generation = generation;
+            _values.Clear();
+        }
+
+        /// <summary>
+        /// 采集落定（收尾）：作废本代次已经算出的值，但**不**推进代次。
+        /// </summary>
+        /// <remarks>
+        /// 采集期间（传感器还没更新完）被读到的值是**更新前**的旧值，必须作废；
+        /// 但收尾**不能**推进代次，也不能清掉**更新一代次**已经算好的值
+        /// （单调性守卫：旧代次的收尾晚到时直接忽略）。
+        /// </remarks>
+        public void SettleGeneration(int generation)
+        {
+            if (generation < _generation) return;
             _values.Clear();
         }
 
@@ -324,15 +343,19 @@ namespace LiteMonitor.src.SystemServices
         /// 那些"更新前"的旧值会被写进本代次缓存并钉住一整个周期。
         /// 这里在采集结束后把缓存再作废一次，让下一次读取用更新后的传感器重新算。
         ///
-        /// ★ 接线说明：协调器需要在采样动作**之后**调用它（onCollectionSettled 回调）。
-        ///   当前主工程的接线由 A2b 补上（见报告的"A2b 接线需求清单"）。
+        /// ★ 接线说明：协调器需要在**发布完成信号之前**调用它（onCollectionSettled 回调）。
+        ///   否则 UI / Web 在 await 返回后写入缓存的值会被随后的收尾清掉，
+        ///   导致同一代次重复计算。
+        ///
+        /// ★ 单调性：旧代次的收尾晚到时**不会**清掉新代次已经算好的值
+        ///   （见 <see cref="GenerationValueCache.SettleGeneration"/>）。
         /// </summary>
         /// <param name="generation">当前采集代次编号。</param>
         public void OnCollectionSettled(int generation)
         {
             lock (_lock)
             {
-                _cache.BeginGeneration(generation);
+                _cache.SettleGeneration(generation);
             }
         }
 
