@@ -145,11 +145,179 @@ namespace LiteMonitor.src.WebServer
         }
     }
 
+    /// <summary>
+    /// 共享采样请求入口（计划 §4.4 / §6.1）。
+    ///
+    /// 语义：请求一次**限频**的真实硬件采集，返回 true 表示本次请求触发（或共享到）了一次真实采集。
+    /// 生产实现 = <c>HardwareMonitor.Instance?.UpdateIfDueAsync(ct)</c>：
+    /// 协调器保证"1 秒 1 次 + 并发合并"，因此多个网页 + HTTP 轮询**不会**叠加真实采集。
+    /// </summary>
+    public delegate Task<bool> WebSamplingRequester(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Web 需求 → 硬件采集需求 的同步器（计划 §4.4）。
+    ///
+    /// ★ 为什么需要它：Web 需求消失（最后一个连接关闭 / HTTP 租期过期）之后，
+    ///   必须把 <c>SetWebDataDemand(false)</c> **及时**送达采集层，
+    ///   否则硬件会继续按"全量普通指标"采集 —— 那正是本轮要省掉的 CPU。
+    ///
+    /// ★ 两条同步路径（缺一不可）：
+    ///   1. **事件驱动**：连接增删 / HTTP 租期授予 / 停止清空 —— 立即同步（毫秒级）；
+    ///   2. **周期监视**：HTTP 租期**到期**没有任何事件可挂靠，只能靠周期监视发现
+    ///      （默认 200 毫秒，远小于 1 个采集周期，满足"≤1 采集周期 + 合理宽限"）。
+    ///      ★ 不能只依赖广播周期同步：广播间隔可能 ≥ 2 秒（大于 HTTP 租期 2 秒），
+    ///        那会让硬件在"已经没有需求"时继续全量采集。
+    ///
+    /// ★ 规则单一来源：需求值一律实时读取（<see cref="WebSessionManager.HasWebDataDemand"/> 或其等价来源），
+    ///   绝不自己缓存另一份；写入目标由调用方提供。
+    /// </summary>
+    public sealed class WebDemandSynchronizer
+    {
+        /// <summary>需求监视的默认间隔（200 毫秒）。</summary>
+        public static readonly TimeSpan DefaultMonitorInterval = TimeSpan.FromMilliseconds(200);
+
+        private readonly Func<bool> _demandProvider;
+        private readonly Func<bool, bool> _applyDemand;
+        private readonly Func<object?>? _targetProvider;
+        private readonly object _gate = new object();
+
+        private bool _hasApplied;
+        private bool _appliedValue;
+        private object? _appliedTarget;
+        private bool _running;
+        private CancellationTokenSource? _monitorCts;
+
+        /// <param name="demandProvider">需求真值来源（实时读取，线程安全由调用方保证）。</param>
+        /// <param name="applyDemand">
+        /// 把需求值写入采集层；返回 true 表示写入成功。
+        /// 返回 false（例如采集层实例还不存在）时**不会**记账，下一轮监视会重试。
+        /// </param>
+        /// <param name="targetProvider">
+        /// 写入目标的身份标识（通常是采集层实例）。目标变了（换了实例）时会重新写入一次，
+        /// 避免新实例漏掉需求。为 null 表示不跟踪目标。
+        /// </param>
+        public WebDemandSynchronizer(
+            Func<bool> demandProvider,
+            Func<bool, bool> applyDemand,
+            Func<object?>? targetProvider = null)
+        {
+            _demandProvider = demandProvider ?? throw new ArgumentNullException(nameof(demandProvider));
+            _applyDemand = applyDemand ?? throw new ArgumentNullException(nameof(applyDemand));
+            _targetProvider = targetProvider;
+        }
+
+        /// <summary>当前需求值（唯一真值来源，实时读取）。</summary>
+        public bool CurrentDemand => _demandProvider();
+
+        /// <summary>上次成功写入采集层的需求值（从未写入过时为 false）。</summary>
+        public bool AppliedValue { get { lock (_gate) return _appliedValue; } }
+
+        /// <summary>是否已经成功写入过采集层。</summary>
+        public bool HasApplied { get { lock (_gate) return _hasApplied; } }
+
+        /// <summary>
+        /// 幂等同步一次：读取当前需求 → 需要时写入采集层。
+        /// </summary>
+        /// <returns>当前需求值（是否写入成功请看 <see cref="HasApplied"/>）。</returns>
+        public bool SyncNow()
+        {
+            bool demand = _demandProvider();
+            object? target = _targetProvider?.Invoke();
+
+            lock (_gate)
+            {
+                // 值没变、目标也没变 → 不重复写（写入是幂等的，但少写一次是一次）
+                if (_hasApplied && _appliedValue == demand && ReferenceEquals(_appliedTarget, target))
+                {
+                    return demand;
+                }
+            }
+
+            bool applied = false;
+            try
+            {
+                applied = _applyDemand(demand);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Web 需求同步失败: " + ex.Message);
+            }
+
+            if (applied)
+            {
+                lock (_gate)
+                {
+                    _appliedValue = demand;
+                    _appliedTarget = target;
+                    _hasApplied = true;
+                }
+            }
+            return demand;
+        }
+
+        /// <summary>
+        /// 启动需求监视（周期检查）。用于发现"没有事件可挂靠"的需求消失 —— 例如 HTTP 租期到期。
+        /// </summary>
+        /// <param name="interval">监视间隔，默认 <see cref="DefaultMonitorInterval"/>。</param>
+        public void Start(TimeSpan? interval = null)
+        {
+            TimeSpan period = interval ?? DefaultMonitorInterval;
+            if (period <= TimeSpan.Zero) period = DefaultMonitorInterval;
+
+            lock (_gate)
+            {
+                if (_running) return;
+                _running = true;
+            }
+
+            var cts = new CancellationTokenSource();
+            var old = Interlocked.Exchange(ref _monitorCts, cts);
+            try { old?.Cancel(); } catch { }
+            try { old?.Dispose(); } catch { }
+
+            // ★ 先取出 token 再进任务体：cts.Token 在 lambda 执行时才求值，
+            //   若任务体在 Start() 释放旧 CTS 之后才启动，会读到已释放的 CTS。
+            var token = cts.Token;
+            _ = Task.Run(() => MonitorLoopAsync(period, token));
+        }
+
+        /// <summary>停止需求监视（幂等）。</summary>
+        public void Stop()
+        {
+            lock (_gate) { _running = false; }
+            var cts = Interlocked.Exchange(ref _monitorCts, null);
+            try { cts?.Cancel(); } catch { }
+        }
+
+        private async Task MonitorLoopAsync(TimeSpan interval, CancellationToken token)
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    SyncNow();
+                    await Task.Delay(interval, token).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Stop 时的正常退出
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Web 需求监视循环异常: " + ex.Message);
+            }
+        }
+    }
+
     public class WebSessionManager
     {
         private readonly ConcurrentDictionary<TcpClient, bool> _wsClients = new();
         private readonly Action<Utf8JsonWriter> _dataProvider;
+        private readonly Func<Utf8JsonWriter, CancellationToken, Task>? _asyncDataProvider;
+        private readonly WebSamplingRequester? _samplingRequester;
         private readonly WebDemandState _demand;
+        private readonly TimeProvider _time;
 
         // 连接集合与需求计数的联动锁：保证"加入连接"与"清空全部需求"不会交错出脏状态
         private readonly object _clientsGate = new object();
@@ -157,13 +325,52 @@ namespace LiteMonitor.src.WebServer
         private volatile bool _isRunning = false;
         private int _generation = 0;                       // Start/Stop 代次：用来区分 Stop 前后的广播任务
         private CancellationTokenSource? _broadcastCts;
+        private CancellationTokenSource? _lifetimeCts;     // 服务级取消令牌：Stop 时让在途采样等待立刻退出
+        private CancellationToken _lifetimeToken = CancellationToken.None;
+
+        /// <summary>共享采样等待的超时（超时后按既有行为降级：照常序列化缓存值，不挂死请求线程）。</summary>
+        public static readonly TimeSpan SamplingWaitTimeout = TimeSpan.FromSeconds(2);
+
+        /// <summary>没有同步序列化回调时的占位实现（此时只会走可等待形态）。</summary>
+        private static readonly Action<Utf8JsonWriter> NoSnapshotProvider = writer => { };
 
         /// <param name="dataProvider">快照序列化回调。</param>
         /// <param name="demandState">需求状态实例（默认新建一个）。</param>
         /// <param name="timeProvider">需求租期使用的单调时钟（默认 <see cref="TimeProvider.System"/>）。</param>
         public WebSessionManager(Action<Utf8JsonWriter> dataProvider, WebDemandState? demandState = null, TimeProvider? timeProvider = null)
+            : this(dataProvider, null, demandState, timeProvider, null)
         {
-            _dataProvider = dataProvider;
+        }
+
+        /// <param name="asyncDataProvider">可等待的快照序列化回调（只负责序列化，不负责触发采集）。</param>
+        /// <param name="demandState">需求状态实例（默认新建一个）。</param>
+        /// <param name="timeProvider">需求租期与采样超时使用的单调时钟（默认 <see cref="TimeProvider.System"/>）。</param>
+        /// <param name="samplingRequester">共享采样请求入口（默认 null = 不采样）。</param>
+        public WebSessionManager(
+            Func<Utf8JsonWriter, CancellationToken, Task> asyncDataProvider,
+            WebDemandState? demandState = null,
+            TimeProvider? timeProvider = null,
+            WebSamplingRequester? samplingRequester = null)
+            : this(null, asyncDataProvider, demandState, timeProvider, samplingRequester)
+        {
+        }
+
+        private WebSessionManager(
+            Action<Utf8JsonWriter>? dataProvider,
+            Func<Utf8JsonWriter, CancellationToken, Task>? asyncDataProvider,
+            WebDemandState? demandState,
+            TimeProvider? timeProvider,
+            WebSamplingRequester? samplingRequester)
+        {
+            if (dataProvider == null && asyncDataProvider == null)
+            {
+                throw new ArgumentException("必须提供快照序列化回调（同步或可等待形态任选其一）。", nameof(dataProvider));
+            }
+
+            _dataProvider = dataProvider ?? NoSnapshotProvider;
+            _asyncDataProvider = asyncDataProvider;
+            _samplingRequester = samplingRequester;
+            _time = timeProvider ?? TimeProvider.System;
             _demand = demandState ?? new WebDemandState(timeProvider);
         }
 
@@ -183,6 +390,15 @@ namespace LiteMonitor.src.WebServer
         public WebDemandSnapshot GetDemandSnapshot() => _demand.GetSnapshot();
 
         /// <summary>
+        /// 需求状态变化通知（连接增删 / HTTP 租期授予 / 停止清空）。
+        ///
+        /// ★ 订阅者必须**重新读取** <see cref="HasWebDataDemand"/>（唯一真值来源）再同步到采集层，
+        ///   不要用通知里携带的旧值 —— 通知只表示"状态可能变了"。
+        /// ★ 通知在内部锁之外触发，订阅者可以安全地调用本对象的任何读取接口。
+        /// </summary>
+        public Action? DemandChanged { get; set; }
+
+        /// <summary>
         /// 当前运行代次（每次 Start / Stop 都会 +1）。
         /// 用来识别"跨越 Stop 边界"的连接与请求：它们不再登记为需求。
         /// </summary>
@@ -191,16 +407,35 @@ namespace LiteMonitor.src.WebServer
         public void Start()
         {
             if (_isRunning) return;
-            _isRunning = true;
+
+            // ★ 代次自增与"开始运行"必须在同一把锁里完成（B1 复审的顺序窗口）：
+            //   连接登记（AddClient）也持有同一把锁。
+            //   如果先置 _isRunning 再自增代次，中间窗口里到达的连接会带着**旧代次**被登记成功，
+            //   于是"Stop 之后才连上的客户端"被当成有效需求（需求永久泄漏）。
+            //   反过来（先自增代次再置 _isRunning）同样有窗口，只是方向相反。
+            //   两者放进同一把锁后，连接登记要么整体发生在 Start 之前（被拒），
+            //   要么整体发生在 Start 之后（代次一致，被接受），不再有中间态。
+            int generation;
+            lock (_clientsGate)
+            {
+                if (_isRunning) return;
+                _isRunning = true;
+                generation = Interlocked.Increment(ref _generation);
+            }
 
             // ★ 用代次 + 取消令牌区分 Stop 前后的广播任务：
             //   快速 Stop/Start 后，旧的广播循环必须自己退出，不能复活成第二个广播者。
-            int generation = Interlocked.Increment(ref _generation);
-
             var cts = new CancellationTokenSource();
             // 上一次的 CTS 已经被 Cancel 过（延迟任务已结束），这里才安全释放
             var old = Interlocked.Exchange(ref _broadcastCts, cts);
             try { old?.Dispose(); } catch { }
+
+            // ★ 服务级取消令牌：Stop 时让在途的 HTTP 采样等待立刻退出
+            var lifetime = new CancellationTokenSource();
+            var oldLifetime = Interlocked.Exchange(ref _lifetimeCts, lifetime);
+            try { oldLifetime?.Cancel(); } catch { }
+            try { oldLifetime?.Dispose(); } catch { }
+            _lifetimeToken = lifetime.Token;
 
             // ★ 先把 token 取出来再进任务体：
             //   cts.Token 是在 lambda **执行时**才求值的，
@@ -211,16 +446,17 @@ namespace LiteMonitor.src.WebServer
 
         public void Stop()
         {
-            _isRunning = false;
-
-            // 让旧广播循环立刻退出（代次 + 取消）
-            Interlocked.Increment(ref _generation);
-            try { _broadcastCts?.Cancel(); } catch { }
-            // 这里不 Dispose：旧循环可能正拿着这个 token 收尾，
-            // 交给下一次 Start() 释放，避免 ObjectDisposedException。
+            // ★ 取消在途的采样等待（不等它自己超时）
+            try { _lifetimeCts?.Cancel(); } catch { }
+            _lifetimeToken = CancellationToken.None;
 
             lock (_clientsGate)
             {
+                _isRunning = false;
+
+                // 让旧广播循环立刻退出（代次 + 取消）
+                Interlocked.Increment(ref _generation);
+
                 foreach (var client in _wsClients.Keys)
                 {
                     try { client.Close(); } catch { }
@@ -230,6 +466,12 @@ namespace LiteMonitor.src.WebServer
                 // ★ 回收全部旧需求：连接与 HTTP 租期都不留给下一次启动
                 _demand.Clear();
             }
+
+            // 旧广播循环可能正拿着这个 token 收尾，交给下一次 Start() 释放，避免 ObjectDisposedException。
+            try { _broadcastCts?.Cancel(); } catch { }
+
+            // ★ 需求已归零：通知订阅者把 false 送达采集层
+            NotifyDemandChanged();
         }
 
         /// <summary>
@@ -240,6 +482,9 @@ namespace LiteMonitor.src.WebServer
             // ★ 捕获本次连接的代次。
             //   Stop 之后才完成的握手 / 才到达的请求一律不再登记需求（见 AddClient / HandleHttpRequest）。
             int connectionGeneration = Volatile.Read(ref _generation);
+
+            // ★ 服务级取消令牌：Stop 时取消，在途的采样等待立刻退出
+            CancellationToken lifetimeToken = _lifetimeToken;
 
             byte[] buffer = null;
             try
@@ -267,7 +512,8 @@ namespace LiteMonitor.src.WebServer
                 }
                 else
                 {
-                    HandleHttpRequest(stream, requestStr, connectionGeneration);
+                    // ★ HTTP 路径改成可等待：鉴权 → 授予租期 → 共享采样 → 序列化 → 响应
+                    await HandleHttpRequestAsync(stream, requestStr, connectionGeneration, lifetimeToken).ConfigureAwait(false);
                     client.Close(); // HTTP 是短连接
                 }
             }
@@ -294,6 +540,7 @@ namespace LiteMonitor.src.WebServer
         /// <param name="connectionGeneration">该连接建立时的运行代次（由 HandleClientAsync 捕获）。</param>
         private void AddClient(TcpClient client, int connectionGeneration)
         {
+            bool registered = false;
             lock (_clientsGate)
             {
                 // ★ Stop 之后不再登记连接。
@@ -309,8 +556,12 @@ namespace LiteMonitor.src.WebServer
                 if (_wsClients.TryAdd(client, true))
                 {
                     _demand.AddAuthenticatedConnection();
+                    registered = true;
                 }
             }
+
+            // ★ 通知在锁之外触发：订阅者要重新读取需求状态，不能被这里的锁挡住
+            if (registered) NotifyDemandChanged();
         }
 
         /// <summary>
@@ -319,12 +570,30 @@ namespace LiteMonitor.src.WebServer
         /// </summary>
         private void RemoveClient(TcpClient client)
         {
+            bool removed = false;
             lock (_clientsGate)
             {
                 if (_wsClients.TryRemove(client, out _))
                 {
                     _demand.RemoveAuthenticatedConnection();
+                    removed = true;
                 }
+            }
+
+            // ★ 需求减少时立刻通知（毫秒级回收，不等广播周期）
+            if (removed) NotifyDemandChanged();
+        }
+
+        /// <summary>触发需求变化通知（异常不会影响需求状态本身）。</summary>
+        private void NotifyDemandChanged()
+        {
+            try
+            {
+                DemandChanged?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Web 需求变化通知失败: " + ex.Message);
             }
         }
 
@@ -363,7 +632,7 @@ namespace LiteMonitor.src.WebServer
                    Regex.IsMatch(req, "Upgrade: websocket", RegexOptions.IgnoreCase);
         }
 
-        private void HandleHttpRequest(NetworkStream stream, string request, int connectionGeneration)
+        private async Task HandleHttpRequestAsync(NetworkStream stream, string request, int connectionGeneration, CancellationToken cancellationToken)
         {
             string[] lines = request.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
             if (lines.Length == 0) return;
@@ -383,14 +652,21 @@ namespace LiteMonitor.src.WebServer
                 //   连续 HTTP 轮询会不断延长租期；未鉴权请求 / HTML / favicon 都不会走到这里。
                 //   跨越 Stop 边界的在途请求不再授予租期：Stop 已经清空过全部需求，
                 //   再补一个 2 秒租期等于把已停止的服务又变成"有需求"。
+                //   ★ 授权点必须在**采样之前**：等待采样期间不能没有需求。
                 if (connectionGeneration == Volatile.Read(ref _generation))
                 {
                     _demand.GrantHttpLease();
+                    NotifyDemandChanged();
                 }
+
+                // ★ 共享采样（限频）：HTTP 轮询与网页广播走**同一条**限频采样路径，
+                //   协调器保证 1 秒 1 次 + 并发合并 → 多个网页 + 轮询不会叠加真实采集。
+                //   快照本身**不执行** hw.Update()，这里只是请求一次共享采样。
+                await RequestSharedSamplingWithTimeoutAsync(cancellationToken).ConfigureAwait(false);
 
                 using var ms = new MemoryStream();
                 using var writer = new Utf8JsonWriter(ms);
-                _dataProvider(writer);
+                await WriteSnapshotAsync(writer, cancellationToken).ConfigureAwait(false);
                 writer.Flush();
                 SendHttpResponse(stream, 200, "application/json", ms.GetBuffer(), (int)ms.Length);
             }
@@ -436,7 +712,79 @@ namespace LiteMonitor.src.WebServer
             if (len > 0) stream.Write(body, 0, len);
         }
 
-        // --- WebSocket 核心逻辑 ---
+        // --- 共享采样（限频） ---
+
+        /// <summary>
+        /// 产出一次快照载荷：**先共享采样，再序列化**。
+        /// HTTP 快照与网页广播都走这里 → 共用同一条限频采样路径。
+        /// </summary>
+        private async Task ProducePayloadAsync(Utf8JsonWriter writer, CancellationToken cancellationToken)
+        {
+            await RequestSharedSamplingWithTimeoutAsync(cancellationToken).ConfigureAwait(false);
+            await WriteSnapshotAsync(writer, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 请求一次共享采样（带超时与取消）。
+        /// ★ 超时后按既有行为**降级**：照常序列化当前缓存值，不挂死请求线程。
+        /// </summary>
+        private async Task<bool> RequestSharedSamplingWithTimeoutAsync(CancellationToken cancellationToken)
+        {
+            if (_samplingRequester == null) return false;
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            // ★ 采样与超时并行：采样先完成就用采样结果，超时先到就降级。
+            //   超时用注入的单调时钟计时（默认 TimeProvider.System）。
+            Task<bool> sampling = RequestSharedSamplingAsync(cts.Token);
+            Task timeout = Task.Delay(SamplingWaitTimeout, _time);
+
+            Task finished = await Task.WhenAny(sampling, timeout).ConfigureAwait(false);
+            if (finished != sampling)
+            {
+                // 超时：取消等待并按既有行为**降级** —— 照常序列化当前缓存值，不挂死请求线程
+                try { cts.Cancel(); } catch { }
+                return false;
+            }
+
+            return await sampling.ConfigureAwait(false);
+        }
+
+        /// <summary>执行共享采样请求（异常不外泄：采样失败也要照常返回快照）。</summary>
+        private async Task<bool> RequestSharedSamplingAsync(CancellationToken cancellationToken)
+        {
+            var requester = _samplingRequester;
+            if (requester == null) return false;
+            try
+            {
+                return await requester(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Web 共享采样请求失败: " + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 写出快照内容（**只做序列化**）。
+        /// ★ 这里不允许触发采集：采集统一由 <see cref="RequestSharedSamplingAsync"/> 在序列化之前完成。
+        /// </summary>
+        private Task WriteSnapshotAsync(Utf8JsonWriter writer, CancellationToken cancellationToken)
+        {
+            if (_asyncDataProvider != null)
+            {
+                return _asyncDataProvider(writer, cancellationToken);
+            }
+            _dataProvider(writer);
+            return Task.CompletedTask;
+        }
+
+        // --- WebSocket core logic ---
 
         private async Task BroadcastLoop(int generation, CancellationToken token)
         {
@@ -456,16 +804,30 @@ namespace LiteMonitor.src.WebServer
                     byte[] buffer = null;
                     try
                     {
+                        int capacity = 32 * 1024;
+                        buffer = ArrayPool<byte>.Shared.Rent(capacity);
 
-                        buffer = ArrayPool<byte>.Shared.Rent(32 * 1024); 
-                        
                         int payloadLen;
-                        using (var ms = new System.IO.MemoryStream(buffer))
-                        using (var writer = new Utf8JsonWriter(ms))
+                        // ★ 可扩容的 MemoryStream：
+                        //   原来的 new MemoryStream(buffer) 是**不可扩容**的固定缓冲，
+                        //   快照 JSON 一旦超过 32 KB 就会抛 NotSupportedException（整帧丢失）。
+                        using (var ms = new System.IO.MemoryStream(capacity))
                         {
-                            _dataProvider(writer);
-                            writer.Flush();
-                            payloadLen = (int)ms.Position;
+                            using (var writer = new Utf8JsonWriter(ms))
+                            {
+                                // ★ 先共享采样（限频），再序列化 —— 与 HTTP 路径同一条采样入口
+                                await ProducePayloadAsync(writer, token).ConfigureAwait(false);
+                                writer.Flush();
+                            }
+                            payloadLen = (int)ms.Length;
+
+                            // 载荷超过租用缓冲时换一块更大的（保留 ArrayPool 复用思路，不做每帧大分配）
+                            if (payloadLen > buffer.Length)
+                            {
+                                ArrayPool<byte>.Shared.Return(buffer);
+                                buffer = ArrayPool<byte>.Shared.Rent(payloadLen);
+                            }
+                            Buffer.BlockCopy(ms.GetBuffer(), 0, buffer, 0, payloadLen);
                         }
 
                         int headerLen = 2;
