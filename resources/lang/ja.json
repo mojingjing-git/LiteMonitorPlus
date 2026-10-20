@@ -131,6 +131,8 @@
     "WebServerPasswordTip": "空で設定なし",
     "OpenWeb": "ウェブを開く",
     "WebServerTip": "有効後、スマホはLAN「IP:ポート」または「IPv6:ポート」でアクセス可",
+    "WebServerFps": "ウェブでFPSを表示",
+    "WebServerFpsTip": "有効にするとウェブ側もフレームレートを収集します。別のツールが必要になり、収集のオーバーヘッドが増えます。",
 
     "Appearance": "外観設定",
     "Theme": "テーマ",
@@ -230,6 +232,7 @@
     "UseWinPerCounters": "システムカウンター優先",
     "UseWinPerCountersTip": "不正確な場合は無効にしてください。CPU/GPU/RAM/ディスクはセンサーから直接読み取られます。",
     "Refresh": "更新頻度",
+    "RefreshTip": "更新頻度は画面の再描画の間隔だけです。通常のハードウェアデータは最大1秒に1回しか収集されないため、値を小さくしても収集頻度は上がりません。",
     "IgnoreSMBTraffic": "SMB通信を無視",
     "MemoryDisplayMode": "メモリ表示",
 

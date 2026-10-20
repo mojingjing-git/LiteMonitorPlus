@@ -8,6 +8,65 @@ using Debug = System.Diagnostics.Debug;
 
 namespace LiteMonitor.src.SystemServices
 {
+    /// <summary>
+    /// 采集代次值缓存。
+    ///
+    /// 限频后，取值缓存的生命周期跟着**真实采集代次**走，而不是界面 Tick：
+    ///  - 同一代次内，同一个 Key 只计算一次（UI / Web / 任务栏可以共享同一轮采样）；
+    ///  - 合法的 0 会被缓存（0 是有效值，不能每次重算）；
+    ///  - 本代次"不可用"的结果同样会被缓存，避免反复走昂贵的失败回退；
+    ///  - 进入新代次时整体作废，下一次读取会重新计算。
+    /// </summary>
+    public sealed class GenerationValueCache
+    {
+        private readonly Dictionary<string, float?> _values = new Dictionary<string, float?>(StringComparer.Ordinal);
+        private int _generation;
+
+        /// <summary>当前采集代次。</summary>
+        public int Generation => _generation;
+
+        /// <summary>本代次已缓存的 Key 数量。</summary>
+        public int Count => _values.Count;
+
+        /// <summary>推进到新的采集代次（旧代次的缓存整体作废）。</summary>
+        /// <remarks>
+        /// ★ 单调性守卫：更旧的代次会被**忽略**（既不把代次往回写，也不清空缓存）。
+        ///   否则"晚到的旧代次收尾"会把代次回退，并顺手清掉新代次已经算好的值。
+        /// </remarks>
+        public void BeginGeneration(int generation)
+        {
+            if (generation < _generation) return;
+            _generation = generation;
+            _values.Clear();
+        }
+
+        /// <summary>
+        /// 采集落定（收尾）：作废本代次已经算出的值，但**不**推进代次。
+        /// </summary>
+        /// <remarks>
+        /// 采集期间（传感器还没更新完）被读到的值是**更新前**的旧值，必须作废；
+        /// 但收尾**不能**推进代次，也不能清掉**更新一代次**已经算好的值
+        /// （单调性守卫：旧代次的收尾晚到时直接忽略）。
+        /// </remarks>
+        public void SettleGeneration(int generation)
+        {
+            if (generation < _generation) return;
+            _values.Clear();
+        }
+
+        /// <summary>清空缓存（映射重建 / 重载等失效路径）。</summary>
+        public void Clear() => _values.Clear();
+
+        /// <summary>
+        /// 读取本代次的缓存值。
+        /// 返回 true 表示本代次已经算过这个 Key（value 为 null 表示"本代次不可用"）。
+        /// </summary>
+        public bool TryGetValue(string key, out float? value) => _values.TryGetValue(key, out value);
+
+        /// <summary>写入本代次的值（value 为 null 表示"本代次不可用"）。</summary>
+        public void SetValue(string key, float? value) => _values[key] = value;
+    }
+
     public class HardwareValueProvider : IDisposable
     {
         private readonly Computer _computer;
@@ -15,7 +74,7 @@ namespace LiteMonitor.src.SystemServices
         private readonly SensorMap _sensorMap;
         private readonly NetworkManager _networkManager;
         private readonly DiskManager _diskManager;
-        private readonly FpsCounter _fpsCounter;
+        private readonly FpsCounter? _fpsCounter;
         private readonly object _lock;
         private readonly Dictionary<string, float> _lastValidMap; 
         
@@ -23,14 +82,41 @@ namespace LiteMonitor.src.SystemServices
         private readonly PerformanceCounterManager _perfManager;
         private readonly ComponentProcessor _componentProcessor;
 
-        // Tick 级智能缓存 (防止同帧重复计算)
-        private readonly Dictionary<string, float> _tickCache = new();
+        // ★ 采集代次缓存：同一代次内同一个 Key 只计算一次
+        private readonly GenerationValueCache _cache = new GenerationValueCache();
+
+        // ★ 启动期缓存：硬件尚未就绪时的性能计数器兜底。
+        //   UI 在初始化期间会高频读取，这里用 TTL 限流（默认 1 秒），
+        //   避免绕过采集门限反复调用 PerformanceCounter.NextValue()。
+        private struct StartupEntry
+        {
+            public float? Value;
+            public long Timestamp;
+        }
+        private readonly Dictionary<string, StartupEntry> _startupCache = new Dictionary<string, StartupEntry>(StringComparer.Ordinal);
+        private readonly object _startupLock = new object();
+        private readonly TimeProvider _time;
+        private readonly HardwareSamplingStatistics? _statistics;
+
+        // ★ 设备切换后作废的"最后有效值"。
+        //   只在这里做标记与查询，**不**直接改共享的 _lastValidMap（非线程安全）。
+        //   _staleValuePrefixes：作废的 Key 前缀（换卡后是 "GPU"）。
+        //   _refreshedValueKeys：切换之后已经重新算过有效值的 Key（这些 Key 的兜底恢复可用）。
+        private readonly HashSet<string> _staleValuePrefixes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _refreshedValueKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly object _staleLock = new object();
+
+        // ★ 设备选择变更通知（接线见 A2b：协调器 Invalidate()）
+        private readonly Action? _onDeviceSelectionChanged;
 
         // 对象级缓存：(Sensor对象)
         private Dictionary<string, ISensor> _manualSensorCache = new();
 
         private const float AutoMoboTempHardMax = 95f;
         private const float ManualMoboTempHardMax = 125f;
+
+        /// <summary>启动期缓存的存活时间（毫秒）。与普通硬件的最小采集周期一致。</summary>
+        private const int StartupCacheTtlMs = 1000;
 
         // 配置版本追踪，用于自动触发预热
         private string _lastPrefCpuFan = "";
@@ -42,7 +128,7 @@ namespace LiteMonitor.src.SystemServices
         private string _lastPrefGpu = "";
         private int _lastGpuCount = 1;
         
-        public HardwareValueProvider(Computer c, Settings s, SensorMap map, NetworkManager net, DiskManager disk, FpsCounter fpsCounter,PerformanceCounterManager perfManager, object syncLock, Dictionary<string, float> lastValid)
+        public HardwareValueProvider(Computer c, Settings s, SensorMap map, NetworkManager net, DiskManager disk, FpsCounter? fpsCounter, PerformanceCounterManager perfManager, object syncLock, Dictionary<string, float> lastValid, HardwareSamplingStatistics? statistics = null, TimeProvider? timeProvider = null, Action? onDeviceSelectionChanged = null)
         {
             _computer = c;
             _cfg = s;
@@ -53,6 +139,9 @@ namespace LiteMonitor.src.SystemServices
             _perfManager = perfManager;
             _lock = syncLock;
             _lastValidMap = lastValid;
+            _statistics = statistics;
+            _time = timeProvider ?? TimeProvider.System;
+            _onDeviceSelectionChanged = onDeviceSelectionChanged;
 
             // 初始化子服务
             _componentProcessor = new ComponentProcessor(c, s, map);
@@ -132,9 +221,10 @@ namespace LiteMonitor.src.SystemServices
             lock (_lock)
             {
                 _manualSensorCache = newCache;
-                _tickCache.Clear();
+                _cache.Clear();
                 _componentProcessor.ClearCache();
             }
+            ClearStartupCache();
         }
 
         /// <summary>
@@ -181,19 +271,29 @@ namespace LiteMonitor.src.SystemServices
             lock (_lock)
             {
                 _manualSensorCache.Clear();
-                _tickCache.Clear();
+                _cache.Clear();
                 _componentProcessor.ClearCache();
             }
+            ClearStartupCache();
         }
 
         /// <summary>
-        /// 每一轮更新开始时的准备工作（清空帧缓存、检查配置变更、更新电源状态）
+        /// 一轮**真实采集**开始时的准备工作。
+        ///
+        /// ★ 触发时机从"每个界面 Tick"改成"每个采集代次"：
+        ///   限频后如果还按界面 Tick 清缓存，UI/Web 的高频读取仍会反复执行
+        ///   PerformanceCounter.NextValue()，限频就白做了。
+        ///
+        /// 这里仍然负责"设备偏好变更 -> 重建映射 + 预热"的失效逻辑，
+        /// 只是它现在每个采集代次才检查一次（用户修改会在下一次允许采样内生效）。
         /// </summary>
-        public void OnUpdateTickStarted()
+        /// <param name="generation">新的采集代次编号。</param>
+        public void OnCollectionStarted(int generation)
         {
             lock (_lock)
             {
-                _tickCache.Clear();
+                // 旧代次的取值全部作废（含"不可用"的记录），新一代次重新计算
+                _cache.BeginGeneration(generation);
 
                 bool gpuChanged = _lastPrefGpu != (_cfg.PreferredGpu ?? "");
                 bool gpuCountChanged = _lastGpuCount != _cfg.MonitoredGpuCount;
@@ -207,6 +307,19 @@ namespace LiteMonitor.src.SystemServices
                     // 留着旧容量会让面板出现"百分比按 20GB 算、容量却显示 12GB"的自相矛盾。
                     Settings.DetectedGpuVramTotalGB = 0;
                     Settings.DetectedGpuVramTotalGBByKey.Clear();
+
+                    // ★★★ [多显卡] 换卡后不能串用上一张卡的最后有效值 ★★★
+                    // "GPU.0.Temp" 之类的 Key 在换卡后指向的是另一块卡，
+                    // 留着旧值会让界面显示另一张卡的温度。
+                    // 这里只"标记"这些 Key 作废，不去动共享的 _lastValidMap：
+                    // 那个字典是非线程安全的，而 GetValue 抢锁失败时会无锁读它，
+                    // 采集线程直接改它会引入未定义行为。
+                    // 真正的删除推迟到"有人真的要读这个 Key"的时候，在持锁状态下做。
+                    MarkStaleGpuValues();
+
+                    // 设备选择变更 -> 允许立即重新采一次（接线见 A2b：协调器 Invalidate()）
+                    try { _onDeviceSelectionChanged?.Invoke(); }
+                    catch { /* 失效通知失败不能影响采集 */ }
                 }
 
                 // 自动检测配置变更：如果用户更改了首选风扇/磁盘/显卡，立即自动预热
@@ -223,12 +336,117 @@ namespace LiteMonitor.src.SystemServices
             }
         }
 
+        /// <summary>
+        /// 一轮**真实采集**落定后的收尾。
+        ///
+        /// 采集期间（hw.Update() 还没做完）如果有别的线程读了值，
+        /// 那些"更新前"的旧值会被写进本代次缓存并钉住一整个周期。
+        /// 这里在采集结束后把缓存再作废一次，让下一次读取用更新后的传感器重新算。
+        ///
+        /// ★ 接线说明：协调器需要在**发布完成信号之前**调用它（onCollectionSettled 回调）。
+        ///   否则 UI / Web 在 await 返回后写入缓存的值会被随后的收尾清掉，
+        ///   导致同一代次重复计算。
+        ///
+        /// ★ 单调性：旧代次的收尾晚到时**不会**清掉新代次已经算好的值
+        ///   （见 <see cref="GenerationValueCache.SettleGeneration"/>）。
+        /// </summary>
+        /// <param name="generation">当前采集代次编号。</param>
+        public void OnCollectionSettled(int generation)
+        {
+            lock (_lock)
+            {
+                _cache.SettleGeneration(generation);
+            }
+        }
+
+        /// <summary>
+        /// 标记显卡相关的"最后有效值"作废（换卡后不能串用上一张卡的数据）。
+        ///
+        /// 只标记，不改共享字典：_lastValidMap 是非线程安全的共享 Dictionary，
+        /// 而 GetValue 抢锁失败时会无锁读它；采集线程直接改它属于未定义行为。
+        /// 被标记的 Key 在真正被读取时（持锁）才从字典里删掉。
+        /// </summary>
+        private void MarkStaleGpuValues()
+        {
+            lock (_staleLock)
+            {
+                _staleValuePrefixes.Add("GPU");
+                // 换卡后，之前"已经算过"的那些 Key 不再算作已刷新
+                _refreshedValueKeys.Clear();
+            }
+        }
+
+        /// <summary>该 Key 的"最后有效值"是否已作废（设备切换后）。</summary>
+        private bool IsStaleValue(string key)
+        {
+            lock (_staleLock)
+            {
+                if (_staleValuePrefixes.Count == 0) return false;
+                if (_refreshedValueKeys.Contains(key)) return false;
+                foreach (string prefix in _staleValuePrefixes)
+                {
+                    if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                return false;
+            }
+        }
+
+        /// <summary>该 Key 重新算出了有效值 -> 不再是陈旧值。</summary>
+        private void ClearStaleValue(string key)
+        {
+            lock (_staleLock)
+            {
+                if (_staleValuePrefixes.Count > 0) _refreshedValueKeys.Add(key);
+            }
+        }
+
+        /// <summary>
+        /// 诊断：某个 Key 的"最后有效值"当前是否处于作废状态
+        /// （设备切换后，旧设备的数值不允许再拿来兜底）。
+        /// </summary>
+        public bool IsLastValidValueStale(string key) => IsStaleValue(key);
+
+        /// <summary>清空启动期缓存。</summary>
+        private void ClearStartupCache()
+        {
+            lock (_startupLock)
+            {
+                _startupCache.Clear();
+            }
+        }
+
 
         // ===========================================================
         // ===================== 公共取值入口 =========================
         // ===========================================================
         public float? GetStartupValue(string key)
         {
+            // ★ 启动期也要限流：硬件还没就绪时 UI 会以界面频率反复读取，
+            //   这里按 TTL 缓存，避免绕过采集门限反复调用 PerformanceCounter.NextValue()。
+            long now = _time.GetTimestamp();
+            long ttlTicks = _time.TimestampFrequency * StartupCacheTtlMs / 1000;
+            lock (_startupLock)
+            {
+                if (_startupCache.TryGetValue(key, out StartupEntry cached) && (now - cached.Timestamp) < ttlTicks)
+                {
+                    return cached.Value;
+                }
+            }
+
+            float? result = ComputeStartupValue(key);
+
+            lock (_startupLock)
+            {
+                _startupCache[key] = new StartupEntry { Value = result, Timestamp = now };
+            }
+            return result;
+        }
+
+        private float? ComputeStartupValue(string key)
+        {
+            // 启动期的取值也要计数：用来证明"早期取值没有绕过采集门限"
+            _statistics?.RecordValueComputation();
+
             if (_lastValidMap.TryGetValue(key, out float lastVal)) return lastVal;
 
             bool useCounter = _cfg.UseWinPerCounters && _perfManager.IsInitialized;
@@ -277,21 +495,30 @@ namespace LiteMonitor.src.SystemServices
                 if (!lockTaken) 
                 {
                     // ★★★ [Fix] 如果无法获取锁（硬件正在重载），优先返回上一帧的有效值，防止 UI 闪烁 ★★★
-                    // 因为 _lastValidMap 仅在 GetValue 内部（即 UI 线程）写入，
-                    // 而后台线程（UpdateAll/Reload）只读不写或完全不访问它，
-                    // 所以此时读取是安全的（虽然没有锁，但没有并发写入）。
+                    // 因为 _lastValidMap 只在 GetValue 内部写入（且都在锁内），
+                    // 而后台线程（采集/重载）不再直接改它，
+                    // 所以此时读取是相对安全的（虽然没有锁）。
+                    // ★ 设备切换后被标记作废的 Key 不能在这里返回旧卡的值。
+                    if (IsStaleValue(key)) return null;
                     if (_lastValidMap.TryGetValue(key, out float lastVal)) return lastVal;
                     return null;
                 }
 
-                // ★★★ [新增 3] 优先查缓存，如果本帧算过，直接返回 ★★★
-                if (_tickCache.TryGetValue(key, out float cachedVal)) return cachedVal;
+                // ★★★ [新增 3] 优先查缓存，如果本代次算过，直接返回 ★★★
+                //   缓存里可能是 null：表示"本代次这个 Key 不可用"，
+                //   直接返回可以避免同一代次反复走昂贵的失败回退路径。
+                if (_cache.TryGetValue(key, out float? cachedVal)) return cachedVal;
 
-
+                // 本代次第一次算这个 Key
+                _statistics?.RecordValueComputation();
 
                 // 定义临时结果变量
                 float? result = null;
                 bool skipGenericFallback = false;
+                // FPS 有自己的更新机制（外部服务 + 自己的平滑/回收逻辑），
+                // 不进普通硬件的采集代次缓存：否则会被冻结接近一个采集周期，
+                // 也会让 FPS 的"空闲回收"判断失真。读取它也不会清空普通硬件缓存。
+                bool skipCache = false;
                 
                 // ★★★ [核心逻辑] 全局开关判断：只有当开关开启，且管理器已初始化成功时，才尝试走计数器 ★★★
                 // 这里的 UseWindowsPerformanceCounters 对应 Step 1 中 Settings 新增的属性
@@ -422,7 +649,8 @@ namespace LiteMonitor.src.SystemServices
                         break;
 
                     case "FPS":
-                        result = _fpsCounter.GetFps();
+                        result = _fpsCounter?.GetFps();
+                        skipCache = true;
                         break;
 
                     // 电池
@@ -507,7 +735,15 @@ namespace LiteMonitor.src.SystemServices
                     if (val.HasValue && !float.IsNaN(val.Value)) 
                     { 
                         _lastValidMap[key] = val.Value; 
+                        // 重新算出了有效值 -> 不再是设备切换前的陈旧值
+                        ClearStaleValue(key);
                         result = val.Value; 
+                    }
+                    else if (IsStaleValue(key))
+                    {
+                        // 设备切换后：这个 Key 的旧值属于上一张卡，不能拿来兜底。
+                        // 顺手把它从共享字典里删掉（此时持有 _lock，与其它写入同一把锁）。
+                        _lastValidMap.Remove(key);
                     }
                     else if (_lastValidMap.TryGetValue(key, out var last))
                     {
@@ -516,13 +752,14 @@ namespace LiteMonitor.src.SystemServices
                 }
 
                 // ★★★ [新增 4] 写入缓存并返回 ★★★
-                if (result.HasValue)
+                //   合法的 0 必须被缓存；null（不可用）同样缓存，
+                //   这样同一代次里多个消费者不会反复触发昂贵的失败回退。
+                if (!skipCache)
                 {
-                    _tickCache[key] = result.Value;
-                    return result.Value;
+                    _cache.SetValue(key, result);
                 }
 
-                return null;
+                return result;
             }
             finally
             {

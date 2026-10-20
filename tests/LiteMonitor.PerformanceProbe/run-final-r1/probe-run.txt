@@ -1,0 +1,28 @@
+[12:07:34] LiteMonitor++ 性能探针 启动于 2026-10-20 12:07:34
+[12:07:34] 参数: --out tests/LiteMonitor.PerformanceProbe/run-final-r1 --groups A,B,C,D,E,F,G,H1,H2 --warmup 15 --steady 60 --settle 3
+[12:07:34] 隔离输出目录 (AppContext.BaseDirectory): G:\TOOL\LiteMonitor-fork\.worktrees\codex-performance-sampling\tests\LiteMonitor.PerformanceProbe\output\
+[12:07:34] 结果目录: G:\TOOL\LiteMonitor-fork\.worktrees\codex-performance-sampling\tests\LiteMonitor.PerformanceProbe\run-final-r1
+[12:07:34] 驱动就绪检查: {"needsInstall":false,"status":"Ready","note":"\u53EA\u8BFB\u68C0\u67E5\uFF0C\u672A\u5B89\u88C5/\u5378\u8F7D\u4EFB\u4F55\u9A71\u52A8\u3002"}
+[12:07:40] 硬件就绪: {"ready":true,"note":"\u521D\u59CB\u5316\u5B8C\u6210\uFF0C\u7528\u65F6 2.0s\uFF0C\u679A\u4E3E\u5230 12 \u4E2A\u786C\u4EF6\u5BF9\u8C61\u3002","driverNeedsInstall":false,"driverStatus":"\u0022Ready\u0022"}
+[12:07:40] LHM Update 计数代理安装: True 诊断: {"groupCount":9,"hardwareListIsLive":false,"injectedDevices":["Virtual Memory [Memory]","Total Memory [Memory]","NVIDIA GeForce RTX 3080 Ti [GpuNvidia]","NVIDIA GeForce RTX 3080 [GpuNvidia]"],"notInjectableGroups":["MotherboardGroup","CpuGroup","AmdGpuGroup","StorageGroup","NetworkGroup","BatteryGroup"],"proxyCount":4,"collectionRoundsObservedDuringInstallCheck":1,"updateCallsObservedAfterInstall":1,"countersWorking":true}
+[12:07:40] --- 开始分组 A: 1000 ms、默认单卡、Web 关：保护默认模式成本 (预热 15s / 稳态 60s)
+[12:08:55] --- 分组 A 完成: 60 轮, 整机 CPU 0.2357%
+[12:08:58] --- 开始分组 B: 100 ms、默认单卡、Web 关：验证高刷新放大硬件采集 (预热 15s / 稳态 60s)
+[12:10:13] --- 分组 B 完成: 60 轮, 整机 CPU 0.2034%
+[12:10:16] --- 开始分组 C: 100 ms、GPU 项全关、Web 关：对照剩余基础成本 (预热 15s / 稳态 60s)
+[12:11:31] --- 分组 C 完成: 60 轮, 整机 CPU 0.0342%
+[12:11:34] --- 开始分组 D: 100 ms、Web 开且无人访问：验证空闲服务不扩大范围 (预热 15s / 稳态 60s)
+[12:12:49] --- 分组 D 完成: 60 轮, 整机 CPU 0.1611%
+[12:12:52] --- 开始分组 E: 100 ms、单个已鉴权网页：连接活动时数据正确且限频 (预热 15s / 稳态 60s)
+[12:14:07] --- 分组 E 完成: 60 轮, 整机 CPU 0.2572%
+[12:14:10] --- 开始分组 F: 100 ms、多网页 + HTTP 轮询：验证多消费者共用采样 (预热 15s / 稳态 60s)
+[12:15:25] --- 分组 F 完成: 60 轮, 整机 CPU 0.2881%
+[12:15:28] --- 开始分组 G: 100 ms、多卡本地监控：每张启用卡均正确 (预热 15s / 稳态 60s)
+[12:16:43] --- 分组 G 完成: 60 轮, 整机 CPU 0.3353%
+[12:16:46] --- 开始分组 H1: 3000 ms、Web 关：慢刷新省电 (预热 15s / 稳态 60s)
+[12:18:01] --- 分组 H1 完成: 20 轮, 整机 CPU 0.0569%
+[12:18:04] --- 开始分组 H2: 3000 ms、Web 开且有合法网页：独立 Web 需求 (预热 15s / 稳态 60s)
+[12:19:19] --- 分组 H2 完成: 56 轮, 整机 CPU 0.1805%
+[12:19:22] --- 单设备 Update 成本测量
+[12:19:25] --- 兼容缓冲绘制微基准
+[12:19:34] --- FPS 状态证据（不启动外部服务）

@@ -1,0 +1,3415 @@
+{
+  "kind": "performance_probe_result",
+  "startedAt": "2026-10-20T08:13:54.5165061\u002B08:00",
+  "options": {
+    "outputDir": "G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\baseline",
+    "groups": [],
+    "warmupSeconds": 15,
+    "steadySeconds": 60,
+    "settleSeconds": 3,
+    "deviceCalls": 20,
+    "renderSeconds": 2,
+    "fpsObservedCycles": 12,
+    "fpsCostSeconds": 1.5
+  },
+  "driverReadiness": {
+    "needsInstall": false,
+    "status": "Ready",
+    "note": "\u53EA\u8BFB\u68C0\u67E5\uFF0C\u672A\u5B89\u88C5/\u5378\u8F7D\u4EFB\u4F55\u9A71\u52A8\u3002"
+  },
+  "hardwareReady": {
+    "ready": true,
+    "note": "\u521D\u59CB\u5316\u5B8C\u6210\uFF0C\u7528\u65F6 0.8s\uFF0C\u679A\u4E3E\u5230 12 \u4E2A\u786C\u4EF6\u5BF9\u8C61\u3002",
+    "driverNeedsInstall": false,
+    "driverStatus": "\u0022Ready\u0022"
+  },
+  "updateCountersInstalled": true,
+  "updateCounterDiagnostics": {
+    "groupCount": 9,
+    "hardwareListIsLive": false,
+    "injectedDevices": [
+      "Virtual Memory [Memory]",
+      "Total Memory [Memory]",
+      "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+      "NVIDIA GeForce RTX 3080 [GpuNvidia]"
+    ],
+    "notInjectableGroups": [
+      "MotherboardGroup",
+      "CpuGroup",
+      "AmdGpuGroup",
+      "StorageGroup",
+      "NetworkGroup",
+      "BatteryGroup"
+    ],
+    "proxyCount": 4,
+    "updateCallsObservedAfterInstall": 1,
+    "countersWorking": true
+  },
+  "groups": [
+    {
+      "kind": "sampling_group",
+      "group": "A",
+      "purpose": "1000 ms\u3001\u9ED8\u8BA4\u5355\u5361\u3001Web \u5173\uFF1A\u4FDD\u62A4\u9ED8\u8BA4\u6A21\u5F0F\u6210\u672C",
+      "uiPeriodMs": 1000,
+      "webEnabled": false,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 0,
+      "httpPollPerSecond": 0,
+      "warmupSeconds": 15,
+      "steadySeconds": 60,
+      "readKeyCount": 12,
+      "elapsedMs": 60071,
+      "collectionRounds": 60,
+      "collectionRoundsPerSecond": 0.999,
+      "valueReads": 720,
+      "valueReadsPerRound": 12,
+      "collectionGenerations": 60,
+      "slowScanTriggerRounds": 20,
+      "diskBackgroundScanTriggerRounds": 6,
+      "trafficSaveDueRounds": 1,
+      "gcRequestDueRounds": 1,
+      "workingSetTrimDueRounds": 1,
+      "trafficFileObservedRewrites": 1,
+      "processCpuMs": 2156.25,
+      "wholeMachineCpuPercent": 0.2243,
+      "allocatedBytes": 3690792,
+      "perSecondSamples": [
+        {
+          "tMs": 1098,
+          "cpuMs": 46.875,
+          "allocatedBytes": 98024
+        },
+        {
+          "tMs": 3075,
+          "cpuMs": 78.125,
+          "allocatedBytes": 114288
+        },
+        {
+          "tMs": 5070,
+          "cpuMs": 93.75,
+          "allocatedBytes": 122488
+        },
+        {
+          "tMs": 6070,
+          "cpuMs": 46.875,
+          "allocatedBytes": 57144
+        },
+        {
+          "tMs": 7081,
+          "cpuMs": 31.25,
+          "allocatedBytes": 57144
+        },
+        {
+          "tMs": 9071,
+          "cpuMs": 62.5,
+          "allocatedBytes": 114288
+        },
+        {
+          "tMs": 10077,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 12095,
+          "cpuMs": 93.75,
+          "allocatedBytes": 146832
+        },
+        {
+          "tMs": 14072,
+          "cpuMs": 78.125,
+          "allocatedBytes": 122488
+        },
+        {
+          "tMs": 15074,
+          "cpuMs": 31.25,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 17071,
+          "cpuMs": 78.125,
+          "allocatedBytes": 114288
+        },
+        {
+          "tMs": 18082,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57144
+        },
+        {
+          "tMs": 20078,
+          "cpuMs": 62.5,
+          "allocatedBytes": 122488
+        },
+        {
+          "tMs": 22099,
+          "cpuMs": 31.25,
+          "allocatedBytes": 138888
+        },
+        {
+          "tMs": 24071,
+          "cpuMs": 62.5,
+          "allocatedBytes": 114288
+        },
+        {
+          "tMs": 25077,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57144
+        },
+        {
+          "tMs": 26095,
+          "cpuMs": 62.5,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 28068,
+          "cpuMs": 78.125,
+          "allocatedBytes": 106344
+        },
+        {
+          "tMs": 29068,
+          "cpuMs": 31.25,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 30073,
+          "cpuMs": 31.25,
+          "allocatedBytes": 64616
+        },
+        {
+          "tMs": 31073,
+          "cpuMs": 31.25,
+          "allocatedBytes": 57144
+        },
+        {
+          "tMs": 32103,
+          "cpuMs": 31.25,
+          "allocatedBytes": 89688
+        },
+        {
+          "tMs": 34073,
+          "cpuMs": 62.5,
+          "allocatedBytes": 114544
+        },
+        {
+          "tMs": 36072,
+          "cpuMs": 62.5,
+          "allocatedBytes": 130592
+        },
+        {
+          "tMs": 37078,
+          "cpuMs": 31.25,
+          "allocatedBytes": 57144
+        },
+        {
+          "tMs": 39076,
+          "cpuMs": 62.5,
+          "allocatedBytes": 122488
+        },
+        {
+          "tMs": 40076,
+          "cpuMs": 31.25,
+          "allocatedBytes": 57144
+        },
+        {
+          "tMs": 42070,
+          "cpuMs": 109.375,
+          "allocatedBytes": 122488
+        },
+        {
+          "tMs": 44073,
+          "cpuMs": 93.75,
+          "allocatedBytes": 122488
+        },
+        {
+          "tMs": 45077,
+          "cpuMs": 46.875,
+          "allocatedBytes": 56816
+        },
+        {
+          "tMs": 46082,
+          "cpuMs": 62.5,
+          "allocatedBytes": 57144
+        },
+        {
+          "tMs": 48069,
+          "cpuMs": 62.5,
+          "allocatedBytes": 122744
+        },
+        {
+          "tMs": 50074,
+          "cpuMs": 62.5,
+          "allocatedBytes": 122488
+        },
+        {
+          "tMs": 52072,
+          "cpuMs": 93.75,
+          "allocatedBytes": 114288
+        },
+        {
+          "tMs": 53075,
+          "cpuMs": 31.25,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 55069,
+          "cpuMs": 62.5,
+          "allocatedBytes": 114288
+        },
+        {
+          "tMs": 56076,
+          "cpuMs": 46.875,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 57076,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57144
+        },
+        {
+          "tMs": 59071,
+          "cpuMs": 78.125,
+          "allocatedBytes": 122488
+        },
+        {
+          "tMs": 60071,
+          "cpuMs": 31.25,
+          "allocatedBytes": 57400
+        }
+      ],
+      "updateDurationMs": {
+        "count": 60,
+        "avg": 73.35,
+        "p50": 71,
+        "p95": 97,
+        "max": 100
+      },
+      "readDurationMs": {
+        "count": 60,
+        "avg": 0.933,
+        "p50": 1,
+        "p95": 2,
+        "max": 2
+      },
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 60,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 4064.966,
+          "updateWallMsPerCall": 67.749
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        }
+      ],
+      "sampleMetricValues": {
+        "CPU.Load": 38.34,
+        "CPU.Temp": 0,
+        "MEM.Load": 39.46,
+        "NET.Up": 49548.12,
+        "NET.Down": 358564.91,
+        "GPU.0.Temp": 59,
+        "GPU.0.Load": 36
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    },
+    {
+      "kind": "sampling_group",
+      "group": "B",
+      "purpose": "100 ms\u3001\u9ED8\u8BA4\u5355\u5361\u3001Web \u5173\uFF1A\u9A8C\u8BC1\u9AD8\u5237\u65B0\u653E\u5927\u786C\u4EF6\u91C7\u96C6",
+      "uiPeriodMs": 100,
+      "webEnabled": false,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 0,
+      "httpPollPerSecond": 0,
+      "warmupSeconds": 15,
+      "steadySeconds": 60,
+      "readKeyCount": 12,
+      "elapsedMs": 60069,
+      "collectionRounds": 590,
+      "collectionRoundsPerSecond": 9.822,
+      "valueReads": 7080,
+      "valueReadsPerRound": 12,
+      "collectionGenerations": 590,
+      "slowScanTriggerRounds": 196,
+      "diskBackgroundScanTriggerRounds": 59,
+      "trafficSaveDueRounds": 11,
+      "gcRequestDueRounds": 0,
+      "workingSetTrimDueRounds": 0,
+      "trafficFileObservedRewrites": 11,
+      "processCpuMs": 14625,
+      "wholeMachineCpuPercent": 1.5217,
+      "allocatedBytes": 35276496,
+      "perSecondSamples": [
+        {
+          "tMs": 1077,
+          "cpuMs": 203.125,
+          "allocatedBytes": 571600
+        },
+        {
+          "tMs": 2174,
+          "cpuMs": 281.25,
+          "allocatedBytes": 702384
+        },
+        {
+          "tMs": 3186,
+          "cpuMs": 234.375,
+          "allocatedBytes": 514552
+        },
+        {
+          "tMs": 4279,
+          "cpuMs": 281.25,
+          "allocatedBytes": 645120
+        },
+        {
+          "tMs": 5372,
+          "cpuMs": 281.25,
+          "allocatedBytes": 639736
+        },
+        {
+          "tMs": 6498,
+          "cpuMs": 296.875,
+          "allocatedBytes": 565800
+        },
+        {
+          "tMs": 7569,
+          "cpuMs": 281.25,
+          "allocatedBytes": 664200
+        },
+        {
+          "tMs": 8670,
+          "cpuMs": 312.5,
+          "allocatedBytes": 672400
+        },
+        {
+          "tMs": 9768,
+          "cpuMs": 281.25,
+          "allocatedBytes": 631400
+        },
+        {
+          "tMs": 10768,
+          "cpuMs": 250,
+          "allocatedBytes": 615000
+        },
+        {
+          "tMs": 11768,
+          "cpuMs": 250,
+          "allocatedBytes": 539696
+        },
+        {
+          "tMs": 12773,
+          "cpuMs": 234.375,
+          "allocatedBytes": 565800
+        },
+        {
+          "tMs": 13792,
+          "cpuMs": 265.625,
+          "allocatedBytes": 615000
+        },
+        {
+          "tMs": 14866,
+          "cpuMs": 281.25,
+          "allocatedBytes": 664200
+        },
+        {
+          "tMs": 15867,
+          "cpuMs": 203.125,
+          "allocatedBytes": 565800
+        },
+        {
+          "tMs": 16869,
+          "cpuMs": 156.25,
+          "allocatedBytes": 623200
+        },
+        {
+          "tMs": 17869,
+          "cpuMs": 265.625,
+          "allocatedBytes": 590400
+        },
+        {
+          "tMs": 18871,
+          "cpuMs": 265.625,
+          "allocatedBytes": 573976
+        },
+        {
+          "tMs": 19973,
+          "cpuMs": 250,
+          "allocatedBytes": 688800
+        },
+        {
+          "tMs": 21069,
+          "cpuMs": 250,
+          "allocatedBytes": 639600
+        },
+        {
+          "tMs": 22071,
+          "cpuMs": 203.125,
+          "allocatedBytes": 516600
+        },
+        {
+          "tMs": 23076,
+          "cpuMs": 234.375,
+          "allocatedBytes": 639600
+        },
+        {
+          "tMs": 24170,
+          "cpuMs": 218.75,
+          "allocatedBytes": 574000
+        },
+        {
+          "tMs": 25181,
+          "cpuMs": 234.375,
+          "allocatedBytes": 574000
+        },
+        {
+          "tMs": 26271,
+          "cpuMs": 265.625,
+          "allocatedBytes": 696464
+        },
+        {
+          "tMs": 27278,
+          "cpuMs": 281.25,
+          "allocatedBytes": 672400
+        },
+        {
+          "tMs": 28281,
+          "cpuMs": 343.75,
+          "allocatedBytes": 590400
+        },
+        {
+          "tMs": 29298,
+          "cpuMs": 234.375,
+          "allocatedBytes": 565800
+        },
+        {
+          "tMs": 30300,
+          "cpuMs": 203.125,
+          "allocatedBytes": 459200
+        },
+        {
+          "tMs": 31369,
+          "cpuMs": 281.25,
+          "allocatedBytes": 582200
+        },
+        {
+          "tMs": 32465,
+          "cpuMs": 234.375,
+          "allocatedBytes": 688800
+        },
+        {
+          "tMs": 33468,
+          "cpuMs": 203.125,
+          "allocatedBytes": 564000
+        },
+        {
+          "tMs": 34476,
+          "cpuMs": 203.125,
+          "allocatedBytes": 613416
+        },
+        {
+          "tMs": 35566,
+          "cpuMs": 312.5,
+          "allocatedBytes": 672400
+        },
+        {
+          "tMs": 36566,
+          "cpuMs": 250,
+          "allocatedBytes": 574000
+        },
+        {
+          "tMs": 37571,
+          "cpuMs": 250,
+          "allocatedBytes": 606800
+        },
+        {
+          "tMs": 38576,
+          "cpuMs": 203.125,
+          "allocatedBytes": 606800
+        },
+        {
+          "tMs": 39673,
+          "cpuMs": 203.125,
+          "allocatedBytes": 631400
+        },
+        {
+          "tMs": 40774,
+          "cpuMs": 234.375,
+          "allocatedBytes": 672272
+        },
+        {
+          "tMs": 41868,
+          "cpuMs": 250,
+          "allocatedBytes": 647800
+        },
+        {
+          "tMs": 42871,
+          "cpuMs": 265.625,
+          "allocatedBytes": 574000
+        },
+        {
+          "tMs": 43972,
+          "cpuMs": 250,
+          "allocatedBytes": 688800
+        },
+        {
+          "tMs": 44974,
+          "cpuMs": 234.375,
+          "allocatedBytes": 582200
+        },
+        {
+          "tMs": 46077,
+          "cpuMs": 312.5,
+          "allocatedBytes": 631400
+        },
+        {
+          "tMs": 47176,
+          "cpuMs": 281.25,
+          "allocatedBytes": 705200
+        },
+        {
+          "tMs": 48272,
+          "cpuMs": 312.5,
+          "allocatedBytes": 630488
+        },
+        {
+          "tMs": 49366,
+          "cpuMs": 265.625,
+          "allocatedBytes": 647800
+        },
+        {
+          "tMs": 50370,
+          "cpuMs": 265.625,
+          "allocatedBytes": 623200
+        },
+        {
+          "tMs": 51373,
+          "cpuMs": 234.375,
+          "allocatedBytes": 574000
+        },
+        {
+          "tMs": 52376,
+          "cpuMs": 312.5,
+          "allocatedBytes": 590400
+        },
+        {
+          "tMs": 53466,
+          "cpuMs": 250,
+          "allocatedBytes": 680600
+        },
+        {
+          "tMs": 54467,
+          "cpuMs": 328.125,
+          "allocatedBytes": 573992
+        },
+        {
+          "tMs": 55468,
+          "cpuMs": 203.125,
+          "allocatedBytes": 590400
+        },
+        {
+          "tMs": 56567,
+          "cpuMs": 234.375,
+          "allocatedBytes": 680600
+        },
+        {
+          "tMs": 57569,
+          "cpuMs": 250,
+          "allocatedBytes": 574000
+        },
+        {
+          "tMs": 58575,
+          "cpuMs": 265.625,
+          "allocatedBytes": 598600
+        },
+        {
+          "tMs": 59671,
+          "cpuMs": 281.25,
+          "allocatedBytes": 664200
+        }
+      ],
+      "updateDurationMs": {
+        "count": 590,
+        "avg": 70.856,
+        "p50": 69,
+        "p95": 88,
+        "max": 105
+      },
+      "readDurationMs": {
+        "count": 590,
+        "avg": 0.871,
+        "p50": 1,
+        "p95": 2,
+        "max": 11
+      },
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 590,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 38544.513,
+          "updateWallMsPerCall": 65.33
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        }
+      ],
+      "sampleMetricValues": {
+        "CPU.Load": 38.05,
+        "CPU.Temp": 0,
+        "MEM.Load": 39.69,
+        "NET.Up": 42402.14,
+        "NET.Down": 358328.34,
+        "GPU.0.Temp": 59,
+        "GPU.0.Load": 34
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    },
+    {
+      "kind": "sampling_group",
+      "group": "C",
+      "purpose": "100 ms\u3001GPU \u9879\u5168\u5173\u3001Web \u5173\uFF1A\u5BF9\u7167\u5269\u4F59\u57FA\u7840\u6210\u672C",
+      "uiPeriodMs": 100,
+      "webEnabled": false,
+      "gpuItemsEnabled": false,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 0,
+      "httpPollPerSecond": 0,
+      "warmupSeconds": 15,
+      "steadySeconds": 60,
+      "readKeyCount": 9,
+      "elapsedMs": 60002,
+      "collectionRounds": 600,
+      "collectionRoundsPerSecond": 10,
+      "valueReads": 5400,
+      "valueReadsPerRound": 9,
+      "collectionGenerations": 600,
+      "slowScanTriggerRounds": 200,
+      "diskBackgroundScanTriggerRounds": 60,
+      "trafficSaveDueRounds": 10,
+      "gcRequestDueRounds": 10,
+      "workingSetTrimDueRounds": 0,
+      "trafficFileObservedRewrites": 10,
+      "processCpuMs": 859.375,
+      "wholeMachineCpuPercent": 0.0895,
+      "allocatedBytes": 28940424,
+      "perSecondSamples": [
+        {
+          "tMs": 1006,
+          "cpuMs": 0,
+          "allocatedBytes": 459200
+        },
+        {
+          "tMs": 2102,
+          "cpuMs": 0,
+          "allocatedBytes": 565800
+        },
+        {
+          "tMs": 3105,
+          "cpuMs": 15.625,
+          "allocatedBytes": 459200
+        },
+        {
+          "tMs": 4209,
+          "cpuMs": 0,
+          "allocatedBytes": 516528
+        },
+        {
+          "tMs": 5303,
+          "cpuMs": 15.625,
+          "allocatedBytes": 565800
+        },
+        {
+          "tMs": 6307,
+          "cpuMs": 15.625,
+          "allocatedBytes": 451000
+        },
+        {
+          "tMs": 7403,
+          "cpuMs": 31.25,
+          "allocatedBytes": 533000
+        },
+        {
+          "tMs": 8403,
+          "cpuMs": 15.625,
+          "allocatedBytes": 500200
+        },
+        {
+          "tMs": 9418,
+          "cpuMs": 78.125,
+          "allocatedBytes": 516600
+        },
+        {
+          "tMs": 10514,
+          "cpuMs": 31.25,
+          "allocatedBytes": 541200
+        },
+        {
+          "tMs": 11605,
+          "cpuMs": 0,
+          "allocatedBytes": 541200
+        },
+        {
+          "tMs": 12608,
+          "cpuMs": 15.625,
+          "allocatedBytes": 459136
+        },
+        {
+          "tMs": 13608,
+          "cpuMs": 0,
+          "allocatedBytes": 500200
+        },
+        {
+          "tMs": 14702,
+          "cpuMs": 0,
+          "allocatedBytes": 533000
+        },
+        {
+          "tMs": 15702,
+          "cpuMs": 0,
+          "allocatedBytes": 451000
+        },
+        {
+          "tMs": 16702,
+          "cpuMs": 15.625,
+          "allocatedBytes": 508400
+        },
+        {
+          "tMs": 17705,
+          "cpuMs": 0,
+          "allocatedBytes": 475600
+        },
+        {
+          "tMs": 18706,
+          "cpuMs": 15.625,
+          "allocatedBytes": 459200
+        },
+        {
+          "tMs": 19804,
+          "cpuMs": 0,
+          "allocatedBytes": 557600
+        },
+        {
+          "tMs": 20903,
+          "cpuMs": 15.625,
+          "allocatedBytes": 522352
+        },
+        {
+          "tMs": 22003,
+          "cpuMs": 0,
+          "allocatedBytes": 516576
+        },
+        {
+          "tMs": 23004,
+          "cpuMs": 0,
+          "allocatedBytes": 533000
+        },
+        {
+          "tMs": 24005,
+          "cpuMs": 15.625,
+          "allocatedBytes": 459200
+        },
+        {
+          "tMs": 25008,
+          "cpuMs": 15.625,
+          "allocatedBytes": 459200
+        },
+        {
+          "tMs": 26103,
+          "cpuMs": 15.625,
+          "allocatedBytes": 574000
+        },
+        {
+          "tMs": 27113,
+          "cpuMs": 31.25,
+          "allocatedBytes": 451000
+        },
+        {
+          "tMs": 28203,
+          "cpuMs": 31.25,
+          "allocatedBytes": 524800
+        },
+        {
+          "tMs": 29212,
+          "cpuMs": 0,
+          "allocatedBytes": 508400
+        },
+        {
+          "tMs": 30302,
+          "cpuMs": 0,
+          "allocatedBytes": 500184
+        },
+        {
+          "tMs": 31303,
+          "cpuMs": 0,
+          "allocatedBytes": 483800
+        },
+        {
+          "tMs": 32311,
+          "cpuMs": 0,
+          "allocatedBytes": 500200
+        },
+        {
+          "tMs": 33410,
+          "cpuMs": 0,
+          "allocatedBytes": 508400
+        },
+        {
+          "tMs": 34508,
+          "cpuMs": 62.5,
+          "allocatedBytes": 538328
+        },
+        {
+          "tMs": 35513,
+          "cpuMs": 15.625,
+          "allocatedBytes": 492000
+        },
+        {
+          "tMs": 36525,
+          "cpuMs": 15.625,
+          "allocatedBytes": 451000
+        },
+        {
+          "tMs": 37620,
+          "cpuMs": 15.625,
+          "allocatedBytes": 557584
+        },
+        {
+          "tMs": 38711,
+          "cpuMs": 15.625,
+          "allocatedBytes": 533000
+        },
+        {
+          "tMs": 39804,
+          "cpuMs": 0,
+          "allocatedBytes": 500200
+        },
+        {
+          "tMs": 40808,
+          "cpuMs": 15.625,
+          "allocatedBytes": 516600
+        },
+        {
+          "tMs": 41813,
+          "cpuMs": 15.625,
+          "allocatedBytes": 467400
+        },
+        {
+          "tMs": 42906,
+          "cpuMs": 31.25,
+          "allocatedBytes": 508344
+        },
+        {
+          "tMs": 43906,
+          "cpuMs": 0,
+          "allocatedBytes": 516600
+        },
+        {
+          "tMs": 44907,
+          "cpuMs": 46.875,
+          "allocatedBytes": 467400
+        },
+        {
+          "tMs": 45925,
+          "cpuMs": 15.625,
+          "allocatedBytes": 451000
+        },
+        {
+          "tMs": 46926,
+          "cpuMs": 0,
+          "allocatedBytes": 524800
+        },
+        {
+          "tMs": 48002,
+          "cpuMs": 31.25,
+          "allocatedBytes": 508400
+        },
+        {
+          "tMs": 49002,
+          "cpuMs": 15.625,
+          "allocatedBytes": 459200
+        },
+        {
+          "tMs": 50003,
+          "cpuMs": 31.25,
+          "allocatedBytes": 524800
+        },
+        {
+          "tMs": 51008,
+          "cpuMs": 0,
+          "allocatedBytes": 459200
+        },
+        {
+          "tMs": 52010,
+          "cpuMs": 0,
+          "allocatedBytes": 459192
+        },
+        {
+          "tMs": 53110,
+          "cpuMs": 0,
+          "allocatedBytes": 574000
+        },
+        {
+          "tMs": 54203,
+          "cpuMs": 15.625,
+          "allocatedBytes": 500200
+        },
+        {
+          "tMs": 55203,
+          "cpuMs": 46.875,
+          "allocatedBytes": 475600
+        },
+        {
+          "tMs": 56304,
+          "cpuMs": 15.625,
+          "allocatedBytes": 557600
+        },
+        {
+          "tMs": 57405,
+          "cpuMs": 15.625,
+          "allocatedBytes": 500200
+        },
+        {
+          "tMs": 58508,
+          "cpuMs": 15.625,
+          "allocatedBytes": 541200
+        },
+        {
+          "tMs": 59508,
+          "cpuMs": 15.625,
+          "allocatedBytes": 492000
+        }
+      ],
+      "updateDurationMs": {
+        "count": 600,
+        "avg": 5.493,
+        "p50": 4,
+        "p95": 16,
+        "max": 84
+      },
+      "readDurationMs": {
+        "count": 600,
+        "avg": 0.77,
+        "p50": 1,
+        "p95": 1,
+        "max": 2
+      },
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        }
+      ],
+      "sampleMetricValues": {
+        "CPU.Load": 22.06,
+        "CPU.Temp": 0,
+        "MEM.Load": 39.65,
+        "NET.Up": 45623.82,
+        "NET.Down": 415256.75
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    },
+    {
+      "kind": "sampling_group",
+      "group": "D",
+      "purpose": "100 ms\u3001Web \u5F00\u4E14\u65E0\u4EBA\u8BBF\u95EE\uFF1A\u9A8C\u8BC1\u7A7A\u95F2\u670D\u52A1\u4E0D\u6269\u5927\u8303\u56F4",
+      "uiPeriodMs": 100,
+      "webEnabled": true,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 0,
+      "httpPollPerSecond": 0,
+      "warmupSeconds": 15,
+      "steadySeconds": 60,
+      "webSocketOpened": 0,
+      "readKeyCount": 12,
+      "elapsedMs": 60034,
+      "collectionRounds": 300,
+      "collectionRoundsPerSecond": 4.997,
+      "valueReads": 3600,
+      "valueReadsPerRound": 12,
+      "collectionGenerations": 300,
+      "slowScanTriggerRounds": 100,
+      "diskBackgroundScanTriggerRounds": 30,
+      "trafficSaveDueRounds": 5,
+      "gcRequestDueRounds": 0,
+      "workingSetTrimDueRounds": 0,
+      "trafficFileObservedRewrites": 5,
+      "processCpuMs": 15109.375,
+      "wholeMachineCpuPercent": 1.573,
+      "allocatedBytes": 20546168,
+      "perSecondSamples": [
+        {
+          "tMs": 1033,
+          "cpuMs": 250,
+          "allocatedBytes": 328000
+        },
+        {
+          "tMs": 2037,
+          "cpuMs": 218.75,
+          "allocatedBytes": 369000
+        },
+        {
+          "tMs": 3246,
+          "cpuMs": 296.875,
+          "allocatedBytes": 393600
+        },
+        {
+          "tMs": 4435,
+          "cpuMs": 312.5,
+          "allocatedBytes": 410000
+        },
+        {
+          "tMs": 5634,
+          "cpuMs": 296.875,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 6638,
+          "cpuMs": 265.625,
+          "allocatedBytes": 328000
+        },
+        {
+          "tMs": 7837,
+          "cpuMs": 328.125,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 9033,
+          "cpuMs": 312.5,
+          "allocatedBytes": 404504
+        },
+        {
+          "tMs": 10039,
+          "cpuMs": 250,
+          "allocatedBytes": 328000
+        },
+        {
+          "tMs": 11238,
+          "cpuMs": 281.25,
+          "allocatedBytes": 434600
+        },
+        {
+          "tMs": 12246,
+          "cpuMs": 296.875,
+          "allocatedBytes": 328000
+        },
+        {
+          "tMs": 13436,
+          "cpuMs": 343.75,
+          "allocatedBytes": 410000
+        },
+        {
+          "tMs": 14643,
+          "cpuMs": 296.875,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 15643,
+          "cpuMs": 265.625,
+          "allocatedBytes": 328000
+        },
+        {
+          "tMs": 16841,
+          "cpuMs": 312.5,
+          "allocatedBytes": 426400
+        },
+        {
+          "tMs": 18035,
+          "cpuMs": 312.5,
+          "allocatedBytes": 401800
+        },
+        {
+          "tMs": 19235,
+          "cpuMs": 312.5,
+          "allocatedBytes": 401800
+        },
+        {
+          "tMs": 20237,
+          "cpuMs": 312.5,
+          "allocatedBytes": 352600
+        },
+        {
+          "tMs": 21250,
+          "cpuMs": 234.375,
+          "allocatedBytes": 335576
+        },
+        {
+          "tMs": 22433,
+          "cpuMs": 203.125,
+          "allocatedBytes": 410000
+        },
+        {
+          "tMs": 23434,
+          "cpuMs": 203.125,
+          "allocatedBytes": 344400
+        },
+        {
+          "tMs": 24434,
+          "cpuMs": 250,
+          "allocatedBytes": 336200
+        },
+        {
+          "tMs": 25439,
+          "cpuMs": 250,
+          "allocatedBytes": 336200
+        },
+        {
+          "tMs": 26444,
+          "cpuMs": 250,
+          "allocatedBytes": 352600
+        },
+        {
+          "tMs": 27641,
+          "cpuMs": 343.75,
+          "allocatedBytes": 393600
+        },
+        {
+          "tMs": 28835,
+          "cpuMs": 296.875,
+          "allocatedBytes": 426400
+        },
+        {
+          "tMs": 29846,
+          "cpuMs": 250,
+          "allocatedBytes": 343008
+        },
+        {
+          "tMs": 31036,
+          "cpuMs": 296.875,
+          "allocatedBytes": 401800
+        },
+        {
+          "tMs": 32043,
+          "cpuMs": 234.375,
+          "allocatedBytes": 360800
+        },
+        {
+          "tMs": 33244,
+          "cpuMs": 250,
+          "allocatedBytes": 393552
+        },
+        {
+          "tMs": 34444,
+          "cpuMs": 312.5,
+          "allocatedBytes": 410000
+        },
+        {
+          "tMs": 35634,
+          "cpuMs": 328.125,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 36843,
+          "cpuMs": 296.875,
+          "allocatedBytes": 393600
+        },
+        {
+          "tMs": 38035,
+          "cpuMs": 296.875,
+          "allocatedBytes": 442272
+        },
+        {
+          "tMs": 39239,
+          "cpuMs": 328.125,
+          "allocatedBytes": 393600
+        },
+        {
+          "tMs": 40243,
+          "cpuMs": 203.125,
+          "allocatedBytes": 336200
+        },
+        {
+          "tMs": 41436,
+          "cpuMs": 296.875,
+          "allocatedBytes": 426400
+        },
+        {
+          "tMs": 42634,
+          "cpuMs": 375,
+          "allocatedBytes": 393600
+        },
+        {
+          "tMs": 43634,
+          "cpuMs": 281.25,
+          "allocatedBytes": 352600
+        },
+        {
+          "tMs": 44832,
+          "cpuMs": 296.875,
+          "allocatedBytes": 401800
+        },
+        {
+          "tMs": 45835,
+          "cpuMs": 171.875,
+          "allocatedBytes": 323152
+        },
+        {
+          "tMs": 46835,
+          "cpuMs": 234.375,
+          "allocatedBytes": 367960
+        },
+        {
+          "tMs": 47836,
+          "cpuMs": 250,
+          "allocatedBytes": 336200
+        },
+        {
+          "tMs": 49033,
+          "cpuMs": 234.375,
+          "allocatedBytes": 393600
+        },
+        {
+          "tMs": 50035,
+          "cpuMs": 265.625,
+          "allocatedBytes": 369000
+        },
+        {
+          "tMs": 51249,
+          "cpuMs": 328.125,
+          "allocatedBytes": 442800
+        },
+        {
+          "tMs": 52438,
+          "cpuMs": 406.25,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 53441,
+          "cpuMs": 187.5,
+          "allocatedBytes": 344400
+        },
+        {
+          "tMs": 54442,
+          "cpuMs": 218.75,
+          "allocatedBytes": 336200
+        },
+        {
+          "tMs": 55635,
+          "cpuMs": 328.125,
+          "allocatedBytes": 410000
+        },
+        {
+          "tMs": 56638,
+          "cpuMs": 265.625,
+          "allocatedBytes": 344400
+        },
+        {
+          "tMs": 57836,
+          "cpuMs": 328.125,
+          "allocatedBytes": 396344
+        },
+        {
+          "tMs": 58839,
+          "cpuMs": 250,
+          "allocatedBytes": 360800
+        },
+        {
+          "tMs": 59840,
+          "cpuMs": 265.625,
+          "allocatedBytes": 336200
+        }
+      ],
+      "updateDurationMs": {
+        "count": 300,
+        "avg": 135.207,
+        "p50": 135,
+        "p95": 142,
+        "max": 155
+      },
+      "readDurationMs": {
+        "count": 300,
+        "avg": 0.857,
+        "p50": 1,
+        "p95": 1,
+        "max": 5
+      },
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 2.366,
+          "updateWallMsPerCall": 0.008
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.888,
+          "updateWallMsPerCall": 0.003
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 19841.377,
+          "updateWallMsPerCall": 66.138
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 19816.393,
+          "updateWallMsPerCall": 66.055
+        }
+      ],
+      "webActivity": {
+        "webSocketClients": 0,
+        "httpSnapshotOk": 0,
+        "httpSnapshotFailed": 0,
+        "webSocketFramesReceived": 0
+      },
+      "sampleMetricValues": {
+        "CPU.Load": 26.49,
+        "CPU.Temp": 0,
+        "MEM.Load": 39.43,
+        "NET.Up": 46685.85,
+        "NET.Down": 331508.12,
+        "GPU.0.Temp": 58,
+        "GPU.0.Load": 39
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    },
+    {
+      "kind": "sampling_group",
+      "group": "E",
+      "purpose": "100 ms\u3001\u5355\u4E2A\u5DF2\u9274\u6743\u7F51\u9875\uFF1A\u8FDE\u63A5\u6D3B\u52A8\u65F6\u6570\u636E\u6B63\u786E\u4E14\u9650\u9891",
+      "uiPeriodMs": 100,
+      "webEnabled": true,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 1,
+      "httpPollPerSecond": 0,
+      "warmupSeconds": 15,
+      "steadySeconds": 60,
+      "webSocketOpened": 1,
+      "readKeyCount": 12,
+      "elapsedMs": 60036,
+      "collectionRounds": 300,
+      "collectionRoundsPerSecond": 4.997,
+      "valueReads": 3600,
+      "valueReadsPerRound": 12,
+      "collectionGenerations": 300,
+      "slowScanTriggerRounds": 99,
+      "diskBackgroundScanTriggerRounds": 31,
+      "trafficSaveDueRounds": 5,
+      "gcRequestDueRounds": 6,
+      "workingSetTrimDueRounds": 5,
+      "trafficFileObservedRewrites": 5,
+      "processCpuMs": 15031.25,
+      "wholeMachineCpuPercent": 1.5648,
+      "allocatedBytes": 23529720,
+      "perSecondSamples": [
+        {
+          "tMs": 1038,
+          "cpuMs": 296.875,
+          "allocatedBytes": 376568
+        },
+        {
+          "tMs": 2038,
+          "cpuMs": 250,
+          "allocatedBytes": 400576
+        },
+        {
+          "tMs": 3041,
+          "cpuMs": 203.125,
+          "allocatedBytes": 360528
+        },
+        {
+          "tMs": 4236,
+          "cpuMs": 359.375,
+          "allocatedBytes": 483632
+        },
+        {
+          "tMs": 5438,
+          "cpuMs": 265.625,
+          "allocatedBytes": 467392
+        },
+        {
+          "tMs": 6639,
+          "cpuMs": 281.25,
+          "allocatedBytes": 434568
+        },
+        {
+          "tMs": 7837,
+          "cpuMs": 281.25,
+          "allocatedBytes": 451400
+        },
+        {
+          "tMs": 8837,
+          "cpuMs": 296.875,
+          "allocatedBytes": 377176
+        },
+        {
+          "tMs": 10040,
+          "cpuMs": 281.25,
+          "allocatedBytes": 442760
+        },
+        {
+          "tMs": 11042,
+          "cpuMs": 234.375,
+          "allocatedBytes": 401776
+        },
+        {
+          "tMs": 12251,
+          "cpuMs": 312.5,
+          "allocatedBytes": 477904
+        },
+        {
+          "tMs": 13251,
+          "cpuMs": 312.5,
+          "allocatedBytes": 383112
+        },
+        {
+          "tMs": 14435,
+          "cpuMs": 359.375,
+          "allocatedBytes": 475576
+        },
+        {
+          "tMs": 15636,
+          "cpuMs": 250,
+          "allocatedBytes": 433328
+        },
+        {
+          "tMs": 16644,
+          "cpuMs": 234.375,
+          "allocatedBytes": 385192
+        },
+        {
+          "tMs": 17839,
+          "cpuMs": 312.5,
+          "allocatedBytes": 442736
+        },
+        {
+          "tMs": 19034,
+          "cpuMs": 281.25,
+          "allocatedBytes": 442760
+        },
+        {
+          "tMs": 20035,
+          "cpuMs": 296.875,
+          "allocatedBytes": 393544
+        },
+        {
+          "tMs": 21036,
+          "cpuMs": 250,
+          "allocatedBytes": 360744
+        },
+        {
+          "tMs": 22036,
+          "cpuMs": 250,
+          "allocatedBytes": 377112
+        },
+        {
+          "tMs": 23036,
+          "cpuMs": 218.75,
+          "allocatedBytes": 401736
+        },
+        {
+          "tMs": 24036,
+          "cpuMs": 265.625,
+          "allocatedBytes": 368944
+        },
+        {
+          "tMs": 25037,
+          "cpuMs": 218.75,
+          "allocatedBytes": 376704
+        },
+        {
+          "tMs": 26238,
+          "cpuMs": 343.75,
+          "allocatedBytes": 507504
+        },
+        {
+          "tMs": 27437,
+          "cpuMs": 312.5,
+          "allocatedBytes": 434544
+        },
+        {
+          "tMs": 28437,
+          "cpuMs": 218.75,
+          "allocatedBytes": 384888
+        },
+        {
+          "tMs": 29438,
+          "cpuMs": 187.5,
+          "allocatedBytes": 393552
+        },
+        {
+          "tMs": 30634,
+          "cpuMs": 281.25,
+          "allocatedBytes": 434584
+        },
+        {
+          "tMs": 31637,
+          "cpuMs": 234.375,
+          "allocatedBytes": 385352
+        },
+        {
+          "tMs": 32639,
+          "cpuMs": 250,
+          "allocatedBytes": 377152
+        },
+        {
+          "tMs": 33639,
+          "cpuMs": 312.5,
+          "allocatedBytes": 426344
+        },
+        {
+          "tMs": 34839,
+          "cpuMs": 203.125,
+          "allocatedBytes": 466856
+        },
+        {
+          "tMs": 35840,
+          "cpuMs": 328.125,
+          "allocatedBytes": 1020384
+        },
+        {
+          "tMs": 37033,
+          "cpuMs": 250,
+          "allocatedBytes": 434568
+        },
+        {
+          "tMs": 38235,
+          "cpuMs": 343.75,
+          "allocatedBytes": 450952
+        },
+        {
+          "tMs": 39248,
+          "cpuMs": 296.875,
+          "allocatedBytes": 385280
+        },
+        {
+          "tMs": 40444,
+          "cpuMs": 343.75,
+          "allocatedBytes": 475144
+        },
+        {
+          "tMs": 41636,
+          "cpuMs": 265.625,
+          "allocatedBytes": 450928
+        },
+        {
+          "tMs": 42636,
+          "cpuMs": 281.25,
+          "allocatedBytes": 377144
+        },
+        {
+          "tMs": 43637,
+          "cpuMs": 203.125,
+          "allocatedBytes": 398184
+        },
+        {
+          "tMs": 44640,
+          "cpuMs": 281.25,
+          "allocatedBytes": 368840
+        },
+        {
+          "tMs": 45836,
+          "cpuMs": 187.5,
+          "allocatedBytes": 434576
+        },
+        {
+          "tMs": 46838,
+          "cpuMs": 203.125,
+          "allocatedBytes": 401776
+        },
+        {
+          "tMs": 48043,
+          "cpuMs": 343.75,
+          "allocatedBytes": 450952
+        },
+        {
+          "tMs": 49235,
+          "cpuMs": 328.125,
+          "allocatedBytes": 434392
+        },
+        {
+          "tMs": 50435,
+          "cpuMs": 375,
+          "allocatedBytes": 491904
+        },
+        {
+          "tMs": 51435,
+          "cpuMs": 218.75,
+          "allocatedBytes": 385288
+        },
+        {
+          "tMs": 52638,
+          "cpuMs": 296.875,
+          "allocatedBytes": 450648
+        },
+        {
+          "tMs": 53640,
+          "cpuMs": 265.625,
+          "allocatedBytes": 377184
+        },
+        {
+          "tMs": 54832,
+          "cpuMs": 328.125,
+          "allocatedBytes": 442472
+        },
+        {
+          "tMs": 55837,
+          "cpuMs": 281.25,
+          "allocatedBytes": 385328
+        },
+        {
+          "tMs": 57038,
+          "cpuMs": 296.875,
+          "allocatedBytes": 442576
+        },
+        {
+          "tMs": 58244,
+          "cpuMs": 250,
+          "allocatedBytes": 464336
+        },
+        {
+          "tMs": 59437,
+          "cpuMs": 281.25,
+          "allocatedBytes": 483520
+        }
+      ],
+      "updateDurationMs": {
+        "count": 300,
+        "avg": 135.5,
+        "p50": 135,
+        "p95": 143,
+        "max": 160
+      },
+      "readDurationMs": {
+        "count": 300,
+        "avg": 0.837,
+        "p50": 1,
+        "p95": 1,
+        "max": 5
+      },
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 2.365,
+          "updateWallMsPerCall": 0.008
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.847,
+          "updateWallMsPerCall": 0.003
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 19723.319,
+          "updateWallMsPerCall": 65.744
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 19763.068,
+          "updateWallMsPerCall": 65.877
+        }
+      ],
+      "webActivity": {
+        "webSocketClients": 1,
+        "httpSnapshotOk": 0,
+        "httpSnapshotFailed": 0,
+        "webSocketFramesReceived": 0
+      },
+      "sampleMetricValues": {
+        "CPU.Load": 28.1,
+        "CPU.Temp": 0,
+        "MEM.Load": 39.35,
+        "NET.Up": 35676.83,
+        "NET.Down": 269864.59,
+        "GPU.0.Temp": 58,
+        "GPU.0.Load": 39
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    },
+    {
+      "kind": "sampling_group",
+      "group": "F",
+      "purpose": "100 ms\u3001\u591A\u7F51\u9875 \u002B HTTP \u8F6E\u8BE2\uFF1A\u9A8C\u8BC1\u591A\u6D88\u8D39\u8005\u5171\u7528\u91C7\u6837",
+      "uiPeriodMs": 100,
+      "webEnabled": true,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 3,
+      "httpPollPerSecond": 1,
+      "warmupSeconds": 15,
+      "steadySeconds": 60,
+      "webSocketOpened": 3,
+      "readKeyCount": 12,
+      "elapsedMs": 60048,
+      "collectionRounds": 300,
+      "collectionRoundsPerSecond": 4.996,
+      "valueReads": 3600,
+      "valueReadsPerRound": 12,
+      "collectionGenerations": 300,
+      "slowScanTriggerRounds": 100,
+      "diskBackgroundScanTriggerRounds": 30,
+      "trafficSaveDueRounds": 5,
+      "gcRequestDueRounds": 0,
+      "workingSetTrimDueRounds": 0,
+      "trafficFileObservedRewrites": 5,
+      "processCpuMs": 15312.5,
+      "wholeMachineCpuPercent": 1.5938,
+      "allocatedBytes": 28167984,
+      "perSecondSamples": [
+        {
+          "tMs": 1034,
+          "cpuMs": 343.75,
+          "allocatedBytes": 1233088
+        },
+        {
+          "tMs": 2037,
+          "cpuMs": 265.625,
+          "allocatedBytes": 491568
+        },
+        {
+          "tMs": 3233,
+          "cpuMs": 328.125,
+          "allocatedBytes": 590256
+        },
+        {
+          "tMs": 4234,
+          "cpuMs": 250,
+          "allocatedBytes": 451936
+        },
+        {
+          "tMs": 5245,
+          "cpuMs": 156.25,
+          "allocatedBytes": 447504
+        },
+        {
+          "tMs": 6448,
+          "cpuMs": 296.875,
+          "allocatedBytes": 511328
+        },
+        {
+          "tMs": 7632,
+          "cpuMs": 296.875,
+          "allocatedBytes": 527808
+        },
+        {
+          "tMs": 8633,
+          "cpuMs": 234.375,
+          "allocatedBytes": 512496
+        },
+        {
+          "tMs": 9634,
+          "cpuMs": 281.25,
+          "allocatedBytes": 446928
+        },
+        {
+          "tMs": 10638,
+          "cpuMs": 265.625,
+          "allocatedBytes": 454168
+        },
+        {
+          "tMs": 11834,
+          "cpuMs": 312.5,
+          "allocatedBytes": 513096
+        },
+        {
+          "tMs": 12835,
+          "cpuMs": 234.375,
+          "allocatedBytes": 435176
+        },
+        {
+          "tMs": 13838,
+          "cpuMs": 234.375,
+          "allocatedBytes": 441976
+        },
+        {
+          "tMs": 15042,
+          "cpuMs": 359.375,
+          "allocatedBytes": 571008
+        },
+        {
+          "tMs": 16234,
+          "cpuMs": 343.75,
+          "allocatedBytes": 625632
+        },
+        {
+          "tMs": 17444,
+          "cpuMs": 375,
+          "allocatedBytes": 534264
+        },
+        {
+          "tMs": 18632,
+          "cpuMs": 296.875,
+          "allocatedBytes": 523400
+        },
+        {
+          "tMs": 19632,
+          "cpuMs": 218.75,
+          "allocatedBytes": 477488
+        },
+        {
+          "tMs": 20632,
+          "cpuMs": 265.625,
+          "allocatedBytes": 441312
+        },
+        {
+          "tMs": 21634,
+          "cpuMs": 265.625,
+          "allocatedBytes": 438176
+        },
+        {
+          "tMs": 22830,
+          "cpuMs": 328.125,
+          "allocatedBytes": 543168
+        },
+        {
+          "tMs": 23830,
+          "cpuMs": 265.625,
+          "allocatedBytes": 533032
+        },
+        {
+          "tMs": 24831,
+          "cpuMs": 250,
+          "allocatedBytes": 437424
+        },
+        {
+          "tMs": 25832,
+          "cpuMs": 250,
+          "allocatedBytes": 488072
+        },
+        {
+          "tMs": 26832,
+          "cpuMs": 265.625,
+          "allocatedBytes": 430792
+        },
+        {
+          "tMs": 27836,
+          "cpuMs": 203.125,
+          "allocatedBytes": 438648
+        },
+        {
+          "tMs": 29044,
+          "cpuMs": 359.375,
+          "allocatedBytes": 537904
+        },
+        {
+          "tMs": 30046,
+          "cpuMs": 250,
+          "allocatedBytes": 437424
+        },
+        {
+          "tMs": 31238,
+          "cpuMs": 312.5,
+          "allocatedBytes": 624952
+        },
+        {
+          "tMs": 32239,
+          "cpuMs": 250,
+          "allocatedBytes": 448240
+        },
+        {
+          "tMs": 33440,
+          "cpuMs": 281.25,
+          "allocatedBytes": 511464
+        },
+        {
+          "tMs": 34443,
+          "cpuMs": 250,
+          "allocatedBytes": 450168
+        },
+        {
+          "tMs": 35631,
+          "cpuMs": 328.125,
+          "allocatedBytes": 522704
+        },
+        {
+          "tMs": 36633,
+          "cpuMs": 218.75,
+          "allocatedBytes": 438568
+        },
+        {
+          "tMs": 37637,
+          "cpuMs": 250,
+          "allocatedBytes": 463368
+        },
+        {
+          "tMs": 38831,
+          "cpuMs": 312.5,
+          "allocatedBytes": 510616
+        },
+        {
+          "tMs": 39837,
+          "cpuMs": 250,
+          "allocatedBytes": 445648
+        },
+        {
+          "tMs": 41048,
+          "cpuMs": 359.375,
+          "allocatedBytes": 531712
+        },
+        {
+          "tMs": 42239,
+          "cpuMs": 281.25,
+          "allocatedBytes": 598040
+        },
+        {
+          "tMs": 43437,
+          "cpuMs": 281.25,
+          "allocatedBytes": 526952
+        },
+        {
+          "tMs": 44640,
+          "cpuMs": 296.875,
+          "allocatedBytes": 514744
+        },
+        {
+          "tMs": 45833,
+          "cpuMs": 328.125,
+          "allocatedBytes": 498096
+        },
+        {
+          "tMs": 47050,
+          "cpuMs": 312.5,
+          "allocatedBytes": 550944
+        },
+        {
+          "tMs": 48235,
+          "cpuMs": 343.75,
+          "allocatedBytes": 561464
+        },
+        {
+          "tMs": 49437,
+          "cpuMs": 281.25,
+          "allocatedBytes": 626016
+        },
+        {
+          "tMs": 50634,
+          "cpuMs": 250,
+          "allocatedBytes": 505784
+        },
+        {
+          "tMs": 51834,
+          "cpuMs": 265.625,
+          "allocatedBytes": 526320
+        },
+        {
+          "tMs": 52839,
+          "cpuMs": 218.75,
+          "allocatedBytes": 487296
+        },
+        {
+          "tMs": 54060,
+          "cpuMs": 312.5,
+          "allocatedBytes": 527144
+        },
+        {
+          "tMs": 55234,
+          "cpuMs": 296.875,
+          "allocatedBytes": 569600
+        },
+        {
+          "tMs": 56234,
+          "cpuMs": 234.375,
+          "allocatedBytes": 467784
+        },
+        {
+          "tMs": 57234,
+          "cpuMs": 250,
+          "allocatedBytes": 461312
+        },
+        {
+          "tMs": 58234,
+          "cpuMs": 265.625,
+          "allocatedBytes": 465160
+        },
+        {
+          "tMs": 59235,
+          "cpuMs": 281.25,
+          "allocatedBytes": 469552
+        }
+      ],
+      "updateDurationMs": {
+        "count": 300,
+        "avg": 135.99,
+        "p50": 134,
+        "p95": 148,
+        "max": 164
+      },
+      "readDurationMs": {
+        "count": 300,
+        "avg": 0.78,
+        "p50": 1,
+        "p95": 1,
+        "max": 4
+      },
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 2.442,
+          "updateWallMsPerCall": 0.008
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.821,
+          "updateWallMsPerCall": 0.003
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 19380.093,
+          "updateWallMsPerCall": 64.6
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 20114.85,
+          "updateWallMsPerCall": 67.05
+        }
+      ],
+      "webActivity": {
+        "webSocketClients": 3,
+        "httpSnapshotOk": 75,
+        "httpSnapshotFailed": 0,
+        "webSocketFramesReceived": 0
+      },
+      "sampleMetricValues": {
+        "CPU.Load": 26.09,
+        "CPU.Temp": 0,
+        "MEM.Load": 39.09,
+        "NET.Up": 33951.22,
+        "NET.Down": 240487.81,
+        "GPU.0.Temp": 58,
+        "GPU.0.Load": 38
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    },
+    {
+      "kind": "sampling_group",
+      "group": "G",
+      "purpose": "100 ms\u3001\u591A\u5361\u672C\u5730\u76D1\u63A7\uFF1A\u6BCF\u5F20\u542F\u7528\u5361\u5747\u6B63\u786E",
+      "uiPeriodMs": 100,
+      "webEnabled": false,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 2,
+      "webSocketClients": 0,
+      "httpPollPerSecond": 0,
+      "warmupSeconds": 15,
+      "steadySeconds": 60,
+      "readKeyCount": 15,
+      "elapsedMs": 60031,
+      "collectionRounds": 300,
+      "collectionRoundsPerSecond": 4.997,
+      "valueReads": 4500,
+      "valueReadsPerRound": 15,
+      "collectionGenerations": 300,
+      "slowScanTriggerRounds": 100,
+      "diskBackgroundScanTriggerRounds": 30,
+      "trafficSaveDueRounds": 5,
+      "gcRequestDueRounds": 0,
+      "workingSetTrimDueRounds": 0,
+      "trafficFileObservedRewrites": 5,
+      "processCpuMs": 14765.625,
+      "wholeMachineCpuPercent": 1.5373,
+      "allocatedBytes": 21370000,
+      "perSecondSamples": [
+        {
+          "tMs": 1040,
+          "cpuMs": 265.625,
+          "allocatedBytes": 352600
+        },
+        {
+          "tMs": 2247,
+          "cpuMs": 281.25,
+          "allocatedBytes": 405712
+        },
+        {
+          "tMs": 3446,
+          "cpuMs": 250,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 4635,
+          "cpuMs": 343.75,
+          "allocatedBytes": 434600
+        },
+        {
+          "tMs": 5833,
+          "cpuMs": 312.5,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 7036,
+          "cpuMs": 281.25,
+          "allocatedBytes": 418224
+        },
+        {
+          "tMs": 8239,
+          "cpuMs": 312.5,
+          "allocatedBytes": 442800
+        },
+        {
+          "tMs": 9433,
+          "cpuMs": 312.5,
+          "allocatedBytes": 410000
+        },
+        {
+          "tMs": 10433,
+          "cpuMs": 250,
+          "allocatedBytes": 369000
+        },
+        {
+          "tMs": 11439,
+          "cpuMs": 265.625,
+          "allocatedBytes": 352600
+        },
+        {
+          "tMs": 12635,
+          "cpuMs": 328.125,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 13639,
+          "cpuMs": 203.125,
+          "allocatedBytes": 369000
+        },
+        {
+          "tMs": 14834,
+          "cpuMs": 312.5,
+          "allocatedBytes": 426080
+        },
+        {
+          "tMs": 15836,
+          "cpuMs": 250,
+          "allocatedBytes": 344400
+        },
+        {
+          "tMs": 16839,
+          "cpuMs": 250,
+          "allocatedBytes": 377200
+        },
+        {
+          "tMs": 18033,
+          "cpuMs": 265.625,
+          "allocatedBytes": 421128
+        },
+        {
+          "tMs": 19241,
+          "cpuMs": 234.375,
+          "allocatedBytes": 428120
+        },
+        {
+          "tMs": 20242,
+          "cpuMs": 250,
+          "allocatedBytes": 377176
+        },
+        {
+          "tMs": 21248,
+          "cpuMs": 218.75,
+          "allocatedBytes": 344400
+        },
+        {
+          "tMs": 22434,
+          "cpuMs": 281.25,
+          "allocatedBytes": 426400
+        },
+        {
+          "tMs": 23435,
+          "cpuMs": 218.75,
+          "allocatedBytes": 360800
+        },
+        {
+          "tMs": 24631,
+          "cpuMs": 312.5,
+          "allocatedBytes": 410000
+        },
+        {
+          "tMs": 25829,
+          "cpuMs": 250,
+          "allocatedBytes": 451000
+        },
+        {
+          "tMs": 26832,
+          "cpuMs": 265.625,
+          "allocatedBytes": 344400
+        },
+        {
+          "tMs": 28031,
+          "cpuMs": 250,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 29037,
+          "cpuMs": 296.875,
+          "allocatedBytes": 369000
+        },
+        {
+          "tMs": 30038,
+          "cpuMs": 265.625,
+          "allocatedBytes": 345272
+        },
+        {
+          "tMs": 31246,
+          "cpuMs": 296.875,
+          "allocatedBytes": 426400
+        },
+        {
+          "tMs": 32433,
+          "cpuMs": 281.25,
+          "allocatedBytes": 434600
+        },
+        {
+          "tMs": 33452,
+          "cpuMs": 265.625,
+          "allocatedBytes": 344400
+        },
+        {
+          "tMs": 34638,
+          "cpuMs": 312.5,
+          "allocatedBytes": 434600
+        },
+        {
+          "tMs": 35837,
+          "cpuMs": 265.625,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 37032,
+          "cpuMs": 265.625,
+          "allocatedBytes": 426400
+        },
+        {
+          "tMs": 38247,
+          "cpuMs": 234.375,
+          "allocatedBytes": 434600
+        },
+        {
+          "tMs": 39440,
+          "cpuMs": 281.25,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 40634,
+          "cpuMs": 281.25,
+          "allocatedBytes": 434600
+        },
+        {
+          "tMs": 41838,
+          "cpuMs": 296.875,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 43035,
+          "cpuMs": 265.625,
+          "allocatedBytes": 426400
+        },
+        {
+          "tMs": 44246,
+          "cpuMs": 281.25,
+          "allocatedBytes": 434600
+        },
+        {
+          "tMs": 45436,
+          "cpuMs": 250,
+          "allocatedBytes": 410000
+        },
+        {
+          "tMs": 46441,
+          "cpuMs": 296.875,
+          "allocatedBytes": 369000
+        },
+        {
+          "tMs": 47636,
+          "cpuMs": 359.375,
+          "allocatedBytes": 426400
+        },
+        {
+          "tMs": 48636,
+          "cpuMs": 265.625,
+          "allocatedBytes": 344400
+        },
+        {
+          "tMs": 49834,
+          "cpuMs": 359.375,
+          "allocatedBytes": 442800
+        },
+        {
+          "tMs": 50834,
+          "cpuMs": 265.625,
+          "allocatedBytes": 352536
+        },
+        {
+          "tMs": 52033,
+          "cpuMs": 281.25,
+          "allocatedBytes": 418200
+        },
+        {
+          "tMs": 53240,
+          "cpuMs": 250,
+          "allocatedBytes": 442752
+        },
+        {
+          "tMs": 54436,
+          "cpuMs": 312.5,
+          "allocatedBytes": 410000
+        },
+        {
+          "tMs": 55436,
+          "cpuMs": 234.375,
+          "allocatedBytes": 369000
+        },
+        {
+          "tMs": 56441,
+          "cpuMs": 250,
+          "allocatedBytes": 352600
+        },
+        {
+          "tMs": 57450,
+          "cpuMs": 265.625,
+          "allocatedBytes": 401800
+        },
+        {
+          "tMs": 58633,
+          "cpuMs": 343.75,
+          "allocatedBytes": 442800
+        },
+        {
+          "tMs": 59636,
+          "cpuMs": 281.25,
+          "allocatedBytes": 344400
+        }
+      ],
+      "updateDurationMs": {
+        "count": 300,
+        "avg": 135.25,
+        "p50": 134,
+        "p95": 146,
+        "max": 158
+      },
+      "readDurationMs": {
+        "count": 300,
+        "avg": 0.78,
+        "p50": 1,
+        "p95": 1,
+        "max": 2
+      },
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 19555.268,
+          "updateWallMsPerCall": 65.184
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 300,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 20157.101,
+          "updateWallMsPerCall": 67.19
+        }
+      ],
+      "sampleMetricValues": {
+        "CPU.Load": 30.39,
+        "CPU.Temp": 0,
+        "MEM.Load": 39.12,
+        "NET.Up": 32845.22,
+        "NET.Down": 241937.48,
+        "GPU.0.Temp": 58,
+        "GPU.0.Load": 39
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    },
+    {
+      "kind": "sampling_group",
+      "group": "H1",
+      "purpose": "3000 ms\u3001Web \u5173\uFF1A\u6162\u5237\u65B0\u7701\u7535",
+      "uiPeriodMs": 3000,
+      "webEnabled": false,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 0,
+      "httpPollPerSecond": 0,
+      "warmupSeconds": 15,
+      "steadySeconds": 60,
+      "readKeyCount": 12,
+      "elapsedMs": 60069,
+      "collectionRounds": 20,
+      "collectionRoundsPerSecond": 0.333,
+      "valueReads": 240,
+      "valueReadsPerRound": 12,
+      "collectionGenerations": 20,
+      "slowScanTriggerRounds": 0,
+      "diskBackgroundScanTriggerRounds": 2,
+      "trafficSaveDueRounds": 1,
+      "gcRequestDueRounds": 0,
+      "workingSetTrimDueRounds": 0,
+      "trafficFileObservedRewrites": 1,
+      "processCpuMs": 453.125,
+      "wholeMachineCpuPercent": 0.0471,
+      "allocatedBytes": 1189104,
+      "perSecondSamples": [
+        {
+          "tMs": 3068,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 6071,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 9077,
+          "cpuMs": 31.25,
+          "allocatedBytes": 65600
+        },
+        {
+          "tMs": 12066,
+          "cpuMs": 31.25,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 15065,
+          "cpuMs": 15.625,
+          "allocatedBytes": 65544
+        },
+        {
+          "tMs": 18077,
+          "cpuMs": 46.875,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 21070,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 24070,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 27069,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 30068,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 33068,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 36073,
+          "cpuMs": 31.25,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 39078,
+          "cpuMs": 46.875,
+          "allocatedBytes": 65560
+        },
+        {
+          "tMs": 42070,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 45074,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 48071,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 51071,
+          "cpuMs": 15.625,
+          "allocatedBytes": 65520
+        },
+        {
+          "tMs": 54069,
+          "cpuMs": 15.625,
+          "allocatedBytes": 57680
+        },
+        {
+          "tMs": 57071,
+          "cpuMs": 46.875,
+          "allocatedBytes": 57400
+        },
+        {
+          "tMs": 60069,
+          "cpuMs": 15.625,
+          "allocatedBytes": 65600
+        }
+      ],
+      "updateDurationMs": {
+        "count": 20,
+        "avg": 68.85,
+        "p50": 68,
+        "p95": 75,
+        "max": 75
+      },
+      "readDurationMs": {
+        "count": 20,
+        "avg": 0.95,
+        "p50": 1,
+        "p95": 2,
+        "max": 2
+      },
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 20,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 1322.899,
+          "updateWallMsPerCall": 66.145
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 0,
+          "updatesPerCollectionRound": 0,
+          "updateWallMs": 0,
+          "updateWallMsPerCall": 0
+        }
+      ],
+      "sampleMetricValues": {
+        "CPU.Load": 39.97,
+        "CPU.Temp": 0,
+        "MEM.Load": 38.79,
+        "NET.Up": 83316.16,
+        "NET.Down": 279936.38,
+        "GPU.0.Temp": 58,
+        "GPU.0.Load": 39
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    },
+    {
+      "kind": "sampling_group",
+      "group": "H2",
+      "purpose": "3000 ms\u3001Web \u5F00\u4E14\u6709\u5408\u6CD5\u7F51\u9875\uFF1A\u72EC\u7ACB Web \u9700\u6C42",
+      "uiPeriodMs": 3000,
+      "webEnabled": true,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 1,
+      "httpPollPerSecond": 0,
+      "warmupSeconds": 15,
+      "steadySeconds": 60,
+      "webSocketOpened": 1,
+      "readKeyCount": 12,
+      "elapsedMs": 60130,
+      "collectionRounds": 20,
+      "collectionRoundsPerSecond": 0.333,
+      "valueReads": 240,
+      "valueReadsPerRound": 12,
+      "collectionGenerations": 20,
+      "slowScanTriggerRounds": 0,
+      "diskBackgroundScanTriggerRounds": 2,
+      "trafficSaveDueRounds": 1,
+      "gcRequestDueRounds": 0,
+      "workingSetTrimDueRounds": 0,
+      "trafficFileObservedRewrites": 1,
+      "processCpuMs": 890.625,
+      "wholeMachineCpuPercent": 0.0926,
+      "allocatedBytes": 3109264,
+      "perSecondSamples": [
+        {
+          "tMs": 3158,
+          "cpuMs": 78.125,
+          "allocatedBytes": 179576
+        },
+        {
+          "tMs": 6139,
+          "cpuMs": 46.875,
+          "allocatedBytes": 122992
+        },
+        {
+          "tMs": 9139,
+          "cpuMs": 46.875,
+          "allocatedBytes": 155768
+        },
+        {
+          "tMs": 12151,
+          "cpuMs": 31.25,
+          "allocatedBytes": 155792
+        },
+        {
+          "tMs": 15163,
+          "cpuMs": 62.5,
+          "allocatedBytes": 163704
+        },
+        {
+          "tMs": 18132,
+          "cpuMs": 31.25,
+          "allocatedBytes": 138664
+        },
+        {
+          "tMs": 21141,
+          "cpuMs": 62.5,
+          "allocatedBytes": 163984
+        },
+        {
+          "tMs": 24134,
+          "cpuMs": 31.25,
+          "allocatedBytes": 147464
+        },
+        {
+          "tMs": 27135,
+          "cpuMs": 31.25,
+          "allocatedBytes": 155712
+        },
+        {
+          "tMs": 30134,
+          "cpuMs": 31.25,
+          "allocatedBytes": 155720
+        },
+        {
+          "tMs": 33143,
+          "cpuMs": 78.125,
+          "allocatedBytes": 180256
+        },
+        {
+          "tMs": 36132,
+          "cpuMs": 46.875,
+          "allocatedBytes": 147400
+        },
+        {
+          "tMs": 39137,
+          "cpuMs": 46.875,
+          "allocatedBytes": 155000
+        },
+        {
+          "tMs": 42134,
+          "cpuMs": 46.875,
+          "allocatedBytes": 163928
+        },
+        {
+          "tMs": 45138,
+          "cpuMs": 46.875,
+          "allocatedBytes": 155744
+        },
+        {
+          "tMs": 48134,
+          "cpuMs": 31.25,
+          "allocatedBytes": 148288
+        },
+        {
+          "tMs": 51134,
+          "cpuMs": 31.25,
+          "allocatedBytes": 154752
+        },
+        {
+          "tMs": 54135,
+          "cpuMs": 31.25,
+          "allocatedBytes": 146752
+        },
+        {
+          "tMs": 57134,
+          "cpuMs": 46.875,
+          "allocatedBytes": 155232
+        },
+        {
+          "tMs": 60130,
+          "cpuMs": 31.25,
+          "allocatedBytes": 154336
+        }
+      ],
+      "updateDurationMs": {
+        "count": 20,
+        "avg": 137.45,
+        "p50": 134,
+        "p95": 160,
+        "max": 160
+      },
+      "readDurationMs": {
+        "count": 20,
+        "avg": 0.9,
+        "p50": 1,
+        "p95": 2,
+        "max": 2
+      },
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 20,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.15,
+          "updateWallMsPerCall": 0.008
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 20,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.054,
+          "updateWallMsPerCall": 0.003
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 20,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 1355.515,
+          "updateWallMsPerCall": 67.776
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 20,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 1315.483,
+          "updateWallMsPerCall": 65.774
+        }
+      ],
+      "webActivity": {
+        "webSocketClients": 1,
+        "httpSnapshotOk": 0,
+        "httpSnapshotFailed": 0,
+        "webSocketFramesReceived": 0
+      },
+      "sampleMetricValues": {
+        "CPU.Load": 29.34,
+        "CPU.Temp": 0,
+        "MEM.Load": 38.75,
+        "NET.Up": 48100.07,
+        "NET.Down": 263971.44,
+        "GPU.0.Temp": 57,
+        "GPU.0.Load": 41
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    }
+  ],
+  "deviceUpdateCosts": [
+    {
+      "kind": "device_update_cost",
+      "device": "MSI MEG X570 UNIFY (MS-7C35)",
+      "type": "Motherboard",
+      "calls": 20,
+      "wallMsPerUpdate": 0.001,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "AMD Ryzen 7 5800X",
+      "type": "Cpu",
+      "calls": 20,
+      "wallMsPerUpdate": 0.567,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "Virtual Memory",
+      "type": "Memory",
+      "calls": 20,
+      "wallMsPerUpdate": 0.003,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "Total Memory",
+      "type": "Memory",
+      "calls": 20,
+      "wallMsPerUpdate": 0.003,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "NVIDIA GeForce RTX 3080 Ti",
+      "type": "GpuNvidia",
+      "calls": 20,
+      "wallMsPerUpdate": 64.924,
+      "cpuMsPerUpdate": 24.219
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "NVIDIA GeForce RTX 3080",
+      "type": "GpuNvidia",
+      "calls": 20,
+      "wallMsPerUpdate": 66.346,
+      "cpuMsPerUpdate": 25.781
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "Radmin VPN",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.055,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "WLAN 8",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.047,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "\u4EE5\u592A\u7F51 3",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.065,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "\u4EE5\u592A\u7F51 5",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.097,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "\u672C\u5730\u8FDE\u63A5* 1",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.061,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "\u672C\u5730\u8FDE\u63A5* 2",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.048,
+      "cpuMsPerUpdate": 0
+    }
+  ],
+  "renderBench": [
+    {
+      "kind": "render_bench",
+      "surface": "winforms-compatible-buffer",
+      "mode": "vertical",
+      "scale": 1,
+      "itemCount": 13,
+      "width": 240,
+      "height": 788,
+      "draws": 440,
+      "wallMsPerDraw": 4.5581,
+      "cpuMsPerDraw": 4.4389,
+      "allocatedBytesPerDraw": 6776.1,
+      "projectedWholeMachineCpuAt10Hz": 0.2774,
+      "excludes": "\u7A97\u53E3\u5448\u73B0\u3001\u684C\u9762\u5408\u6210\u3001\u900F\u660E\u6548\u679C\u3001\u4EFB\u52A1\u680F\u3001\u786C\u4EF6\u91C7\u96C6\u3001\u63D2\u4EF6"
+    },
+    {
+      "kind": "render_bench",
+      "surface": "winforms-compatible-buffer",
+      "mode": "horizontal",
+      "scale": 1,
+      "itemCount": 13,
+      "width": 768,
+      "height": 56,
+      "draws": 845,
+      "wallMsPerDraw": 2.3683,
+      "cpuMsPerDraw": 2.3484,
+      "allocatedBytesPerDraw": 4640,
+      "projectedWholeMachineCpuAt10Hz": 0.1468,
+      "excludes": "\u7A97\u53E3\u5448\u73B0\u3001\u684C\u9762\u5408\u6210\u3001\u900F\u660E\u6548\u679C\u3001\u4EFB\u52A1\u680F\u3001\u786C\u4EF6\u91C7\u96C6\u3001\u63D2\u4EF6"
+    },
+    {
+      "kind": "render_bench",
+      "surface": "winforms-compatible-buffer",
+      "mode": "vertical",
+      "scale": 2,
+      "itemCount": 13,
+      "width": 480,
+      "height": 1576,
+      "draws": 351,
+      "wallMsPerDraw": 5.7051,
+      "cpuMsPerDraw": 5.5199,
+      "allocatedBytesPerDraw": 6776.1,
+      "projectedWholeMachineCpuAt10Hz": 0.345,
+      "excludes": "\u7A97\u53E3\u5448\u73B0\u3001\u684C\u9762\u5408\u6210\u3001\u900F\u660E\u6548\u679C\u3001\u4EFB\u52A1\u680F\u3001\u786C\u4EF6\u91C7\u96C6\u3001\u63D2\u4EF6"
+    },
+    {
+      "kind": "render_bench",
+      "surface": "winforms-compatible-buffer",
+      "mode": "horizontal",
+      "scale": 2,
+      "itemCount": 13,
+      "width": 1434,
+      "height": 112,
+      "draws": 800,
+      "wallMsPerDraw": 2.5026,
+      "cpuMsPerDraw": 2.5195,
+      "allocatedBytesPerDraw": 4640,
+      "projectedWholeMachineCpuAt10Hz": 0.1575,
+      "excludes": "\u7A97\u53E3\u5448\u73B0\u3001\u684C\u9762\u5408\u6210\u3001\u900F\u660E\u6548\u679C\u3001\u4EFB\u52A1\u680F\u3001\u786C\u4EF6\u91C7\u96C6\u3001\u63D2\u4EF6"
+    }
+  ],
+  "fpsState": {
+    "deadPidRetention": [
+      {
+        "kind": "fps_dead_pid_retention",
+        "seededDeadPids": 0,
+        "retainedPidsInFrameCounts": 0,
+        "observedCycles": 12,
+        "processQueryExceptions": 0,
+        "costCycles": 5797847,
+        "wallMsPerCycle": 0.0003,
+        "cpuMsPerCycle": 0.0003,
+        "allocatedBytesPerCycle": 0,
+        "projectedWholeMachineCpuAt2Hz": 0,
+        "presentMonStarted": false,
+        "note": "\u53EA\u8C03\u7528\u5B9E\u9645\u7EDF\u8BA1\u65B9\u6CD5\uFF0C\u672A\u542F\u52A8\u5916\u90E8\u670D\u52A1\uFF1B\u6B8B\u7559\u8BB0\u5F55\u6570\u662F\u6E05\u7406\u7F3A\u9677\u7684\u76F4\u63A5\u8BC1\u636E\u3002"
+      },
+      {
+        "kind": "fps_dead_pid_retention",
+        "seededDeadPids": 1,
+        "retainedPidsInFrameCounts": 1,
+        "observedCycles": 12,
+        "processQueryExceptions": 12,
+        "costCycles": 213596,
+        "wallMsPerCycle": 0.007,
+        "cpuMsPerCycle": 0.0071,
+        "allocatedBytesPerCycle": 584,
+        "projectedWholeMachineCpuAt2Hz": 9E-05,
+        "presentMonStarted": false,
+        "note": "\u53EA\u8C03\u7528\u5B9E\u9645\u7EDF\u8BA1\u65B9\u6CD5\uFF0C\u672A\u542F\u52A8\u5916\u90E8\u670D\u52A1\uFF1B\u6B8B\u7559\u8BB0\u5F55\u6570\u662F\u6E05\u7406\u7F3A\u9677\u7684\u76F4\u63A5\u8BC1\u636E\u3002"
+      },
+      {
+        "kind": "fps_dead_pid_retention",
+        "seededDeadPids": 10,
+        "retainedPidsInFrameCounts": 10,
+        "observedCycles": 12,
+        "processQueryExceptions": 120,
+        "costCycles": 22481,
+        "wallMsPerCycle": 0.0667,
+        "cpuMsPerCycle": 0.0667,
+        "allocatedBytesPerCycle": 5336.1,
+        "projectedWholeMachineCpuAt2Hz": 0.00083,
+        "presentMonStarted": false,
+        "note": "\u53EA\u8C03\u7528\u5B9E\u9645\u7EDF\u8BA1\u65B9\u6CD5\uFF0C\u672A\u542F\u52A8\u5916\u90E8\u670D\u52A1\uFF1B\u6B8B\u7559\u8BB0\u5F55\u6570\u662F\u6E05\u7406\u7F3A\u9677\u7684\u76F4\u63A5\u8BC1\u636E\u3002"
+      },
+      {
+        "kind": "fps_dead_pid_retention",
+        "seededDeadPids": 100,
+        "retainedPidsInFrameCounts": 100,
+        "observedCycles": 12,
+        "processQueryExceptions": 1200,
+        "costCycles": 2282,
+        "wallMsPerCycle": 0.6574,
+        "cpuMsPerCycle": 0.6573,
+        "allocatedBytesPerCycle": 52856.7,
+        "projectedWholeMachineCpuAt2Hz": 0.00822,
+        "presentMonStarted": false,
+        "note": "\u53EA\u8C03\u7528\u5B9E\u9645\u7EDF\u8BA1\u65B9\u6CD5\uFF0C\u672A\u542F\u52A8\u5916\u90E8\u670D\u52A1\uFF1B\u6B8B\u7559\u8BB0\u5F55\u6570\u662F\u6E05\u7406\u7F3A\u9677\u7684\u76F4\u63A5\u8BC1\u636E\u3002"
+      }
+    ],
+    "webHiddenFps": {
+      "kind": "web_hidden_fps_read",
+      "visibleInPanel": false,
+      "visibleInTaskbar": false,
+      "presentMonStarted": false,
+      "outputContainsFps": true,
+      "fpsReadRequested": true,
+      "note": "\u5408\u6210\u72B6\u6001\u4E3A\u300C\u5DF2\u8FD0\u884C\u3001\u65E0\u7ED3\u679C\u300D\uFF0C\u907F\u514D\u542F\u52A8\u5916\u90E8\u670D\u52A1\uFF1B\u8BC1\u660E\u7684\u662F\u9690\u85CF FPS \u88AB\u8BFB\u53D6\u3002"
+    }
+  },
+  "metadata": {
+    "probeUtc": "2026-10-20T00:26:00.0855252Z",
+    "machineName": "QINGLING",
+    "os": "Microsoft Windows NT 10.0.26300.0",
+    "processorCount": 16,
+    "framework": ".NET 8.0.32",
+    "runtimeIdentifier": "win-x64",
+    "processArchitecture": "X64",
+    "baseDirectory": "G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\output\\",
+    "outputDirectory": "G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\baseline",
+    "gitHead": "5a8bb4c2caab6ee915f239c8a154711057e92fd9",
+    "mainAssemblyPath": "G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\output\\LiteMonitor\u002B\u002B.dll",
+    "mainAssemblySha256": "C0ECB22E93ABCC0640C9E3107379CD9B824F65AAC9AB776A0CF8356EB05D0911",
+    "probeAssemblySha256": "C4D089EFE796C66A6FDC8F84098D311938297B45F7C09314D13466A2D06250C9",
+    "isAdministrator": false,
+    "readyNote": "\u521D\u59CB\u5316\u5B8C\u6210\uFF0C\u7528\u65F6 0.8s\uFF0C\u679A\u4E3E\u5230 12 \u4E2A\u786C\u4EF6\u5BF9\u8C61\u3002",
+    "hardwareInventory": [
+      {
+        "name": "MSI MEG X570 UNIFY (MS-7C35)",
+        "type": "Motherboard",
+        "sensorCount": 0,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "AMD Ryzen 7 5800X",
+        "type": "Cpu",
+        "sensorCount": 64,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "Virtual Memory",
+        "type": "Memory",
+        "sensorCount": 3,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "Total Memory",
+        "type": "Memory",
+        "sensorCount": 3,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "NVIDIA GeForce RTX 3080 Ti",
+        "type": "GpuNvidia",
+        "sensorCount": 38,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "NVIDIA GeForce RTX 3080",
+        "type": "GpuNvidia",
+        "sensorCount": 38,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "Radmin VPN",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "WLAN 8",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "\u4EE5\u592A\u7F51 3",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "\u4EE5\u592A\u7F51 5",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "\u672C\u5730\u8FDE\u63A5* 1",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "\u672C\u5730\u8FDE\u63A5* 2",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      }
+    ],
+    "temperatureSensors": [
+      {
+        "device": "AMD Ryzen 7 5800X",
+        "sensor": "Core (Tctl/Tdie)",
+        "value": 0
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080 Ti",
+        "sensor": "GPU Core",
+        "value": 57
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080 Ti",
+        "sensor": "GPU Hot Spot",
+        "value": 65.84375
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080 Ti",
+        "sensor": "GPU Memory Junction",
+        "value": 64
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080",
+        "sensor": "GPU Core",
+        "value": 35
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080",
+        "sensor": "GPU Hot Spot",
+        "value": 45.875
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080",
+        "sensor": "GPU Memory Junction",
+        "value": 46
+      }
+    ],
+    "settingsSummary": {
+      "refreshMs": 3000,
+      "webServerEnabled": true,
+      "webServerPort": 14415,
+      "monitoredGpuCount": 1,
+      "useWinPerCounters": true,
+      "alertTempEnabled": false,
+      "monitorItems": [
+        {
+          "key": "DASH.HOST",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DASH.Time",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DASH.Uptime",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DASH.IP",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CPU.Load",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "CPU.Temp",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "CPU.Clock",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CPU.Power",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CPU.Voltage",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CPU.Fan",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CPU.Pump",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "MEM.Load",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "FPS",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "MOBO.Temp",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DISK.Temp",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CASE.Fan",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "BAT.Percent",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "BAT.Power",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "BAT.Voltage",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "BAT.Current",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DISK.Read",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DISK.Write",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "NET.Up",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "NET.Down",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "DATA.DayUp",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DATA.DayDown",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "GPU.0.Load",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "GPU.0.Temp",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "GPU.0.Clock",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "GPU.0.Power",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "GPU.0.Fan",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "GPU.0.VRAM",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        }
+      ]
+    }
+  },
+  "finishedAt": "2026-10-20T08:26:00.2006539\u002B08:00",
+  "log": "[08:13:54] LiteMonitor\u002B\u002B \u6027\u80FD\u63A2\u9488 \u542F\u52A8\u4E8E 2026-10-20 08:13:54\r\n[08:13:54] \u53C2\u6570: --out tests\\LiteMonitor.PerformanceProbe\\baseline\r\n[08:13:54] \u9694\u79BB\u8F93\u51FA\u76EE\u5F55 (AppContext.BaseDirectory): G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\output\\\r\n[08:13:54] \u7ED3\u679C\u76EE\u5F55: G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\baseline\r\n[08:13:54] \u9A71\u52A8\u5C31\u7EEA\u68C0\u67E5: {\u0022needsInstall\u0022:false,\u0022status\u0022:\u0022Ready\u0022,\u0022note\u0022:\u0022\\u53EA\\u8BFB\\u68C0\\u67E5\\uFF0C\\u672A\\u5B89\\u88C5/\\u5378\\u8F7D\\u4EFB\\u4F55\\u9A71\\u52A8\\u3002\u0022}\r\n[08:13:58] \u786C\u4EF6\u5C31\u7EEA: {\u0022ready\u0022:true,\u0022note\u0022:\u0022\\u521D\\u59CB\\u5316\\u5B8C\\u6210\\uFF0C\\u7528\\u65F6 0.8s\\uFF0C\\u679A\\u4E3E\\u5230 12 \\u4E2A\\u786C\\u4EF6\\u5BF9\\u8C61\\u3002\u0022,\u0022driverNeedsInstall\u0022:false,\u0022driverStatus\u0022:\u0022\\u0022Ready\\u0022\u0022}\r\n[08:13:59] LHM Update \u8BA1\u6570\u4EE3\u7406\u5B89\u88C5: True \u8BCA\u65AD: {\u0022groupCount\u0022:9,\u0022hardwareListIsLive\u0022:false,\u0022injectedDevices\u0022:[\u0022Virtual Memory [Memory]\u0022,\u0022Total Memory [Memory]\u0022,\u0022NVIDIA GeForce RTX 3080 Ti [GpuNvidia]\u0022,\u0022NVIDIA GeForce RTX 3080 [GpuNvidia]\u0022],\u0022notInjectableGroups\u0022:[\u0022MotherboardGroup\u0022,\u0022CpuGroup\u0022,\u0022AmdGpuGroup\u0022,\u0022StorageGroup\u0022,\u0022NetworkGroup\u0022,\u0022BatteryGroup\u0022],\u0022proxyCount\u0022:4,\u0022updateCallsObservedAfterInstall\u0022:1,\u0022countersWorking\u0022:true}\r\n[08:13:59] --- \u5F00\u59CB\u5206\u7EC4 A: 1000 ms\u3001\u9ED8\u8BA4\u5355\u5361\u3001Web \u5173\uFF1A\u4FDD\u62A4\u9ED8\u8BA4\u6A21\u5F0F\u6210\u672C (\u9884\u70ED 15s / \u7A33\u6001 60s)\r\n[08:15:14] --- \u5206\u7EC4 A \u5B8C\u6210: 60 \u8F6E, \u6574\u673A CPU 0.2243%\r\n[08:15:17] --- \u5F00\u59CB\u5206\u7EC4 B: 100 ms\u3001\u9ED8\u8BA4\u5355\u5361\u3001Web \u5173\uFF1A\u9A8C\u8BC1\u9AD8\u5237\u65B0\u653E\u5927\u786C\u4EF6\u91C7\u96C6 (\u9884\u70ED 15s / \u7A33\u6001 60s)\r\n[08:16:32] --- \u5206\u7EC4 B \u5B8C\u6210: 590 \u8F6E, \u6574\u673A CPU 1.5217%\r\n[08:16:35] --- \u5F00\u59CB\u5206\u7EC4 C: 100 ms\u3001GPU \u9879\u5168\u5173\u3001Web \u5173\uFF1A\u5BF9\u7167\u5269\u4F59\u57FA\u7840\u6210\u672C (\u9884\u70ED 15s / \u7A33\u6001 60s)\r\n[08:17:50] --- \u5206\u7EC4 C \u5B8C\u6210: 600 \u8F6E, \u6574\u673A CPU 0.0895%\r\n[08:17:53] --- \u5F00\u59CB\u5206\u7EC4 D: 100 ms\u3001Web \u5F00\u4E14\u65E0\u4EBA\u8BBF\u95EE\uFF1A\u9A8C\u8BC1\u7A7A\u95F2\u670D\u52A1\u4E0D\u6269\u5927\u8303\u56F4 (\u9884\u70ED 15s / \u7A33\u6001 60s)\r\n[08:19:08] --- \u5206\u7EC4 D \u5B8C\u6210: 300 \u8F6E, \u6574\u673A CPU 1.573%\r\n[08:19:11] --- \u5F00\u59CB\u5206\u7EC4 E: 100 ms\u3001\u5355\u4E2A\u5DF2\u9274\u6743\u7F51\u9875\uFF1A\u8FDE\u63A5\u6D3B\u52A8\u65F6\u6570\u636E\u6B63\u786E\u4E14\u9650\u9891 (\u9884\u70ED 15s / \u7A33\u6001 60s)\r\n[08:20:26] --- \u5206\u7EC4 E \u5B8C\u6210: 300 \u8F6E, \u6574\u673A CPU 1.5648%\r\n[08:20:29] --- \u5F00\u59CB\u5206\u7EC4 F: 100 ms\u3001\u591A\u7F51\u9875 \u002B HTTP \u8F6E\u8BE2\uFF1A\u9A8C\u8BC1\u591A\u6D88\u8D39\u8005\u5171\u7528\u91C7\u6837 (\u9884\u70ED 15s / \u7A33\u6001 60s)\r\n[08:21:44] --- \u5206\u7EC4 F \u5B8C\u6210: 300 \u8F6E, \u6574\u673A CPU 1.5938%\r\n[08:21:47] --- \u5F00\u59CB\u5206\u7EC4 G: 100 ms\u3001\u591A\u5361\u672C\u5730\u76D1\u63A7\uFF1A\u6BCF\u5F20\u542F\u7528\u5361\u5747\u6B63\u786E (\u9884\u70ED 15s / \u7A33\u6001 60s)\r\n[08:23:02] --- \u5206\u7EC4 G \u5B8C\u6210: 300 \u8F6E, \u6574\u673A CPU 1.5373%\r\n[08:23:05] --- \u5F00\u59CB\u5206\u7EC4 H1: 3000 ms\u3001Web \u5173\uFF1A\u6162\u5237\u65B0\u7701\u7535 (\u9884\u70ED 15s / \u7A33\u6001 60s)\r\n[08:24:21] --- \u5206\u7EC4 H1 \u5B8C\u6210: 20 \u8F6E, \u6574\u673A CPU 0.0471%\r\n[08:24:24] --- \u5F00\u59CB\u5206\u7EC4 H2: 3000 ms\u3001Web \u5F00\u4E14\u6709\u5408\u6CD5\u7F51\u9875\uFF1A\u72EC\u7ACB Web \u9700\u6C42 (\u9884\u70ED 15s / \u7A33\u6001 60s)\r\n[08:25:39] --- \u5206\u7EC4 H2 \u5B8C\u6210: 20 \u8F6E, \u6574\u673A CPU 0.0926%\r\n[08:25:42] --- \u5355\u8BBE\u5907 Update \u6210\u672C\u6D4B\u91CF\r\n[08:25:45] --- \u517C\u5BB9\u7F13\u51B2\u7ED8\u5236\u5FAE\u57FA\u51C6\r\n[08:25:54] --- FPS \u72B6\u6001\u8BC1\u636E\uFF08\u4E0D\u542F\u52A8\u5916\u90E8\u670D\u52A1\uFF09\r\n"
+}

@@ -226,6 +226,8 @@ namespace LiteMonitor.src.UI.SettingsPage
                 () => (Config?.RefreshMs ?? 1000) + " ms",
                 v => { if (Config != null) Config.RefreshMs = MetricUtils.ParseInt(v); }
             );
+            // ★ 说明：刷新频率只决定界面重绘节奏，普通硬件数据的采集上限是每秒一次
+            group.AddHint(LanguageManager.T("Menu.RefreshTip"));
 
             // ★★★ 修复：强制转换为 LiteComboBox ★★★
             _cbDisk = (LiteComboBox)group.AddCombo(this, "Menu.DiskSource", new List<string> { strAuto }, 

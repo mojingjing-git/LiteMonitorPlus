@@ -130,6 +130,8 @@
     "WebServerPasswordTip": "Empty for none",
     "OpenWeb": "Open Web",
     "WebServerTip": "Web enabled. Mobile access via LAN 'IP:Port' or remote 'IPv6:Port'.",
+    "WebServerFps": "Web FPS",
+    "WebServerFpsTip": "When on, the web page also collects frame rate. It needs an extra tool and adds sampling overhead.",
 
     "Appearance": "Appearance",
     "Theme": "Theme",
@@ -229,6 +231,7 @@
     "UseWinPerCounters": "Use Sys Counters",
     "UseWinPerCountersTip": "Disable if inaccurate. CPU/GPU/MEM/DISK read from sensors.",
     "Refresh": "Rate",
+    "RefreshTip": "This only sets how often the interface redraws. Normal hardware data is sampled at most once per second, so a smaller value does not sample more often.",
     "IgnoreSMBTraffic": "Ignore SMB Traffic",
     "MemoryDisplayMode": "RAM Display",
 
