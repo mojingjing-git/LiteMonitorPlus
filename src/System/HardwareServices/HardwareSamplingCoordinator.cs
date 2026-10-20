@@ -386,12 +386,20 @@ namespace LiteMonitor.src.SystemServices
         {
             bool success = false;
             int generation = 0;
+            // ★ 关闭期早退标记：这一轮采集"按要求没有开始"，
+            //   既不是成功也不是失败，绝不能被计入 FailedCollections。
+            bool skipped = false;
 
             try
             {
                 lock (_gate)
                 {
-                    if (_disposed) return;   // 关闭过程中不再开始新的真实采集
+                    if (_disposed)
+                    {
+                        // 关闭过程中不再开始新的真实采集
+                        skipped = true;
+                        return;
+                    }
                     generation = ++_generation;
                 }
 
@@ -443,8 +451,14 @@ namespace LiteMonitor.src.SystemServices
                     _running = null;
                 }
 
-                double durationMs = _time.GetElapsedTime(start, end).TotalMilliseconds;
-                _statistics.RecordCollectionFinished(generation, success, durationMs);
+                if (!skipped)
+                {
+                    // 只有真正跑过的采集才记结果。
+                    // ★ 关闭期被跳过的采集**不是失败**：不记 FailedCollections，
+                    //   也不写耗时（根本没有采集动作发生）。
+                    double durationMs = _time.GetElapsedTime(start, end).TotalMilliseconds;
+                    _statistics.RecordCollectionFinished(generation, success, durationMs);
+                }
 
                 // ★ 必须先完成 Task，再调用外部回调。
                 //   starter.Task 是 RequestCollectionAsync 返回给调用方的唯一完成信号，
