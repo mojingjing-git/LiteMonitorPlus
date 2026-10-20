@@ -5,6 +5,7 @@ using System.Runtime.InteropServices; // ★★★ 新增：引用用于内存�
 using System.Reflection; // ★★★ 新增：用于反射关闭历史记录
 using LibreHardwareMonitor.Hardware;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.WebServer; // ★ FPS 需求规则的**单一来源**（WebFpsDemand）
 using System.Linq;
 using System.Threading;
 
@@ -12,6 +13,9 @@ namespace LiteMonitor.src.SystemServices
 {
     public sealed class HardwareMonitor : IDisposable
     {
+        /// <summary>界面刷新间隔的默认值（毫秒）。RefreshMs 非法时回退到它。</summary>
+        public const int DefaultRefreshMs = 1000;
+
         #region Singleton & Events
         public static HardwareMonitor? Instance { get; private set; }
         public event Action? OnValuesUpdated;
@@ -47,17 +51,68 @@ namespace LiteMonitor.src.SystemServices
         private volatile bool _isReloading = false;
         private volatile bool _isOpening = false;
 
+        // ★★★ [限频] 采集就绪状态 ★★★
+        // _isOpening == false 只说明"没有正在打开"，不代表初始化已经成功完成。
+        // 构造后到异步初始化结束之间存在一个短窗口，这期间不允许发生真实采集。
+        private volatile bool _isReady = false;
+        private volatile bool _disposed = false;
+
+        // 采样协调器 (唯一真实采集入口) + 低开销统计计数器
+        private readonly HardwareSamplingStatistics _samplingStatistics;
+        private readonly HardwareSamplingCoordinator _coordinator;
+
+        // ★ 设备 Update 计数入口：网卡 / 磁盘由子管理器计数，采集层不重复记。
+        private readonly HardwareDeviceUpdateCounter _deviceCounter;
+
+        // ★ 单调截止时间调度 (慢扫描 / 磁盘后台扫描)。
+        private readonly HardwareSamplingSchedule _schedule;
+
+        // ★ 维护任务调度器：**本实例自己持有**（计划 §4.3「周期状态属于正确的服务实例」）。
+        //   不用进程级静态实例，避免多实例互相污染。
+        private readonly MaintenanceScheduler _maintenance;
+
+        // Web 有效数据需求 (由 Web 层在存在合法需求时调用 SetWebDataDemand 写入)。
+        private volatile bool _webDataDemand = false;
+
         // 计时器相关
         private long _tickCounter = 0;
         private double _secondAccumulator = 0;
         private long _secondsCounter = 0;
-        private DateTime _lastTrafficTime = DateTime.Now;
+
+        // ★ 单调时钟：采集间隔不再用墙上时间（系统时间回拨不会产生负 delta）。
+        private readonly TimeProvider _time = TimeProvider.System;
+        private long _lastTrafficTimestamp;
+        private bool _hasTrafficTimestamp;
         #endregion
 
         #region Public Properties
         // [新增] 允许 UI 层访问原始硬件树（用于硬件信息面板）
         public IComputer ComputerInstance => _computer;
         public object SyncLock => _lock;
+
+        /// <summary>
+        /// 采集统计快照入口（低开销计数器）。
+        /// 探针 / 后续阶段用它统计真实采集轮数、每设备 Update 次数、慢扫描与维护触发次数。
+        /// </summary>
+        public HardwareSamplingStatistics SamplingStatistics => _samplingStatistics;
+
+        /// <summary>当前采集代次编号（每完成一次真实采集 +1）。</summary>
+        public int SamplingGeneration => _coordinator.Generation;
+
+        /// <summary>硬件层是否已完成初始化（可以真实采集）。</summary>
+        public bool IsReady => _isReady;
+
+        /// <summary>
+        /// 当前是否存在**可用的 FPS 数据**。
+        ///
+        /// 语义（供 Web 层区分"真 0 FPS"和"未启用 / 首帧未到"）：
+        ///  - true  ：FPS 采集服务已在跑且有可上报的帧数据，<see cref="FpsCounter.GetFps"/> 的值可信；
+        ///  - false ：没有 FPS 需求、服务没启动，或启动后首帧还没到 ——
+        ///             此时网页/界面应输出 "--" 之类的**未启用占位**，不能把 0 当成真实的 0 FPS。
+        ///
+        /// 转发自 <see cref="FpsCounter.HasFpsData"/>。
+        /// </summary>
+        public bool HasFpsData => _fpsCounter?.HasFpsData ?? false;
         #endregion
 
         #region Constructor
@@ -103,7 +158,43 @@ namespace LiteMonitor.src.SystemServices
             _driverInstaller = new DriverInstaller(cfg, ReloadComputerSafe, ReleaseComputerForDriverInstall);
             _fpsCounter = new FpsCounter(_driverInstaller); // <--- 新增
 
-            // ★★★ [修改] 2. 将 Manager 注入给 ValueProvider ★★★
+            // ★ FPS 需求探针（计划 §4.4）：
+            //   FpsCounter 用它决定"要不要启动 / 保持外部 FPS 采集服务"。
+            //   规则**单一来源**：直接复用 WebFpsDemand.IsFpsDemand（网页 "--" 占位用同一套规则），
+            //   否则会出现「网页显示 -- 但服务在跑」或「网页报 0 但服务没跑」的不一致。
+            AttachFpsDemandProbe(_fpsCounter, _cfg, () => _webDataDemand);
+
+            // ★★★ [修改] 2. 采集统计计数器 + 调度 + 设备计数入口 ★★★
+            _samplingStatistics = new HardwareSamplingStatistics();
+
+            // 设备 Update 计数入口：网卡 / 磁盘的**精确**计数由子管理器负责
+            // （NetworkManager / DiskManager 只在真的执行了 hw.Update() 时计数），
+            // 采集层只负责 CPU / 显卡 / 内存 / 电池 / 主板，避免同一个 Key 被记两遍。
+            _deviceCounter = new HardwareDeviceUpdateCounter(_samplingStatistics);
+
+            // 慢扫描 / 磁盘后台扫描改用**单调截止时间**（同一到期时间只消费一次）。
+            _schedule = new HardwareSamplingSchedule();
+
+            // 维护任务调度器由**本实例**持有（流量保存 5s/60s、GC 30s/180s、工作集 45s/300s）。
+            _maintenance = SystemOptimizer.CreateScheduler();
+
+            // ★ 网卡 / 磁盘的真实 Update 次数接线（A2a 提供属性，这里只接上统计实例）
+            _networkManager.SamplingStatistics = _samplingStatistics;
+            _diskManager.SamplingStatistics = _samplingStatistics;
+
+            // 3. 采集协调器: 唯一真实采集入口 (单调时钟门限 + 并发合并 + 代次)
+            //    ★ 必须先于 ValueProvider 构造：Provider 的"设备选择变更"回调要调用
+            //      协调器的 Invalidate()（让该轮被记为**例外采集**）。
+            _coordinator = new HardwareSamplingCoordinator(
+                periodProvider: ComputeEffectivePeriodMs,
+                sampler: CollectAsync,
+                onCollectionStarted: OnCollectionStarted,
+                onCollectionCompleted: OnCollectionCompleted,
+                statistics: _samplingStatistics,
+                // ★ 采集落定回调：作废"采集中途被读到并写进缓存的旧值"（闭合钉住旧值的窗口）
+                onCollectionSettled: OnCollectionSettled);
+
+            // 4. 将 Manager 注入给 ValueProvider
             _valueProvider = new HardwareValueProvider(
                 _computer, 
                 cfg, 
@@ -113,10 +204,12 @@ namespace LiteMonitor.src.SystemServices
                 _fpsCounter, 
                 _perfCounterManager, 
                 _lock, 
-                _lastValidMap
+                _lastValidMap,
+                _samplingStatistics,
+                onDeviceSelectionChanged: () => _coordinator.Invalidate()
             );
 
-            // 3. 异步启动 (唯一优化：不卡UI)
+            // 5. 异步启动 (唯一优化：不卡UI)
             InitializeAsync();
         }
         #endregion
@@ -171,9 +264,151 @@ namespace LiteMonitor.src.SystemServices
             });
         }
 
+        /// <summary>
+        /// 采集入口（兼容外观）：与 <see cref="UpdateIfDueAsync"/> 共用同一套门限与并发保护。
+        ///
+        /// ★ 真实硬件采集现在由 <see cref="HardwareSamplingCoordinator"/> 限频：
+        /// 未到期时这里不会调用 hw.Update()、不会清值缓存、不会推进采集时间。
+        /// </summary>
         public void UpdateAll()
         {
-            if (_isOpening) return;
+            _coordinator.RequestCollection();
+        }
+
+        /// <summary>
+        /// 采集入口（异步）：UI / Web 都通过它请求采样。
+        /// 返回 true 表示本次请求触发（或共享到）了一次真实采集。
+        /// </summary>
+        public Task<bool> UpdateIfDueAsync(CancellationToken cancellationToken = default)
+        {
+            return _coordinator.RequestCollectionAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// 通知采集层"当前有合法的 Web 数据需求"。
+        ///
+        /// ★ 契约（Web 层 / B2 负责调用）：
+        ///  - <paramref name="hasDemand"/> = **已鉴权且尚未关闭的 WebSocket 连接数 &gt; 0**，
+        ///    或**已鉴权的 /api/snapshot 请求仍在租期内**（建议 2 秒租期）；
+        ///  - 未鉴权请求、只取 HTML/favicon、页面还没连上 → 必须传 false；
+        ///  - 最后一个连接关闭且租期过期 → 传 false（本地需求不受影响，会自动恢复）；
+        ///  - Web 服务 Stop / 重启 → 先传 false 清理旧需求。
+        ///
+        /// ★ 语义：它决定"是否按**全量普通指标**需求更新"，**不再**由 WebServerEnabled 开关决定
+        ///   （旧行为是"Web 开关一开就全量采集"，无人访问也会白采）。
+        ///   本地需求（面板/任务栏启用的指标）与它**完全无关**，断开网页不会清空本地需求。
+        /// </summary>
+        public void SetWebDataDemand(bool hasDemand)
+        {
+            _webDataDemand = hasDemand;
+        }
+
+        /// <summary>
+        /// 把 FPS 需求探针接到 <see cref="FpsCounter"/> 上（生产路径：构造函数里调用）。
+        ///
+        /// ★ 规则**单一来源**：探针内部直接复用 <see cref="WebFpsDemand.IsFpsDemand"/>，
+        ///   不在硬件侧另写一份 `local || (web &amp;&amp; WebFpsEnabled)`。
+        ///   网页端的 "--" 占位判断用的就是同一套规则，两边一旦漂移就会出现
+        ///   「网页显示 -- 但服务在跑」或「网页报 0 但服务没跑」的不一致。
+        /// </summary>
+        /// <param name="fpsCounter">目标 FPS 计数器（其 <see cref="FpsCounter.FpsDemandProvider"/> 会被覆盖）。</param>
+        /// <param name="cfg">当前设置（本地 FPS 可见性 + 网页版帧率开关）。</param>
+        /// <param name="webDemand">返回"当前是否有合法的 Web 数据需求"的委托。</param>
+        public static void AttachFpsDemandProbe(FpsCounter fpsCounter, Settings cfg, Func<bool> webDemand)
+        {
+            if (fpsCounter == null) throw new ArgumentNullException(nameof(fpsCounter));
+            fpsCounter.FpsDemandProvider = CreateFpsDemandProbe(cfg, webDemand);
+        }
+
+        /// <summary>
+        /// 创建 FPS 需求探针（供 <see cref="FpsCounter.FpsDemandProvider"/> 使用）。
+        ///
+        /// ★ 规则**单一来源**：直接调用 <see cref="WebFpsDemand.IsFpsDemand"/>，
+        ///   规则本身只有一份实现（网页占位判断与硬件侧启停共用）。
+        ///
+        /// 语义（计划 §4.4）：
+        /// <code>
+        /// localFpsDemand = 本地 FPS 在面板或任务栏启用
+        /// webFpsDemand  = 当前有合法 Web 数据需求 &amp;&amp; WebFpsEnabled
+        /// fpsDemand     = localFpsDemand || webFpsDemand
+        /// </code>
+        ///
+        /// 抽成静态方法是为了能在**不构造 <see cref="HardwareMonitor"/>**（它会打开真实硬件树）
+        /// 的前提下做单元测试 —— 与本文件已有的
+        /// <see cref="HardwareUpdateRequirements.Compute"/> / <see cref="GpuUpdateSelection.ShouldUpdate"/> 同风格。
+        /// </summary>
+        /// <param name="cfg">当前设置（本地 FPS 可见性 + 网页版帧率开关）。</param>
+        /// <param name="webDemand">返回"当前是否有合法的 Web 数据需求"的委托。</param>
+        public static Func<bool> CreateFpsDemandProbe(Settings cfg, Func<bool> webDemand)
+        {
+            if (cfg == null) throw new ArgumentNullException(nameof(cfg));
+            if (webDemand == null) throw new ArgumentNullException(nameof(webDemand));
+
+            return () => WebFpsDemand.IsFpsDemand(cfg, webDemand());
+        }
+
+        /// <summary>
+        /// 计算当前有效的采集周期（毫秒）。
+        /// 规则（计划 §4.1）：普通硬件最高每秒一次；慢刷新用户保留自己的慢周期。
+        /// </summary>
+        private int ComputeEffectivePeriodMs()
+        {
+            int refresh = _cfg.RefreshMs;
+            if (refresh <= 0) refresh = DefaultRefreshMs;
+
+            int localPeriod = Math.Max(HardwareSamplingCoordinator.MinimumPeriodMs, refresh);
+
+            // 有已鉴权的 Web 数据需求时按 1 秒采集（当前阶段 Web 需求恒为 false）
+            if (_webDataDemand) return HardwareSamplingCoordinator.MinimumPeriodMs;
+
+            return localPeriod;
+        }
+
+        /// <summary>采集动作的异步包装（真实工作是同步的）。</summary>
+        private Task CollectAsync(CancellationToken cancellationToken)
+        {
+            CollectOnce();
+            return Task.CompletedTask;
+        }
+
+        /// <summary>采集开始：推进值缓存的采集代次。</summary>
+        private void OnCollectionStarted(int generation)
+        {
+            _valueProvider.OnCollectionStarted(generation);
+        }
+
+        /// <summary>采集结束（目前仅用于诊断）。</summary>
+        private void OnCollectionCompleted(int generation, bool success)
+        {
+            System.Diagnostics.Debug.WriteLine($"[HardwareMonitor] 采集代次 {generation} 结束, 成功={success}");
+        }
+
+        /// <summary>
+        /// 采集落定（在采样动作**之后**调用）。
+        ///
+        /// ★ 作用：采集期间（hw.Update() 还没做完）如果有别的线程读了值，
+        ///   那些"更新前"的旧值会被写进本代次缓存并钉住一整个周期。
+        ///   这里在采集结束后把缓存再作废一次，让下一次读取用更新后的传感器重新算。
+        /// </summary>
+        private void OnCollectionSettled(int generation)
+        {
+            _valueProvider.OnCollectionSettled(generation);
+        }
+
+        /// <summary>
+        /// 一次真实采集（原 UpdateAll 的全部工作）。
+        /// 只有通过协调器门限后才会被调用。
+        ///
+        /// ★ 契约（本方法的**硬性**约定，破坏它会让失败计数虚高一倍）：
+        ///   本方法必须**吞掉所有异常、绝不能把异常再抛出去**。
+        ///   失败由采集层自己记（见 <see cref="RecordCollectionFailure"/>），
+        ///   而协调器只在采样动作**抛出**异常时才会再记一次失败；
+        ///   一旦这里把异常上抛，同一次失败就会被记两次（FailedCollections 翻倍）。
+        /// </summary>
+        private void CollectOnce()
+        {
+            if (_disposed) return;
+            if (!_isReady) return;   // 尚未就绪：不发生真实采集
 
             // [Fix #290] 标记是否需要触发重载（因硬件变更或故障）
             bool needsReload = false;
@@ -185,8 +420,6 @@ namespace LiteMonitor.src.SystemServices
 
                 // 2. 计算更新需求
                 var requirements = CheckUpdateRequirements();
-
-                _valueProvider.OnUpdateTickStarted();
 
                 lock (_lock)
                 {
@@ -200,41 +433,58 @@ namespace LiteMonitor.src.SystemServices
                         _valueProvider.PreCacheAllSensors(_sensorMap);
                     }
 
-                    // 3秒一次 (慢速扫描)
-                    bool isSlowScanTick = (_secondsCounter % 3 == 0); 
-                    // 10秒一次 (磁盘后台扫描)
-                    bool needDiskBgScan = (_secondsCounter % 10 == 0);
+                    // 主板/SuperIO、非目标网卡：不快于每 3 秒一次
+                    // ★ 改用**单调截止时间**（同一到期时间只消费一次；跳过若干周期后最多执行一次）。
+                    //   旧实现是 `_secondsCounter % 3 == 0`：同一个到期秒里被调用 N 次就会消费 N 次，
+                    //   而且依赖墙上时间（系统时间回拨会让到期判断失真）。
+                    bool isSlowScanTick = _schedule.TryConsumeSlowScan();
+                    // 磁盘后台扫描：不快于每 10 秒一次（同样改用单调截止时间）
+                    bool needDiskBgScan = _schedule.TryConsumeDiskBackgroundScan();
+
+                    if (isSlowScanTick) _samplingStatistics.RecordSlowScanTrigger();
+                    if (needDiskBgScan) _samplingStatistics.RecordDiskBackgroundScanTrigger();
 
                     foreach (var hw in _computer.Hardware)
                     {
-                        if (hw.HardwareType == HardwareType.Cpu && requirements.NeedCpu) { hw.Update(); continue; }
+                        if (hw.HardwareType == HardwareType.Cpu && requirements.NeedCpu) { UpdateDevice(hw, "Cpu"); continue; }
                         
                         // [Fix #290] 显卡防闪退保护：双显卡切换时 Update 可能抛出异常
                         if (IsGpu(hw) && requirements.NeedGpu) 
                         { 
-                            if (!requirements.ForceAll && !ShouldUpdateGpuHardware(hw)) continue;
+                            // ★ 全量普通指标需求（Web）**不得**绕过显卡选择：
+                            //   只更新"当前可输出的 GPU key"对应的卡（监控卡集合 + 首选卡）。
+                            //   MonitoredGpuCount=1 的 Web 不会隐式更新两张物理卡；
+                            //   配置两卡时两卡都在监控集合里，都会更新。编号与首选卡规则保持不变。
+                            if (!ShouldUpdateGpuHardware(hw)) continue;
 
-                            try { hw.Update(); }
+                            try { hw.Update(); RecordDeviceUpdate(hw, "Gpu"); }
                             catch (Exception ex)
                             {
-                                HardwareErrorLog.Write("UpdateAll.GPU", ex);
+                                // ★ 显卡更新失败必须可观测：否则 FailedCollections 是恒零的死指标。
+                                //   走统一的失败计数接缝（写日志 + 记一次失败采集，顺序与改动前一致）。
+                                RecordCollectionFailure(_samplingStatistics, ex, "UpdateAll.GPU");
                                 System.Diagnostics.Debug.WriteLine($"[GPU Error] Update failed: {ex.Message}");
                                 needsReload = true;
                             }
                             continue; 
                         }
 
-                        if (hw.HardwareType == HardwareType.Memory && requirements.NeedMem) { hw.Update(); continue; }
-                        if (hw.HardwareType == HardwareType.Battery && requirements.NeedBat) { hw.Update(); continue; }
+                        if (hw.HardwareType == HardwareType.Memory && requirements.NeedMem) { UpdateDevice(hw, "Memory"); continue; }
+                        if (hw.HardwareType == HardwareType.Battery && requirements.NeedBat) { UpdateDevice(hw, "Battery"); continue; }
 
                         if (hw.HardwareType == HardwareType.Network && requirements.NeedNet)
                         {
                             // ★★★ 修复：使用正确的 timeDelta，而不是 requirements.TimeDelta (它是0) ★★★
                             _networkManager.ProcessUpdate(hw, _cfg, timeDelta, isSlowScanTick);
+                            // ★ 网卡的 Update 计数由 NetworkManager 负责
+                            //   （它只在**真的执行了 hw.Update()** 时计数，Key 格式 "类型:名称"）。
+                            //   采集层**不再**重复计数，否则同一个 Key 会被记两遍。
                             continue;
                         }
                         if (hw.HardwareType == HardwareType.Storage && requirements.NeedDisk)
                         {
+                            // ★ 必须为每个 Storage 设备调用 ProcessUpdate，否则后台磁盘永远不会被更新。
+                            //   磁盘的 Update 计数同样由 DiskManager 负责（只在真的 Update 时计数）。
                             _diskManager.ProcessUpdate(hw, _cfg, isSlowScanTick, needDiskBgScan);
                             continue;
                         }
@@ -248,18 +498,34 @@ namespace LiteMonitor.src.SystemServices
                              if (isSlowScanTick)
                              {
                                  UpdateWithSubHardware(hw);
+                                 RecordDeviceUpdate(hw, "Motherboard");
                              }
                              continue;
                         }
                     }
                 }
-                
-                // 任务错峰执行 (调用 SystemOptimizer)
-                SystemOptimizer.RunMaintenanceTasks(_secondsCounter);
+
+                // 任务错峰执行 (维护任务)
+                // ★ 维护调度由**本实例持有的** MaintenanceScheduler 驱动（单调截止时间：
+                //   流量保存 5s/60s、GC 30s/180s、工作集 45s/300s，同一到期时间只消费一次）。
+                //   计数记在 RunDueTasks() 返回的"本次**真正到期并被消费**"的任务上，
+                //   而不是按旧的整数秒取模语义推算
+                //   （旧口径会出现"同一到期秒被消费十次"的记账版本缺陷）。
+                MaintenanceRunResult maintenance = _maintenance.RunDueTasks();
+                RecordMaintenanceTriggers(_samplingStatistics, maintenance);
                 
                 OnValuesUpdated?.Invoke();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // ★ 异常必须可观测：写错误日志 + 记一次失败采集。
+                //   旧实现是 `catch { }`：全部异常被吞掉 → 协调器收到的 sampler 永远不抛 →
+                //   协调器的 catch 与 success=false 分支在生产永远不发生 →
+                //   交付出去的 FailedCollections 是**恒零的死指标**。
+                //   ★ 这里**绝不能**再把异常抛出去：采集层已经记过一次失败，
+                //   再上抛会让协调器把同一次失败**再记一次**（失败计数虚高一倍）。
+                RecordCollectionFailure(_samplingStatistics, ex, "CollectOnce");
+            }
 
             // [Fix #290] 硬件故障自动恢复
             // 如果检测到 GPU 丢失或驱动崩溃，触发安全重载以刷新硬件列表
@@ -284,16 +550,62 @@ namespace LiteMonitor.src.SystemServices
             }
         }
 
+        /// <summary>更新一个设备并记录计数。</summary>
+        private void UpdateDevice(IHardware hw, string category)
+        {
+            hw.Update();
+            RecordDeviceUpdate(hw, category);
+        }
+
+        /// <summary>
+        /// 记录一次设备更新次数（Key 形如 "GPU.0" / "Cpu:xxx"）。
+        ///
+        /// ★ 网卡（Network）与磁盘（Storage）**不在这里计数**：
+        ///   它们的精确 Update 次数由 NetworkManager / DiskManager 记录
+        ///   （只在真的执行了 hw.Update() 时计数），采集层再记一次会让同一个 Key 被记两遍。
+        /// </summary>
+        private void RecordDeviceUpdate(IHardware hw, string category)
+        {
+            _deviceCounter.Record(BuildDeviceKey(hw), category);
+        }
+
+        /// <summary>
+        /// 构造设备计数 Key。
+        /// 显卡用应用里的编号 ("GPU.0" / "GPU.1")，与界面上的 Key 一一对应；
+        /// 其它设备用 "类型:名称"。
+        /// </summary>
+        private string BuildDeviceKey(IHardware hw)
+        {
+            if (IsGpu(hw))
+            {
+                var gpus = _sensorMap.CachedGpus;
+                for (int i = 0; i < gpus.Count; i++)
+                {
+                    if (ReferenceEquals(gpus[i], hw)) return "GPU." + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+                return "GPU:" + hw.Name;
+            }
+            return hw.HardwareType + ":" + hw.Name;
+        }
+
         public void CleanMemory(Action<int>? onProgress = null) => SystemOptimizer.CleanMemory(onProgress);
 
         public void Dispose()
         {
-            // ★★★ 核心修复：加锁！防止与正在运行的 UpdateAll() 冲突 ★★★
+            if (_disposed) return;
+            _disposed = true;
+
+            // ★★★ 关闭顺序：先停止接受新的采集请求，再等在途采集结束，最后关闭硬件 ★★★
+            //   否则可能在对已关闭的 Computer 上执行 hw.Update()。
+            _coordinator.Dispose();
+            _coordinator.WaitForIdle(TimeSpan.FromSeconds(2));
+
+            // ★★★ 核心修复：加锁！防止与正在运行的采集任务冲突 ★★★
             lock (_lock)
             {
                 try 
                 {
-                    // 将 Close 操作放入锁内，确保此时 UpdateAll 不在运行
+                    // 将 Close 操作放入锁内，确保此时采集任务不在运行
                     _computer.Close(); 
                 }
                 catch (Exception ex)
@@ -374,6 +686,14 @@ namespace LiteMonitor.src.SystemServices
                 finally
                 {
                     _isOpening = false;
+
+                    // 初始化尝试结束（成功或失败都算结束）：此后允许采集。
+                    // 失败时硬件树是空的，采集会自然空转，不影响性能计数器兜底取值。
+                    if (!_disposed)
+                    {
+                        _isReady = true;
+                        _coordinator.SetReady(true);
+                    }
                 }
             });
         }
@@ -440,15 +760,22 @@ namespace LiteMonitor.src.SystemServices
             _tickCounter++;
             
             // 2. 计算精确时间差 (仅用于网速计算)
-            DateTime now = DateTime.Now;
-            double timeDelta = (now - _lastTrafficTime).TotalSeconds;
-            _lastTrafficTime = now;
+            //    ★ 改用**单调时钟**：墙上时间回拨（用户改系统时间 / NTP 校时）不会产生负 delta。
+            //      这里量的是"两次真实采集之间的经过时间"，与 UI Tick 次数无关。
+            long now = _time.GetTimestamp();
+            double timeDelta = 0;
+            if (_hasTrafficTimestamp)
+            {
+                timeDelta = _time.GetElapsedTime(_lastTrafficTimestamp, now).TotalSeconds;
+                if (timeDelta < 0) timeDelta = 0;
+            }
+            _lastTrafficTimestamp = now;
+            _hasTrafficTimestamp = true;
             if (timeDelta > 5.0) timeDelta = 0; // 防止休眠唤醒后的数据突刺
 
-            // ★★★ [智能处理] 刷新率自适应逻辑 ★★★
-            // 无论 UpdateAll 是 300ms 调一次还是 2s 调一次，
-            // 我们都将时间累加，直到凑满 1秒，才增加 _secondsCounter。
-            // 这样后续的 % 60, % 600 逻辑就是基于"真实时间"，而非"调用次数"。
+            // ★ 刷新率自适应逻辑：把经过时间累加，凑满 1 秒才增加 _secondsCounter。
+            //   （_secondsCounter 现在只作为**诊断计数**保留，不再参与任何调度判断；
+            //     慢扫描 / 磁盘后台扫描 / 维护任务都已经改用单调截止时间。）
             _secondAccumulator += timeDelta;
             while (_secondAccumulator >= 1.0)
             {
@@ -459,52 +786,85 @@ namespace LiteMonitor.src.SystemServices
             return timeDelta;
         }
 
-        private (bool ForceAll, bool NeedCpu, bool NeedGpu, bool NeedMem, bool NeedNet, bool NeedDisk, bool NeedBat, bool NeedMobo, double TimeDelta) CheckUpdateRequirements()
+        /// <summary>
+        /// 计算这一轮采集的更新需求。
+        ///
+        /// ★ 全量判断（ForceAll）现在反映**有效的 Web 数据需求**（<see cref="SetWebDataDemand"/>），
+        ///   而不是"Web 服务开关"：
+        ///   - Web 开关开着但**没有合法需求**（没人连、没有已鉴权快照请求）→ **不扩大**采集范围；
+        ///   - 有合法需求 → 按全量普通指标需求更新；
+        ///   - 本地需求（面板/任务栏启用的指标）与 Web 无关，断开网页不会被清空。
+        /// </summary>
+        private HardwareUpdateRequirements CheckUpdateRequirements()
         {
-            // === [优化开始] 精细化判断更新需求 ===
-        
             // 1. 获取计数器状态
             bool useCounter = _cfg.UseWinPerCounters && _perfCounterManager.IsInitialized;
-            
-            // ★★★ [优化] 全量更新判断 ★★★
-            // 如果开启了 WebServer，则需要强制更新所有硬件，因为网页端可能会查看主界面未开启的项目
-            bool forceAll = _cfg.WebServerEnabled;
 
-            // 2. CPU: 总是需要 (因为 LHM 要读温度)
-            bool needCpu = forceAll || _cfg.IsAnyEnabled("CPU");
-            
-            // 3. 显卡: 总是需要
-            bool needGpu = forceAll || _cfg.IsAnyEnabled("GPU");
-            
-            // 4. ★★★ [优化 1] 内存: 如果走了计数器，就不需要 LHM 轮询了 ★★★
-            bool needMem = forceAll || (_cfg.IsAnyEnabled("MEM") && !useCounter);
-            
-            // 5. 网络: 保持不变
-            bool needNet = forceAll || _cfg.IsAnyEnabled("NET") || _cfg.IsAnyEnabled("DATA");
-            
-            // 7. 电池: 只有在开启时才更新
-            bool needBat = forceAll || _cfg.IsAnyEnabled("BAT");
+            return HardwareUpdateRequirements.Compute(_cfg, _webDataDemand, useCounter);
+        }
 
-            // 6. ★★★ [优化 2] 磁盘: 智能判断 ★★★
-            // 只有当 (没开计数器 OR 指定了特定盘 OR 需要看温度) 时，才需要 LHM 介入
-            bool needDiskTemp = _cfg.IsAnyEnabled("DISK.Temp");
-            bool hasSpecificDisk = !string.IsNullOrEmpty(_cfg.PreferredDisk);
-            bool needDiskSpeed = _cfg.IsAnyEnabled("DISK") && (!useCounter || hasSpecificDisk);
-            bool needDisk = forceAll || needDiskSpeed || needDiskTemp;
+        /// <summary>
+        /// 把"本次真正到期并被消费"的维护任务记进统计计数器。
+        ///
+        /// ★ 计数必须记在**真实触发**上，而不是按整数秒取模推算：
+        ///   旧口径（<c>_secondsCounter % 60 == 5</c>）在同一个到期秒里被调用十次就会记十次，
+        ///   正是"同一到期秒被消费十次"缺陷的**记账版本**。
+        ///
+        /// 抽成静态方法是为了能在不构造 <see cref="HardwareMonitor"/>（它会打开真实硬件树）
+        /// 的前提下做单元测试。
+        /// </summary>
+        public static void RecordMaintenanceTriggers(HardwareSamplingStatistics statistics, MaintenanceRunResult result)
+        {
+            if (statistics == null) return;
+            if (result.TrafficSave) statistics.RecordTrafficSaveTrigger();
+            if (result.GcRequest) statistics.RecordGcRequestTrigger();
+            if (result.WorkingSetTrim) statistics.RecordWorkingSetTrimTrigger();
+        }
 
-            // 判断主板更新需求
-            bool needMobo = forceAll ||
-                _cfg.IsAnyEnabled("MOBO") ||
-                _cfg.IsAnyEnabled("CPU.Fan") ||
-                _cfg.IsAnyEnabled("CPU.Pump") ||
-                _cfg.IsAnyEnabled("CASE.Fan");
-            
-            return (forceAll, needCpu, needGpu, needMem, needNet, needDisk, needBat, needMobo, 0);
+        /// <summary>
+        /// 记录一次采集失败：**写错误日志 + 记一次失败采集**。
+        ///
+        /// ★ 抽成静态接缝的理由（与 <see cref="RecordMaintenanceTriggers"/> 完全同形）：
+        ///   <see cref="HardwareMonitor"/> 的构造函数会打开真实硬件树，单元测试无法实例化它；
+        ///   而"失败被计数"是本任务的头号不变量，必须**可断言**。
+        ///   失败计数是对 <see cref="HardwareSamplingStatistics"/> 的**纯内存自增**，
+        ///   把"计数 + 写日志"开放成可测接缝后，就能断言"一次失败恰好 +1"与"日志仍被写"。
+        ///
+        /// ★ 计数归属（互斥性，见 <see cref="CollectOnce"/> 的契约）：
+        ///   采集层吞掉异常时由本方法记**一次**；协调器只在采样动作**抛出**异常时才记失败。
+        ///   因此采集层**绝不能**把异常再抛出去，否则同一次失败会被记两次。
+        ///
+        /// ★ 行为与抽接缝之前**完全一致**：错误日志的 source 标签、写入位置、计数时机都不变
+        ///   （先写日志、后自增计数）。
+        /// </summary>
+        /// <param name="statistics">共享的统计计数器（为 null 时只写日志、不计数）。</param>
+        /// <param name="ex">捕获到的异常。</param>
+        /// <param name="source">错误日志的来源标签（"CollectOnce" / "UpdateAll.GPU"）。</param>
+        /// <param name="errorLogger">
+        /// 错误日志出口；为 null 时走默认的 <see cref="HardwareErrorLog"/>
+        /// （写运行目录下的持久化日志文件）。
+        /// 测试可注入替身，避免在测试输出目录留下日志文件。
+        /// </param>
+        public static void RecordCollectionFailure(
+            HardwareSamplingStatistics? statistics,
+            Exception? ex,
+            string source = "CollectOnce",
+            Action<string, Exception?>? errorLogger = null)
+        {
+            if (errorLogger == null) HardwareErrorLog.Write(source, ex);
+            else errorLogger(source, ex);
+
+            // ★ 计数时机：日志写完之后自增（与抽接缝之前一致）。
+            statistics?.RecordFailedCollection();
         }
 
         private void ReloadComputerSafe()
         {
             bool opened = false;
+
+            // ★ 关闭/重开硬件期间不允许真实采集（硬件树正在被整体替换） ★
+            _isReady = false;
+            _coordinator.SetReady(false);
 
             try
             {
@@ -534,8 +894,13 @@ namespace LiteMonitor.src.SystemServices
                         {
                             _computer.Accept(new HardwareVisitor(h => { }));
                             _computer.Close();
-                            // ★★★ 核心修复：手动清空硬件列表 ★★★
-                            // LHM 的 Close() 不会清空列表，必须手动 Clear，否则再次 Open 会追加重复硬件
+                            // 手动清空硬件列表。
+                            // 【已核实的实现事实】LHM 0.9.6 的 Computer.Hardware 属性**每次返回副本**
+                            // （主控实测：两次 get_Hardware 返回**不同引用**，返回类型为 List<IHardware>），
+                            // 因此这里 Clear() 清到的是**临时副本**，**对 LHM 内部列表不生效**。
+                            // 旧注释"必须手动 Clear，否则再次 Open 会追加重复硬件"与该事实相反，已更正。
+                            // 是否真会在再次 Open 时追加重复硬件，取决于 LHM 的 Close()/Open() 内部实现，
+                            // **本轮未查证**，故**保留该调用、不改行为**（只改注释）。
                             _computer.Hardware.Clear();
                         }
                     }
@@ -613,6 +978,16 @@ namespace LiteMonitor.src.SystemServices
             {
                 HardwareErrorLog.Write("ReloadComputerSafe.Trim", ex);
             }
+            finally
+            {
+                // ★ 重载结束：重新允许采集，并允许立刻采一次新样本 ★
+                //   打开失败时硬件列表是空的，采集会自然空转，旧的映射表与旧的有效值仍然保留。
+                if (!_disposed)
+                {
+                    _isReady = true;
+                    _coordinator.SetReady(true);
+                }
+            }
         }
 
         private void ReleaseComputerForDriverInstall()
@@ -669,22 +1044,7 @@ namespace LiteMonitor.src.SystemServices
 
         private bool ShouldUpdateGpuHardware(IHardware hw)
         {
-            var activeGpu = _sensorMap.CachedGpu;
-
-            // ★★★ [多显卡] 映射还没建好时 (CachedGpu 与 CachedGpus 都为空),
-            // 保持旧行为: 更新所有显卡。否则热插拔触发 SensorMap.Clear() 之后
-            // 到下一次 Rebuild 之间, 显卡会完全不刷新。 ★★★
-            if (activeGpu == null && _sensorMap.CachedGpus.Count == 0) return true;
-
-            if (activeGpu != null && ReferenceEquals(hw, activeGpu)) return true;
-
-            // ★★★ [多显卡] 更新所有被监控的显卡 ★★★
-            foreach (var g in _sensorMap.CachedGpus)
-            {
-                if (ReferenceEquals(g, hw)) return true;
-            }
-
-            return false;
+            return GpuUpdateSelection.ShouldUpdate(hw, _sensorMap.CachedGpu, _sensorMap.CachedGpus);
         }
 
         /// <summary>
@@ -815,5 +1175,309 @@ namespace LiteMonitor.src.SystemServices
             public void VisitParameter(IParameter parameter) { }
         }
         #endregion
+    }
+
+    // =====================================================================
+    // 采集层的可测试策略类型
+    //
+    // 之所以把它们从 HardwareMonitor 里抽出来（而不是留在私有方法里）：
+    //   HardwareMonitor 的构造函数会启动异步初始化并打开 LHM 硬件树，
+    //   **无法在普通单元测试里构造**。把这些纯策略抽成独立类型后，
+    //   就能用假时钟 + 假硬件在**不启动 LHM / 驱动 / 真实 PresentMon / 外网**的前提下
+    //   锁定计划 §4.3 / §4.4 / §6.1 的硬性不变量。
+    // =====================================================================
+
+    /// <summary>
+    /// 采集层的**单调截止时间**调度（计划 §4.3）。
+    ///
+    /// 解决的问题：旧实现用「整数秒计数器取模」判断到期
+    /// （<c>_secondsCounter % 3 == 0</c> / <c>% 10 == 0</c>），
+    /// 同一个到期秒里被调用 N 次就会消费 N 次，而且依赖墙上时间。
+    ///
+    /// 语义：
+    ///  - 同一到期时间**最多消费一次**；
+    ///  - 跳过若干周期后**最多执行一次**，然后安排下一次（不补跑一串）；
+    ///  - 两次执行之间**至少**间隔各自的周期（见下方"为什么不用固定网格"）；
+    ///  - 状态由**实例**持有，墙上时间回拨不影响判断；
+    ///  - 时钟可注入 → 单元测试用假时钟，不做真 Sleep。
+    ///  - **线程安全**：<see cref="TryConsumeSlowScan"/> / <see cref="TryConsumeDiskBackgroundScan"/>
+    ///    的"比较 + 推进"在同一个临界区内完成，即使多个线程同时调用，
+    ///    同一个到期时间也只会有一次返回 true（"同一到期时间最多消费一次"的承诺在并发下同样成立）。
+    /// </summary>
+    public sealed class HardwareSamplingSchedule
+    {
+        /// <summary>主板 / SuperIO / 非目标网卡的最快更新间隔：不快于每 3 秒一次。</summary>
+        public static readonly TimeSpan SlowScanInterval = TimeSpan.FromSeconds(3);
+
+        /// <summary>磁盘后台扫描的最快间隔：不快于每 10 秒一次。</summary>
+        public static readonly TimeSpan DiskBackgroundScanInterval = TimeSpan.FromSeconds(10);
+
+        private readonly MinGapTrigger _slowScan;
+        private readonly MinGapTrigger _diskBackgroundScan;
+
+        /// <param name="timeProvider">可注入的单调时钟，默认 <see cref="TimeProvider.System"/>。</param>
+        public HardwareSamplingSchedule(TimeProvider? timeProvider = null)
+        {
+            var time = timeProvider ?? TimeProvider.System;
+
+            // 首次延迟 = 0：第一次采集就是一次慢扫描 / 后台扫描
+            //（与旧实现 "_secondsCounter == 0 时命中" 的行为一致）；之后按各自周期推进。
+            _slowScan = new MinGapTrigger(time, SlowScanInterval);
+            _diskBackgroundScan = new MinGapTrigger(time, DiskBackgroundScanInterval);
+        }
+
+        /// <summary>
+        /// 本轮是否应执行慢扫描（主板 / SuperIO / 非目标网卡）。
+        /// 同一到期时间只会被消费一次。
+        /// </summary>
+        public bool TryConsumeSlowScan() => _slowScan.TryConsume();
+
+        /// <summary>
+        /// 本轮是否应执行磁盘后台扫描。同一到期时间只会被消费一次。
+        /// </summary>
+        public bool TryConsumeDiskBackgroundScan() => _diskBackgroundScan.TryConsume();
+
+        /// <summary>
+        /// 最小间隔触发器（单调时钟）。
+        ///
+        /// ★ 为什么不用 <see cref="MonotonicPeriodicTrigger"/> 的固定网格推进：
+        ///   固定网格把下一次到期点锚在"原截止时间 + k*周期"上，
+        ///   当一次消费**迟到**时（例如采集周期 1 秒、慢扫描周期 3 秒，两条网格相位不同），
+        ///   两次实际执行之间的间隔最短只有 <c>周期 - 采集周期</c>（3 - 1 = 2 秒），
+        ///   违反计划 §4.3 表格里"主板/SuperIO 不快于每 3 秒一次"的硬性约定。
+        ///   本类改用"now + 周期"锚定，保证两次执行之间**至少**间隔一个周期。
+        ///
+        /// 其余语义与 <see cref="MonotonicPeriodicTrigger"/> 一致：
+        /// 同一到期时间只消费一次、跳过若干周期后最多执行一次、墙上时间回拨不影响判断。
+        ///
+        /// ★ 线程安全：<see cref="TryConsume"/> 的"比较 + 推进"在同一个临界区内完成
+        ///   （与 <see cref="MonotonicPeriodicTrigger"/> 同一写法），
+        ///   即使多个线程同时调用，同一个到期时间也只会有一次返回 true。
+        /// </summary>
+        private sealed class MinGapTrigger
+        {
+            private readonly TimeProvider _time;
+            private readonly long _periodTicks;
+            private readonly object _gate = new object();
+            private long _nextDue;
+            private bool _armed;
+
+            public MinGapTrigger(TimeProvider time, TimeSpan period)
+            {
+                _time = time;
+                long frequency = time.TimestampFrequency > 0 ? time.TimestampFrequency : TimeSpan.TicksPerSecond;
+                _periodTicks = (long)Math.Round(frequency * period.TotalSeconds);
+                if (_periodTicks <= 0) _periodTicks = 1;
+            }
+
+            /// <summary>
+            /// 到期则消费一次并返回 true；**同一到期时间只会被消费一次**。
+            /// 未到期返回 false（不执行任何动作）。
+            /// ★ 比较与推进在同一个临界区内完成：即使多个线程同时调用，
+            ///   同一个到期时间也只会有一次返回 true。
+            /// </summary>
+            public bool TryConsume()
+            {
+                long now = _time.GetTimestamp();
+
+                lock (_gate)
+                {
+                    if (_armed && now < _nextDue) return false;
+
+                    // 下一次到期 = 现在 + 周期（保证两次执行之间至少间隔一个周期）
+                    _nextDue = now > long.MaxValue - _periodTicks ? long.MaxValue : now + _periodTicks;
+                    _armed = true;
+                    return true;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 一轮采集的更新需求（计划 §4.1 / §4.4）。
+    ///
+    /// ★ 关键语义：<see cref="ForceAll"/> 反映的是**有效的 Web 数据需求**，
+    ///   而不是"Web 服务开关"。旧行为是「WebServerEnabled 一开就全量采集」，
+    ///   无人访问网页时也在白采 —— 这正是本轮要修的根因。
+    /// </summary>
+    public readonly struct HardwareUpdateRequirements
+    {
+        public HardwareUpdateRequirements(
+            bool forceAll,
+            bool needCpu,
+            bool needGpu,
+            bool needMem,
+            bool needNet,
+            bool needDisk,
+            bool needBat,
+            bool needMobo)
+        {
+            ForceAll = forceAll;
+            NeedCpu = needCpu;
+            NeedGpu = needGpu;
+            NeedMem = needMem;
+            NeedNet = needNet;
+            NeedDisk = needDisk;
+            NeedBat = needBat;
+            NeedMobo = needMobo;
+        }
+
+        /// <summary>是否有合法的 Web 数据需求（此时按全量普通指标需求更新）。</summary>
+        public bool ForceAll { get; }
+        /// <summary>是否需要更新 CPU。</summary>
+        public bool NeedCpu { get; }
+        /// <summary>是否需要更新显卡（**具体哪几张卡仍由显卡选择规则决定**）。</summary>
+        public bool NeedGpu { get; }
+        /// <summary>是否需要更新内存。</summary>
+        public bool NeedMem { get; }
+        /// <summary>是否需要更新网卡。</summary>
+        public bool NeedNet { get; }
+        /// <summary>是否需要更新磁盘。</summary>
+        public bool NeedDisk { get; }
+        /// <summary>是否需要更新电池。</summary>
+        public bool NeedBat { get; }
+        /// <summary>是否需要更新主板 / SuperIO（仍强制跟随慢扫描周期）。</summary>
+        public bool NeedMobo { get; }
+
+        /// <summary>
+        /// 计算一轮采集的更新需求。
+        /// </summary>
+        /// <param name="cfg">当前设置（本地需求来源：面板/任务栏启用的监控项）。</param>
+        /// <param name="hasWebDataDemand">
+        /// 是否有**合法**的 Web 数据需求（已鉴权连接 或 未过期的已鉴权快照租期）。
+        /// 传 false 时**不会**扩大采集范围，但**也不会**清空本地需求。
+        /// </param>
+        /// <param name="usePerformanceCounters">
+        /// 是否正在使用 Windows 性能计数器（内存/磁盘速度可以不走 LHM 轮询）。
+        /// </param>
+        public static HardwareUpdateRequirements Compute(
+            Settings cfg,
+            bool hasWebDataDemand,
+            bool usePerformanceCounters)
+        {
+            if (cfg == null) throw new ArgumentNullException(nameof(cfg));
+
+            // ★ 全量判断 = 有效的 Web 数据需求（不是 WebServerEnabled 开关）
+            bool forceAll = hasWebDataDemand;
+
+            // CPU: 总是需要 (因为 LHM 要读温度)
+            bool needCpu = forceAll || cfg.IsAnyEnabled("CPU");
+
+            // 显卡: 总是需要（**具体哪几张卡**由 ShouldUpdateGpuHardware 决定，
+            //        全量需求不允许绕过显卡选择）
+            bool needGpu = forceAll || cfg.IsAnyEnabled("GPU");
+
+            // 内存: 如果走了计数器，就不需要 LHM 轮询了
+            bool needMem = forceAll || (cfg.IsAnyEnabled("MEM") && !usePerformanceCounters);
+
+            // 网络
+            bool needNet = forceAll || cfg.IsAnyEnabled("NET") || cfg.IsAnyEnabled("DATA");
+
+            // 电池: 只有在开启时才更新
+            bool needBat = forceAll || cfg.IsAnyEnabled("BAT");
+
+            // 磁盘: 智能判断
+            // 只有当 (没开计数器 OR 指定了特定盘 OR 需要看温度) 时，才需要 LHM 介入
+            bool needDiskTemp = cfg.IsAnyEnabled("DISK.Temp");
+            bool hasSpecificDisk = !string.IsNullOrEmpty(cfg.PreferredDisk);
+            bool needDiskSpeed = cfg.IsAnyEnabled("DISK") && (!usePerformanceCounters || hasSpecificDisk);
+            bool needDisk = forceAll || needDiskSpeed || needDiskTemp;
+
+            // 主板
+            bool needMobo = forceAll ||
+                cfg.IsAnyEnabled("MOBO") ||
+                cfg.IsAnyEnabled("CPU.Fan") ||
+                cfg.IsAnyEnabled("CPU.Pump") ||
+                cfg.IsAnyEnabled("CASE.Fan");
+
+            return new HardwareUpdateRequirements(
+                forceAll, needCpu, needGpu, needMem, needNet, needDisk, needBat, needMobo);
+        }
+    }
+
+    /// <summary>
+    /// 显卡更新选择规则（计划 §4.4）。
+    ///
+    /// ★ 全量普通指标需求（Web）**不得**绕过这个规则：
+    ///   更新"未纳入监控集合、也不在网页快照里"的物理卡没有收益。
+    ///   <c>MonitoredGpuCount=1</c> 的 Web 不应隐式更新两张物理卡；配置两卡时两卡都必须更新。
+    ///   首选卡与编号规则保持不变。
+    /// </summary>
+    public static class GpuUpdateSelection
+    {
+        /// <summary>
+        /// 判断某个显卡这一轮是否需要更新。
+        /// </summary>
+        /// <param name="hw">待判断的显卡。</param>
+        /// <param name="preferredGpu">当前首选卡（可为空）。</param>
+        /// <param name="monitoredGpus">当前被监控的显卡集合（对应 MonitoredGpuCount）。</param>
+        public static bool ShouldUpdate(IHardware hw, IHardware? preferredGpu, IReadOnlyList<IHardware>? monitoredGpus)
+        {
+            if (hw == null) return false;
+
+            // ★ 映射还没建好时（首选卡与监控集合都为空）: 保持旧行为, 更新所有显卡。
+            //   否则热插拔触发 SensorMap.Clear() 之后到下一次 Rebuild 之间, 显卡会完全不刷新。
+            bool noMapping = preferredGpu == null && (monitoredGpus == null || monitoredGpus.Count == 0);
+            if (noMapping) return true;
+
+            if (preferredGpu != null && ReferenceEquals(hw, preferredGpu)) return true;
+
+            if (monitoredGpus != null)
+            {
+                foreach (var g in monitoredGpus)
+                {
+                    if (ReferenceEquals(g, hw)) return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 采集层的设备 Update 计数入口。
+    ///
+    /// ★ 计数**归属**（防止同一个 Key 被记两遍）：
+    ///   - CPU / 显卡 / 内存 / 电池 / 主板 → 由采集层（本类）计数；
+    ///   - 网卡（Network）/ 磁盘（Storage） → 由 NetworkManager / DiskManager 计数
+    ///     （它们只在**真的执行了 hw.Update()** 时计数，Key 格式 "类型:名称"）。
+    ///
+    /// 本类会**直接忽略** Network / Storage 两类，防止重复计数。
+    /// </summary>
+    public sealed class HardwareDeviceUpdateCounter
+    {
+        /// <summary>网卡分类名（由 NetworkManager 计数）。</summary>
+        public const string NetworkCategory = "Network";
+        /// <summary>磁盘分类名（由 DiskManager 计数）。</summary>
+        public const string StorageCategory = "Storage";
+
+        private readonly HardwareSamplingStatistics? _statistics;
+
+        /// <param name="statistics">共享的统计计数器实例（null 时不计数）。</param>
+        public HardwareDeviceUpdateCounter(HardwareSamplingStatistics? statistics)
+        {
+            _statistics = statistics;
+        }
+
+        /// <summary>
+        /// 该分类是否由**采集层**自己计数。
+        /// 网卡与磁盘返回 false（它们由子管理器精确计数）。
+        /// </summary>
+        public static bool IsCollectLayerOwned(string category)
+        {
+            if (string.IsNullOrEmpty(category)) return false;
+            return !string.Equals(category, NetworkCategory, StringComparison.Ordinal)
+                && !string.Equals(category, StorageCategory, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 记录一次设备更新。网卡 / 磁盘会被忽略（避免与子管理器重复计数）。
+        /// </summary>
+        public void Record(string deviceKey, string category)
+        {
+            if (_statistics == null) return;
+            if (!IsCollectLayerOwned(category)) return;
+            _statistics.RecordDeviceUpdate(deviceKey, category);
+        }
     }
 }

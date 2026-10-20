@@ -1,4 +1,5 @@
 using LiteMonitor.src.Core;
+using LiteMonitor.src.SystemServices;
 using LiteMonitor.src.UI.Helpers;
 using System;
 using System.Collections.Generic;
@@ -25,6 +26,29 @@ namespace LiteMonitor
         private DateTime _lastFindHandleTime = DateTime.MinValue;
         private string _lastLayoutSignature = "";
         private readonly TaskbarTooltipHelper _tooltipHelper;
+
+        /// <summary>
+        /// 任务栏主题检查的周期（计划 §4.3：约每 5 秒一次）。
+        /// ★ 唯一来源：生产代码与单元测试共用这个常量，
+        ///   避免"测试复制一份配置、两边悄悄跑偏"的情况。
+        /// </summary>
+        public static readonly TimeSpan ThemeCheckInterval = TimeSpan.FromSeconds(5);
+
+        /// <summary>
+        /// 主题检查的**单调截止时间**触发器。
+        /// 旧实现用 `Math.Abs(Environment.TickCount) % 5000 &lt; RefreshMs` 判断，
+        /// 在高刷新率下会反复读取系统主题、甚至反复应用分层样式。
+        /// </summary>
+        private readonly MonotonicPeriodicTrigger _themeCheckTrigger;
+
+        /// <summary>
+        /// 创建任务栏主题检查的触发器（生产代码与单元测试共用）。
+        /// </summary>
+        /// <param name="timeProvider">可注入的单调时钟，默认 <see cref="TimeProvider.System"/>。</param>
+        public static MonotonicPeriodicTrigger CreateThemeCheckTrigger(TimeProvider? timeProvider = null)
+        {
+            return new MonotonicPeriodicTrigger(ThemeCheckInterval, ThemeCheckInterval, timeProvider);
+        }
         
         // 公开属性
         public string TargetDevice { get; private set; } = "";
@@ -37,12 +61,18 @@ namespace LiteMonitor
         private const int WM_LBUTTONDBLCLK = 0x0203;
         private bool _isWin11;
 
-        public TaskbarForm(Settings cfg, UIController ui, MainForm mainForm)
+        /// <param name="timeProvider">
+        /// 可注入的单调时钟（默认 <see cref="TimeProvider.System"/>）。
+        /// 仅用于测试驱动主题检查的触发器；生产代码不需要传。
+        /// </param>
+        public TaskbarForm(Settings cfg, UIController ui, MainForm mainForm, TimeProvider? timeProvider = null)
         {
             _cfg = cfg;
             _ui = ui;
             _mainForm = mainForm;
             TargetDevice = _cfg.TaskbarMonitorDevice;
+
+            _themeCheckTrigger = CreateThemeCheckTrigger(timeProvider);
 
             _isWin11 = Environment.OSVersion.Version >= new Version(10, 0, 22000);
 
@@ -182,7 +212,9 @@ namespace LiteMonitor
                 _lastFindHandleTime = DateTime.Now;
             }
 
-            if (Math.Abs(Environment.TickCount) % 5000 < _cfg.RefreshMs) _bizHelper.CheckTheme();
+            // [限频] 主题检查改为单调截止时间驱动（约每 5 秒一次）：
+            // 正常重复 Tick 不再反复读取系统主题 / 反复应用分层样式。
+            if (_themeCheckTrigger.TryConsume()) _bizHelper.CheckTheme();
 
             // [Fix Part 1] 防空数据保护
             // 使用临时变量接收，先判断数据有效性，再赋值给成员变量 _cols

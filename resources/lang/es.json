@@ -130,6 +130,8 @@
     "WebServerPasswordTip": "Vacío para ninguna",
     "OpenWeb": "Abrir web",
     "WebServerTip": "Web activa. Acceso móvil vía LAN 'IP:Puerto' o 'IPv6:Puerto'.",
+    "WebServerFps": "FPS en la web",
+    "WebServerFpsTip": "Si está activo, la página web también recopila los fotogramas por segundo. Requiere una herramienta adicional y aumenta la carga de muestreo.",
 
     "Appearance": "Apariencia",
     "Theme": "Tema",
@@ -229,6 +231,7 @@
     "UseWinPerCounters": "Contadores Sistema",
     "UseWinPerCountersTip": "Desactiva si no es exacto. CPU/GPU/RAM/DISCO leídos desde sensores.",
     "Refresh": "Tasa",
+    "RefreshTip": "Solo define cada cuánto se redibuja la interfaz. Los datos normales del hardware se muestrean como máximo una vez por segundo, así que un valor menor no muestrea más a menudo.",
     "IgnoreSMBTraffic": "Ignorar SMB",
     "MemoryDisplayMode": "Vis. RAM",
 

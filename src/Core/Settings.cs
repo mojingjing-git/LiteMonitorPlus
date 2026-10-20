@@ -141,6 +141,12 @@ namespace LiteMonitor
         public bool WebServerEnabled { get; set; } = false;
         public int WebServerPort { get; set; } = 5000; // 默认端口
         public string WebServerPassword { get; set; } = ""; // 访问密码
+
+        // ★★★ [新增] 网页版是否显示帧率 (FPS) ★★★
+        // 网页版默认**不**采集 FPS：帧率需要额外的外部采集服务，开着会带来额外采集开销。
+        // 只有用户显式打开时，网页端才会产生 FPS 采集需求（与本地 FPS 需求合并计算）。
+        // 旧设置 JSON 里没有这个字段时，反序列化后为 false（System.Text.Json 的缺省行为）。
+        public bool WebFpsEnabled { get; set; } = false;
         
         public ThresholdsSet Thresholds { get; set; } = new ThresholdsSet();
 
