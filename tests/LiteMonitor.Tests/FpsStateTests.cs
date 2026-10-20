@@ -1096,6 +1096,66 @@ namespace LiteMonitor.Tests
             }
         }
 
+        [Theory]
+        [InlineData(true, false)]
+        [InlineData(false, true)]
+        [InlineData(false, false)]
+        public void StartupAdmissionMustRespectLifecycleChange(bool disposeInGap, bool stopInGap)
+        {
+            var launcher = new FakeLauncher();
+            var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
+            using var demandEntered = new ManualResetEventSlim(false);
+            using var releaseDemand = new ManualResetEventSlim(false);
+            int startupThreadId = 0;
+            int demandWaitTimedOut = 0;
+            Exception startupError = null;
+
+            // 暂停在准备完成后的需求检查中：旧实现已检查 disposed/代次，尚未登记在途。
+            // 只让专用启动线程持有需求，后台健康检查不会额外拉起服务。
+            counter.FpsDemandProvider = () =>
+            {
+                if (Environment.CurrentManagedThreadId != Volatile.Read(ref startupThreadId)) return false;
+                if (launcher.EnsureCount > 0)
+                {
+                    demandEntered.Set();
+                    if (!releaseDemand.Wait(StateWaitMs)) Interlocked.Exchange(ref demandWaitTimedOut, 1);
+                }
+                return true;
+            };
+
+            var startMethod = typeof(FpsCounter).GetMethod("StartService",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(startMethod);
+            var starter = new Thread(() =>
+            {
+                Volatile.Write(ref startupThreadId, Environment.CurrentManagedThreadId);
+                try { startMethod.Invoke(counter, null); }
+                catch (Exception ex) { startupError = ex; }
+            }) { IsBackground = true };
+
+            try
+            {
+                starter.Start();
+                Assert.True(demandEntered.Wait(StateWaitMs), "启动线程未进入准备后的需求检查");
+
+                if (disposeInGap) counter.Dispose();
+                else if (stopInGap) counter.StopService();
+
+                // 生命周期操作已返回，再放行准入；断言前等待整个启动流程结束。
+                releaseDemand.Set();
+                Assert.True(starter.Join(StateWaitMs), "启动线程未结束");
+                Assert.Null(startupError);
+                Assert.Equal(0, Volatile.Read(ref demandWaitTimedOut));
+                Assert.Equal(disposeInGap || stopInGap ? 0 : 1, launcher.StartCount);
+            }
+            finally
+            {
+                releaseDemand.Set();
+                starter.Join(StateWaitMs);
+                counter.Dispose();
+            }
+        }
+
         [Fact]
         public void 创建进程期间发生释放时必须撤销创建并停止进程()
         {

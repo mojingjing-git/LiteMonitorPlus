@@ -778,7 +778,7 @@ namespace LiteMonitor.src.SystemServices
 
         // ★★★ [新增] 进程创建在途计数 ★★★
         //   >0 表示"正在创建外部进程，或正在撤销这次创建"。
-        //   最终释放用它做**有界等待**：保证"释放返回后不会再有进程被创建"。
+        //   最终释放用它做有界等待；超时后仍由启动线程撤销已获准的创建。
         private int _processCreationInFlight = 0;
 
         // 在途创建归零时的等待同步点
@@ -786,6 +786,7 @@ namespace LiteMonitor.src.SystemServices
 
         // ★★★ [新增] 生命周期互斥锁（启动 / 停止 / 最终释放共享） ★★★
         //   保护的临界区：
+        //     - 启动准入："最终复查 → 登记在途创建"
         //     - 启动侧："再校验 → 发布运行状态 / 撤销刚创建的进程"
         //     - 停止侧："停止启动器 → 回落运行状态"
         //   临界区**不跨越**慢操作（EnsureAvailable）与进程创建（Start），
@@ -844,8 +845,8 @@ namespace LiteMonitor.src.SystemServices
         private const int StartRetryBackoffMs = 30000;
 
         // 最终释放时等待"在途进程创建"结束的上限（毫秒）。
-        // 有界等待：既保证"释放返回后不会再有进程被创建"，
-        // 又不会因为外部进程创建卡死而让释放无限期挂起。
+        // 仅限制在途创建的等待时间；超时后由启动线程完成撤销，
+        // 不保证 Dispose 返回瞬间已无在途创建。
         private const int DisposeCreationDrainTimeoutMs = 5000;
 
         // 文件路径常量
@@ -1309,10 +1310,19 @@ namespace LiteMonitor.src.SystemServices
                 if (Interlocked.Read(ref _lifecycleGeneration) != generation) return;
                 if (!ResolveDemand()) return;
 
-                // ★★★ [新增] 进程创建与"停止 / 最终释放"共享生命周期同步 ★★★
-                //   在途区间覆盖"调用 Start() → 发布状态 / 撤销创建"，
-                //   最终释放据此做有界等待，保证"释放返回后不会再有进程被创建"。
-                Interlocked.Increment(ref _processCreationInFlight);
+                // 最终复查与在途登记必须和停止/释放互斥。
+                // 上面的需求回调在锁外执行，期间可能发生 StopService/Dispose；
+                // 释放要么阻止这次准入，要么能看见已登记的创建并等待撤销。
+                lock (_lifecycleGate)
+                {
+                    if (Volatile.Read(ref _disposed) != 0 ||
+                        Interlocked.Read(ref _lifecycleGeneration) != generation)
+                    {
+                        return;
+                    }
+
+                    Interlocked.Increment(ref _processCreationInFlight);
+                }
                 try
                 {
                     if (!_launcher.Start(OnPresentMonLine, out string? error))
@@ -1377,9 +1387,9 @@ namespace LiteMonitor.src.SystemServices
         /// <summary>
         /// 有界等待在途的进程创建结束（单调时钟计时）。
         ///
-        /// 用途：最终释放据此保证"**Dispose 返回后不会再有进程被创建**"——
-        /// 正在创建的那一个会被启动流程撤销（停掉），
-        /// 还没进入创建阶段的那个会在慢操作返回后被重新校验拦下。
+        /// 未超时时，已获准的创建会在返回前完成或撤销；
+        /// 超时后，仍由启动线程在创建返回时撤销，不保证返回瞬间已无在途创建。
+        /// 尚未获准的启动会被生命周期锁下的最终复查拦下。
         /// </summary>
         private void WaitForProcessCreationDrain(int timeoutMs)
         {
@@ -1527,10 +1537,8 @@ namespace LiteMonitor.src.SystemServices
             //   已经创建出来的那一个会被撤销（停掉）。
             StopService();
 
-            // ★★★ [新增] 有界等待在途的进程创建结束 ★★★
-            //   保证"**Dispose 返回后不会再有进程被创建**"：
-            //   正在创建的那一个会在返回前完成撤销（停掉）；
-            //   还没进入创建阶段的那个会在慢操作返回后被重新校验拦下。
+            // 有界等待已获准的进程创建完成撤销；若超时，撤销在启动线程恢复后执行。
+            // 尚未获准的启动会在生命周期锁下被拒绝，不能绕过在途计数。
             WaitForProcessCreationDrain(DisposeCreationDrainTimeoutMs);
 
             // 只取消，不释放 CancellationTokenSource：
