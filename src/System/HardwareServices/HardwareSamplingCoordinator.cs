@@ -88,6 +88,25 @@ namespace LiteMonitor.src.SystemServices
             }
         }
 
+        /// <summary>
+        /// 记录一次**被取消**的采集。
+        ///
+        /// 取消既不是成功也不是失败，因此语义上与 <see cref="RecordCollectionFinished"/> 分开：
+        ///  - **不**计入 <see cref="FailedCollections"/>：取消是调用方（关闭 / 主动取消）造成的，
+        ///    不是采集动作自己失败，把它算成失败会让"采集异常"这个交付指标凭空多出噪声；
+        ///  - 但这一轮采集动作**确实已经开始过**（<see cref="RecordCollectionStarted"/> 已经把
+        ///    <see cref="CollectionRounds"/> +1），真实消耗掉的时间必须计入，
+        ///    否则"累计采集耗时"会漏掉一次真实消耗。
+        /// </summary>
+        internal void RecordCollectionCanceled(int generation, double durationMs)
+        {
+            Volatile.Write(ref _lastDurationMs, durationMs);
+            lock (_deviceGate)
+            {
+                _totalDurationMs += durationMs;
+            }
+        }
+
         internal void RecordSkippedRequest() => Interlocked.Increment(ref _skippedRequests);
         internal void RecordRejectedRequest() => Interlocked.Increment(ref _rejectedRequests);
         internal void RecordSharedRequest() => Interlocked.Increment(ref _sharedRequests);
@@ -389,6 +408,10 @@ namespace LiteMonitor.src.SystemServices
             // ★ 关闭期早退标记：这一轮采集"按要求没有开始"，
             //   既不是成功也不是失败，绝不能被计入 FailedCollections。
             bool skipped = false;
+            // ★ 取消标记：采集动作**确实开始过**，但被取消打断。
+            //   取消既不是成功也不是失败：不能计入 FailedCollections，
+            //   但这一轮真实消耗的耗时必须计入。
+            bool canceled = false;
 
             try
             {
@@ -412,6 +435,9 @@ namespace LiteMonitor.src.SystemServices
             catch (OperationCanceledException)
             {
                 // 取消不算失败，按正常周期重试
+                // ★ 显式标记"被取消"：这一轮既不是成功也不是失败，
+                //   finally 里据此不把 FailedCollections +1（但耗时照记）。
+                canceled = true;
             }
             catch (Exception ex)
             {
@@ -457,7 +483,17 @@ namespace LiteMonitor.src.SystemServices
                     // ★ 关闭期被跳过的采集**不是失败**：不记 FailedCollections，
                     //   也不写耗时（根本没有采集动作发生）。
                     double durationMs = _time.GetElapsedTime(start, end).TotalMilliseconds;
-                    _statistics.RecordCollectionFinished(generation, success, durationMs);
+                    if (canceled)
+                    {
+                        // ★ 被取消：既不是成功也不是失败。
+                        //   采集动作确实跑过 -> 耗时计入；
+                        //   绝不能计入 FailedCollections（取消是调用方/关闭过程的副产品）。
+                        _statistics.RecordCollectionCanceled(generation, durationMs);
+                    }
+                    else
+                    {
+                        _statistics.RecordCollectionFinished(generation, success, durationMs);
+                    }
                 }
 
                 // ★ 必须先完成 Task，再调用外部回调。
