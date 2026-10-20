@@ -24,6 +24,15 @@ namespace LiteMonitor.src.WebServer
         
         // [Refactor] Decoupled WebSocket Logic
         private readonly WebSessionManager _sessionManager;
+
+        // ★ 共享采样请求入口（限频）：生产实现走 HardwareMonitor 的采样协调器
+        private readonly Func<CancellationToken, Task<bool>> _samplingRequester;
+
+        // ★ 把"是否有 Web 需求"写入采集层（默认写 HardwareMonitor.SetWebDataDemand）
+        private readonly Func<bool, bool> _demandApplier;
+
+        // ★ Web 需求 → 采集需求的同步器（事件驱动 + 周期监视）
+        private readonly WebDemandSynchronizer _demandSync;
         
         public static LiteWebServer? Instance { get; private set; }
 
@@ -39,12 +48,65 @@ namespace LiteMonitor.src.WebServer
         /// <summary>Web 需求状态快照（连接数 + HTTP 租期，一次性读取，不撕裂）。</summary>
         public WebDemandSnapshot GetDemandSnapshot() => _sessionManager.GetDemandSnapshot();
 
-        public LiteWebServer(Settings cfg)
+        /// <param name="cfg">当前设置。</param>
+        /// <param name="samplingRequester">
+        /// 共享采样请求入口（默认走 <c>HardwareMonitor.Instance?.UpdateIfDueAsync</c>）。
+        /// 传 null 表示使用默认实现。
+        /// </param>
+        /// <param name="demandApplier">
+        /// 把 Web 需求写入采集层的回调（默认写 <c>HardwareMonitor.Instance.SetWebDataDemand</c>）。
+        /// 返回 false 表示"暂时写不进去"（例如采集层实例还不存在），同步器会在下一轮重试。
+        /// </param>
+        public LiteWebServer(
+            Settings cfg,
+            Func<CancellationToken, Task<bool>>? samplingRequester = null,
+            Func<bool, bool>? demandApplier = null)
         {
             _cfg = cfg;
             Instance = this;
+            _samplingRequester = samplingRequester ?? DefaultSamplingRequester;
+            _demandApplier = demandApplier ?? ApplyWebDataDemandToHardware;
+
             // Initialize WebSocket Manager with the data provider delegate
-            _sessionManager = new WebSessionManager(WriteSnapshotJson);
+            // ★ 序列化回调只负责写 JSON；采样由共享采样入口在序列化**之前**完成。
+            _sessionManager = new WebSessionManager(
+                (writer, ct) => { WriteSnapshotJson(writer); return Task.CompletedTask; },
+                demandState: null,
+                timeProvider: null,
+                samplingRequester: (ct) => _samplingRequester(ct));
+
+            // ★ 需求同步器：需求真值来源与网页占位判断**同源**（都是 _sessionManager 的需求状态）
+            _demandSync = new WebDemandSynchronizer(
+                demandProvider: () => _sessionManager.HasWebDataDemand,
+                applyDemand: _demandApplier,
+                targetProvider: () => HardwareMonitor.Instance);
+
+            // ★ 需求变化（连接增删 / HTTP 租期授予 / 停止清空）立刻同步，不等广播周期
+            _sessionManager.DemandChanged = () => _demandSync.SyncNow();
+        }
+
+        /// <summary>
+        /// 默认共享采样入口：走采集协调器（1 秒 1 次 + 并发合并）。
+        /// ★ <see cref="HardwareMonitor.Instance"/> **每次取值时再取**，不在构造时缓存：
+        ///   硬件层可能比 Web 服务更晚创建。
+        /// </summary>
+        private static Task<bool> DefaultSamplingRequester(CancellationToken cancellationToken)
+        {
+            var hw = HardwareMonitor.Instance;
+            if (hw == null) return Task.FromResult(false);
+            return hw.UpdateIfDueAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// 默认需求写入：把"是否有 Web 需求"写进采集层。
+        /// ★ 采集层实例还不存在时返回 false → 同步器下一轮监视会重试（不会丢需求）。
+        /// </summary>
+        private static bool ApplyWebDataDemandToHardware(bool hasDemand)
+        {
+            var hw = HardwareMonitor.Instance;
+            if (hw == null) return false;
+            hw.SetWebDataDemand(hasDemand);
+            return true;
         }
 
         public bool Start(out string errorMsg)
@@ -53,11 +115,11 @@ namespace LiteMonitor.src.WebServer
             if (_isRunning) return true;
             if (!_cfg.WebServerEnabled) return true;
 
+            TcpListener? listener = null;
             try
             {
                 int port = _cfg.WebServerPort;
 
-                TcpListener listener;
                 try
                 {
                     // [Fix] 优先尝试绑定 IPv6Any 并开启 DualMode，以同时支持 IPv4 和 IPv6
@@ -71,7 +133,6 @@ namespace LiteMonitor.src.WebServer
                     listener = new TcpListener(IPAddress.Any, port);
                     listener.Start();
                 }
-                _listener = listener;
 
                 _isRunning = true;
                 _currentRunningPort = port;
@@ -87,14 +148,28 @@ namespace LiteMonitor.src.WebServer
                 // ★ 监听器用局部变量传进去：循环体不再读可变的 _listener 字段，
                 //   避免"条件检查通过之后 Stop+Start"导致旧循环 accept 到新监听器上。
                 int generation = Interlocked.Increment(ref _generation);
-                Task.Run(() => ListenLoop(generation, listener));
-                
+                Task.Run(() => ListenLoop(generation, listener!));
+
+                // ★ _listener 只在**真正启动成功之后**才赋值（B1 复审）：
+                //   启动失败时字段不应该指向一个仍在监听的套接字。
+                _listener = listener;
+
+                // ★ 启动需求监视：HTTP 租期到期没有事件可挂靠，只能靠周期监视发现。
+                //   间隔 200 毫秒 << 1 个采集周期，满足"≤1 采集周期 + 宽限"。
+                _demandSync.Start();
+                _demandSync.SyncNow();
+
                 return true;
             }
             catch (Exception ex)
             {
                 errorMsg = ex.Message;
                 Debug.WriteLine("WebServer Start Error: " + ex.Message);
+                // 启动失败：不要留下一个还在监听的套接字
+                _isRunning = false;
+                _currentRunningPort = -1;
+                try { listener?.Stop(); } catch { }
+                _listener = null;
                 return false;
             }
         }
@@ -108,9 +183,16 @@ namespace LiteMonitor.src.WebServer
             Interlocked.Increment(ref _generation);
 
             try { _listener?.Stop(); } catch { }
+            _listener = null;
             
             // 停止 WebSocket 管理器（同时清空全部 Web 需求：连接 + HTTP 租期）
             _sessionManager.Stop();
+
+            // ★ 需求已归零：把 false 送达采集层（不依赖广播周期）
+            _demandSync.SyncNow();
+
+            // 停止需求监视
+            _demandSync.Stop();
         }
 
         public void Dispose()
@@ -185,7 +267,13 @@ namespace LiteMonitor.src.WebServer
 
             // ★ FPS 需求规则 (计划 §4.4)：本地启用 或 (有合法 Web 需求 且 显式开启网页版帧率)
             //   没有需求时 Web 端输出 "--" 占位，不读取数值、不伪造 0。
+            //   ★ 需求值与同步器写入采集层的值**同源**（都是 _sessionManager 的需求状态）。
             bool fpsDemand = WebFpsDemand.IsFpsDemand(_cfg, _sessionManager.HasWebDataDemand);
+
+            // ★ 当前是否有**可信**的 FPS 数据：
+            //   有需求但服务刚启动、首帧未到时，hw.Get("FPS") 会返回 0f —— 那是"没有数据"而不是"真的是 0"。
+            //   用 HasFpsData 区分两者，前者输出 "--"，后者输出真实的 0。
+            bool hasFpsData = hw.HasFpsData;
 
             writer.WriteStartObject();
 
@@ -256,7 +344,8 @@ namespace LiteMonitor.src.WebServer
                     //   webFpsDemand    = 有合法 Web 数据需求 && WebFpsEnabled
                     //   没有需求时：既不读取 FPS 数值（读取会触发外部 FPS 采集服务的惰性启动），
                     //   也不把"未启动"伪报成 0，而是明确输出 "--"。
-                    var valueState = WebSnapshotValues.ResolveValue(item.Key, fpsDemand, k => hw.Get(k), out string valueStr, out float? rawValue);
+                    //   有需求但首帧未到（hasFpsData == false）时同样输出 "--"，不是 0。
+                    var valueState = WebSnapshotValues.ResolveValue(item.Key, fpsDemand, hasFpsData, k => hw.Get(k), out string valueStr, out float? rawValue);
 
                     // [Fix] 恢复过滤逻辑：跳过没有数据的监控项（如台式机的电池），以符合业务屏蔽需求
                     // 布局顺序问题已由 CSS order (gidx) 机制解决，即使数据晚到也会插入正确位置
@@ -356,13 +445,48 @@ namespace LiteMonitor.src.WebServer
             out string value,
             out float? raw)
         {
+            // 既有行为保持不变：FPS 有需求时按真实值输出（含"真 0 FPS"）。
+            return ResolveValue(key, fpsDemand, hasFpsData: true, readValue, out value, out raw);
+        }
+
+        /// <summary>
+        /// 计算某个硬件监控项在快照里的取值（**带 FPS 数据可信度**的形态）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 取值顺序固定为：**先判需求 → 再判 HasFpsData → 最后才读数值**。
+        ///   - 没有 FPS 需求 → <see cref="WebSnapshotValueState.NotEnabled"/>（"--"），
+        ///     且 **readValue 不会被调用**（读 FPS 会触发外部采集服务的惰性启动）；
+        ///   - 有需求但 <paramref name="hasFpsData"/> 为 false（服务刚启动、首帧未到）
+        ///     → 同样是"尚无可信数据"，输出 "--" 而**不是** 0（"真 0 FPS"必须能显示 0，
+        ///     所以不能用数值本身来区分）；
+        ///   - 有需求且有可信数据 → 读真实值（真实的 0 就是 0）。
+        /// </remarks>
+        /// <param name="key">监控项 Key（如 "CPU.Load" / "FPS"）。</param>
+        /// <param name="fpsDemand">当前是否存在 FPS 采集需求（见 <see cref="WebFpsDemand"/>）。</param>
+        /// <param name="hasFpsData">当前是否有**可信**的 FPS 数据（见 <c>HardwareMonitor.HasFpsData</c>）。</param>
+        /// <param name="readValue">读取实际数值的委托；FPS 不满足条件时**不会**被调用。</param>
+        /// <param name="value">写出的数值字符串（无值/未启用时为 "--"）。</param>
+        /// <param name="raw">读到的原始数值（无值/未启用时为 null）。</param>
+        public static WebSnapshotValueState ResolveValue(
+            string key,
+            bool fpsDemand,
+            bool hasFpsData,
+            Func<string, float?> readValue,
+            out string value,
+            out float? raw)
+        {
             value = NotEnabled;
             raw = null;
 
-            // ★ FPS 未启用：明确占位，不读数值（读 FPS 会触发外部采集服务的惰性启动）
-            if (!fpsDemand && string.Equals(key, "FPS", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(key, "FPS", StringComparison.OrdinalIgnoreCase))
             {
-                return WebSnapshotValueState.NotEnabled;
+                // ① 先判需求：没有需求 → 明确占位，且**不读取数值**
+                //    （读 FPS 会触发外部采集服务的惰性启动）
+                if (!fpsDemand) return WebSnapshotValueState.NotEnabled;
+
+                // ② 再判数据可信度：服务刚启动、首帧未到 → 也是"尚无可信数据"，
+                //    输出 "--" 而不是把"没数据"伪报成 0
+                if (!hasFpsData) return WebSnapshotValueState.NotEnabled;
             }
 
             float? v = readValue(key);
