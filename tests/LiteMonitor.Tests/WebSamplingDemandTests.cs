@@ -1777,5 +1777,248 @@ namespace LiteMonitor.Tests
 
             manager.Stop();
         }
+
+        // ================================================================
+        // 8. 广播代次隔离（复审 R3 的常驻回归测试）
+        // ================================================================
+
+        /// <summary>
+        /// 假时钟：单调时间戳恒定，且**计时器永不触发**。
+        ///
+        /// ★ 为什么必须"计时器永不触发"：
+        ///   <c>RequestSharedSamplingWithTimeoutAsync</c> 用
+        ///   <c>Task.Delay(SamplingWaitTimeout, _time)</c>（2 秒）做**超时降级**
+        ///   （超时后照常序列化缓存值并发送）。
+        ///   基类 <see cref="TimeProvider"/> 的 <c>CreateTimer</c> 走的是**真实**系统计时器，
+        ///   所以"注入假时钟"并**不能**让这个超时失效 ——
+        ///   机器一忙，2 秒一到新代次的采样请求就降级、照常序列化并发送，
+        ///   用例会变成**依赖真实时间**的 flaky 测试
+        ///   （本轮实际踩到：单独跑绿、全量跑红，收到 14 字节）。
+        ///   本类让该超时**永不**发生，把用例从真实时间里彻底解耦。
+        /// </summary>
+        private sealed class NeverFiringTimeProvider : TimeProvider
+        {
+            public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+            public override long GetTimestamp() => 0;
+
+            public override DateTimeOffset GetUtcNow()
+                => new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero);
+
+            /// <summary>
+            /// 4 参重载（.NET 8 <see cref="TimeProvider"/> 上唯一可重写的计时器入口）：
+            /// <c>Task.Delay(TimeSpan, TimeProvider)</c> 内部（<c>DelayPromise</c>）
+            /// 走的就是这一个，**必须**覆盖它，否则采样等待的 2 秒超时仍会按真实时间触发。
+            /// ★ 实测（net8.0.32 探针）：覆盖后 <c>Task.Delay</c> 挂起且**永不完成**，
+            ///   等价于"超时降级"这条路径被彻底关掉。
+            /// </summary>
+            public override ITimer CreateTimer(TimerCallback callback, object state, TimeSpan dueTime, TimeSpan period)
+                => new NeverFiringTimer();
+
+            private sealed class NeverFiringTimer : ITimer
+            {
+                public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+                public void Dispose() { }
+                public ValueTask DisposeAsync() => default;
+            }
+        }
+
+        /// <summary>
+        /// 复审 R3：旧代次的广播**不得**跨过 Stop → Start 边界，
+        /// 把帧发给"重启之后才连上"的新连接。
+        ///
+        /// ★ 修复前这条用例是**红的**（复审实测新连接收到 15 字节旧帧）：
+        ///   广播循环只在 while 入口校验服务代次；循环体里 await 共享采样期间
+        ///   发生 Stop → Start 时，**采集方不响应取消**、等待包装又把取消
+        ///   **转成 false**（不抛异常）→ 旧循环"正常"恢复 → 继续序列化 →
+        ///   枚举共享的连接字典 → 把旧帧发给新代次的连接。
+        ///
+        /// ★ 构造方式：第 1 次采样请求挂起 → Stop → Start → 用私有接缝按
+        ///   **新代次**注册连接 → 放行第 1 次请求 → 旧循环恢复。
+        ///   之后的所有采样请求一律挂起 → 新代次的广播循环停在采样处，
+        ///   于是"新连接收到的字节"只可能来自**旧**循环。
+        /// </summary>
+        [Fact]
+        public async Task 旧代次广播不得发给重启之后才连上的新连接()
+        {
+            var firstRequestEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseFirstRequest = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var blockLaterRequests = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            int requestCount = 0;
+
+            var manager = NewManager(
+                timeProvider: new NeverFiringTimeProvider(),
+                samplingRequester: ct =>
+                {
+                    if (Interlocked.Increment(ref requestCount) == 1)
+                    {
+                        firstRequestEntered.TrySetResult(true);
+                        return releaseFirstRequest.Task;
+                    }
+                    return blockLaterRequests.Task;
+                });
+
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+
+            async Task<(TcpClient Client, TcpClient Server)> AcceptPairAsync()
+            {
+                var client = new TcpClient();
+                var accept = listener.AcceptTcpClientAsync();
+                await client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+                return (client, await accept);
+            }
+
+            TcpClient client2 = null;
+            TcpClient server2 = null;
+            try
+            {
+                var pair1 = await AcceptPairAsync();
+                manager.Start();
+                AddClientViaPrivateSeam(manager, pair1.Server);
+
+                Assert.True(await firstRequestEntered.Task.WaitAsync(TimeSpan.FromSeconds(10)),
+                    "旧代次的第一次采样请求必须已经进入挂起状态（前提不成立）");
+
+                // 跨过 Stop → Start 边界
+                manager.Stop();
+                manager.Start();
+                int newGeneration = manager.Generation;
+
+                // 新连接在**新代次**注册
+                var pair2 = await AcceptPairAsync();
+                client2 = pair2.Client;
+                server2 = pair2.Server;
+                AddClientViaPrivateSeam(manager, server2);
+
+                // ★ 防"空断言恒真"：必须确认新连接**确实已按新代次登记**，
+                //   否则"收到 0 字节"可能只是"根本没有收件人"，用例就白绿了。
+                Assert.Equal(newGeneration, manager.Generation);
+                Assert.True(CurrentClientCount(manager) >= 1,
+                    "新连接必须已经登记在管理器里（否则本用例会变成空断言恒真）");
+
+                // 放行旧代次的采样请求 → 旧循环恢复
+                releaseFirstRequest.TrySetResult(true);
+
+                int received = await ReadBytesAsync(client2, TimeSpan.FromMilliseconds(700));
+                Assert.Equal(0, received);
+            }
+            finally
+            {
+                manager.Stop();
+                releaseFirstRequest.TrySetResult(false);
+                blockLaterRequests.TrySetResult(false);
+                listener.Stop();
+                client2?.Dispose();
+                server2?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// 正向对照（防"空断言恒真"）：与上一条**同一套装置**，但**不**跨 Stop → Start 边界。
+        /// 此时广播**必须**能送达客户端 —— 若这条用例变红，说明上一条"收到 0 字节"
+        /// 只是因为装置看不见帧，而不是因为代次隔离生效。
+        /// </summary>
+        [Fact]
+        public async Task 未跨重启边界时广播必须能送达客户端_正向对照()
+        {
+            var firstRequestEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseFirstRequest = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var blockLaterRequests = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            int requestCount = 0;
+
+            var manager = NewManager(
+                timeProvider: new NeverFiringTimeProvider(),
+                samplingRequester: ct =>
+                {
+                    if (Interlocked.Increment(ref requestCount) == 1)
+                    {
+                        firstRequestEntered.TrySetResult(true);
+                        return releaseFirstRequest.Task;
+                    }
+                    return blockLaterRequests.Task;
+                });
+
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+
+            TcpClient client = null;
+            TcpClient server = null;
+            try
+            {
+                var clientSide = new TcpClient();
+                var accept = listener.AcceptTcpClientAsync();
+                await clientSide.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+                client = clientSide;
+                server = await accept;
+
+                manager.Start();
+                AddClientViaPrivateSeam(manager, server);
+
+                Assert.True(await firstRequestEntered.Task.WaitAsync(TimeSpan.FromSeconds(10)),
+                    "第一次采样请求必须已经进入挂起状态（前提不成立）");
+                Assert.True(CurrentClientCount(manager) >= 1, "连接必须已经登记");
+
+                releaseFirstRequest.TrySetResult(true);
+
+                int received = await ReadBytesAsync(client, TimeSpan.FromSeconds(5));
+                Assert.True(received > 0,
+                    "未跨重启边界时广播必须能送达客户端（否则上一条用例的 0 字节毫无意义）");
+            }
+            finally
+            {
+                manager.Stop();
+                releaseFirstRequest.TrySetResult(false);
+                blockLaterRequests.TrySetResult(false);
+                listener.Stop();
+                client?.Dispose();
+                server?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// 用私有接缝 <c>AddClient</c> 登记一个**已建立的 TCP 连接**，
+        /// 并把该连接绑定到**当前**服务代次。
+        ///
+        /// ★ 为什么走私有接缝而不是 <c>HandleClientAsync</c>：
+        ///   本用例要精确控制"连接属于哪个服务代次"，
+        ///   而 <c>HandleClientAsync</c> 会做完整 WebSocket 握手、
+        ///   登记时机由服务端决定，**无法稳定构造**"Stop → Start 之后才连上"这一时刻。
+        ///   本文件已有同类先例（<c>UseLoopbackListener</c> / <c>ResetLiteWebServerInstance</c>）
+        ///   同样用反射访问 internal / 私有接缝。
+        ///   ★ 它**没有**绕过被测代码：广播的采集、序列化、发送路径全部照常执行。
+        /// </summary>
+        private static void AddClientViaPrivateSeam(WebSessionManager manager, TcpClient server)
+        {
+            var method = typeof(WebSessionManager).GetMethod("AddClient",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.True(method != null,
+                "WebSessionManager 必须保留 private AddClient 接缝（否则无法构造'按代次登记'的场景）");
+            method.Invoke(manager, new object[] { server, manager.Generation });
+        }
+
+        /// <summary>当前登记的 WebSocket 客户端数量（用于断言用例前提真的成立）。</summary>
+        private static int CurrentClientCount(WebSessionManager manager)
+        {
+            var field = typeof(WebSessionManager).GetField("_wsClients",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.True(field != null, "WebSessionManager 必须保留 _wsClients 字段");
+            var value = field.GetValue(manager) as System.Collections.ICollection;
+            return value?.Count ?? 0;
+        }
+
+        /// <summary>在给定时间内读取客户端收到的字节数（0 = 没收到任何字节）。</summary>
+        private static async Task<int> ReadBytesAsync(TcpClient client, TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            try
+            {
+                var buffer = new byte[512];
+                return await client.GetStream().ReadAsync(buffer, cts.Token);
+            }
+            catch (OperationCanceledException) { return 0; }
+            catch (IOException) { return 0; }
+            catch (ObjectDisposedException) { return 0; }
+        }
     }
 }

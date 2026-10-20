@@ -317,7 +317,10 @@ namespace LiteMonitor.src.WebServer
 
     public class WebSessionManager
     {
-        private readonly ConcurrentDictionary<TcpClient, bool> _wsClients = new();
+        // ★ 值 = 该连接登记时的**运行代次**（不是无意义的 bool）：
+        //   广播收件人必须与广播循环所属的服务代次绑定 ——
+        //   旧代次的广播绝不能发给新代次（Stop → Start 之后才连上）的连接。
+        private readonly ConcurrentDictionary<TcpClient, int> _wsClients = new();
         private readonly Action<Utf8JsonWriter> _dataProvider;
         private readonly Func<Utf8JsonWriter, CancellationToken, Task>? _asyncDataProvider;
         private readonly WebSamplingRequester? _samplingRequester;
@@ -569,7 +572,9 @@ namespace LiteMonitor.src.WebServer
                     return;
                 }
 
-                if (_wsClients.TryAdd(client, true))
+                // ★ 登记时把**该连接的运行代次**一起记下来：
+                //   广播时用它过滤收件人（旧代次的广播不得发给新代次的连接）。
+                if (_wsClients.TryAdd(client, connectionGeneration))
                 {
                     _demand.AddAuthenticatedConnection();
                     registered = true;
@@ -731,13 +736,48 @@ namespace LiteMonitor.src.WebServer
         // --- 共享采样（限频） ---
 
         /// <summary>
+        /// 判断广播循环所属代次是否仍然是"当前代次"（没有跨过 Stop → Start 边界）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 为什么必须**自己查**，不能只看取消令牌：
+        ///   共享采样是"限频 + 并发合并"的，**采集方不响应取消令牌**；
+        ///   而等待包装（<see cref="RequestSharedSamplingWithTimeoutAsync"/>）又把取消
+        ///   **转成 false**（不抛异常）→ 旧循环会从 await **正常恢复**。
+        ///   所以每个 await 之后都要重新核对代次，否则旧代次会继续序列化并发送。
+        /// ★ 同时看令牌与代次：令牌覆盖"Stop 但还没自增代次"的瞬间，
+        ///   代次覆盖"Stop → Start 之后令牌已换新"的场景。
+        /// </remarks>
+        private bool IsGenerationCurrent(int generation, CancellationToken token)
+        {
+            return _isRunning
+                && !token.IsCancellationRequested
+                && generation == Volatile.Read(ref _generation);
+        }
+
+        /// <summary>
         /// 产出一次快照载荷：**先共享采样，再序列化**。
         /// HTTP 快照与网页广播都走这里 → 共用同一条限频采样路径。
         /// </summary>
-        private async Task ProducePayloadAsync(Utf8JsonWriter writer, CancellationToken cancellationToken)
+        /// <param name="writer">快照写入器。</param>
+        /// <param name="generation">调用方（广播循环）所属的服务代次。</param>
+        /// <param name="cancellationToken">取消令牌。</param>
+        /// <returns>
+        /// true = 载荷仍然有效（代次未变，可以发送）；
+        /// false = 已经跨过 Stop 边界（调用方必须**放弃本轮发送**，直接退出）。
+        /// </returns>
+        private async Task<bool> ProducePayloadAsync(Utf8JsonWriter writer, int generation, CancellationToken cancellationToken)
         {
             await RequestSharedSamplingWithTimeoutAsync(cancellationToken).ConfigureAwait(false);
+
+            // ★ 采样等待结束 → 重新校验代次。
+            //   采集方不响应取消，等待包装又把取消转成 false（不抛异常），
+            //   旧循环会从这里"正常"恢复 —— 必须在**序列化之前**自己查代次。
+            if (!IsGenerationCurrent(generation, cancellationToken)) return false;
+
             await WriteSnapshotAsync(writer, cancellationToken).ConfigureAwait(false);
+
+            // ★ 序列化等待结束 → 再校验一次（序列化本身也可能是异步的，期间同样可能 Stop → Start）。
+            return IsGenerationCurrent(generation, cancellationToken);
         }
 
         /// <summary>
@@ -817,7 +857,11 @@ namespace LiteMonitor.src.WebServer
             {
                 // ★ 代次校验：Stop 之后（或再次 Start 之后）本循环必须退出，
                 //   防止快速 Stop/Start 复活出第二个广播者。
-                while (_isRunning && generation == Volatile.Read(ref _generation))
+                //   ★ 这个校验**不能只看循环入口**：循环体里有多个 await
+                //     （等待共享采样 / 等待序列化 / 等待发送），
+                //     等待期间完全可能发生 Stop → Start。
+                //     所以每个 await 之后都要**重新**校验（见 IsGenerationCurrent）。
+                while (IsGenerationCurrent(generation, token))
                 {
                     // [Optimization] 如果没有任何客户端连接，降低循环频率以节省资源
                     if (_wsClients.IsEmpty)
@@ -838,7 +882,14 @@ namespace LiteMonitor.src.WebServer
                         using (var writer = new Utf8JsonWriter(payloadStream))
                         {
                             // ★ 先共享采样（限频），再序列化 —— 与 HTTP 路径同一条采样入口
-                            await ProducePayloadAsync(writer, token).ConfigureAwait(false);
+                            //   ProducePayloadAsync 在"采样等待结束"与"序列化等待结束"两处
+                            //   各自校验代次；返回 false = 本循环已过期 → 放弃本轮，绝不发送。
+                            bool payloadValid = await ProducePayloadAsync(writer, generation, token).ConfigureAwait(false);
+                            if (!payloadValid)
+                            {
+                                // ★ 旧代次：直接退出本轮（不能把这一帧发给重启后的新连接）
+                                break;
+                            }
                             writer.Flush();
                         }
                         payloadLen = (int)payloadStream.Length;
@@ -856,6 +907,9 @@ namespace LiteMonitor.src.WebServer
                         else if (payloadLen >= 126) headerLen += 2;
                         int totalLen = headerLen + payloadLen;
 
+                        // ★ 发送前再校验一次（构建帧的这段代码里也可能发生 Stop → Start）
+                        if (!IsGenerationCurrent(generation, token)) break;
+
                         // Rent a target buffer for the frame
                         byte[] frameBuffer = ArrayPool<byte>.Shared.Rent(totalLen);
                         try
@@ -870,11 +924,17 @@ namespace LiteMonitor.src.WebServer
                             // Broadcast using frameBuffer
                             var tasks = new List<Task>();
                             // Capture the buffer and length for the closure
-                            var bufToSend = frameBuffer; 
+                            var bufToSend = frameBuffer;
                             var lenToSend = totalLen;
 
-                            foreach (var client in _wsClients.Keys)
+                            foreach (var entry in _wsClients)
                             {
+                                // ★ 收件人必须与广播循环所属的服务代次绑定：
+                                //   旧代次的广播不能把新代次（Stop → Start 之后才连上）的连接当收件人。
+                                //   这一层防的是"最后一次代次校验与真正枚举/发送之间"的窄窗口。
+                                if (entry.Value != generation) continue;
+
+                                var client = entry.Key;
                                 if (!client.Connected)
                                 {
                                     // 已断开的连接：回收需求
@@ -895,6 +955,9 @@ namespace LiteMonitor.src.WebServer
                         {
                             ArrayPool<byte>.Shared.Return(frameBuffer);
                         }
+
+                        // ★ 等待发送结束 → 再校验：旧代次不再进入下一轮
+                        if (!IsGenerationCurrent(generation, token)) break;
                     }
                     catch (Exception ex)
                     {
