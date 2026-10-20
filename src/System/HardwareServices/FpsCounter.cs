@@ -754,6 +754,9 @@ namespace LiteMonitor.src.SystemServices
         private long _lastAccessTicks = 0;             // 最后一次被请求 FPS 数据的时间（单调毫秒）
         private long _lastDataTicks = 0;               // 最后一次收到数据的时间（单调毫秒）
         private long _nextStartAttemptTicks = 0;       // 启动失败后的重试退避截止时间
+        private int _serviceStarted = 0;               // 外部服务已成功启动且尚未观察到退出（1=已启动）
+        private int _lastKnownDemand = -1;             // 最近一次已知的 FPS 需求状态（-1=未知 0=无需求 1=有需求）
+        private long _startBlockedByBackoff = 0;       // 因"启动失败退避"被拒绝的拉起次数（观测限频效果）
 
         // ★★★ [新增] 静态关机标志 ★★★
         private static bool _isSystemShuttingDown = false;
@@ -779,6 +782,9 @@ namespace LiteMonitor.src.SystemServices
 
         // 管理员权限判定（可注入，便于单元测试；默认使用 Windows 身份判断）
         private readonly Func<bool> _administratorProbe;
+
+        // 毫秒单调时钟（可注入，便于单元测试用假时钟瞬间推进"启动失败退避窗口"）
+        private readonly Func<long> _clock;
 
         // 秒表计时，用于计算采样周期
         private Stopwatch _cycleTimer = new Stopwatch();
@@ -842,9 +848,29 @@ namespace LiteMonitor.src.SystemServices
         /// PresentMon 需要管理员权限（ETW 会话），非管理员不得启动外部服务。
         /// </param>
         public FpsCounter(DriverInstaller installer, IFpsServiceLauncher? launcher, IFpsProcessQuery? processQuery, Func<bool>? administratorProbe)
+            : this(installer, launcher, processQuery, administratorProbe, null)
+        {
+        }
+
+        /// <summary>
+        /// FPS 构造函数（可注入外部服务启动器、进程查询器、管理员权限判定与毫秒单调时钟）
+        /// </summary>
+        /// <param name="installer">注入 DriverInstaller 以复用下载逻辑</param>
+        /// <param name="launcher">外部 FPS 采集服务启动器；为 null 时使用默认的 PresentMon 启动器</param>
+        /// <param name="processQuery">进程查询器；为 null 时使用基于 Process 的默认实现</param>
+        /// <param name="administratorProbe">
+        /// 管理员权限判定；为 null 时使用 <see cref="IsAdministrator"/>。
+        /// PresentMon 需要管理员权限（ETW 会话），非管理员不得启动外部服务。
+        /// </param>
+        /// <param name="clock">
+        /// 毫秒单调时钟；为 null 时使用 <see cref="Environment.TickCount64"/>。
+        /// 注入假时钟后，"启动失败退避窗口"可以用假时钟瞬间推进，测试无需真实等待 30 秒。
+        /// </param>
+        public FpsCounter(DriverInstaller installer, IFpsServiceLauncher? launcher, IFpsProcessQuery? processQuery, Func<bool>? administratorProbe, Func<long>? clock)
         {
             _driverInstaller = installer;
             _administratorProbe = administratorProbe ?? IsAdministrator;
+            _clock = clock ?? (() => Environment.TickCount64);
             _launcher = launcher ?? new PresentMonServiceLauncher(installer, _administratorProbe);
             _processQuery = processQuery ?? new SystemProcessQuery();
 
@@ -856,7 +882,8 @@ namespace LiteMonitor.src.SystemServices
 
             _store = new FpsProcessStateStore(_processQuery, new FpsStateOptions
             {
-                ExcludedProcesses = ExcludedProcesses
+                ExcludedProcesses = ExcludedProcesses,
+                Clock = _clock
             });
 
             // [修改] 确保目录存在 (DriverInstaller 也会做，这里双重保险)
@@ -913,6 +940,12 @@ namespace LiteMonitor.src.SystemServices
         /// <summary>当前是否存在可上报的 FPS 数据（外部可查询；false 时不应把 FPS 报成 0）</summary>
         public bool HasFpsData => _store.HasActiveFps;
 
+        /// <summary>
+        /// 因"启动失败退避"被拒绝的拉起次数（用于观测限频效果）。
+        /// 该计数在 <see cref="GetFps"/> 调用链内同步递增，可用于确定性断言"退避确实拦下了拉起请求"。
+        /// </summary>
+        public long StartBlockedByBackoffCount => Interlocked.Read(ref _startBlockedByBackoff);
+
         private void Log(string msg)
         {
             try { File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss}] {msg}\n"); } catch { }
@@ -924,6 +957,10 @@ namespace LiteMonitor.src.SystemServices
         private void OnExternalServiceExited()
         {
             _isRunning = false;
+            // ★ 进程"起来即退"必须记一次启动失败退避：
+            //   否则外部会按 GetFps() 的调用频率无界重拉起 PresentMon
+            //   （每次拉起还带一个 logman 子进程），违反"禁止失败重试忙循环"。
+            RecordUnexpectedExitBackoff();
         }
 
         /// <summary>
@@ -931,7 +968,12 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         private void SyncServiceState()
         {
-            if (_isRunning && !_launcher.IsRunning) _isRunning = false;
+            if (_isRunning && !_launcher.IsRunning)
+            {
+                _isRunning = false;
+                // 退出事件未送达时同样要记退避，否则退避会被完全绕过
+                RecordUnexpectedExitBackoff();
+            }
         }
 
         /// <summary>
@@ -942,7 +984,7 @@ namespace LiteMonitor.src.SystemServices
         public float? GetFps()
         {
             // ★★★ [修改] 记录本次访问时间，并触发惰性启动 ★★★
-            Interlocked.Exchange(ref _lastAccessTicks, Environment.TickCount64);
+            Interlocked.Exchange(ref _lastAccessTicks, _clock());
 
             // 已最终释放：不再启动服务
             if (Volatile.Read(ref _disposed) != 0) return 0f;
@@ -1045,15 +1087,27 @@ namespace LiteMonitor.src.SystemServices
         private bool ResolveDemand()
         {
             Func<bool>? provider = FpsDemandProvider;
+            bool demand;
             if (provider != null)
             {
-                try { return provider(); }
-                catch { return false; }
+                try { demand = provider(); }
+                catch { demand = false; }
+            }
+            else
+            {
+                long last = Interlocked.Read(ref _lastAccessTicks);
+                demand = last != 0 && _clock() - last <= IdleStopSeconds * 1000L;
             }
 
-            long last = Interlocked.Read(ref _lastAccessTicks);
-            if (last == 0) return false;
-            return Environment.TickCount64 - last <= IdleStopSeconds * 1000L;
+            // ★ 需求消失时清理启动失败退避：
+            //   否则这条退避会把"需求重新开启"一起挡住（重新启用需求后拉不起服务）。
+            //   需求仍在时不动退避，保证"失败一次后窗口内不再拉起"这条不变量。
+            if (Interlocked.Exchange(ref _lastKnownDemand, demand ? 1 : 0) == 1 && !demand)
+            {
+                Interlocked.Exchange(ref _nextStartAttemptTicks, 0);
+            }
+
+            return demand;
         }
 
         /// <summary>
@@ -1088,7 +1142,7 @@ namespace LiteMonitor.src.SystemServices
             if (_isRunning && demand)
             {
                 // 判断服务是否异常：超过3秒没有收到数据或进程已退出
-                bool isDead = (Environment.TickCount64 - _lastDataTicks) > 3000;
+                bool isDead = (_clock() - _lastDataTicks) > 3000;
                 if (!_launcher.IsRunning) isDead = true;
 
                 // 异常时重启服务。
@@ -1108,6 +1162,9 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         public void StopService()
         {
+            // ★ 先清"已启动"标记：主动停止不是"启动失败"，
+            //   不能因此给后续重新拉起记上一条 30 秒退避。
+            Interlocked.Exchange(ref _serviceStarted, 0);
             try { _launcher.Stop(); } catch { }
             _isRunning = false;
 
@@ -1147,7 +1204,12 @@ namespace LiteMonitor.src.SystemServices
             if (_isRunning) return;
             if (Volatile.Read(ref _disposed) != 0) return;
             if (Volatile.Read(ref _startGate) != 0) return;   // 已有启动流程在进行
-            if (Environment.TickCount64 < Interlocked.Read(ref _nextStartAttemptTicks)) return; // 失败退避
+            if (_clock() < Interlocked.Read(ref _nextStartAttemptTicks))
+            {
+                // 退避生效：记一次被拦下的拉起（观测限频效果）
+                Interlocked.Increment(ref _startBlockedByBackoff);
+                return;
+            }
 
             Task.Run(() => StartService());
         }
@@ -1167,7 +1229,7 @@ namespace LiteMonitor.src.SystemServices
 
                 // ★★★ [修改] 拿到闸门后再复查：排队中的启动任务不能重复拉起第二个实例 ★★★
                 if (_isRunning) return;
-                if (Environment.TickCount64 < Interlocked.Read(ref _nextStartAttemptTicks)) return; // 失败退避
+                if (_clock() < Interlocked.Read(ref _nextStartAttemptTicks)) return; // 失败退避
 
                 // 没有需求：不启动、不下载
                 if (!ResolveDemand()) return;
@@ -1193,7 +1255,9 @@ namespace LiteMonitor.src.SystemServices
 
                 // 更新服务状态
                 _isRunning = true;
-                Interlocked.Exchange(ref _lastDataTicks, Environment.TickCount64);
+                // 标记"已成功启动"：之后若观察到进程退出，即按"启动失败"记一次退避
+                Interlocked.Exchange(ref _serviceStarted, 1);
+                Interlocked.Exchange(ref _lastDataTicks, _clock());
             }
             catch
             {
@@ -1210,7 +1274,27 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         private void ScheduleStartRetry()
         {
-            Interlocked.Exchange(ref _nextStartAttemptTicks, Environment.TickCount64 + StartRetryBackoffMs);
+            Interlocked.Exchange(ref _nextStartAttemptTicks, _clock() + StartRetryBackoffMs);
+        }
+
+        /// <summary>
+        /// 记录"外部服务意外退出"（进程起来即退 / 崩溃）导致的启动失败退避。
+        ///
+        /// 不变量：<b>一旦因为启动失败或进程秒退而失败过一次，
+        /// 后续在退避窗口（<see cref="StartRetryBackoffMs"/>）内不得再次拉起外部进程。</b>
+        ///
+        /// 主动停止（<see cref="StopService"/> / <see cref="Dispose"/>）不算失败：
+        /// 那两条路径会先清掉 <c>_serviceStarted</c> 标记，因此这里不会误记退避。
+        /// </summary>
+        private void RecordUnexpectedExitBackoff()
+        {
+            if (Volatile.Read(ref _disposed) != 0) return;
+
+            // 只有"确实成功启动过、且不是我们主动停的"才记退避。
+            // Interlocked.Exchange 同时保证幂等：同一次退出只记一条退避。
+            if (Interlocked.Exchange(ref _serviceStarted, 0) == 0) return;
+
+            ScheduleStartRetry();
         }
 
         /// <summary>
@@ -1218,7 +1302,7 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         private void OnPresentMonLine(string line)
         {
-            Interlocked.Exchange(ref _lastDataTicks, Environment.TickCount64);
+            Interlocked.Exchange(ref _lastDataTicks, _clock());
             ParseLine(line);
         }
 
