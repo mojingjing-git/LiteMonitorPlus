@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Threading;
 using System.Threading.Tasks;
 using LiteMonitor.src.SystemServices;
@@ -29,15 +31,26 @@ namespace LiteMonitor.Tests
         private const int StateWaitMs = 20000;
 
         /// <summary>
-        /// "服务应当及时进入运行状态"的短预算（毫秒，真实单调时钟）。
+        /// "**启动调度路径**应当及时进入运行状态"的短预算（毫秒，真实单调时钟）。
         ///
         /// 与 <see cref="StateWaitMs"/> 的分工（两条断言并存，不靠放宽预算糊过去）：
         /// - <see cref="StateWaitMs"/> 只保证"该状态最终发生"，
         ///   用来兜住高负载下 .NET 线程池调度被推迟的情况，不约束快慢；
-        /// - 本预算是一条**及时性**护栏：防止"启动耗时 5–20s"的性能回归
-        ///   被上面那条宽松预算掩盖。
+        /// - 本预算是一条**及时性**护栏：防止"**FpsCounter 自身启动调度**耗时 5–20s"
+        ///   的性能回归被上面那条宽松预算掩盖。
         /// 取值依据：健康检查每 3 秒一轮，服务最迟应在下一轮检查内进入运行状态，
         /// 因此给到 5s（≈ 3s 检查周期 + 2s 余量）。
+        ///
+        /// ★ 覆盖范围（收窄措辞，修复轮 4）：
+        ///   本预算**只**覆盖 <c>FpsCounter</c> 自身的启动调度路径
+        ///   （<c>GetFps → EnsureServiceStarted → Task.Run(StartService) → EnsureAvailable → Start</c>）。
+        ///   注入的启动器是**假启动器**：<c>EnsureAvailable</c> / <c>Start</c> 默认立即返回，
+        ///   因此真机上最可能变慢的两段 —— PresentMon 组件的下载 / 校验
+        ///   （生产实现里的 <c>CheckAndDownloadPresentMon(silent: true).Wait(120000)</c>，真机可达 **120 秒**）
+        ///   与真实 <c>Process.Start</c> + ETW 会话建立 —— **不在本护栏的测量范围内**。
+        ///   **真机 PresentMon 启动耗时由 Task 6 实机测量覆盖**。
+        ///   （要让"启动链变慢"进入测量范围，用例 <c>启动链变慢时及时性护栏能变红</c>
+        ///   通过**注入延迟**把这段耗时放进被测路径。）
         /// </summary>
         private const int StartLatencyBudgetMs = 5000;
 
@@ -47,6 +60,16 @@ namespace LiteMonitor.Tests
         /// 必须给被测系统一个真实时间窗，否则断言可能跑在后台启动任务之前而假通过。
         /// </summary>
         private const int MustNotHappenWaitMs = 1500;
+
+        /// <summary>
+        /// 及时性测量专用等待预算（毫秒）。
+        ///
+        /// 与 <see cref="StateWaitMs"/> 分开：及时性用例会**故意**让启动链变慢
+        /// （注入 6s 延迟），需要比普通用例更宽裕的等待窗来吸收机器负载抖动。
+        /// ★ 这是"等一个真实状态"的**上限**，不是被断言的量 ——
+        ///   被断言的是"注入的延迟是否生效"与"护栏判定"，都不依赖这个上限。
+        /// </summary>
+        private const int StartLatencyWaitMs = 30000;
 
         // ================================================================
         // 测试替身
@@ -111,6 +134,24 @@ namespace LiteMonitor.Tests
             /// <summary>为 true 时 Start() 会阻塞在 <see cref="ReleaseStart"/> 上（用于确定性并发测试）</summary>
             public bool BlockStart { get; set; }
 
+            /// <summary>
+            /// <see cref="EnsureAvailable"/> 的**注入延迟**（毫秒，真实单调时钟）。
+            ///
+            /// 用途：模拟真机上"下载 / 校验 PresentMon 组件"这一步的耗时
+            /// （生产实现里对应 <c>CheckAndDownloadPresentMon(silent: true).Wait(120000)</c>，
+            /// 真机上可能长达 **120 秒**）。
+            /// 默认 0 = 立即返回（绝大多数用例保持该默认值）。
+            /// </summary>
+            public int EnsureAvailableDelayMs { get; set; }
+
+            /// <summary>
+            /// <see cref="Start"/> 的**注入延迟**（毫秒，真实单调时钟）。
+            ///
+            /// 用途：模拟真机上"真实 <c>Process.Start</c> + ETW 会话建立"的耗时。
+            /// 默认 0 = 立即返回（绝大多数用例保持该默认值）。
+            /// </summary>
+            public int StartDelayMs { get; set; }
+
             /// <summary>进入 Start() 时被置位</summary>
             public ManualResetEventSlim StartEntered => _startEntered;
 
@@ -124,12 +165,14 @@ namespace LiteMonitor.Tests
             public bool EnsureAvailable()
             {
                 Interlocked.Increment(ref _ensureCount);
+                if (EnsureAvailableDelayMs > 0) Thread.Sleep(EnsureAvailableDelayMs);
                 return true;
             }
 
             public bool Start(Action<string> onLine, out string? error)
             {
                 Interlocked.Increment(ref _startCount);
+                if (StartDelayMs > 0) Thread.Sleep(StartDelayMs);
                 error = null;
                 Volatile.Write(ref _isRunning, 1);
                 _startEntered.Set();
@@ -1043,28 +1086,214 @@ namespace LiteMonitor.Tests
             Assert.True(launcher.StartCount == 1, "退避窗口内不得再次拉起外部服务");
         }
 
-        [Fact]
-        public void 服务应当在短时间内进入运行状态而不是拖到宽松预算上限()
-        {
-            // 背景：修复轮 2 把等待预算从 3s/5s/8s 放宽到 20s（健康检查 40s）。
-            // 断言语义没被削弱（仍是"该状态最终发生"），但"启动耗时 5–20s"的性能回归不再被发现。
-            // 这里保留一条**短**的及时性断言（真实单调时钟；假时钟测不出"慢"），
-            // 与上面那条宽松的"最终发生"断言并存。
-            var launcher = new FakeLauncher();
-            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
+        // ================================================================
+        // 启动及时性护栏（覆盖范围：FpsCounter 自身的启动调度路径）
+        // ================================================================
 
+        /// <summary>
+        /// 及时性护栏**本体**：服务进入运行状态的耗时必须**小于** <see cref="StartLatencyBudgetMs"/> 毫秒。
+        ///
+        /// 超预算 → 抛断言异常（护栏"变红"）；在预算内 → 通过（护栏"保持绿"）。
+        /// 判定逻辑只写这一处，"及时性用例"与"证明护栏不空"的用例共用同一份。
+        /// </summary>
+        private static void AssertStartLatencyWithinBudget(long elapsedMs)
+        {
+            Assert.True(elapsedMs < StartLatencyBudgetMs,
+                $"启动调度路径应当在 {StartLatencyBudgetMs}ms 内进入运行状态（实际 {elapsedMs}ms）；" +
+                "否则'FpsCounter 启动调度变慢'的性能回归会被宽松的'最终发生'预算掩盖");
+        }
+
+        /// <summary>
+        /// 测量"从 <c>GetFps()</c> 到服务进入运行状态"的真实单调耗时（毫秒）。
+        /// 只用于及时性护栏；等待方式是"等真实状态"，不靠 sleep 制造时序。
+        /// </summary>
+        private static long MeasureStartLatencyMs(FpsCounter counter, FakeLauncher launcher)
+        {
             // 预热线程池：避免"首次注入线程"的延迟被算进启动耗时
             Task.Run(() => { }).GetAwaiter().GetResult();
 
             var sw = Stopwatch.StartNew();
             counter.GetFps();
-            Assert.True(launcher.WaitForStart(1, StateWaitMs), "第一次启动应当发生");
-            Assert.True(WaitUntil(() => counter.IsServiceRunning, StateWaitMs), "服务应当处于运行状态");
-            long elapsed = sw.ElapsedMilliseconds;
+            Assert.True(launcher.WaitForStart(1, StartLatencyWaitMs), "第一次启动应当发生");
+            Assert.True(WaitUntil(() => counter.IsServiceRunning, StartLatencyWaitMs),
+                $"服务应当处于运行状态（start={launcher.StartCount} ensure={launcher.EnsureCount} " +
+                $"stop={launcher.StopCount} demand={counter.IsFpsDemandActive} " +
+                $"blocked={counter.StartBlockedByBackoffCount} launcherRunning={launcher.IsRunning}）");
+            return sw.ElapsedMilliseconds;
+        }
 
-            Assert.True(elapsed < StartLatencyBudgetMs,
-                $"服务应当在 {StartLatencyBudgetMs}ms 内进入运行状态（实际 {elapsed}ms）；" +
-                "否则'启动变慢'的性能回归会被宽松的'最终发生'预算掩盖");
+        /// <summary>
+        /// 用"注入了 <paramref name="ensureDelayMs"/> 延迟的假启动器"测量启动耗时。
+        /// 注入点是真机上最可能变慢的那一段（<c>EnsureAvailable</c>：下载 / 校验 PresentMon 组件）。
+        /// </summary>
+        private static long MeasureStartLatencyMsWithEnsureDelay(int ensureDelayMs)
+        {
+            var launcher = new FakeLauncher { EnsureAvailableDelayMs = ensureDelayMs };
+            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
+            // ★ 必须显式注入"永远有需求"：默认的需求规则是"最近 IdleStopSeconds(=5) 秒内被访问过"
+            //   （FpsCounter.cs:1113），而本用例的注入延迟（6s）**超过** 5 秒 →
+            //   需求在启动途中过期 → 3 秒一轮的健康检查会按"没有需求"把**刚起来的服务停掉**
+            //   （CheckHealth → StopService）→ 之后不再重启（需求为 false）→
+            //   测出来的不是"启动耗时"，而是"服务被停掉后永远起不来"。
+            //   本用例要测的是**启动调度耗时**，不是"空闲多久停服务"，所以把需求固定为 true。
+            counter.FpsDemandProvider = () => true;
+            return MeasureStartLatencyMs(counter, launcher);
+        }
+
+        [Fact]
+        public void 启动调度路径应当在预算内进入运行状态而不是拖到宽松预算上限()
+        {
+            // ★ 覆盖范围（收窄措辞，修复轮 4 的 F-2）：
+            //   本护栏只覆盖 **FpsCounter 自身的启动调度路径**
+            //   （GetFps → EnsureServiceStarted → Task.Run(StartService) → EnsureAvailable → Start）。
+            //   真机上最可能变慢的两段 —— PresentMon 组件的下载 / 校验
+            //   （生产实现里的 CheckAndDownloadPresentMon(silent: true).Wait(120000)，真机可达 120 秒）
+            //   与真实 Process.Start + ETW 会话建立 —— **不在本护栏的测量范围内**；
+            //   **真机 PresentMon 启动耗时由 Task 6 实机测量覆盖**。
+            //
+            // 背景：修复轮 2 把等待预算从 3s/5s/8s 放宽到 20s（健康检查 40s）。
+            // 断言语义没被削弱（仍是"该状态最终发生"），但"启动耗时 5–20s"的性能回归不再被发现。
+            // 这里保留一条**短**的及时性断言（真实单调时钟；假时钟测不出"慢"），
+            // 与宽松的"最终发生"断言并存。
+            var launcher = new FakeLauncher();
+            using var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
+            // ★ 需求固定为 true：本用例测的是**启动调度耗时**，
+            //   不该受"最近 5 秒有没有被访问过"（IdleStopSeconds）这条默认需求规则影响。
+            counter.FpsDemandProvider = () => true;
+
+            long elapsed = MeasureStartLatencyMs(counter, launcher);
+
+            AssertStartLatencyWithinBudget(elapsed);
+        }
+
+        [Fact]
+        public void 启动链变慢时及时性护栏能变红()
+        {
+            // ★ 这条用例证明及时性护栏**不空**（修复轮 4 的 F-2）：
+            //   把"假启动器"换成"慢启动器"（注入超过预算的延迟）后，护栏必须**变红**。
+            //
+            // ★★ 断言**零时间依赖**（本轮修掉的一个 flaky）：
+            //   场景 1 用真实注入的 6s 延迟，但判定只用两条**恒真**关系：
+            //     ① "实测耗时 >= 注入值" —— 注入的 Thread.Sleep 不可能更短；
+            //     ② "注入值 6000 > 预算 5000" —— 纯常量比较。
+            //   场景 2 **不再做真实注入**，改用**合成耗时值**直接喂给护栏
+            //   （预算内 → 必须不抛；超预算 → 必须抛）。
+            //   → 无论机器多忙，本用例的结论都不翻面。
+            //   （上一版场景 2 用真实 200ms 注入并要求"实测 < 5000ms"，
+            //     余量只有 25 倍，机器一忙就翻面 —— 已废弃。）
+            //
+            //   期望值由"注入的延迟 vs 预算"**独立算出**（不复用护栏的判定逻辑），
+            //   所以下面两种变异的后果是确定的：
+            //   - 放宽 / 去掉护栏的上界 → 实际判定与期望不一致 → 本用例**变红**；
+            //   - 把注入的延迟改成低于预算 → 期望随之变成"绿" → 本用例**仍然绿**。
+
+            // 护栏的预算值本身也不得被放宽 —— 这正是"放宽预算掩盖回归"的历史教训
+            // （修复轮 2 把等待预算从 3s/5s/8s 放宽到 20s，掩盖了"启动变慢"）。
+            Assert.True(StartLatencyBudgetMs == 5000,
+                "及时性护栏的预算不得被放宽（依据：3s 健康检查周期 + 2s 余量）");
+
+            // 场景 1：注入 6s（> 5s 预算）→ 护栏必须判红
+            const int slowDelayMs = 6000;
+            long slowElapsed = MeasureStartLatencyMsWithEnsureDelay(slowDelayMs);
+            // ① 单边且确定：注入的延迟必须真的生效（Thread.Sleep 不可能更短）
+            Assert.True(slowElapsed >= slowDelayMs,
+                $"注入的 {slowDelayMs}ms 延迟必须真的生效（实测耗时 {slowElapsed}ms，不可能小于注入值）");
+            // ② 护栏对这个耗时必须判红（6000ms > 5000ms 预算，确定性）
+            bool slowShouldBeRed = slowDelayMs > StartLatencyBudgetMs;
+            var slowException = Record.Exception(() => AssertStartLatencyWithinBudget(slowElapsed));
+            Assert.True(slowShouldBeRed == (slowException != null),
+                $"注入 {slowDelayMs}ms 的启动链延迟后，及时性护栏必须判红（实际耗时 {slowElapsed}ms；" +
+                $"注入延迟 {slowDelayMs}ms vs 预算 {StartLatencyBudgetMs}ms 的期望判定 = {(slowShouldBeRed ? "红" : "绿")}）");
+
+            // 场景 2：**合成耗时值**（零时间依赖）—— 护栏在预算内不抛、超预算必抛
+            var withinException = Record.Exception(
+                () => AssertStartLatencyWithinBudget(StartLatencyBudgetMs - 1));
+            Assert.True(withinException == null,
+                $"耗时 {StartLatencyBudgetMs - 1}ms（预算 {StartLatencyBudgetMs}ms 内）时护栏必须不抛（护栏不是恒红）");
+            var overException = Record.Exception(
+                () => AssertStartLatencyWithinBudget(StartLatencyBudgetMs + 1));
+            Assert.True(overException != null,
+                $"耗时 {StartLatencyBudgetMs + 1}ms（超预算 {StartLatencyBudgetMs}ms）时护栏必须抛（护栏不是恒绿）");
+        }
+
+        // ================================================================
+        // 启动顺序的结构性护栏（IL 断言）
+        // ================================================================
+
+        /// <summary>
+        /// 找到"把 <c>_serviceStarted</c> 置 1"那条 <c>Interlocked.Exchange</c> 调用的 IL 偏移；找不到返回 -1。
+        /// </summary>
+        private static int FindServiceStartedExchangeOffset(IList<IlInspector.IlInstruction> instructions)
+        {
+            for (int i = 0; i < instructions.Count; i++)
+            {
+                var instruction = instructions[i];
+                if (instruction.OpCode != OpCodes.Call) continue;
+
+                var target = instruction.Target as MethodInfo;
+                if (target == null || target.DeclaringType != typeof(Interlocked) || target.Name != "Exchange") continue;
+
+                // 往前找最近的一条**字段加载**指令，确认这次 Exchange 写的确实是 _serviceStarted。
+                // （StartService 里还有一次 Interlocked.Exchange(ref _lastDataTicks, ...)，
+                //   两者必须靠"最近加载的字段"区分开。）
+                for (int j = i - 1; j >= 0 && j >= i - 8; j--)
+                {
+                    var previous = instructions[j];
+                    if (previous.Field == null) continue;
+                    if (previous.OpCode != OpCodes.Ldfld && previous.OpCode != OpCodes.Ldflda &&
+                        previous.OpCode != OpCodes.Ldsfld && previous.OpCode != OpCodes.Ldsflda) continue;
+                    if (previous.Field.Name == "_serviceStarted") return instruction.Offset;
+                    break;   // 最近加载的是别的字段 → 不是这一条
+                }
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// 找到 <c>_isRunning = true</c> 那条写指令（<c>stfld</c>）的 IL 偏移；找不到返回 -1。
+        /// （<c>if (_isRunning) return;</c> 是读，用的是 <c>ldfld</c>，不会被误认。）
+        /// </summary>
+        private static int FindIsRunningStoreOffset(IList<IlInspector.IlInstruction> instructions)
+        {
+            foreach (var instruction in instructions)
+            {
+                if (instruction.OpCode == OpCodes.Stfld && instruction.Field != null &&
+                    instruction.Field.Name == "_isRunning")
+                {
+                    return instruction.Offset;
+                }
+            }
+            return -1;
+        }
+
+        [Fact]
+        public void 启动成功标记必须早于运行状态置位()
+        {
+            // ★ 回归保护（修复轮 4 的 F-1）：
+            //   `Interlocked.Exchange(ref _serviceStarted, 1)` 必须**早于** `_isRunning = true`。
+            //   顺序反过来的话，退出回调若恰好落在这两行之间（纳秒级窗口），
+            //   RecordUnexpectedExitBackoff 会看到 _serviceStarted 仍为 0 而提前返回
+            //   → 这次失败**没被记账** → 下一次 GetFps() 会多拉起一次。
+            //   这个窗口**无法**用时序测试稳定命中（复审的 300 轮随机退出时序 harness 也没实测命中），
+            //   所以用**IL 结构断言**把顺序锁死：确定性、零时序依赖、零生产代码改动。
+            var startService = typeof(FpsCounter).GetMethod("StartService",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(startService);
+
+            var instructions = IlInspector.Disassemble(startService).Instructions;
+            Assert.NotEmpty(instructions);
+
+            int exchangeOffset = FindServiceStartedExchangeOffset(instructions);
+            int isRunningStoreOffset = FindIsRunningStoreOffset(instructions);
+
+            Assert.True(exchangeOffset >= 0,
+                "StartService 的 IL 里必须存在 Interlocked.Exchange(ref _serviceStarted, 1)（找不到该指令）");
+            Assert.True(isRunningStoreOffset >= 0,
+                "StartService 的 IL 里必须存在 _isRunning = true 的写指令（找不到该指令）");
+            Assert.True(exchangeOffset < isRunningStoreOffset,
+                $"Interlocked.Exchange(ref _serviceStarted, 1)（IL 偏移 {exchangeOffset}）必须早于 " +
+                $"_isRunning = true（IL 偏移 {isRunningStoreOffset}）；" +
+                "否则退出回调落在这两行之间时不会记启动失败退避，下一次 GetFps() 会多拉起一次");
         }
 
         [Fact]
