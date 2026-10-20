@@ -12,6 +12,9 @@ namespace LiteMonitor.src.SystemServices
 {
     public sealed class HardwareMonitor : IDisposable
     {
+        /// <summary>界面刷新间隔的默认值（毫秒）。RefreshMs 非法时回退到它。</summary>
+        public const int DefaultRefreshMs = 1000;
+
         #region Singleton & Events
         public static HardwareMonitor? Instance { get; private set; }
         public event Action? OnValuesUpdated;
@@ -47,6 +50,19 @@ namespace LiteMonitor.src.SystemServices
         private volatile bool _isReloading = false;
         private volatile bool _isOpening = false;
 
+        // ★★★ [限频] 采集就绪状态 ★★★
+        // _isOpening == false 只说明"没有正在打开"，不代表初始化已经成功完成。
+        // 构造后到异步初始化结束之间存在一个短窗口，这期间不允许发生真实采集。
+        private volatile bool _isReady = false;
+        private volatile bool _disposed = false;
+
+        // 采样协调器 (唯一真实采集入口) + 低开销统计计数器
+        private readonly HardwareSamplingStatistics _samplingStatistics;
+        private readonly HardwareSamplingCoordinator _coordinator;
+
+        // Web 有效数据需求 (下一阶段接入)。当前恒为 false，保持既有行为。
+        private volatile bool _webDataDemand = false;
+
         // 计时器相关
         private long _tickCounter = 0;
         private double _secondAccumulator = 0;
@@ -58,6 +74,18 @@ namespace LiteMonitor.src.SystemServices
         // [新增] 允许 UI 层访问原始硬件树（用于硬件信息面板）
         public IComputer ComputerInstance => _computer;
         public object SyncLock => _lock;
+
+        /// <summary>
+        /// 采集统计快照入口（低开销计数器）。
+        /// 探针 / 后续阶段用它统计真实采集轮数、每设备 Update 次数、慢扫描与维护触发次数。
+        /// </summary>
+        public HardwareSamplingStatistics SamplingStatistics => _samplingStatistics;
+
+        /// <summary>当前采集代次编号（每完成一次真实采集 +1）。</summary>
+        public int SamplingGeneration => _coordinator.Generation;
+
+        /// <summary>硬件层是否已完成初始化（可以真实采集）。</summary>
+        public bool IsReady => _isReady;
         #endregion
 
         #region Constructor
@@ -104,6 +132,8 @@ namespace LiteMonitor.src.SystemServices
             _fpsCounter = new FpsCounter(_driverInstaller); // <--- 新增
 
             // ★★★ [修改] 2. 将 Manager 注入给 ValueProvider ★★★
+            _samplingStatistics = new HardwareSamplingStatistics();
+
             _valueProvider = new HardwareValueProvider(
                 _computer, 
                 cfg, 
@@ -113,10 +143,19 @@ namespace LiteMonitor.src.SystemServices
                 _fpsCounter, 
                 _perfCounterManager, 
                 _lock, 
-                _lastValidMap
+                _lastValidMap,
+                _samplingStatistics
             );
 
-            // 3. 异步启动 (唯一优化：不卡UI)
+            // 3. 采集协调器: 唯一真实采集入口 (单调时钟门限 + 并发合并 + 代次)
+            _coordinator = new HardwareSamplingCoordinator(
+                periodProvider: ComputeEffectivePeriodMs,
+                sampler: CollectAsync,
+                onCollectionStarted: OnCollectionStarted,
+                onCollectionCompleted: OnCollectionCompleted,
+                statistics: _samplingStatistics);
+
+            // 4. 异步启动 (唯一优化：不卡UI)
             InitializeAsync();
         }
         #endregion
@@ -171,9 +210,79 @@ namespace LiteMonitor.src.SystemServices
             });
         }
 
+        /// <summary>
+        /// 采集入口（兼容外观）：与 <see cref="UpdateIfDueAsync"/> 共用同一套门限与并发保护。
+        ///
+        /// ★ 真实硬件采集现在由 <see cref="HardwareSamplingCoordinator"/> 限频：
+        /// 未到期时这里不会调用 hw.Update()、不会清值缓存、不会推进采集时间。
+        /// </summary>
         public void UpdateAll()
         {
-            if (_isOpening) return;
+            _coordinator.RequestCollection();
+        }
+
+        /// <summary>
+        /// 采集入口（异步）：UI / Web 都通过它请求采样。
+        /// 返回 true 表示本次请求触发（或共享到）了一次真实采集。
+        /// </summary>
+        public Task<bool> UpdateIfDueAsync(CancellationToken cancellationToken = default)
+        {
+            return _coordinator.RequestCollectionAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// 通知采集层"当前有合法的 Web 数据需求"。
+        /// 下一阶段（Web 需求接入）用它替换 Web 开关直接决定全量采集的旧做法。
+        /// </summary>
+        public void SetWebDataDemand(bool hasDemand)
+        {
+            _webDataDemand = hasDemand;
+        }
+
+        /// <summary>
+        /// 计算当前有效的采集周期（毫秒）。
+        /// 规则（计划 §4.1）：普通硬件最高每秒一次；慢刷新用户保留自己的慢周期。
+        /// </summary>
+        private int ComputeEffectivePeriodMs()
+        {
+            int refresh = _cfg.RefreshMs;
+            if (refresh <= 0) refresh = DefaultRefreshMs;
+
+            int localPeriod = Math.Max(HardwareSamplingCoordinator.MinimumPeriodMs, refresh);
+
+            // 有已鉴权的 Web 数据需求时按 1 秒采集（当前阶段 Web 需求恒为 false）
+            if (_webDataDemand) return HardwareSamplingCoordinator.MinimumPeriodMs;
+
+            return localPeriod;
+        }
+
+        /// <summary>采集动作的异步包装（真实工作是同步的）。</summary>
+        private Task CollectAsync(CancellationToken cancellationToken)
+        {
+            CollectOnce();
+            return Task.CompletedTask;
+        }
+
+        /// <summary>采集开始：推进值缓存的采集代次。</summary>
+        private void OnCollectionStarted(int generation)
+        {
+            _valueProvider.OnCollectionStarted(generation);
+        }
+
+        /// <summary>采集结束（目前仅用于诊断）。</summary>
+        private void OnCollectionCompleted(int generation, bool success)
+        {
+            System.Diagnostics.Debug.WriteLine($"[HardwareMonitor] 采集代次 {generation} 结束, 成功={success}");
+        }
+
+        /// <summary>
+        /// 一次真实采集（原 UpdateAll 的全部工作）。
+        /// 只有通过协调器门限后才会被调用。
+        /// </summary>
+        private void CollectOnce()
+        {
+            if (_disposed) return;
+            if (!_isReady) return;   // 尚未就绪：不发生真实采集
 
             // [Fix #290] 标记是否需要触发重载（因硬件变更或故障）
             bool needsReload = false;
@@ -185,8 +294,6 @@ namespace LiteMonitor.src.SystemServices
 
                 // 2. 计算更新需求
                 var requirements = CheckUpdateRequirements();
-
-                _valueProvider.OnUpdateTickStarted();
 
                 lock (_lock)
                 {
@@ -205,16 +312,19 @@ namespace LiteMonitor.src.SystemServices
                     // 10秒一次 (磁盘后台扫描)
                     bool needDiskBgScan = (_secondsCounter % 10 == 0);
 
+                    if (isSlowScanTick) _samplingStatistics.RecordSlowScanTrigger();
+                    if (needDiskBgScan) _samplingStatistics.RecordDiskBackgroundScanTrigger();
+
                     foreach (var hw in _computer.Hardware)
                     {
-                        if (hw.HardwareType == HardwareType.Cpu && requirements.NeedCpu) { hw.Update(); continue; }
+                        if (hw.HardwareType == HardwareType.Cpu && requirements.NeedCpu) { UpdateDevice(hw, "Cpu"); continue; }
                         
                         // [Fix #290] 显卡防闪退保护：双显卡切换时 Update 可能抛出异常
                         if (IsGpu(hw) && requirements.NeedGpu) 
                         { 
                             if (!requirements.ForceAll && !ShouldUpdateGpuHardware(hw)) continue;
 
-                            try { hw.Update(); }
+                            try { hw.Update(); RecordDeviceUpdate(hw, "Gpu"); }
                             catch (Exception ex)
                             {
                                 HardwareErrorLog.Write("UpdateAll.GPU", ex);
@@ -224,18 +334,23 @@ namespace LiteMonitor.src.SystemServices
                             continue; 
                         }
 
-                        if (hw.HardwareType == HardwareType.Memory && requirements.NeedMem) { hw.Update(); continue; }
-                        if (hw.HardwareType == HardwareType.Battery && requirements.NeedBat) { hw.Update(); continue; }
+                        if (hw.HardwareType == HardwareType.Memory && requirements.NeedMem) { UpdateDevice(hw, "Memory"); continue; }
+                        if (hw.HardwareType == HardwareType.Battery && requirements.NeedBat) { UpdateDevice(hw, "Battery"); continue; }
 
                         if (hw.HardwareType == HardwareType.Network && requirements.NeedNet)
                         {
                             // ★★★ 修复：使用正确的 timeDelta，而不是 requirements.TimeDelta (它是0) ★★★
                             _networkManager.ProcessUpdate(hw, _cfg, timeDelta, isSlowScanTick);
+                            // 网卡的实际 Update 由 NetworkManager 决定（目标网卡每轮更新，
+                            // 其余网卡只在慢扫描轮更新），这里记录"进入更新路径"的次数。
+                            RecordDeviceUpdate(hw, "Network");
                             continue;
                         }
                         if (hw.HardwareType == HardwareType.Storage && requirements.NeedDisk)
                         {
                             _diskManager.ProcessUpdate(hw, _cfg, isSlowScanTick, needDiskBgScan);
+                            // 磁盘的实际 Update 由 DiskManager 的休眠/冷却规则决定。
+                            RecordDeviceUpdate(hw, "Storage");
                             continue;
                         }
                         
@@ -248,13 +363,19 @@ namespace LiteMonitor.src.SystemServices
                              if (isSlowScanTick)
                              {
                                  UpdateWithSubHardware(hw);
+                                 RecordDeviceUpdate(hw, "Motherboard");
                              }
                              continue;
                         }
                     }
                 }
-                
+
                 // 任务错峰执行 (调用 SystemOptimizer)
+                // ★ 与 SystemOptimizer.RunMaintenanceTasks 的到期条件保持一致，
+                //   这里只做计数（不改变它的调度语义，那属于下一阶段）。
+                if (_secondsCounter % 60 == 5) _samplingStatistics.RecordTrafficSaveTrigger();
+                if (_secondsCounter % 180 == 30) _samplingStatistics.RecordGcRequestTrigger();
+                if (_secondsCounter % 300 == 45) _samplingStatistics.RecordWorkingSetTrimTrigger();
                 SystemOptimizer.RunMaintenanceTasks(_secondsCounter);
                 
                 OnValuesUpdated?.Invoke();
@@ -284,16 +405,56 @@ namespace LiteMonitor.src.SystemServices
             }
         }
 
+        /// <summary>更新一个设备并记录计数。</summary>
+        private void UpdateDevice(IHardware hw, string category)
+        {
+            hw.Update();
+            RecordDeviceUpdate(hw, category);
+        }
+
+        /// <summary>记录一次设备更新次数（Key 形如 "GPU.0" / "Cpu:xxx"）。</summary>
+        private void RecordDeviceUpdate(IHardware hw, string category)
+        {
+            _samplingStatistics.RecordDeviceUpdate(BuildDeviceKey(hw), category);
+        }
+
+        /// <summary>
+        /// 构造设备计数 Key。
+        /// 显卡用应用里的编号 ("GPU.0" / "GPU.1")，与界面上的 Key 一一对应；
+        /// 其它设备用 "类型:名称"。
+        /// </summary>
+        private string BuildDeviceKey(IHardware hw)
+        {
+            if (IsGpu(hw))
+            {
+                var gpus = _sensorMap.CachedGpus;
+                for (int i = 0; i < gpus.Count; i++)
+                {
+                    if (ReferenceEquals(gpus[i], hw)) return "GPU." + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+                return "GPU:" + hw.Name;
+            }
+            return hw.HardwareType + ":" + hw.Name;
+        }
+
         public void CleanMemory(Action<int>? onProgress = null) => SystemOptimizer.CleanMemory(onProgress);
 
         public void Dispose()
         {
-            // ★★★ 核心修复：加锁！防止与正在运行的 UpdateAll() 冲突 ★★★
+            if (_disposed) return;
+            _disposed = true;
+
+            // ★★★ 关闭顺序：先停止接受新的采集请求，再等在途采集结束，最后关闭硬件 ★★★
+            //   否则可能在对已关闭的 Computer 上执行 hw.Update()。
+            _coordinator.Dispose();
+            _coordinator.WaitForIdle(TimeSpan.FromSeconds(2));
+
+            // ★★★ 核心修复：加锁！防止与正在运行的采集任务冲突 ★★★
             lock (_lock)
             {
                 try 
                 {
-                    // 将 Close 操作放入锁内，确保此时 UpdateAll 不在运行
+                    // 将 Close 操作放入锁内，确保此时采集任务不在运行
                     _computer.Close(); 
                 }
                 catch (Exception ex)
@@ -374,6 +535,14 @@ namespace LiteMonitor.src.SystemServices
                 finally
                 {
                     _isOpening = false;
+
+                    // 初始化尝试结束（成功或失败都算结束）：此后允许采集。
+                    // 失败时硬件树是空的，采集会自然空转，不影响性能计数器兜底取值。
+                    if (!_disposed)
+                    {
+                        _isReady = true;
+                        _coordinator.SetReady(true);
+                    }
                 }
             });
         }
@@ -506,6 +675,10 @@ namespace LiteMonitor.src.SystemServices
         {
             bool opened = false;
 
+            // ★ 关闭/重开硬件期间不允许真实采集（硬件树正在被整体替换） ★
+            _isReady = false;
+            _coordinator.SetReady(false);
+
             try
             {
                 lock (_lock)
@@ -612,6 +785,16 @@ namespace LiteMonitor.src.SystemServices
             catch (Exception ex)
             {
                 HardwareErrorLog.Write("ReloadComputerSafe.Trim", ex);
+            }
+            finally
+            {
+                // ★ 重载结束：重新允许采集，并允许立刻采一次新样本 ★
+                //   打开失败时硬件列表是空的，采集会自然空转，旧的映射表与旧的有效值仍然保留。
+                if (!_disposed)
+                {
+                    _isReady = true;
+                    _coordinator.SetReady(true);
+                }
             }
         }
 

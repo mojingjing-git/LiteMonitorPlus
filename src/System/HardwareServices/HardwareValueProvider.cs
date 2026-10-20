@@ -8,6 +8,46 @@ using Debug = System.Diagnostics.Debug;
 
 namespace LiteMonitor.src.SystemServices
 {
+    /// <summary>
+    /// 采集代次值缓存。
+    ///
+    /// 限频后，取值缓存的生命周期跟着**真实采集代次**走，而不是界面 Tick：
+    ///  - 同一代次内，同一个 Key 只计算一次（UI / Web / 任务栏可以共享同一轮采样）；
+    ///  - 合法的 0 会被缓存（0 是有效值，不能每次重算）；
+    ///  - 本代次"不可用"的结果同样会被缓存，避免反复走昂贵的失败回退；
+    ///  - 进入新代次时整体作废，下一次读取会重新计算。
+    /// </summary>
+    public sealed class GenerationValueCache
+    {
+        private readonly Dictionary<string, float?> _values = new Dictionary<string, float?>(StringComparer.Ordinal);
+        private int _generation;
+
+        /// <summary>当前采集代次。</summary>
+        public int Generation => _generation;
+
+        /// <summary>本代次已缓存的 Key 数量。</summary>
+        public int Count => _values.Count;
+
+        /// <summary>推进到新的采集代次（旧代次的缓存整体作废）。</summary>
+        public void BeginGeneration(int generation)
+        {
+            _generation = generation;
+            _values.Clear();
+        }
+
+        /// <summary>清空缓存（映射重建 / 重载等失效路径）。</summary>
+        public void Clear() => _values.Clear();
+
+        /// <summary>
+        /// 读取本代次的缓存值。
+        /// 返回 true 表示本代次已经算过这个 Key（value 为 null 表示"本代次不可用"）。
+        /// </summary>
+        public bool TryGetValue(string key, out float? value) => _values.TryGetValue(key, out value);
+
+        /// <summary>写入本代次的值（value 为 null 表示"本代次不可用"）。</summary>
+        public void SetValue(string key, float? value) => _values[key] = value;
+    }
+
     public class HardwareValueProvider : IDisposable
     {
         private readonly Computer _computer;
@@ -15,7 +55,7 @@ namespace LiteMonitor.src.SystemServices
         private readonly SensorMap _sensorMap;
         private readonly NetworkManager _networkManager;
         private readonly DiskManager _diskManager;
-        private readonly FpsCounter _fpsCounter;
+        private readonly FpsCounter? _fpsCounter;
         private readonly object _lock;
         private readonly Dictionary<string, float> _lastValidMap; 
         
@@ -23,14 +63,30 @@ namespace LiteMonitor.src.SystemServices
         private readonly PerformanceCounterManager _perfManager;
         private readonly ComponentProcessor _componentProcessor;
 
-        // Tick 级智能缓存 (防止同帧重复计算)
-        private readonly Dictionary<string, float> _tickCache = new();
+        // ★ 采集代次缓存：同一代次内同一个 Key 只计算一次
+        private readonly GenerationValueCache _cache = new GenerationValueCache();
+
+        // ★ 启动期缓存：硬件尚未就绪时的性能计数器兜底。
+        //   UI 在初始化期间会高频读取，这里用 TTL 限流（默认 1 秒），
+        //   避免绕过采集门限反复调用 PerformanceCounter.NextValue()。
+        private struct StartupEntry
+        {
+            public float? Value;
+            public long Timestamp;
+        }
+        private readonly Dictionary<string, StartupEntry> _startupCache = new Dictionary<string, StartupEntry>(StringComparer.Ordinal);
+        private readonly object _startupLock = new object();
+        private readonly TimeProvider _time;
+        private readonly HardwareSamplingStatistics? _statistics;
 
         // 对象级缓存：(Sensor对象)
         private Dictionary<string, ISensor> _manualSensorCache = new();
 
         private const float AutoMoboTempHardMax = 95f;
         private const float ManualMoboTempHardMax = 125f;
+
+        /// <summary>启动期缓存的存活时间（毫秒）。与普通硬件的最小采集周期一致。</summary>
+        private const int StartupCacheTtlMs = 1000;
 
         // 配置版本追踪，用于自动触发预热
         private string _lastPrefCpuFan = "";
@@ -42,7 +98,7 @@ namespace LiteMonitor.src.SystemServices
         private string _lastPrefGpu = "";
         private int _lastGpuCount = 1;
         
-        public HardwareValueProvider(Computer c, Settings s, SensorMap map, NetworkManager net, DiskManager disk, FpsCounter fpsCounter,PerformanceCounterManager perfManager, object syncLock, Dictionary<string, float> lastValid)
+        public HardwareValueProvider(Computer c, Settings s, SensorMap map, NetworkManager net, DiskManager disk, FpsCounter? fpsCounter, PerformanceCounterManager perfManager, object syncLock, Dictionary<string, float> lastValid, HardwareSamplingStatistics? statistics = null, TimeProvider? timeProvider = null)
         {
             _computer = c;
             _cfg = s;
@@ -53,6 +109,8 @@ namespace LiteMonitor.src.SystemServices
             _perfManager = perfManager;
             _lock = syncLock;
             _lastValidMap = lastValid;
+            _statistics = statistics;
+            _time = timeProvider ?? TimeProvider.System;
 
             // 初始化子服务
             _componentProcessor = new ComponentProcessor(c, s, map);
@@ -132,9 +190,10 @@ namespace LiteMonitor.src.SystemServices
             lock (_lock)
             {
                 _manualSensorCache = newCache;
-                _tickCache.Clear();
+                _cache.Clear();
                 _componentProcessor.ClearCache();
             }
+            ClearStartupCache();
         }
 
         /// <summary>
@@ -181,19 +240,29 @@ namespace LiteMonitor.src.SystemServices
             lock (_lock)
             {
                 _manualSensorCache.Clear();
-                _tickCache.Clear();
+                _cache.Clear();
                 _componentProcessor.ClearCache();
             }
+            ClearStartupCache();
         }
 
         /// <summary>
-        /// 每一轮更新开始时的准备工作（清空帧缓存、检查配置变更、更新电源状态）
+        /// 一轮**真实采集**开始时的准备工作。
+        ///
+        /// ★ 触发时机从"每个界面 Tick"改成"每个采集代次"：
+        ///   限频后如果还按界面 Tick 清缓存，UI/Web 的高频读取仍会反复执行
+        ///   PerformanceCounter.NextValue()，限频就白做了。
+        ///
+        /// 这里仍然负责"设备偏好变更 -> 重建映射 + 预热"的失效逻辑，
+        /// 只是它现在每个采集代次才检查一次（用户修改会在下一次允许采样内生效）。
         /// </summary>
-        public void OnUpdateTickStarted()
+        /// <param name="generation">新的采集代次编号。</param>
+        public void OnCollectionStarted(int generation)
         {
             lock (_lock)
             {
-                _tickCache.Clear();
+                // 旧代次的取值全部作废（含"不可用"的记录），新一代次重新计算
+                _cache.BeginGeneration(generation);
 
                 bool gpuChanged = _lastPrefGpu != (_cfg.PreferredGpu ?? "");
                 bool gpuCountChanged = _lastGpuCount != _cfg.MonitoredGpuCount;
@@ -207,6 +276,12 @@ namespace LiteMonitor.src.SystemServices
                     // 留着旧容量会让面板出现"百分比按 20GB 算、容量却显示 12GB"的自相矛盾。
                     Settings.DetectedGpuVramTotalGB = 0;
                     Settings.DetectedGpuVramTotalGBByKey.Clear();
+
+                    // ★★★ [多显卡] 换卡后不能串用上一张卡的最后有效值 ★★★
+                    // "GPU.0.Temp" 之类的 Key 在换卡后指向的是另一块卡，
+                    // 留着旧值会让界面显示另一张卡的温度。设备切换时把这些 Key 的
+                    // 最后有效值一并丢掉（失败重载时旧映射仍然保留，不走这条路径）。
+                    DropLastValidValues("GPU");
                 }
 
                 // 自动检测配置变更：如果用户更改了首选风扇/磁盘/显卡，立即自动预热
@@ -223,12 +298,62 @@ namespace LiteMonitor.src.SystemServices
             }
         }
 
+        /// <summary>丢弃指定前缀 Key 的"最后有效值"（设备切换时防止串卡）。</summary>
+        private void DropLastValidValues(string prefix)
+        {
+            List<string>? stale = null;
+            foreach (string key in _lastValidMap.Keys)
+            {
+                if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    (stale ??= new List<string>()).Add(key);
+                }
+            }
+            if (stale == null) return;
+            foreach (string key in stale) _lastValidMap.Remove(key);
+        }
+
+        /// <summary>清空启动期缓存。</summary>
+        private void ClearStartupCache()
+        {
+            lock (_startupLock)
+            {
+                _startupCache.Clear();
+            }
+        }
+
 
         // ===========================================================
         // ===================== 公共取值入口 =========================
         // ===========================================================
         public float? GetStartupValue(string key)
         {
+            // ★ 启动期也要限流：硬件还没就绪时 UI 会以界面频率反复读取，
+            //   这里按 TTL 缓存，避免绕过采集门限反复调用 PerformanceCounter.NextValue()。
+            long now = _time.GetTimestamp();
+            long ttlTicks = _time.TimestampFrequency * StartupCacheTtlMs / 1000;
+            lock (_startupLock)
+            {
+                if (_startupCache.TryGetValue(key, out StartupEntry cached) && (now - cached.Timestamp) < ttlTicks)
+                {
+                    return cached.Value;
+                }
+            }
+
+            float? result = ComputeStartupValue(key);
+
+            lock (_startupLock)
+            {
+                _startupCache[key] = new StartupEntry { Value = result, Timestamp = now };
+            }
+            return result;
+        }
+
+        private float? ComputeStartupValue(string key)
+        {
+            // 启动期的取值也要计数：用来证明"早期取值没有绕过采集门限"
+            _statistics?.RecordValueComputation();
+
             if (_lastValidMap.TryGetValue(key, out float lastVal)) return lastVal;
 
             bool useCounter = _cfg.UseWinPerCounters && _perfManager.IsInitialized;
@@ -284,14 +409,21 @@ namespace LiteMonitor.src.SystemServices
                     return null;
                 }
 
-                // ★★★ [新增 3] 优先查缓存，如果本帧算过，直接返回 ★★★
-                if (_tickCache.TryGetValue(key, out float cachedVal)) return cachedVal;
+                // ★★★ [新增 3] 优先查缓存，如果本代次算过，直接返回 ★★★
+                //   缓存里可能是 null：表示"本代次这个 Key 不可用"，
+                //   直接返回可以避免同一代次反复走昂贵的失败回退路径。
+                if (_cache.TryGetValue(key, out float? cachedVal)) return cachedVal;
 
-
+                // 本代次第一次算这个 Key
+                _statistics?.RecordValueComputation();
 
                 // 定义临时结果变量
                 float? result = null;
                 bool skipGenericFallback = false;
+                // FPS 有自己的更新机制（外部服务 + 自己的平滑/回收逻辑），
+                // 不进普通硬件的采集代次缓存：否则会被冻结接近一个采集周期，
+                // 也会让 FPS 的"空闲回收"判断失真。读取它也不会清空普通硬件缓存。
+                bool skipCache = false;
                 
                 // ★★★ [核心逻辑] 全局开关判断：只有当开关开启，且管理器已初始化成功时，才尝试走计数器 ★★★
                 // 这里的 UseWindowsPerformanceCounters 对应 Step 1 中 Settings 新增的属性
@@ -422,7 +554,8 @@ namespace LiteMonitor.src.SystemServices
                         break;
 
                     case "FPS":
-                        result = _fpsCounter.GetFps();
+                        result = _fpsCounter?.GetFps();
+                        skipCache = true;
                         break;
 
                     // 电池
@@ -516,13 +649,14 @@ namespace LiteMonitor.src.SystemServices
                 }
 
                 // ★★★ [新增 4] 写入缓存并返回 ★★★
-                if (result.HasValue)
+                //   合法的 0 必须被缓存；null（不可用）同样缓存，
+                //   这样同一代次里多个消费者不会反复触发昂贵的失败回退。
+                if (!skipCache)
                 {
-                    _tickCache[key] = result.Value;
-                    return result.Value;
+                    _cache.SetValue(key, result);
                 }
 
-                return null;
+                return result;
             }
             finally
             {
