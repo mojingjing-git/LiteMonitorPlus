@@ -32,6 +32,9 @@ internal static class Program
             ["kind"] = "performance_probe_result",
             ["startedAt"] = DateTime.Now.ToString("o"),
             ["options"] = options.ToJson(),
+            // ★ 批次级口径声明：任何跨批次比较都必须先读它（见 README §6）。
+            //   它说明本批次各计数字段的来源，避免"同名字段不同含义"被直接相减。
+            ["counterSemantics"] = ProbeCounterSemantics.Build(),
         };
 
         ProbeEnvironment? env = null;
@@ -57,6 +60,11 @@ internal static class Program
                 Write($"LHM Update 计数代理安装: {counters} 诊断: {env.Diagnostics.ToJsonString()}");
 
                 var runner = new SamplingRunner(env);
+                // 旧取模复算是否可用：不可用时只影响 *Recomputed 系列（输出 null），
+                // 主字段（生产侧真实计数）照常产出 —— 探针不会因此起不来。
+                results["secondsCounterAvailability"] = runner.SecondsCounterAvailable
+                    ? "available"
+                    : runner.SecondsCounterNote;
                 var groups = BuildGroups(options);
                 var groupArray = new JsonArray();
                 foreach (var spec in groups)

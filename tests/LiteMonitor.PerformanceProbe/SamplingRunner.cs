@@ -18,19 +18,22 @@ internal sealed record GroupSpec(
     string Note = "");
 
 /// <summary>
-/// 探针复算"到期轮数"时使用的**当前生产实现的取模语义**。
+/// 探针复算"到期轮数"时使用的**旧整数秒取模语义**。
 ///
-/// ⚠ 时效性警告：这些常量复制自生产代码
+/// ⚠ 口径警告（2026-10-20 口径改造后）：这些常量复制的是**改造前**的生产调度规则
 ///   - HardwareMonitor.UpdateAll()：`isSlowScanTick = _secondsCounter % 3 == 0`、
 ///     `needDiskBgScan = _secondsCounter % 10 == 0`
 ///   - SystemOptimizer.RunMaintenanceTasks()：`% 60 == 5`（流量保存）、
 ///     `% 180 == 30`（GC 请求）、`% 300 == 45`（工作集裁剪）
-/// 计划 §4.3 要把它们改成**单调截止时间**。一旦生产改完，这里的判定就与生产脱节，
-/// 探针仍会按旧语义报出一个"形状几乎一样"的假指标，而且**不会报错**。
 ///
-/// 缓解措施：探针把「按取模算出的到期轮数」与「实际观测到的文件重写次数」交叉验证，
-/// 两者明显不一致时把 `trafficRewriteAgreesWithDueRounds` 置为 false。
-/// Task 2/Task 3 落地后，必须把到期轮数改成**直接观测实际调用**，不再复算。
+/// 生产侧**已经**改成单调截止时间（`HardwareSamplingSchedule` 的 `now + 周期` 锚定、
+/// `MaintenanceScheduler` 的真实到期），所以这里的常量**不再代表当前生产调度语义**，
+/// 只用于生成 `*Recomputed` 系列的**旧口径推算值**。
+///
+/// 主字段（`slowScanTriggerRounds` / `trafficSaveDueRounds` …）读的是**生产侧真实触发计数**，
+/// 与 `*Recomputed` 语义不同：**不可相减、不可跨批次直接比较**。
+/// 真正的行为级报警是 `trafficRewriteAgreesWithDueRounds`
+/// （生产侧实际触发的流量保存次数 vs 轮询文件 LastWriteTime 变化得到的下界）。
 /// </summary>
 internal static class MaintenanceDueSemantics
 {
@@ -44,9 +47,10 @@ internal static class MaintenanceDueSemantics
     public const int WorkingSetOffset = 45;
 
     public const string Warning =
-        "到期轮数按【当前生产实现的整数秒取模语义】复算（%3/%10/%60==5/%180==30/%300==45）。" +
-        "计划 §4.3 把生产改成单调截止时间之后，本列会与生产脱节而不会报错，" +
-        "Task 2/3 必须改为直接观测实际调用。";
+        "*Recomputed 系列是按【旧整数秒取模语义】复算的推算值（%3/%10/%60==5/%180==30/%300==45）。" +
+        "生产侧已改为单调截止时间（HardwareSamplingSchedule / MaintenanceScheduler 真实到期），" +
+        "主字段读的是生产侧真实触发计数。推算值与真实计数语义不同，" +
+        "禁止相减、禁止跨批次直接比较；跨批次比较前先读顶层的 counterSemantics。";
 
     public static string Describe => $"slow%{SlowScanModulo},diskBg%{DiskBackgroundScanModulo}," +
         $"traffic%{TrafficSaveModulo}=={TrafficSaveOffset},gc%{GcRequestModulo}=={GcRequestOffset}," +
@@ -67,16 +71,50 @@ internal static class MaintenanceDueSemantics
 internal sealed class SamplingRunner
 {
     private readonly ProbeEnvironment _env;
-    private readonly FieldInfo _secondsCounterField;
+    private readonly FieldInfo? _secondsCounterField;
+    private readonly string _secondsCounterNote;
     private readonly string _trafficFile;
 
     public SamplingRunner(ProbeEnvironment env)
     {
         _env = env;
-        _secondsCounterField = typeof(LiteMonitor.src.SystemServices.HardwareMonitor)
-            .GetField("_secondsCounter", BindingFlags.NonPublic | BindingFlags.Instance)
-            ?? throw new InvalidOperationException("无法读取 HardwareMonitor._secondsCounter，采集轮次分类证据不可用。");
+        // ★ 优雅降级：_secondsCounter 在生产侧已被降级为"只作诊断计数"的私有字段，
+        //   随时可能被改名或删除。取不到**不能**让探针起不来 —— 只把依赖它的
+        //   *Recomputed 系列标为"本批次不可用"，其余证据（生产侧真实计数）照常产出。
+        _secondsCounterField = ResolveSecondsCounterField(out _secondsCounterNote);
         _trafficFile = Path.Combine(AppContext.BaseDirectory, "TrafficHistory.json");
+    }
+
+    /// <summary>本批次能否读到 <c>HardwareMonitor._secondsCounter</c>（决定 *Recomputed 系列是否可用）。</summary>
+    public bool SecondsCounterAvailable => _secondsCounterField != null;
+
+    /// <summary>反射结果说明（可用时为 "available"，不可用时为原因）。</summary>
+    public string SecondsCounterNote => _secondsCounterNote;
+
+    /// <summary>
+    /// 反射查找 <c>HardwareMonitor._secondsCounter</c>。**不抛异常**：
+    /// 字段不存在 / 改名 / 反射失败，一律降级为 null，由调用方把相关输出字段
+    /// 标为"本批次不可用"，而不是让整个测量失败。
+    /// </summary>
+    private static FieldInfo? ResolveSecondsCounterField(out string note)
+    {
+        try
+        {
+            var field = typeof(LiteMonitor.src.SystemServices.HardwareMonitor)
+                .GetField("_secondsCounter", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (field == null)
+            {
+                note = "unavailable: HardwareMonitor 上不存在私有字段 _secondsCounter（可能已被改名或删除）。";
+                return null;
+            }
+            note = "available";
+            return field;
+        }
+        catch (Exception ex)
+        {
+            note = $"unavailable: 反射读取 HardwareMonitor._secondsCounter 失败：{ex.GetType().Name}: {ex.Message}";
+            return null;
+        }
     }
 
     /// <summary>本轮实际读取的监控项 Key（界面可见项的并集，跳过 DASH.*）。</summary>
@@ -107,6 +145,9 @@ internal sealed class SamplingRunner
             ["httpPollPerSecond"] = spec.HttpPollPerSecond,
             ["warmupSeconds"] = warmupSeconds,
             ["steadySeconds"] = steadySeconds,
+            // ★ 批次级口径声明：跨批次比较前**必须**先读这个字段。
+            //   它说明本批次各计数字段的来源（生产侧真实计数 / 旧取模语义推算值 / 探针自身计数）。
+            ["counterSemantics"] = ProbeCounterSemantics.Build(),
         };
         if (spec.Note.Length > 0) record["note"] = spec.Note;
 
@@ -256,6 +297,9 @@ internal sealed class SamplingRunner
         long rounds = 0, reads = 0;
         long lastObservedRounds = stats.CollectionRounds;
         long slowScanRounds = 0, diskBgScanRounds = 0, trafficSaveDueRounds = 0, gcRequestDueRounds = 0, workingSetDueRounds = 0;
+        // 旧取模语义复算是否可用（_secondsCounter 反射失败时降级为不可用，不影响主字段）。
+        bool recomputeAvailable = _secondsCounterField != null;
+        string recomputeNote = _secondsCounterField != null ? "available" : _secondsCounterNote;
         long trafficFileRewrites = 0;
         var updateDurations = new List<double>(capacity: 4096);
         var readDurations = new List<double>(capacity: 4096);
@@ -291,21 +335,38 @@ internal sealed class SamplingRunner
             readDurations.Add(t2 - t1);
 
             // 采集代次/慢扫描/维护到期分类：读取应用自己的秒计数器。
-            // ⚠ 判定语义见 MaintenanceDueSemantics：这是按**当前实现的取模语义**复算的，
-            //   计划 §4.3 改成单调截止时间后必须换成直接观测。
+            // ⚠ 这是按**旧整数秒取模语义**复算的**推算值**（判定语义见 MaintenanceDueSemantics），
+            //   生产侧已改成单调截止时间，所以它**不代表**生产侧真实触发次数，
+            //   只作参考，**不可与主字段（生产侧真实计数）相减**。
             // ★ 只在**本次请求真的产生了一次采集**时复算：生产侧现在有采集门限，
             //   未到期的请求根本不会采集，也就不会推进秒计数器/触发维护。
             //   若按请求复算，会比生产计数多出"被跳过的请求"那一部分，无法交叉验证。
+            // ★ _secondsCounter 不可用时整段跳过：*Recomputed 系列输出 null（"本批次不可用"），
+            //   主字段（生产侧真实计数）照常产出 —— 不得因此让整个测量失败。
             long roundsNow = stats.CollectionRounds;
             if (roundsNow != lastObservedRounds)
             {
                 lastObservedRounds = roundsNow;
-                long secondsCounter = (long)_secondsCounterField.GetValue(_env.Monitor)!;
-                if (secondsCounter % MaintenanceDueSemantics.SlowScanModulo == 0) slowScanRounds++;
-                if (secondsCounter % MaintenanceDueSemantics.DiskBackgroundScanModulo == 0) diskBgScanRounds++;
-                if (secondsCounter % MaintenanceDueSemantics.TrafficSaveModulo == MaintenanceDueSemantics.TrafficSaveOffset) trafficSaveDueRounds++;
-                if (secondsCounter % MaintenanceDueSemantics.GcRequestModulo == MaintenanceDueSemantics.GcRequestOffset) gcRequestDueRounds++;
-                if (secondsCounter % MaintenanceDueSemantics.WorkingSetModulo == MaintenanceDueSemantics.WorkingSetOffset) workingSetDueRounds++;
+                if (recomputeAvailable)
+                {
+                    try
+                    {
+                        if (_secondsCounterField!.GetValue(_env.Monitor) is long secondsCounter)
+                        {
+                            if (secondsCounter % MaintenanceDueSemantics.SlowScanModulo == 0) slowScanRounds++;
+                            if (secondsCounter % MaintenanceDueSemantics.DiskBackgroundScanModulo == 0) diskBgScanRounds++;
+                            if (secondsCounter % MaintenanceDueSemantics.TrafficSaveModulo == MaintenanceDueSemantics.TrafficSaveOffset) trafficSaveDueRounds++;
+                            if (secondsCounter % MaintenanceDueSemantics.GcRequestModulo == MaintenanceDueSemantics.GcRequestOffset) gcRequestDueRounds++;
+                            if (secondsCounter % MaintenanceDueSemantics.WorkingSetModulo == MaintenanceDueSemantics.WorkingSetOffset) workingSetDueRounds++;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // 读取期失败同样降级：不再复算，并如实标注原因。
+                        recomputeAvailable = false;
+                        recomputeNote = $"unavailable: 读取 _secondsCounter 失败：{ex.GetType().Name}: {ex.Message}";
+                    }
+                }
             }
 
             // 流量文件真实重写次数
@@ -339,6 +400,14 @@ internal sealed class SamplingRunner
         // 生产侧实际发生的采集轮数（请求次数 ≠ 采集轮数：未到期会被门限跳过）
         long actualRounds = stats.CollectionRounds - prodRoundsBefore;
 
+        // ★ 主字段口径：**生产侧真实触发计数**（本批次稳态窗口内的增量）。
+        //   这里的"到期轮数"是生产侧真的触发了多少次，不是任何推算值。
+        long slowScanObserved = stats.SlowScanTriggers - prodSlowScanBefore;
+        long diskBgObserved = stats.DiskBackgroundScanTriggers - prodDiskBgBefore;
+        long trafficSaveObserved = stats.TrafficSaveTriggers - prodTrafficBefore;
+        long gcRequestObserved = stats.GcRequestTriggers - prodGcBefore;
+        long workingSetObserved = stats.WorkingSetTrimTriggers - prodWorkingSetBefore;
+
         var result = new JsonObject
         {
             ["elapsedMs"] = elapsedTotal,
@@ -358,11 +427,11 @@ internal sealed class SamplingRunner
             ["failedCollections"] = stats.FailedCollections - prodFailedBefore,
             ["valueComputations"] = stats.ValueComputations - prodValueCalcBefore,
             ["productionCollectionDurationMs"] = Math.Round(stats.TotalCollectionDurationMs - prodTotalDurationBefore, 3),
-            ["slowScanTriggerRounds"] = stats.SlowScanTriggers - prodSlowScanBefore,
-            ["diskBackgroundScanTriggerRounds"] = stats.DiskBackgroundScanTriggers - prodDiskBgBefore,
-            ["trafficSaveDueRounds"] = stats.TrafficSaveTriggers - prodTrafficBefore,
-            ["gcRequestDueRounds"] = stats.GcRequestTriggers - prodGcBefore,
-            ["workingSetTrimDueRounds"] = stats.WorkingSetTrimTriggers - prodWorkingSetBefore,
+            ["slowScanTriggerRounds"] = slowScanObserved,
+            ["diskBackgroundScanTriggerRounds"] = diskBgObserved,
+            ["trafficSaveDueRounds"] = trafficSaveObserved,
+            ["gcRequestDueRounds"] = gcRequestObserved,
+            ["workingSetTrimDueRounds"] = workingSetObserved,
             ["productionDeviceUpdates"] = DeltaCounters(prodDevicesBefore, stats.SnapshotDeviceUpdates()),
             ["productionCategoryUpdates"] = DeltaCounters(prodCategoriesBefore, stats.SnapshotCategoryTotals()),
             ["trafficFileObservedRewrites"] = trafficFileRewrites,
@@ -372,18 +441,50 @@ internal sealed class SamplingRunner
                 "\"到期一次就真的写一次\"。",
             ["dueSemantics"] = MaintenanceDueSemantics.Describe,
             ["dueSemanticsWarning"] = MaintenanceDueSemantics.Warning,
-            // 取模复算值只作交叉验证：权威值是上面直接读生产计数得到的那些字段。
-            ["slowScanTriggerRoundsRecomputed"] = slowScanRounds,
-            ["diskBackgroundScanTriggerRoundsRecomputed"] = diskBgScanRounds,
-            ["trafficSaveDueRoundsRecomputed"] = trafficSaveDueRounds,
-            ["gcRequestDueRoundsRecomputed"] = gcRequestDueRounds,
-            ["workingSetTrimDueRoundsRecomputed"] = workingSetDueRounds,
-            ["dueSemanticsRecomputationAgrees"] =
-                Agrees(slowScanRounds, stats.SlowScanTriggers - prodSlowScanBefore) &&
-                Agrees(diskBgScanRounds, stats.DiskBackgroundScanTriggers - prodDiskBgBefore) &&
-                Agrees(trafficSaveDueRounds, stats.TrafficSaveTriggers - prodTrafficBefore) &&
-                Agrees(gcRequestDueRounds, stats.GcRequestTriggers - prodGcBefore) &&
-                Agrees(workingSetDueRounds, stats.WorkingSetTrimTriggers - prodWorkingSetBefore),
+            // ★ 旧取模语义复算值：**推算值**，不是生产计数。
+            //   与上面的主字段语义不同 —— 不可相减、不可跨批次直接比较。
+            //   _secondsCounter 反射不可用时输出 null（"本批次不可用"），不是 0。
+            ["recomputedCountersStatus"] = recomputeAvailable ? "available" : "unavailable",
+            ["recomputedCountersNote"] = recomputeNote,
+            ["slowScanTriggerRoundsRecomputed"] = recomputeAvailable ? (JsonNode?)slowScanRounds : null,
+            ["diskBackgroundScanTriggerRoundsRecomputed"] = recomputeAvailable ? (JsonNode?)diskBgScanRounds : null,
+            ["trafficSaveDueRoundsRecomputed"] = recomputeAvailable ? (JsonNode?)trafficSaveDueRounds : null,
+            ["gcRequestDueRoundsRecomputed"] = recomputeAvailable ? (JsonNode?)gcRequestDueRounds : null,
+            ["workingSetTrimDueRoundsRecomputed"] = recomputeAvailable ? (JsonNode?)workingSetDueRounds : null,
+            // 改造后的口径：比较的是「探针按旧取模语义复算的推算值」与「生产侧真实触发计数」。
+            //   生产侧已改为单调截止时间，两套语义本就不同 —— 该字段为 false 属于**正常状态**，
+            //   不再是"生产侧出 bug"的报警；它变为 true 反而值得人工确认
+            //   （某个触发器的节奏恰好与旧取模规则重合）。
+            //   真正的行为级报警是 trafficRewriteAgreesWithDueRounds。
+            ["dueSemanticsRecomputationAgrees"] = recomputeAvailable
+                ? (JsonNode?)(Agrees(slowScanRounds, slowScanObserved) &&
+                    Agrees(diskBgScanRounds, diskBgObserved) &&
+                    Agrees(trafficSaveDueRounds, trafficSaveObserved) &&
+                    Agrees(gcRequestDueRounds, gcRequestObserved) &&
+                    Agrees(workingSetDueRounds, workingSetObserved))
+                : null,
+            ["dueSemanticsRecomputationAgreesMeaning"] =
+                "本字段比较的是「探针按旧整数秒取模语义复算的推算值」与「生产侧真实触发计数」是否逐项吻合（|差| ≤ 1）。" +
+                "生产侧已改为单调截止时间（HardwareSamplingSchedule / MaintenanceScheduler 真实到期），" +
+                "两套语义本就不同：**false 属于正常状态，不再是行为级报警**；" +
+                "true 说明某个触发器的节奏恰好与旧取模规则重合，需要人工确认该计数究竟来自单调截止时间还是回退到了取模语义。" +
+                "复算不可用时本字段为 null（见 recomputedCountersStatus）。" +
+                "真正的行为级报警是 trafficRewriteAgreesWithDueRounds" +
+                "（生产侧实际触发的流量保存次数 vs 轮询文件 LastWriteTime 变化得到的下界）。",
+            // 逐项差：复算推算值 - 生产侧真实计数（正值=旧取模规则推算得更多）。
+            ["dueSemanticsRecomputationDelta"] = recomputeAvailable
+                ? new JsonObject
+                {
+                    ["slowScan"] = slowScanRounds - slowScanObserved,
+                    ["diskBackgroundScan"] = diskBgScanRounds - diskBgObserved,
+                    ["trafficSave"] = trafficSaveDueRounds - trafficSaveObserved,
+                    ["gcRequest"] = gcRequestDueRounds - gcRequestObserved,
+                    ["workingSetTrim"] = workingSetDueRounds - workingSetObserved,
+                }
+                : null,
+            ["dueSemanticsRecomputationDeltaMeaning"] =
+                "逐项差 = 旧取模语义推算值 - 生产侧真实触发计数（正值表示旧取模规则推算得更多）。" +
+                "这是**两套口径的差**，不是「生产侧多触发或少触发」的差 —— 不要据此下结论。",
             ["processCpuMs"] = Math.Round(cpuTotalMs, 3),
             ["wholeMachineCpuPercent"] = elapsedTotal > 0
                 ? Math.Round(cpuTotalMs / elapsedTotal / Environment.ProcessorCount * 100.0, 4)
@@ -392,10 +493,9 @@ internal sealed class SamplingRunner
             ["perSecondSamples"] = perSecond,
         };
 
-        // 交叉验证：生产侧实际触发的"流量保存次数"与观测到的文件重写次数是否一致。
-        // 用生产计数（而不是探针复算值）做基准；生产改成单调截止时间后，
-        // 两者会明显对不上 —— 这就是探针的报警点。
-        long trafficSaveObserved = stats.TrafficSaveTriggers - prodTrafficBefore;
+        // ★ 真正的行为级交叉验证：生产侧**实际触发**的"流量保存次数"与观测到的文件重写次数是否一致。
+        //   基准用生产侧真实计数（trafficSaveObserved），**不是**探针的旧取模复算值。
+        //   这是跨口径唯一的有效行为级报警点。
         result["trafficRewriteAgreesWithDueRounds"] =
             Math.Abs(trafficFileRewrites - trafficSaveObserved) <= 1;
         result["trafficRewriteDelta"] = trafficFileRewrites - trafficSaveObserved;
@@ -409,7 +509,10 @@ internal sealed class SamplingRunner
     }
 
     /// <summary>
-    /// 复算值与生产计数是否吻合（允许 ±1：探针读到的秒计数器可能比采集内部用的那个晚一拍）。
+    /// 旧取模推算值与生产侧真实计数是否吻合（允许 ±1：两套口径本就不同，
+    /// 差 1 属于边界抖动）。
+    /// ⚠ 口径：这不是"生产侧行为是否正确"的判据 —— 见
+    ///   <c>dueSemanticsRecomputationAgreesMeaning</c>。
     /// </summary>
     private static bool Agrees(long recomputed, long observed) => Math.Abs(recomputed - observed) <= 1;
 

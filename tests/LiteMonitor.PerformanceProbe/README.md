@@ -15,7 +15,7 @@
 | 采集组 A–H | 按 §6.2 的实机性能组跑"采集循环"，预热 ≥15 s、稳态 ≥60 s | §6.2 / §6.1 |
 | 每设备 Update 次数 | **直接读生产侧计数** `HardwareMonitor.SamplingStatistics`（含 CPU/显卡/内存/网卡/磁盘/主板）；另用 LHM 硬件对象代理独立复核显卡与内存 | §4.1 / §6.1 |
 | 采集轮数 vs 请求数 | 采集轮数 = 生产侧实际发生的采集（`CollectionRounds` 增量）；请求数 = 探针发起的采集请求（未到期会被门限跳过） | §4.1 / §4.2 |
-| 慢扫描 / 保存次数 | **直接读生产侧触发计数**（慢扫描/后台磁盘扫描/流量保存/GC 请求/工作集裁剪），并与探针按取模复算的值交叉验证 | §4.3 |
+| 慢扫描 / 保存次数 | **直接读生产侧触发计数**（慢扫描/后台磁盘扫描/流量保存/GC 请求/工作集裁剪）；另保留探针按**旧取模语义**复算的推算值作参考 | §4.3 |
 | 单设备 Update 成本 | 对每个真实硬件对象直接调用 `Update()`，测墙钟与进程 CPU 时间 | §2 |
 | 兼容缓冲绘制 | 用真实 `UILayout`/`UIRenderer`/`HorizontalRenderer` 在 WinForms 兼容缓冲画布上测绘制成本 | §2 / §6.2 |
 | FPS 状态 | 失效 PID 残留（是否被清理、是否每轮重复查询）、Web 快照在**有/无需求**下是否读取 FPS（**不启动任何外部服务**） | §4.4 / §4.5 |
@@ -31,6 +31,7 @@ tests/LiteMonitor.PerformanceProbe/
 ├── ProbeEnvironment.cs   隔离配置、应用生命周期、环境元数据、LHM 计数代理注入
 ├── CountingHardware.cs   LHM Hardware 基类代理（统计 Update 次数）+ 空 ISettings
 ├── SamplingRunner.cs     采集循环测量器（§6.2 的 A–H 组）
+├── CounterSemantics.cs   批次级计数口径声明（counterSemantics）
 ├── WebActivity.cs        最小 WebSocket / HTTP 客户端（只用 BCL）
 ├── MicroBenchmarks.cs    单设备 Update 成本 + 兼容缓冲绘制
 ├── FpsStateProbe.cs      失效 PID 残留 + Web 隐藏 FPS
@@ -156,7 +157,91 @@ dotnet tests/LiteMonitor.PerformanceProbe/output/LiteMonitor.PerformanceProbe.dl
 
 ---
 
-## 6. 计数口径的时效性（改调度之后会失效的列）
+## 6. 计数口径（跨批次比较前**必读**）
+
+### 6.1 每个批次都带 `counterSemantics` 顶层声明
+
+`probe-results.json` 的**顶层**与**每个分组记录**里都有 `counterSemantics`，
+它逐字段写明本批次各计数**从哪来**（`counterSemantics.semanticsVersion` = `2026-10-20-d-prep`）：
+
+| 字段 | 本批次口径（来源类别） |
+|---|---|
+| `collectionRounds` / `collectionGenerations` / `skippedRequests` / `sharedRequests` / `rejectedRequests` / `forcedCollections` / `failedCollections` / `valueComputations` / `productionCollectionDurationMs` | **生产侧真实计数**（`HardwareMonitor.SamplingStatistics` 增量） |
+| `slowScanTriggerRounds` / `diskBackgroundScanTriggerRounds` / `trafficSaveDueRounds` / `gcRequestDueRounds` / `workingSetTrimDueRounds` | **生产侧真实计数**（生产侧**真的**触发了多少次） |
+| `productionDeviceUpdates` / `productionCategoryUpdates` | **生产侧真实计数**（每设备 / 每分类 Update 次数增量） |
+| `collectionRequests` / `valueReads` | 探针自身计数（发起了多少次请求 / 取了多少次值） |
+| `trafficFileObservedRewrites` | 探针观测值（轮询文件 `LastWriteTime` 变化得到的**下界**） |
+| `deviceUpdateCounters` | LHM 注入代理独立复核（只覆盖显卡/内存） |
+| `slowScanTriggerRoundsRecomputed` / `diskBackgroundScanTriggerRoundsRecomputed` / `trafficSaveDueRoundsRecomputed` / `gcRequestDueRoundsRecomputed` / `workingSetTrimDueRoundsRecomputed` | ⚠ **旧取模语义推算值**（`%3` / `%10` / `%60==5` / `%180==30` / `%300==45`）——**不可与生产计数相减** |
+| `dueSemanticsRecomputationAgrees` / `dueSemanticsRecomputationDelta` | 两套口径的对照结果，见 §6.4 |
+
+**任何跨批次比较都必须先读 `counterSemantics`**，确认两边口径一致再比。
+
+### 6.2 ⚠ 跨批次"同名不同义"（最容易踩的一条）
+
+同一个字段名，在**不同批次**里含义可能不同 —— **直接相减会得出与事实相反的结论**：
+
+| 批次 | "到期轮数"类字段的来源 |
+|---|---|
+| `baseline/`（Task 0 建立的实施前基线） | **旧探针按整数秒取模复算的值** |
+| 本批次及之后的复跑 | **生产侧真实触发计数** |
+
+实测证据（可自行核对）：
+
+- `baseline/probe-results.json` A 组：`collectionRounds=60`、`slowScanTriggerRounds=20`、
+  `diskBackgroundScanTriggerRounds=6` —— 20 = 60/3、6 = 60/10，是**取模复算值**；
+  那时还没有采集门限，`collectionRounds` = 请求次数 = 实际采集次数。
+- `rerun3/probe-results.json` H2 组：`collectionRounds=12`（真实采集轮数）、
+  `collectionRequests=15`（请求次数）—— 已经是**生产侧计数口径**。
+
+两者**形状很像、含义不同**。所以：**先看 `counterSemantics` → 再看字段名 → 最后才比较**。
+另外 `collectionRounds` 在基线里等于请求次数、在现在等于真实采集轮数（见 §4 的提示）。
+
+### 6.3 ⚠ "生产计数"也不总是权威：Task 3 接线之前它只是取模镜像
+
+⚠ **在生产侧接线（Task 3）之前**，生产侧那些"触发计数"本身**只是取模规则的镜像**
+（当时只做计数、不改调度语义）—— 也就是说，**"生产计数"并不总是权威，不能一概而论**。
+
+- 基线批次：取模规则在**探针侧**复算；
+- Task 3 接线之后：生产侧改成单调截止时间（`HardwareSamplingSchedule` 的 `now + 周期` 锚定、
+  `MaintenanceScheduler` 的**真实到期**），计数才变成**真实触发次数**。
+
+判断某个批次的计数可不可信，要看它**有没有 `counterSemantics` 声明**：
+没有声明的旧产物（`baseline/`、`rerun3/`）一律按"旧取模语义"对待。
+
+### 6.4 `dueSemanticsRecomputationAgrees` 现在比较的是什么
+
+- **比较对象**：「探针按旧取模语义复算的推算值」 vs 「生产侧真实触发计数」，逐项看 |差| ≤ 1。
+- **为什么不再报警**：生产侧已经改成单调截止时间，两套语义**本来就不同**，
+  所以该字段为 `false` 属于**正常状态**，**不是**"生产侧出 bug"的信号。
+  旧实现拿"同源的取模副本"互比，自身漂移才会变 false，形同虚设。
+- **什么情况下才值得看**：它变成 `true` 时 —— 说明某个触发器的节奏**恰好**与旧取模规则重合，
+  需要人工确认该计数究竟来自单调截止时间，还是生产侧回退到了取模语义。
+- **真正的行为级报警**是 `trafficRewriteAgreesWithDueRounds`
+  （生产侧**实际触发**的流量保存次数 vs 轮询文件 `LastWriteTime` 变化得到的下界），
+  以及它的差值 `trafficRewriteDelta`。
+- `dueSemanticsRecomputationDelta` 是**逐项差**（复算值 − 生产计数），
+  它衡量的是**两套口径的差**，**不是**"生产侧多触发/少触发"的差，不要据此下结论。
+
+### 6.5 优雅降级：`_secondsCounter` 读不到时
+
+复算 `*Recomputed` 系列需要反射读 `HardwareMonitor._secondsCounter`。
+该字段在生产侧已被降级为"只作诊断计数"的私有字段，**随时可能被改名或删除**。
+
+探针对此**不再抛异常**（旧实现会在构造期直接抛，探针**根本起不来**，所有测量归零）：
+
+| 位置 | 读不到时的表现 |
+|---|---|
+| 顶层 `secondsCounterAvailability` | `unavailable: <原因>` |
+| 分组 `recomputedCountersStatus` | `unavailable` |
+| 分组 `recomputedCountersNote` | 具体原因（字段不存在 / 反射异常） |
+| 5 个 `*Recomputed` 字段 | `null` —— **不是 0**（0 会被误读成"复算得 0 次"） |
+| `dueSemanticsRecomputationAgrees` / `dueSemanticsRecomputationDelta` | `null`（没测到，不是不一致） |
+| **主字段**（生产侧真实计数） | **照常产出**（`slowScanTriggerRounds` 等仍然有值） |
+
+**降级不会让整个测量失败** —— 其它证据（生产侧计数）仍然有效。
+
+### 6.6 字段口径表（改调度之后会失效的列）
 
 | 字段 | 口径 | 什么时候失效 |
 |---|---|---|
@@ -165,14 +250,23 @@ dotnet tests/LiteMonitor.PerformanceProbe/output/LiteMonitor.PerformanceProbe.dl
 | `productionDeviceUpdates` | 生产侧每设备 Update 次数 | 生产改设备 Key 规则时 |
 | `deviceUpdateCounters` | LHM 代理直接数的 `IHardware.Update()` 调用 | 改硬件重载/代理注入路径时 |
 | `valueReads` | 探针自己的 `Get()` 调用 | 不失效 |
-| `slowScanTriggerRounds` / `trafficSaveDueRounds` / `gcRequestDueRounds` / `workingSetTrimDueRounds` | **直接读生产侧触发计数**（`SamplingStatistics`） | 不失效（生产改调度语义时数值自动跟着变） |
-| `*Recomputed` 系列 | ⚠ 探针按当前生产实现的整数秒取模语义**复算**（`%3` / `%10` / `%60==5` / `%180==30` / `%300==45`），只用于交叉验证 | **计划 §4.3 把生产改成单调截止时间之后立即失效** |
-| `dueSemanticsRecomputationAgrees` | 复算值与生产计数是否逐项相等 | 生产改调度语义后会变 false —— 那就是要改口径的信号 |
+| `slowScanTriggerRounds` / `diskBackgroundScanTriggerRounds` / `trafficSaveDueRounds` / `gcRequestDueRounds` / `workingSetTrimDueRounds` | **直接读生产侧触发计数**（`SamplingStatistics`） | 不失效（生产改调度语义时数值自动跟着变） |
+| `*Recomputed` 系列 | ⚠ **旧取模语义推算值**（`%3` / `%10` / `%60==5` / `%180==30` / `%300==45`），**不可与生产计数相减** | 只能当参考；`_secondsCounter` 消失时为 `null` |
+| `dueSemanticsRecomputationAgrees` | 复算推算值与生产计数是否逐项吻合（±1） | **不是**报警项，见 §6.4 |
 | `trafficFileObservedRewrites` | 轮询文件 `LastWriteTime` 变化得到的**下界** | 不失效，但永远 ≤ 真实写入次数 |
+| `trafficRewriteAgreesWithDueRounds` / `trafficRewriteDelta` | 生产侧真实流量保存次数 vs 文件重写观测 | 不失效（**行为级报警点**） |
 
 取模判定集中放在 `SamplingRunner.MaintenanceDueSemantics`，常量来源在文件头的注释里。
-交叉验证字段 `trafficRewriteAgreesWithDueRounds`：
-"生产侧实际触发的流量保存次数"与"实际观测到的文件重写次数"差值 > 1 时为 false。
+**注意**：这些常量是**改造前**的旧规则，生产侧已改用单调截止时间 —— 它们不再代表生产调度语义。
+
+### 6.7 ⚠ `webSocketFramesReceived` 在基线批次里是死计数器值
+
+基线批次（`baseline/`）里 `webSocketFramesReceived` **恒为 0**（D/E/F/H2 四组实测都是 0）：
+那是**根本没计到帧**的占位值，**不携带任何信息**。
+
+**不可**把它与复跑批次的 53 / 159 / 55（`rerun3/` 的 E/F/H2 组实测）相比 ——
+那是**换了计法**（Web 侧改成真实计帧），**不是**性能变化。
+`counterSemantics.knownDeadCounters` 里也写了这一条。
 
 ---
 
@@ -192,5 +286,7 @@ dotnet tests/LiteMonitor.PerformanceProbe/output/LiteMonitor.PerformanceProbe.dl
 - FPS 需求组（§6.2 的 I 组）**未实机验证**：启动真实 PresentMon 需要下载外部程序，本轮禁止。
   探针只验证不依赖外部服务的 FPS 状态行为。
 - `--quick` 的数据**不能**当基线，只用于验证流程能跑通。
+- 跨批次比较**必须**先看 `counterSemantics`（§6.1–§6.3）：同名字段在不同批次里含义可能不同。
+- `*Recomputed` 系列是**旧取模语义推算值**，与生产侧真实计数**不可相减**（§6.1、§6.6）。
 - 退出码：0 = 正常；1 = 探针异常；**2 = 硬件层不可用 / 驱动未就绪，没有产出硬件测量数据**。
   退出码 2 的结果文件不能当基线用，先看 `hardwareReady.ready`。
