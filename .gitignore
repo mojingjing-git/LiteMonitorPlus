@@ -16,5 +16,8 @@ TrafficHistory.json.bak
 # 评审/临时产物
 .review-scratch/
 
+# 性能探针的隔离输出目录（运行期产物：流量历史、硬件错误日志等，不进版本库）
+tests/LiteMonitor.PerformanceProbe/output/
+
 # 发布产物（由 scripts/pack-release.ps1 生成）
 dist/
