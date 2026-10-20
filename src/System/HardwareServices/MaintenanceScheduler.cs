@@ -12,7 +12,7 @@ namespace LiteMonitor.src.SystemServices
     ///  2. 旧实现依赖「墙上时间」，系统时间回拨会让到期判断失真。
     ///
     /// 语义：
-    ///  - 同一到期时间**最多消费一次**；
+    ///  - 同一到期时间**最多消费一次**（比较 + 推进在同一临界区内完成，多线程调用也只会有一次成功）；
     ///  - 跳过若干周期后**最多执行一次**，然后安排下一次（不补跑一串）；
     ///  - 状态由**实例**持有，不使用易互相污染的全局静态时间戳；
     ///  - 墙上时间回拨不影响判断（只使用单调时间戳）。
@@ -20,6 +20,7 @@ namespace LiteMonitor.src.SystemServices
     public sealed class MonotonicPeriodicTrigger
     {
         private readonly TimeProvider _time;
+        private readonly object _gate = new object();
         private TimeSpan _period;
         private TimeSpan _initialDelay;
         private long _nextDue;      // 下一次到期的单调时间戳
@@ -50,10 +51,13 @@ namespace LiteMonitor.src.SystemServices
         {
             get
             {
-                if (!_armed) return TimeSpan.Zero;
-                long now = _time.GetTimestamp();
-                if (now >= _nextDue) return TimeSpan.Zero;
-                return TimeSpan.FromSeconds((double)(_nextDue - now) / Frequency);
+                lock (_gate)
+                {
+                    if (!_armed) return TimeSpan.Zero;
+                    long now = _time.GetTimestamp();
+                    if (now >= _nextDue) return TimeSpan.Zero;
+                    return TimeSpan.FromSeconds((double)(_nextDue - now) / Frequency);
+                }
             }
         }
 
@@ -61,35 +65,48 @@ namespace LiteMonitor.src.SystemServices
         /// 到期则消费一次并返回 true；**同一到期时间只会被消费一次**。
         /// 未到期返回 false（不执行任何动作）。
         /// 消费后会把截止时间推进到「现在之后」的下一个周期：跳过若干周期也只执行一次，不补跑。
+        ///
+        /// ★ 比较与推进在同一个临界区内完成：即使多个线程同时调用，
+        ///   同一个到期时间也只会有一次返回 true。
         /// </summary>
         public bool TryConsume()
         {
             long now = _time.GetTimestamp();
 
-            if (!_armed)
+            lock (_gate)
             {
-                // 理论上不会发生（构造函数已排定），兜底：从现在开始排首次到期
-                Arm(now);
-                return false;
+                if (!_armed)
+                {
+                    // 理论上不会发生（构造函数已排定），兜底：从现在开始排首次到期
+                    Arm(now);
+                    return false;
+                }
+
+                if (now < _nextDue) return false;
+
+                Advance(now);
+                return true;
             }
-
-            if (now < _nextDue) return false;
-
-            Advance(now);
-            return true;
         }
 
         /// <summary>重新排定（相当于重新开始一轮周期）。</summary>
-        public void Reset() => Arm();
+        public void Reset()
+        {
+            lock (_gate) { Arm(); }
+        }
 
         /// <summary>重新排定，并可同时更换周期与首次延迟。</summary>
         public void Reset(TimeSpan initialDelay, TimeSpan period)
         {
             if (period <= TimeSpan.Zero)
                 throw new ArgumentOutOfRangeException(nameof(period), "周期必须为正数");
-            _initialDelay = initialDelay < TimeSpan.Zero ? TimeSpan.Zero : initialDelay;
-            _period = period;
-            Arm();
+
+            lock (_gate)
+            {
+                _initialDelay = initialDelay < TimeSpan.Zero ? TimeSpan.Zero : initialDelay;
+                _period = period;
+                Arm();
+            }
         }
 
         // ============================================================
@@ -175,8 +192,8 @@ namespace LiteMonitor.src.SystemServices
         public bool Any => TrafficSave || GcRequest || WorkingSetTrim;
     }
 
-    /// <summary>
-    /// 维护任务调度器（计划 §4.3 的周期约定）：
+        /// <summary>
+        /// 维护任务调度器（计划 §4.3 的周期约定）：
     ///
     /// | 工作 | 约定周期/首次触发 |
     /// |---|---|
@@ -190,6 +207,10 @@ namespace LiteMonitor.src.SystemServices
     ///  - 墙上时间回拨不影响调度。
     ///
     /// 三个动作都可以注入（便于用假时钟做单元测试，不需要真实写文件 / 真实 GC）。
+    ///
+    /// ★ 状态由**本实例**持有（不依赖任何全局静态时间戳）；
+    ///   调用方应当持有自己的实例（见 <see cref="SystemOptimizer.CreateScheduler"/>），
+    ///   以满足"周期状态属于正确的服务实例"。
     /// </summary>
     public sealed class MaintenanceScheduler
     {
@@ -233,6 +254,11 @@ namespace LiteMonitor.src.SystemServices
             _onGcRequest = onGcRequest;
             _onWorkingSetTrim = onWorkingSetTrim;
         }
+
+        /// <summary>
+        /// 距离下一次流量保存到期还有多久（诊断用；已经到期时为 <see cref="TimeSpan.Zero"/>）。
+        /// </summary>
+        public TimeSpan NextTrafficSaveDelay => _trafficSave.Remaining;
 
         /// <summary>
         /// 执行所有已到期的维护任务。
