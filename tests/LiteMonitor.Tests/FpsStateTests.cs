@@ -1041,8 +1041,16 @@ namespace LiteMonitor.Tests
                 counter.GetFps();
                 Assert.True(launcher.EnsureEntered.Wait(StateWaitMs), "启动应当进入慢准备阶段");
 
-                // 最终释放（此时慢准备仍被阻塞）
-                counter.Dispose();
+                // 在专用线程上释放：慢准备仍在途时，释放也必须能返回
+                // （不得因为等待在途启动而被无限期挂起）。
+                var disposer = new Thread(() => counter.Dispose()) { IsBackground = true };
+                disposer.Start();
+
+                // 同步点：释放确实走到了"停止外部服务"这一步
+                Assert.True(WaitUntil(() => launcher.StopCount >= 1, StateWaitMs),
+                    "释放应当走到停止外部服务这一步");
+                // 同步点：释放已经返回 —— 之后慢准备返回也不得再创建外部进程
+                Assert.True(disposer.Join(StateWaitMs), "释放应当返回");
 
                 // 放行慢准备：若没有"慢操作返回后重新校验"，这里就会创建出外部进程
                 launcher.ReleaseEnsure();
@@ -1095,8 +1103,12 @@ namespace LiteMonitor.Tests
             //   "仅在 Start() 前增加一次无锁检查仍有竞态窗口" ——
             //   也就是说，"检查通过之后、Start() 真正创建进程之前"发生 Dispose 的情况必须被覆盖。
             //
-            //   期望：刚创建出来的进程必须被**撤销**（停掉），
-            //   释放返回后不得留下运行中的启动器。
+            //   ★ 时序**完全由同步点决定**（不用 Thread.Sleep 碰运气）：
+            //     ① 创建确实已进入（StartEntered）
+            //     ② 释放确实走到了"停止外部服务"（StopCount ≥ 1），此刻创建仍在途
+            //     ③ 测试显式放行创建（ReleaseStart）
+            //     ④ 释放返回（Dispose 的有界等待等到了在途创建结束）
+            //   断言全部放在 ④ 之后 ⇒ "CreatedCount == 1" 是**必然**，不依赖机器快慢。
             var launcher = new BlockingStartLauncher();
             var counter = new FpsCounter(null, launcher, new FakeProcessQuery(), () => true);
             counter.FpsDemandProvider = () => true;
@@ -1105,14 +1117,22 @@ namespace LiteMonitor.Tests
                 counter.GetFps();
                 Assert.True(launcher.StartEntered.Wait(StateWaitMs), "启动应当进入创建进程阶段");
 
-                // 另起线程放行"进程创建"，制造"释放与创建交错"的真实时序
-                var releaser = new Thread(() => { Thread.Sleep(200); launcher.ReleaseStart(); })
-                {
-                    IsBackground = true
-                };
-                releaser.Start();
+                // 在专用线程上释放：Dispose 会阻塞在"等待在途创建结束"里，
+                // 直到下面显式放行创建为止。
+                var disposer = new Thread(() => counter.Dispose()) { IsBackground = true };
+                disposer.Start();
 
-                counter.Dispose();
+                // 同步点：释放确实走到了"停止外部服务"这一步 ⇒ 此时进程创建仍在途
+                // （Dispose 先置 _disposed、再 StopService，最后才做有界等待）
+                Assert.True(WaitUntil(() => launcher.StopCount >= 1, StateWaitMs),
+                    "释放应当走到停止外部服务这一步（此刻进程创建仍在途）");
+                Assert.Equal(0, launcher.CreatedCount);   // 尚未放行 ⇒ 进程还没被创建
+
+                // 显式放行"进程创建"：创建完成 → 启动流程必须撤销它
+                launcher.ReleaseStart();
+
+                // 释放返回（有界等待等到了在途创建结束）
+                Assert.True(disposer.Join(StateWaitMs), "释放应当返回");
 
                 // 进程确实被创建过 → 说明确实走进了"创建与释放交错"的窗口
                 Assert.Equal(1, launcher.CreatedCount);
