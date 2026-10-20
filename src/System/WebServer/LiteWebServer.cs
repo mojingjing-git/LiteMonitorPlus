@@ -48,6 +48,20 @@ namespace LiteMonitor.src.WebServer
         /// <summary>Web 需求状态快照（连接数 + HTTP 租期，一次性读取，不撕裂）。</summary>
         public WebDemandSnapshot GetDemandSnapshot() => _sessionManager.GetDemandSnapshot();
 
+        /// <summary>
+        /// 既有构造函数（**原样保留**，保证二进制兼容）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 简报要求"公开 API 只许新增、不许改既有成员签名"：
+        ///   本构造函数必须保留 —— 否则 1 参 ctor 的元数据签名会消失（源码兼容 ✓、二进制兼容 ✘）。
+        /// ★ 既有 3 个调用点（<c>MainForm_Transparent</c> / <c>FpsStateProbe</c> / <c>ProbeEnvironment</c>）
+        ///   都写的是 <c>new LiteWebServer(cfg)</c>，会绑定到本版本，
+        ///   行为与改造前完全一致（默认实现即生产实现）。
+        /// </remarks>
+        public LiteWebServer(Settings cfg) : this(cfg, null, null)
+        {
+        }
+
         /// <param name="cfg">当前设置。</param>
         /// <param name="samplingRequester">
         /// 共享采样请求入口（默认走 <c>HardwareMonitor.Instance?.UpdateIfDueAsync</c>）。
@@ -170,6 +184,15 @@ namespace LiteMonitor.src.WebServer
                 _currentRunningPort = -1;
                 try { listener?.Stop(); } catch { }
                 _listener = null;
+
+                // ★ 启动失败必须把**已经起来的**部件全部停掉（次要#5）。
+                //   异常可能发生在 _sessionManager.Start() 之后（例如 _demandSync.Start() 抛错）：
+                //   那样会留下一个**仍在跑的广播循环**，而需求监视又没启动
+                //   → HTTP 租期到期没人发现 → 采集层需求**永久停在 true**（永久白采集，本轮优化全白做）。
+                //   顺序：先停会话管理器（它会清空全部需求并通知 → 同步器把 false 送达采集层），
+                //   再停需求监视（否则监视线程可能在停掉之后又写一次）。
+                try { _sessionManager.Stop(); } catch { }
+                try { _demandSync.Stop(); } catch { }
                 return false;
             }
         }

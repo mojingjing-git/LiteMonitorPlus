@@ -221,38 +221,43 @@ namespace LiteMonitor.src.WebServer
         /// <returns>当前需求值（是否写入成功请看 <see cref="HasApplied"/>）。</returns>
         public bool SyncNow()
         {
-            bool demand = _demandProvider();
-            object? target = _targetProvider?.Invoke();
-
+            // ★ 读 + 比较 + 写必须在**同一把锁**里（次要#4）。
+            //   原来"读在锁外、写在锁内"：事件线程（需求刚消失）与 200ms 监视线程各读各的，
+            //   后读到 false 的线程可能**先**写 false，先读到 true 的线程**后**写 true
+            //   → 陈旧的 true 落在 false 之后 → 采集层**瞬时过度采集**（≤200ms 内自愈，影响有界）。
+            //   放进同一把锁后，"读到需求"与"写入需求"变成原子的一对，
+            //   后写的一定是后读的 → 不可能再写出陈旧值。
+            // ★ 锁内调用 _demandProvider()：它读的是 WebDemandState 的**另一把**锁，
+            //   两把锁之间没有反向持有顺序（需求状态从不回调同步器）→ 不会死锁。
             lock (_gate)
             {
+                bool demand = _demandProvider();
+                object? target = _targetProvider?.Invoke();
+
                 // 值没变、目标也没变 → 不重复写（写入是幂等的，但少写一次是一次）
                 if (_hasApplied && _appliedValue == demand && ReferenceEquals(_appliedTarget, target))
                 {
                     return demand;
                 }
-            }
 
-            bool applied = false;
-            try
-            {
-                applied = _applyDemand(demand);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("Web 需求同步失败: " + ex.Message);
-            }
+                bool applied = false;
+                try
+                {
+                    applied = _applyDemand(demand);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("Web 需求同步失败: " + ex.Message);
+                }
 
-            if (applied)
-            {
-                lock (_gate)
+                if (applied)
                 {
                     _appliedValue = demand;
                     _appliedTarget = target;
                     _hasApplied = true;
                 }
+                return demand;
             }
-            return demand;
         }
 
         /// <summary>
@@ -433,8 +438,13 @@ namespace LiteMonitor.src.WebServer
             // ★ 服务级取消令牌：Stop 时让在途的 HTTP 采样等待立刻退出
             var lifetime = new CancellationTokenSource();
             var oldLifetime = Interlocked.Exchange(ref _lifetimeCts, lifetime);
+            // ★ 只 Cancel，**不 Dispose**（次要#6）：
+            //   在途请求还持有 oldLifetime.Token（HandleClientAsync 入口捕获），
+            //   之后 CreateLinkedTokenSource(token) 会对**已释放**的 CTS 注册回调
+            //   → 抛 ObjectDisposedException → 该 HTTP 请求被 HandleClientAsync 的 catch 吞掉
+            //   → **客户端收不到任何响应**（窗口窄：Stop→Start 快切）。
+            //   与 _broadcastCts 在 Stop 路径上的处理一致：只取消，释放交给 GC。
             try { oldLifetime?.Cancel(); } catch { }
-            try { oldLifetime?.Dispose(); } catch { }
             _lifetimeToken = lifetime.Token;
 
             // ★ 先把 token 取出来再进任务体：
@@ -788,6 +798,12 @@ namespace LiteMonitor.src.WebServer
 
         private async Task BroadcastLoop(int generation, CancellationToken token)
         {
+            // ★ 复用同一个载荷流（次要#7）：每帧只重置长度，**不重新分配内部缓冲**。
+            //   原来每帧 `new MemoryStream(capacity)` → 每帧 new byte[32768] → 广播 1 帧/秒 ≈ 32KB/s Gen0 垃圾。
+            //   取舍：没有采用"capacity 传 0 按需增长"——那会让每帧从 0 开始倍增扩容（约 17 次 realloc + 拷贝），
+            //   比现在的一次性 32KB 分配**更差**；这里改成"一次分配、长期复用"：
+            //   稳态 0 分配、无 realloc 抖动，且保留"可扩容"语义（>32KB 的帧不会丢）。
+            using var payloadStream = new MemoryStream(32 * 1024);
             try
             {
                 // ★ 代次校验：Stop 之后（或再次 Start 之后）本循环必须退出，
@@ -808,27 +824,23 @@ namespace LiteMonitor.src.WebServer
                         buffer = ArrayPool<byte>.Shared.Rent(capacity);
 
                         int payloadLen;
-                        // ★ 可扩容的 MemoryStream：
-                        //   原来的 new MemoryStream(buffer) 是**不可扩容**的固定缓冲，
-                        //   快照 JSON 一旦超过 32 KB 就会抛 NotSupportedException（整帧丢失）。
-                        using (var ms = new System.IO.MemoryStream(capacity))
+                        // ★ 重置长度（位置归 0，内部缓冲保留 → 不再每帧分配 32KB）
+                        payloadStream.SetLength(0);
+                        using (var writer = new Utf8JsonWriter(payloadStream))
                         {
-                            using (var writer = new Utf8JsonWriter(ms))
-                            {
-                                // ★ 先共享采样（限频），再序列化 —— 与 HTTP 路径同一条采样入口
-                                await ProducePayloadAsync(writer, token).ConfigureAwait(false);
-                                writer.Flush();
-                            }
-                            payloadLen = (int)ms.Length;
-
-                            // 载荷超过租用缓冲时换一块更大的（保留 ArrayPool 复用思路，不做每帧大分配）
-                            if (payloadLen > buffer.Length)
-                            {
-                                ArrayPool<byte>.Shared.Return(buffer);
-                                buffer = ArrayPool<byte>.Shared.Rent(payloadLen);
-                            }
-                            Buffer.BlockCopy(ms.GetBuffer(), 0, buffer, 0, payloadLen);
+                            // ★ 先共享采样（限频），再序列化 —— 与 HTTP 路径同一条采样入口
+                            await ProducePayloadAsync(writer, token).ConfigureAwait(false);
+                            writer.Flush();
                         }
+                        payloadLen = (int)payloadStream.Length;
+
+                        // 载荷超过租用缓冲时换一块更大的（保留 ArrayPool 复用思路，不做每帧大分配）
+                        if (payloadLen > buffer.Length)
+                        {
+                            ArrayPool<byte>.Shared.Return(buffer);
+                            buffer = ArrayPool<byte>.Shared.Rent(payloadLen);
+                        }
+                        Buffer.BlockCopy(payloadStream.GetBuffer(), 0, buffer, 0, payloadLen);
 
                         int headerLen = 2;
                         if (payloadLen >= 65536) headerLen += 8;
