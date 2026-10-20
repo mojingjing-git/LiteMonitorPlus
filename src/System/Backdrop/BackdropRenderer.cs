@@ -112,7 +112,10 @@ namespace LiteMonitor.src.SystemServices.Backdrop
                 }
                 else
                 {
-                    offer = BackdropFrameOffer.Available(isPreview: false);
+                    // ★ 来源由**帧提供者自己声明**（IBackdropFrameSource.IsPreview）：
+                    //   真实捕获后端报 LiveFrame，固定样例图 / 假后端报 PreviewFrame。
+                    //   这样"把固定图当实时帧上报"的误报从根上不可能发生（独立复核 N2）。
+                    offer = BackdropFrameOffer.Available(isPreview: _frameSource.IsPreview);
                 }
             }
 

@@ -33,8 +33,11 @@ namespace LiteMonitor.ThemeEditor
     ///    背景层、底纹、外框、辉光、进度条一律由正式渲染层绘制。
     /// 3. 生命周期：主题切换（主题代次自增）、尺寸变化、DPI 变化都会让运行时快照失效重建；
     ///    <see cref="AppearanceRuntime"/> 在 <see cref="Dispose(bool)"/> 里释放，绝不泄漏。
-    /// 4. 玻璃底图仍然只来自<b>固定样例图</b>（<see cref="PreviewFrameSource"/>），
-    ///    预览路径<b>绝不</b>访问真实桌面。
+    /// 4. 玻璃底图仍然只来自<b>固定样例图</b>，预览路径<b>绝不</b>访问真实桌面：
+    ///    样例图通过 <c>AppearanceRuntime</c> 的 <c>previewSource</c> 参数进入
+    ///    <c>options.PreviewSource</c>，背景层走 A08 已验证的"预览固定源优先"分支 ——
+    ///    <b>完全不访问帧后端</b>（后端调用次数 = 0），且来源诊断是
+    ///    <c>PreviewFrame</c> 而<b>不是</b> <c>LiveFrame</c>（独立复核 N2）。
     /// </summary>
     public class ThemePreviewControl : Panel
     {
@@ -60,9 +63,6 @@ namespace LiteMonitor.ThemeEditor
         /// <summary>正式外观运行时：预览与主窗口共用同一套渲染器与资源生命周期。</summary>
         private readonly AppearanceRuntime _appearance;
 
-        /// <summary>预览固定样例图的帧来源（只提供固定图案，绝不访问真实桌面）。</summary>
-        private readonly PreviewFrameSource _previewSource;
-
         /// <summary>预览专用的固定样例图（静态图案，绝不来自桌面捕获）。</summary>
         private Bitmap? _previewSample;
 
@@ -78,11 +78,11 @@ namespace LiteMonitor.ThemeEditor
             BackColor = Color.White;
             BorderStyle = BorderStyle.FixedSingle;
 
-            // 固定样例图来源：玻璃预览唯一的底图来源（不注册任何实时后端）
-            _previewSource = new PreviewFrameSource();
-
-            // 正式外观运行时：背景层 / 装饰层 / 进度条与主窗口完全同源
-            _appearance = new AppearanceRuntime(_previewSource);
+            // 正式外观运行时：背景层 / 装饰层 / 进度条与主窗口完全同源。
+            // ★ 预览**不注册任何实时帧后端** —— 固定样例图通过 previewSource 走
+            //   options.PreviewSource 路径（A08 已验证：完全不访问后端，后端调用次数 = 0），
+            //   并且来源诊断是 PreviewFrame 而不是 LiveFrame（独立复核 N2）。
+            _appearance = new AppearanceRuntime(previewSource: GetPreviewSample());
 
             // DPI 缩放支持 - 手动计算内边距
             _dpiScale = GetDpiScale();
@@ -284,7 +284,11 @@ namespace LiteMonitor.ThemeEditor
             if (previewTheme == null) throw new ArgumentNullException(nameof(previewTheme));
             if (groups == null) throw new ArgumentNullException(nameof(groups));
 
-            // 预览专用运行时：固定样例图是唯一的帧来源，绝不注册实时背景后端
+            // 预览专用运行时：**只**注册固定样例图来源（PreviewFrameSource），
+            // 它绝不访问真实桌面（IsReady 只看有没有样例图）。
+            // ★ 保留它而不是"什么都不注册"：没有样例图时降级原因仍是
+            //   "预览没有固定样例图…"（预览语境），而不是"未注册实时背景后端"
+            //   （那是主窗口的语境，放在预览里会误导）。
             using var appearance = new AppearanceRuntime(new PreviewFrameSource(null));
             appearance.Update(previewTheme, 1.0f, 1.0f, bounds);
 
@@ -325,7 +329,13 @@ namespace LiteMonitor.ThemeEditor
             if (previewTheme == null) throw new ArgumentNullException(nameof(previewTheme));
             if (groups == null) throw new ArgumentNullException(nameof(groups));
 
-            // 预览专用运行时：固定样例图是唯一的帧来源，绝不注册实时背景后端
+            // 预览专用运行时：**只**注册固定样例图来源（PreviewFrameSource），
+            // 它绝不访问真实桌面（IsReady 只看有没有样例图）。
+            // ★ 之所以不改成 options.PreviewSource 路径：这个兼容重载允许
+            //   调用方传 null 样例图，此时历史降级文案是"预览没有固定样例图…"；
+            //   走 PreviewSource 路径会变成"未注册实时背景后端"（主窗口语境，预览里会误导）。
+            // ★ 而 N2 的来源误报由 PreviewFrameSource.IsPreview = true 根治：
+            //   来源报 PreviewFrame 而不是 LiveFrame。
             using var appearance = new AppearanceRuntime(new PreviewFrameSource(previewSource));
             appearance.Update(previewTheme, dpiScale <= 0f ? 1.0f : dpiScale, 1.0f, bounds);
 
@@ -413,8 +423,8 @@ namespace LiteMonitor.ThemeEditor
                     _lastSize = requiredSize;
                 }
 
-                // 固定样例图交给帧来源（玻璃预览的唯一底图来源）
-                _previewSource.Sample = GetPreviewSample();
+                // ★ 固定样例图在构造运行时时就已交给它（options.PreviewSource 路径），
+                //   这里不需要再做任何注入。
 
                 var bounds = new Rectangle(0, 0, requiredSize.Width, requiredSize.Height);
 

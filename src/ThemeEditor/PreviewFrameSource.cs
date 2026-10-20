@@ -12,9 +12,15 @@ namespace LiteMonitor.ThemeEditor
     ///    <see cref="ThemePreviewControl.CreatePreviewSample"/> 生成的静态图案提供。
     /// 2. 帧是**借用**引用：本类既不释放样例图，也不修改它
     ///    （样例图由 <see cref="ThemePreviewControl"/> 自己创建、自己释放）。
-    /// 3. 用途：作为 <see cref="AppearanceRuntime"/> 的帧来源注入点 —— 运行时内部的背景渲染器
-    ///    因此能走"预览固定源"分支，玻璃预览不会被降级成渐变，
-    ///    同时又保证预览路径**永远不注册实时背景后端**。
+    /// 3. <see cref="IsPreview"/> 返回 true —— 通过本类提供的帧一律报
+    ///    <c>PreviewFrame</c>，**不会**被误记成"实时玻璃真的在工作"（独立复核 N2）。
+    /// <para>
+    /// ★ <b>编辑器的预览路径已经不用本类了</b>：编辑器把固定样例图通过
+    ///   <c>AppearanceRuntime</c> 的 <c>previewSource</c> 参数交给
+    ///   <c>options.PreviewSource</c>，那条路径**根本不注册帧后端**（后端调用次数 = 0），
+    ///   是不依赖约定的结构性保证。本类保留给需要"以帧来源身份"注入固定图的场景
+    ///   （测试、复现程序、未来的预览适配器）。
+    /// </para>
     /// </summary>
     public sealed class PreviewFrameSource : IBackdropFrameSource
     {
@@ -41,6 +47,11 @@ namespace LiteMonitor.ThemeEditor
 
         /// <summary>后端是否就绪：只有拿到固定样例图才算就绪。</summary>
         public bool IsReady => _sample != null;
+
+        /// <summary>
+        /// 本来源提供的帧是**预览用**的 ⇒ 诊断里报 <c>PreviewFrame</c>。
+        /// </summary>
+        public bool IsPreview => true;
 
         /// <summary>未就绪原因（人类可读），会进入背景层的降级诊断文本。</summary>
         public string UnavailableReason => "预览没有固定样例图，玻璃背景已按降级链回退。";
