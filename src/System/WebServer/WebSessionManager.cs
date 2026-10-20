@@ -701,10 +701,18 @@ namespace LiteMonitor.src.WebServer
                 // 默认返回首页（仅取 HTML：不产生硬件需求）
                 string iconBase64 = WebPageContent.GetAppIconBase64();
                 bool authRequired = !string.IsNullOrEmpty(Settings.Load().WebServerPassword);
-                
+
+                // ★ A11 挂载点：主题颜色快照 → CSS 变量。
+                //   · 只**消费**UI 层发布的不可变快照（WebThemeColorPublisher.Current）：
+                //     这里不解析主题、不读主题文件、不碰硬件；
+                //   · 未发布快照时用写死的回退配色 → 页面外观与改造前一致；
+                //   · 刻意**不推送、不轮询**：换主题后刷新浏览器即取到新配色。
+                string themeCss = WebThemeCss.BuildCssVariables(WebThemeColorPublisher.Current);
+
                 string html = WebPageContent.IndexHtml
                     .Replace("{{FAVICON}}", !string.IsNullOrEmpty(iconBase64) ? $"<link rel='icon' type='image/png' href='data:image/png;base64,{iconBase64}'>" : "")
-                    .Replace("{{AUTH_REQUIRED}}", authRequired.ToString().ToLower());
+                    .Replace("{{AUTH_REQUIRED}}", authRequired.ToString().ToLower())
+                    .Replace(WebPageContent.ThemeCssPlaceholder, themeCss);
                 
                 byte[] data = Encoding.UTF8.GetBytes(html);
                 SendHttpResponse(stream, 200, "text/html; charset=utf-8", data, data.Length);

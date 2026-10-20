@@ -21,6 +21,7 @@ namespace LiteMonitor.ThemeEditor
         private Button? btnRename;
         private Button? btnCopy;
         private Button? btnDelete;
+        private Button? btnCancel;
 
         // 中间：TabControl + 编辑页
         private TabControl? tab;
@@ -28,10 +29,20 @@ namespace LiteMonitor.ThemeEditor
         private Panel? pageFont;
         private Panel? pageColors;
 
+        // 外观字段页（机能风 / 液态玻璃的新字段，外观改造计划 A10）
+        private AppearanceFields? appearanceFields;
+
         // 右栏：预览
         private ThemePreviewControl? preview;
 
         private Theme? _theme;
+
+        /// <summary>
+        /// 进入编辑器时的原始快照：用于"取消"时把内存中的主题恢复原状。
+        /// ★ 只存在于内存，<b>从不落盘</b>。
+        /// </summary>
+        private Theme? _pristineTheme;
+
         private string _currentThemeName = "";
 
         // 系统字体缓存
@@ -88,7 +99,10 @@ namespace LiteMonitor.ThemeEditor
             pageLayout = new Panel { AutoScroll = true, Dock = DockStyle.Fill };
             pageFont = new Panel { AutoScroll = true, Dock = DockStyle.Fill };
             pageColors = new Panel { AutoScroll = true, Dock = DockStyle.Fill };
-            
+
+            // 外观字段页（新外观开关 / 背景 / alpha 编辑）
+            appearanceFields = new AppearanceFields(dpiScale);
+
             
             var tpColors = new TabPage(" 颜色 / Colors ");
             tpColors.Controls.Add(pageColors);
@@ -102,9 +116,9 @@ namespace LiteMonitor.ThemeEditor
             tpLayout.Controls.Add(pageLayout);
             tab.TabPages.Add(tpLayout);
 
-           
-
-            
+            var tpAppearance = new TabPage(" 外观 / Appearance ");
+            tpAppearance.Controls.Add(appearanceFields);
+            tab.TabPages.Add(tpAppearance);
             
             // ------------- 右侧：预览 -------------
             preview = new ThemePreviewControl
@@ -150,7 +164,21 @@ namespace LiteMonitor.ThemeEditor
             btnNew = new Button { Text = "新建主题 / New Theme", Dock = DockStyle.Top, Height = (int)(40 * dpiScale) };
             btnNew.Click += (_, __) => CmdNewTheme();
             leftPanel.Controls.Add(btnNew);
-            
+
+            // 取消：不保存任何东西，内存中的主题恢复原状，磁盘文件一个字节都不动
+            btnCancel = new Button { Text = "取消 / Cancel", Dock = DockStyle.Bottom, Height = (int)(40 * dpiScale) };
+            btnCancel.Click += (_, __) => CancelEditing();
+            leftPanel.Controls.Add(btnCancel);
+
+            // 外观字段变化 → 刷新预览（只改内存，不写盘）
+            if (appearanceFields != null)
+            {
+                appearanceFields.ValueChanged += (_, __) =>
+                {
+                    if (_theme != null) preview?.SetTheme(_theme);
+                };
+            }
+
             // 按照正确的顺序添加控件到主窗体
             Controls.Add(tab);      // 先添加填充中间的控件
             Controls.Add(preview);  // 再添加右侧控件
@@ -216,11 +244,48 @@ namespace LiteMonitor.ThemeEditor
                 return;
             }
 
+            // ★ 记录进入编辑器时的快照（只在内存里）：取消时用它恢复原状
+            _pristineTheme = AppearanceThemeConfig.CloneConfig(_theme);
+
             BuildLayoutPage();
             BuildFontPage();
             BuildColorsPage();
+            appearanceFields?.Bind(_theme);
 
             preview.SetTheme(_theme);
+        }
+
+        /// <summary>
+        /// 取消编辑：把内存中的主题恢复成进入编辑器前的状态，然后关闭编辑器。
+        /// ★ 磁盘文件<b>不写</b>：只有"保存"按钮才会落盘。
+        /// </summary>
+        private void CancelEditing()
+        {
+            RestorePristineTheme();
+            Close();
+        }
+
+        /// <summary>
+        /// 就地把内存中的主题恢复成快照状态（对象引用不变）。
+        /// </summary>
+        private void RestorePristineTheme()
+        {
+            if (_theme == null || _pristineTheme == null) return;
+
+            AppearanceThemeConfig.RestoreConfig(_theme, _pristineTheme);
+
+            appearanceFields?.Bind(_theme);
+            preview?.SetTheme(_theme);
+        }
+
+        /// <summary>
+        /// 关闭编辑器（不保存）= 取消：内存中的主题回到进入编辑器前的状态，
+        /// 磁盘上的主题文件一个字节都不改。
+        /// </summary>
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            RestorePristineTheme();
+            base.OnFormClosing(e);
         }
 
 
@@ -404,7 +469,10 @@ namespace LiteMonitor.ThemeEditor
             float dpiScale = GetDpiScale();
             int y = (int)(10 * dpiScale);
 
-            Button AddColor(string label, Func<string> get, Action<string> set)
+            // 颜色缺省值（与 ColorConfig 的属性默认值一致）
+            var defaults = new ColorConfig();
+
+            Button AddColor(string label, Func<string> get, Action<string> set, string? defaultText = null)
             {
                 pageColors.Controls.Add(new Label
                 {
@@ -431,6 +499,25 @@ namespace LiteMonitor.ThemeEditor
                     ForeColor = textColor // 根据背景亮度设置文字颜色
                 };
 
+                // alpha（透明度）编辑：0–1，写回格式 rgba(r,g,b,a)
+                var alphaEditor = new AppearanceAlphaEditor
+                {
+                    Location = new Point((int)(348 * dpiScale), y + (int)(2 * dpiScale)),
+                    Width = (int)(110 * dpiScale)
+                };
+                alphaEditor.SetColorText(get());
+
+                // 统一的颜色写回（按钮外观 + alpha 显示一起刷新）
+                void ApplyColorText(string text)
+                {
+                    btn.Text = text;
+                    Color c = ThemeManager.ParseColor(text);
+                    btn.BackColor = c;
+                    var b = (c.R * 0.299 + c.G * 0.587 + c.B * 0.114);
+                    btn.ForeColor = b > 127 ? Color.Black : Color.White;
+                    alphaEditor.SetColorText(text);
+                }
+
                 btn.Click += (_, __) =>
                 {
                     using var cd = new ColorDialog();
@@ -444,18 +531,49 @@ namespace LiteMonitor.ThemeEditor
                     
                     if (cd.ShowDialog() == DialogResult.OK)
                     {
-                        string hex = $"#{cd.Color.R:X2}{cd.Color.G:X2}{cd.Color.B:X2}";
+                        // 保留当前 alpha，只换 RGB（alpha 由右侧输入框单独编辑）
+                        double alpha = AppearanceColorText.TryGetAlpha(get(), out double a) ? a : 1.0;
+                        string hex = AppearanceColorText.Format(cd.Color.R, cd.Color.G, cd.Color.B, alpha);
                         set(hex);
-                        btn.Text = hex;
-                        btn.BackColor = cd.Color; // 更新按钮背景色
-                        // 更新文字颜色
-                        var newBrightness = (cd.Color.R * 0.299 + cd.Color.G * 0.587 + cd.Color.B * 0.114);
-                        btn.ForeColor = newBrightness > 127 ? Color.Black : Color.White;
+                        ApplyColorText(hex);
                         preview.SetTheme(_theme!);
                     }
                 };
 
+                // alpha 改动：合法才写回；非法（越界 / NaN / Infinity / 颜色写坏了）一律拒绝并回退
+                alphaEditor.AlphaChanged += (_, __) =>
+                {
+                    string current = get();
+                    if (!AppearanceColorText.TrySetAlpha(current, alphaEditor.Alpha, out string newText))
+                    {
+                        alphaEditor.SetColorText(current);
+                        return;
+                    }
+
+                    set(newText);
+                    ApplyColorText(newText);
+                    preview.SetTheme(_theme!);
+                };
+
+                // 恢复缺省
+                var btnDefault = new Button
+                {
+                    Text = "缺省",
+                    Location = new Point((int)(464 * dpiScale), y),
+                    Width = (int)(60 * dpiScale),
+                    Height = (int)(30 * dpiScale)
+                };
+                btnDefault.Click += (_, __) =>
+                {
+                    string text = defaultText ?? string.Empty;
+                    set(text);
+                    ApplyColorText(text);
+                    preview.SetTheme(_theme!);
+                };
+
                 pageColors.Controls.Add(btn);
+                pageColors.Controls.Add(alphaEditor);
+                pageColors.Controls.Add(btnDefault);
 
                 y += (int)(45 * dpiScale); // 增加垂直间距以适应更高的按钮
                 return btn;
@@ -463,21 +581,26 @@ namespace LiteMonitor.ThemeEditor
 
             var C = _theme.Color;
 
-            AddColor("背景色 / Background", () => C.Background, v => C.Background = v);
-            AddColor("组背景 / GroupBackground", () => C.GroupBackground, v => C.GroupBackground = v);
+            AddColor("背景色 / Background", () => C.Background, v => C.Background = v, defaults.Background);
+            AddColor("组背景 / GroupBackground", () => C.GroupBackground, v => C.GroupBackground = v, defaults.GroupBackground);
 
-            AddColor("标题字体 / TextTitle", () => C.TextTitle, v => C.TextTitle = v);
-            AddColor("组标题字体 / TextGroup", () => C.TextGroup, v => C.TextGroup = v);
-            AddColor("普通字体 / TextPrimary", () => C.TextPrimary, v => C.TextPrimary = v);
+            AddColor("标题字体 / TextTitle", () => C.TextTitle, v => C.TextTitle = v, defaults.TextTitle);
+            AddColor("组标题字体 / TextGroup", () => C.TextGroup, v => C.TextGroup = v, defaults.TextGroup);
+            AddColor("普通字体 / TextPrimary", () => C.TextPrimary, v => C.TextPrimary = v, defaults.TextPrimary);
 
-            AddColor("安全值颜色 / ValueSafe", () => C.ValueSafe, v => C.ValueSafe = v);    
-            AddColor("警告值颜色 / ValueWarn", () => C.ValueWarn, v => C.ValueWarn = v);
-            AddColor("严重值颜色 / ValueCrit", () => C.ValueCrit, v => C.ValueCrit = v);
+            AddColor("安全值颜色 / ValueSafe", () => C.ValueSafe, v => C.ValueSafe = v, defaults.ValueSafe);    
+            AddColor("警告值颜色 / ValueWarn", () => C.ValueWarn, v => C.ValueWarn = v, defaults.ValueWarn);
+            AddColor("严重值颜色 / ValueCrit", () => C.ValueCrit, v => C.ValueCrit = v, defaults.ValueCrit);
 
-            AddColor("进度条背景 / BarBackground", () => C.BarBackground, v => C.BarBackground = v);
-            AddColor("进度条低位 / BarLow", () => C.BarLow, v => C.BarLow = v);
-            AddColor("进度条中位 / BarMid", () => C.BarMid, v => C.BarMid = v);
-            AddColor("进度条高位 / BarHigh", () => C.BarHigh, v => C.BarHigh = v);  
+            AddColor("进度条背景 / BarBackground", () => C.BarBackground, v => C.BarBackground = v, defaults.BarBackground);
+            AddColor("进度条低位 / BarLow", () => C.BarLow, v => C.BarLow = v, defaults.BarLow);
+            AddColor("进度条中位 / BarMid", () => C.BarMid, v => C.BarMid = v, defaults.BarMid);
+            AddColor("进度条高位 / BarHigh", () => C.BarHigh, v => C.BarHigh = v, defaults.BarHigh);  
+
+            // 新用途色（可空；缺省不写出）：描边 / 辉光 / 次级文字
+            AddColor("描边色 / Border", () => C.Border ?? string.Empty, v => C.Border = string.IsNullOrEmpty(v) ? null : v);
+            AddColor("辉光色 / Shadow", () => C.Shadow ?? string.Empty, v => C.Shadow = string.IsNullOrEmpty(v) ? null : v);
+            AddColor("次级文字色 / TextSecondary", () => C.TextSecondary ?? string.Empty, v => C.TextSecondary = string.IsNullOrEmpty(v) ? null : v);
 
             AddSaveButton(pageColors);
         }
@@ -517,6 +640,9 @@ namespace LiteMonitor.ThemeEditor
             try
             {
                 ThemeFileService.SaveTheme(_currentThemeName, _theme);
+
+                // 保存成功：快照更新为已保存状态（之后再"取消"就恢复到这份内容）
+                _pristineTheme = AppearanceThemeConfig.CloneConfig(_theme);
 
                 // 刷新主界面菜单的主题列表
                 RefreshMainFormThemeMenu();
