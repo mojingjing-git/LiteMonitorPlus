@@ -35,6 +35,7 @@ internal static class Program
         };
 
         ProbeEnvironment? env = null;
+        bool skipped = false;
         try
         {
             env = new ProbeEnvironment(options.OutputDir);
@@ -80,14 +81,33 @@ internal static class Program
             {
                 results["skippedReason"] = "硬件层不可用或驱动就绪检查未通过，未执行需要真实硬件的测量（不编造数据）。";
                 Write("跳过需要真实硬件的测量。");
+                // 退出码非 0：一份"没有硬件数据"的结果文件不能被当成成功的基线。
+                skipped = true;
             }
 
             Write("--- FPS 状态证据（不启动外部服务）");
-            results["fpsState"] = new JsonObject
+            // FPS 证据段单独兜底：生产侧重构导致探针失配时，只降级这一段，
+            // 不应该让整轮测量（含硬件分组）作废。
+            var fpsState = new JsonObject();
+            try
             {
-                ["deadPidRetention"] = FpsStateProbe.RunDeadPidRetention(new[] { 0, 1, 10, 100 }, options.FpsObservedCycles, options.FpsCostSeconds),
-                ["webHiddenFps"] = FpsStateProbe.RunWebHiddenFps(env.Cfg),
-            };
+                fpsState["deadPidRetention"] = FpsStateProbe.RunDeadPidRetention(new[] { 0, 1, 10, 100 }, options.FpsObservedCycles, options.FpsCostSeconds);
+            }
+            catch (Exception ex)
+            {
+                fpsState["deadPidRetentionError"] = $"{ex.GetType().Name}: {ex.Message}";
+                Write($"!! FPS 死 PID 证据失败（已降级，不影响其它测量）: {ex.GetType().Name}: {ex.Message}");
+            }
+            try
+            {
+                fpsState["webHiddenFps"] = FpsStateProbe.RunWebHiddenFps(env.Cfg);
+            }
+            catch (Exception ex)
+            {
+                fpsState["webHiddenFpsError"] = $"{ex.GetType().Name}: {ex.Message}";
+                Write($"!! Web 隐藏 FPS 证据失败（已降级，不影响其它测量）: {ex.GetType().Name}: {ex.Message}");
+            }
+            results["fpsState"] = fpsState;
 
             results["metadata"] = env.BuildMetadata();
         }
@@ -104,6 +124,8 @@ internal static class Program
 
         results["finishedAt"] = DateTime.Now.ToString("o");
         results["log"] = Log.ToString();
+        results["exitCode"] = results["fatalError"] != null ? 1 : (skipped ? 2 : 0);
+        results["exitCodeMeaning"] = "0=正常；1=探针异常；2=硬件层不可用/驱动未就绪，未产出硬件测量数据";
 
         string resultPath = Path.Combine(options.OutputDir, "probe-results.json");
         string logPath = Path.Combine(options.OutputDir, "probe-run.txt");
@@ -113,7 +135,10 @@ internal static class Program
         Write($"结果已写入: {resultPath}");
         Write($"日志已写入: {logPath}");
 
-        return results["fatalError"] != null ? 1 : 0;
+        int exitCode = (int)results["exitCode"]!.GetValue<int>();
+        if (exitCode != 0)
+            Write($"!! 退出码 {exitCode}：{(exitCode == 2 ? "没有产出硬件测量数据，这份结果不能当基线用" : "探针异常")}。");
+        return exitCode;
     }
 
     private static JsonObject hardwareReadyJson(ProbeEnvironment env, bool ready, JsonObject driverCheck)

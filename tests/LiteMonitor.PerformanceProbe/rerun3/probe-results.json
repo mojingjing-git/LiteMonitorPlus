@@ -1,0 +1,1935 @@
+{
+  "kind": "performance_probe_result",
+  "startedAt": "2026-10-20T09:16:23.8199710\u002B08:00",
+  "options": {
+    "outputDir": "G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\rerun3",
+    "groups": [
+      "D",
+      "E",
+      "F",
+      "H2"
+    ],
+    "warmupSeconds": 10,
+    "steadySeconds": 45,
+    "settleSeconds": 3,
+    "deviceCalls": 20,
+    "renderSeconds": 2,
+    "fpsObservedCycles": 12,
+    "fpsCostSeconds": 1.5
+  },
+  "driverReadiness": {
+    "needsInstall": false,
+    "status": "Ready",
+    "note": "\u53EA\u8BFB\u68C0\u67E5\uFF0C\u672A\u5B89\u88C5/\u5378\u8F7D\u4EFB\u4F55\u9A71\u52A8\u3002"
+  },
+  "hardwareReady": {
+    "ready": true,
+    "note": "\u521D\u59CB\u5316\u5B8C\u6210\uFF0C\u7528\u65F6 0.8s\uFF0C\u679A\u4E3E\u5230 12 \u4E2A\u786C\u4EF6\u5BF9\u8C61\u3002",
+    "driverNeedsInstall": false,
+    "driverStatus": "\u0022Ready\u0022"
+  },
+  "updateCountersInstalled": true,
+  "updateCounterDiagnostics": {
+    "groupCount": 9,
+    "hardwareListIsLive": false,
+    "injectedDevices": [
+      "Virtual Memory [Memory]",
+      "Total Memory [Memory]",
+      "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+      "NVIDIA GeForce RTX 3080 [GpuNvidia]"
+    ],
+    "notInjectableGroups": [
+      "MotherboardGroup",
+      "CpuGroup",
+      "AmdGpuGroup",
+      "StorageGroup",
+      "NetworkGroup",
+      "BatteryGroup"
+    ],
+    "proxyCount": 4,
+    "collectionRoundsObservedDuringInstallCheck": 1,
+    "updateCallsObservedAfterInstall": 1,
+    "countersWorking": true
+  },
+  "groups": [
+    {
+      "kind": "sampling_group",
+      "group": "D",
+      "purpose": "100 ms\u3001Web \u5F00\u4E14\u65E0\u4EBA\u8BBF\u95EE\uFF1A\u9A8C\u8BC1\u7A7A\u95F2\u670D\u52A1\u4E0D\u6269\u5927\u8303\u56F4",
+      "uiPeriodMs": 100,
+      "webEnabled": true,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 0,
+      "httpPollPerSecond": 0,
+      "warmupSeconds": 10,
+      "steadySeconds": 45,
+      "webSocketOpened": 0,
+      "readKeyCount": 12,
+      "elapsedMs": 45042,
+      "collectionRounds": 45,
+      "collectionRoundsMeaning": "\u751F\u4EA7\u4FA7\u5B9E\u9645\u53D1\u751F\u7684\u771F\u5B9E\u91C7\u96C6\u8F6E\u6570\uFF08HardwareSamplingStatistics.CollectionRounds \u589E\u91CF\uFF09",
+      "collectionRequests": 405,
+      "collectionRequestsMeaning": "\u63A2\u9488\u5411\u5E94\u7528\u53D1\u8D77\u7684\u91C7\u96C6\u8BF7\u6C42\u6B21\u6570\uFF1B\u672A\u5230\u671F\u7684\u8BF7\u6C42\u4F1A\u88AB\u95E8\u9650\u8DF3\u8FC7\uFF0C\u4E0D\u4EA7\u751F\u91C7\u96C6",
+      "collectionRoundsPerSecond": 0.999,
+      "collectionRequestsPerSecond": 8.992,
+      "valueReads": 4860,
+      "valueReadsPerRound": 12,
+      "collectionGenerations": 45,
+      "skippedRequests": 360,
+      "sharedRequests": 0,
+      "rejectedRequests": 0,
+      "forcedCollections": 0,
+      "failedCollections": 0,
+      "valueComputations": 720,
+      "productionCollectionDurationMs": 6508.784,
+      "slowScanTriggerRounds": 15,
+      "diskBackgroundScanTriggerRounds": 5,
+      "trafficSaveDueRounds": 0,
+      "gcRequestDueRounds": 1,
+      "workingSetTrimDueRounds": 1,
+      "productionDeviceUpdates": {
+        "Cpu:AMD Ryzen 7 5800X": 45,
+        "GPU.0": 45,
+        "GPU.1": 0,
+        "Network:Radmin VPN": 45,
+        "Network:WLAN 8": 45,
+        "Network:\u4EE5\u592A\u7F51 3": 45,
+        "Network:\u4EE5\u592A\u7F51 5": 45,
+        "Network:\u672C\u5730\u8FDE\u63A5* 1": 45,
+        "Network:\u672C\u5730\u8FDE\u63A5* 2": 45,
+        "Motherboard:MSI MEG X570 UNIFY (MS-7C35)": 15,
+        "Memory:Virtual Memory": 45,
+        "Memory:Total Memory": 45,
+        "GPU:NVIDIA GeForce RTX 3080": 45
+      },
+      "productionCategoryUpdates": {
+        "Cpu": 45,
+        "Gpu": 90,
+        "Network": 270,
+        "Motherboard": 15,
+        "Memory": 90
+      },
+      "trafficFileObservedRewrites": 0,
+      "trafficRewriteNote": "\u8FD9\u662F**\u8F6E\u8BE2\u6587\u4EF6 LastWriteTime \u53D8\u5316**\u5F97\u5230\u7684\u4E0B\u754C\uFF1A\u4E24\u6B21\u8F6E\u8BE2\u4E4B\u95F4\u7684\u591A\u6B21\u5199\u5165\u4F1A\u88AB\u5408\u5E76\u6210\u4E00\u6B21\uFF0C\u6240\u4EE5\u5B83\u4E0D\u662F\u5199\u5165\u6B21\u6570\u672C\u8EAB\u3002\u628A\u5B83\u548C trafficSaveDueRounds\uFF08\u751F\u4EA7\u4FA7\u5B9E\u9645\u89E6\u53D1\u7684\u6B21\u6570\uFF09\u653E\u5728\u4E00\u8D77\u770B\uFF1A\u4E24\u8005\u4E00\u81F4\u624D\u8BF4\u660E\u0022\u5230\u671F\u4E00\u6B21\u5C31\u771F\u7684\u5199\u4E00\u6B21\u0022\u3002",
+      "dueSemantics": "slow%3,diskBg%10,traffic%60==5,gc%180==30,workingSet%300==45",
+      "dueSemanticsWarning": "\u5230\u671F\u8F6E\u6570\u6309\u3010\u5F53\u524D\u751F\u4EA7\u5B9E\u73B0\u7684\u6574\u6570\u79D2\u53D6\u6A21\u8BED\u4E49\u3011\u590D\u7B97\uFF08%3/%10/%60==5/%180==30/%300==45\uFF09\u3002\u8BA1\u5212 \u00A74.3 \u628A\u751F\u4EA7\u6539\u6210\u5355\u8C03\u622A\u6B62\u65F6\u95F4\u4E4B\u540E\uFF0C\u672C\u5217\u4F1A\u4E0E\u751F\u4EA7\u8131\u8282\u800C\u4E0D\u4F1A\u62A5\u9519\uFF0CTask 2/3 \u5FC5\u987B\u6539\u4E3A\u76F4\u63A5\u89C2\u6D4B\u5B9E\u9645\u8C03\u7528\u3002",
+      "slowScanTriggerRoundsRecomputed": 15,
+      "diskBackgroundScanTriggerRoundsRecomputed": 5,
+      "trafficSaveDueRoundsRecomputed": 0,
+      "gcRequestDueRoundsRecomputed": 1,
+      "workingSetTrimDueRoundsRecomputed": 1,
+      "dueSemanticsRecomputationAgrees": true,
+      "processCpuMs": 2656.25,
+      "wholeMachineCpuPercent": 0.3686,
+      "allocatedBytes": 3209152,
+      "perSecondSamples": [
+        {
+          "tMs": 1043,
+          "cpuMs": 93.75,
+          "allocatedBytes": 65248
+        },
+        {
+          "tMs": 2048,
+          "cpuMs": 62.5,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 3100,
+          "cpuMs": 46.875,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 4100,
+          "cpuMs": 62.5,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 5101,
+          "cpuMs": 93.75,
+          "allocatedBytes": 97888
+        },
+        {
+          "tMs": 6101,
+          "cpuMs": 46.875,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 7101,
+          "cpuMs": 78.125,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 8201,
+          "cpuMs": 62.5,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 9201,
+          "cpuMs": 78.125,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 10201,
+          "cpuMs": 46.875,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 11201,
+          "cpuMs": 46.875,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 12201,
+          "cpuMs": 93.75,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 13301,
+          "cpuMs": 78.125,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 14301,
+          "cpuMs": 62.5,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 15401,
+          "cpuMs": 62.5,
+          "allocatedBytes": 97888
+        },
+        {
+          "tMs": 16401,
+          "cpuMs": 78.125,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 17401,
+          "cpuMs": 62.5,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 18402,
+          "cpuMs": 78.125,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 19501,
+          "cpuMs": 93.75,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 20501,
+          "cpuMs": 62.5,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 21501,
+          "cpuMs": 46.875,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 22501,
+          "cpuMs": 62.5,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 23601,
+          "cpuMs": 46.875,
+          "allocatedBytes": 73520
+        },
+        {
+          "tMs": 24601,
+          "cpuMs": 46.875,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 25701,
+          "cpuMs": 31.25,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 26801,
+          "cpuMs": 31.25,
+          "allocatedBytes": 89688
+        },
+        {
+          "tMs": 28042,
+          "cpuMs": 93.75,
+          "allocatedBytes": 138888
+        },
+        {
+          "tMs": 29101,
+          "cpuMs": 46.875,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 30201,
+          "cpuMs": 46.875,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 31201,
+          "cpuMs": 46.875,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 32201,
+          "cpuMs": 46.875,
+          "allocatedBytes": 73392
+        },
+        {
+          "tMs": 33301,
+          "cpuMs": 46.875,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 34301,
+          "cpuMs": 93.75,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 35401,
+          "cpuMs": 46.875,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 36401,
+          "cpuMs": 46.875,
+          "allocatedBytes": 97888
+        },
+        {
+          "tMs": 37401,
+          "cpuMs": 46.875,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 38501,
+          "cpuMs": 46.875,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 39601,
+          "cpuMs": 62.5,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 40701,
+          "cpuMs": 46.875,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 41701,
+          "cpuMs": 46.875,
+          "allocatedBytes": 64712
+        },
+        {
+          "tMs": 42701,
+          "cpuMs": 46.875,
+          "allocatedBytes": 73544
+        },
+        {
+          "tMs": 43701,
+          "cpuMs": 46.875,
+          "allocatedBytes": 65344
+        },
+        {
+          "tMs": 44701,
+          "cpuMs": 78.125,
+          "allocatedBytes": 65344
+        }
+      ],
+      "trafficRewriteAgreesWithDueRounds": true,
+      "trafficRewriteDelta": 0,
+      "updateDurationMs": {
+        "count": 405,
+        "avg": 16.074,
+        "p50": 0,
+        "p95": 143,
+        "max": 175
+      },
+      "readDurationMs": {
+        "count": 405,
+        "avg": 0.119,
+        "p50": 0,
+        "p95": 1,
+        "max": 3
+      },
+      "countersStillInstalled": true,
+      "deviceUpdateCountersTrusted": true,
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.476,
+          "updateWallMsPerCall": 0.011
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.193,
+          "updateWallMsPerCall": 0.004
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 3200.312,
+          "updateWallMsPerCall": 71.118
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 3000.11,
+          "updateWallMsPerCall": 66.669
+        }
+      ],
+      "deviceUpdateCountersMeaning": "LHM \u6CE8\u5165\u4EE3\u7406\u770B\u5230\u7684\u6BCF\u8BBE\u5907 Update \u6B21\u6570\uFF08\u53EA\u8986\u76D6\u53EF\u6CE8\u5165\u5206\u7EC4\uFF1A\u663E\u5361/\u5185\u5B58\uFF09\uFF1B\u6743\u5A01\u7684\u6BCF\u8BBE\u5907\u6B21\u6570\u662F productionDeviceUpdates\uFF08\u751F\u4EA7\u4FA7\u8BA1\u6570\uFF0C\u542B CPU/\u7F51\u5361/\u78C1\u76D8/\u4E3B\u677F\uFF09\u3002",
+      "webActivity": {
+        "webSocketClients": 0,
+        "httpSnapshotOk": 0,
+        "httpSnapshotFailed": 0,
+        "webSocketFramesReceived": 0,
+        "webSocketFramesPerClient": [],
+        "webSocketDesyncs": 0,
+        "webSocketNote": "webSocketFramesReceived \u662F\u5404\u8FDE\u63A5\u5B9E\u9645\u6536\u5230\u7684**\u5E7F\u64AD\u6587\u672C\u5E27\u6570**\uFF1B\u670D\u52A1\u7AEF\u6BCF 1 \u79D2\u5E7F\u64AD\u4E00\u6B21\uFF0C60 \u79D2\u7A33\u6001\u4E0B\u6BCF\u4E2A\u8FDE\u63A5\u5E94\u5728 60 \u5E27\u5DE6\u53F3\u3002\u4E3A 0 \u8BF4\u660E\u8FDE\u63A5\u6CA1\u771F\u6B63\u6536\u5230\u6570\u636E\uFF08\u4E0D\u662F\u0027\u6CA1\u6570\u636E\u53EF\u53D1\u0027\uFF09\u3002webSocketDesyncs \u5E94\u6052\u4E3A 0\uFF0C\u975E 0 \u8868\u793A\u5E27\u89E3\u6790\u5931\u6B65\u3001\u5E27\u8BA1\u6570\u4E0D\u53EF\u4FE1\u3002"
+      },
+      "sampleMetricValues": {
+        "CPU.Load": 39.36,
+        "CPU.Temp": 0,
+        "MEM.Load": 38.75,
+        "NET.Up": 2553705.25,
+        "NET.Down": 308646.34,
+        "GPU.0.Temp": 48,
+        "GPU.0.Load": 41
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    },
+    {
+      "kind": "sampling_group",
+      "group": "E",
+      "purpose": "100 ms\u3001\u5355\u4E2A\u5DF2\u9274\u6743\u7F51\u9875\uFF1A\u8FDE\u63A5\u6D3B\u52A8\u65F6\u6570\u636E\u6B63\u786E\u4E14\u9650\u9891",
+      "uiPeriodMs": 100,
+      "webEnabled": true,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 1,
+      "httpPollPerSecond": 0,
+      "warmupSeconds": 10,
+      "steadySeconds": 45,
+      "webSocketOpened": 1,
+      "readKeyCount": 12,
+      "elapsedMs": 45001,
+      "collectionRounds": 45,
+      "collectionRoundsMeaning": "\u751F\u4EA7\u4FA7\u5B9E\u9645\u53D1\u751F\u7684\u771F\u5B9E\u91C7\u96C6\u8F6E\u6570\uFF08HardwareSamplingStatistics.CollectionRounds \u589E\u91CF\uFF09",
+      "collectionRequests": 405,
+      "collectionRequestsMeaning": "\u63A2\u9488\u5411\u5E94\u7528\u53D1\u8D77\u7684\u91C7\u96C6\u8BF7\u6C42\u6B21\u6570\uFF1B\u672A\u5230\u671F\u7684\u8BF7\u6C42\u4F1A\u88AB\u95E8\u9650\u8DF3\u8FC7\uFF0C\u4E0D\u4EA7\u751F\u91C7\u96C6",
+      "collectionRoundsPerSecond": 1,
+      "collectionRequestsPerSecond": 9,
+      "valueReads": 4860,
+      "valueReadsPerRound": 12,
+      "collectionGenerations": 45,
+      "skippedRequests": 360,
+      "sharedRequests": 0,
+      "rejectedRequests": 0,
+      "forcedCollections": 0,
+      "failedCollections": 0,
+      "valueComputations": 1395,
+      "productionCollectionDurationMs": 6539.509,
+      "slowScanTriggerRounds": 15,
+      "diskBackgroundScanTriggerRounds": 4,
+      "trafficSaveDueRounds": 0,
+      "gcRequestDueRounds": 0,
+      "workingSetTrimDueRounds": 0,
+      "productionDeviceUpdates": {
+        "Cpu:AMD Ryzen 7 5800X": 45,
+        "GPU.0": 45,
+        "GPU.1": 0,
+        "Network:Radmin VPN": 45,
+        "Network:WLAN 8": 45,
+        "Network:\u4EE5\u592A\u7F51 3": 45,
+        "Network:\u4EE5\u592A\u7F51 5": 45,
+        "Network:\u672C\u5730\u8FDE\u63A5* 1": 45,
+        "Network:\u672C\u5730\u8FDE\u63A5* 2": 45,
+        "Motherboard:MSI MEG X570 UNIFY (MS-7C35)": 15,
+        "Memory:Virtual Memory": 45,
+        "Memory:Total Memory": 45,
+        "GPU:NVIDIA GeForce RTX 3080": 45
+      },
+      "productionCategoryUpdates": {
+        "Cpu": 45,
+        "Gpu": 90,
+        "Network": 270,
+        "Motherboard": 15,
+        "Memory": 90
+      },
+      "trafficFileObservedRewrites": 0,
+      "trafficRewriteNote": "\u8FD9\u662F**\u8F6E\u8BE2\u6587\u4EF6 LastWriteTime \u53D8\u5316**\u5F97\u5230\u7684\u4E0B\u754C\uFF1A\u4E24\u6B21\u8F6E\u8BE2\u4E4B\u95F4\u7684\u591A\u6B21\u5199\u5165\u4F1A\u88AB\u5408\u5E76\u6210\u4E00\u6B21\uFF0C\u6240\u4EE5\u5B83\u4E0D\u662F\u5199\u5165\u6B21\u6570\u672C\u8EAB\u3002\u628A\u5B83\u548C trafficSaveDueRounds\uFF08\u751F\u4EA7\u4FA7\u5B9E\u9645\u89E6\u53D1\u7684\u6B21\u6570\uFF09\u653E\u5728\u4E00\u8D77\u770B\uFF1A\u4E24\u8005\u4E00\u81F4\u624D\u8BF4\u660E\u0022\u5230\u671F\u4E00\u6B21\u5C31\u771F\u7684\u5199\u4E00\u6B21\u0022\u3002",
+      "dueSemantics": "slow%3,diskBg%10,traffic%60==5,gc%180==30,workingSet%300==45",
+      "dueSemanticsWarning": "\u5230\u671F\u8F6E\u6570\u6309\u3010\u5F53\u524D\u751F\u4EA7\u5B9E\u73B0\u7684\u6574\u6570\u79D2\u53D6\u6A21\u8BED\u4E49\u3011\u590D\u7B97\uFF08%3/%10/%60==5/%180==30/%300==45\uFF09\u3002\u8BA1\u5212 \u00A74.3 \u628A\u751F\u4EA7\u6539\u6210\u5355\u8C03\u622A\u6B62\u65F6\u95F4\u4E4B\u540E\uFF0C\u672C\u5217\u4F1A\u4E0E\u751F\u4EA7\u8131\u8282\u800C\u4E0D\u4F1A\u62A5\u9519\uFF0CTask 2/3 \u5FC5\u987B\u6539\u4E3A\u76F4\u63A5\u89C2\u6D4B\u5B9E\u9645\u8C03\u7528\u3002",
+      "slowScanTriggerRoundsRecomputed": 15,
+      "diskBackgroundScanTriggerRoundsRecomputed": 4,
+      "trafficSaveDueRoundsRecomputed": 0,
+      "gcRequestDueRoundsRecomputed": 0,
+      "workingSetTrimDueRoundsRecomputed": 0,
+      "dueSemanticsRecomputationAgrees": true,
+      "processCpuMs": 2890.625,
+      "wholeMachineCpuPercent": 0.4015,
+      "allocatedBytes": 5003288,
+      "perSecondSamples": [
+        {
+          "tMs": 1000,
+          "cpuMs": 62.5,
+          "allocatedBytes": 138760
+        },
+        {
+          "tMs": 2000,
+          "cpuMs": 78.125,
+          "allocatedBytes": 97736
+        },
+        {
+          "tMs": 3001,
+          "cpuMs": 46.875,
+          "allocatedBytes": 105816
+        },
+        {
+          "tMs": 4101,
+          "cpuMs": 78.125,
+          "allocatedBytes": 147064
+        },
+        {
+          "tMs": 5101,
+          "cpuMs": 46.875,
+          "allocatedBytes": 106296
+        },
+        {
+          "tMs": 6101,
+          "cpuMs": 46.875,
+          "allocatedBytes": 114240
+        },
+        {
+          "tMs": 7101,
+          "cpuMs": 46.875,
+          "allocatedBytes": 97888
+        },
+        {
+          "tMs": 8101,
+          "cpuMs": 46.875,
+          "allocatedBytes": 106224
+        },
+        {
+          "tMs": 9101,
+          "cpuMs": 78.125,
+          "allocatedBytes": 114232
+        },
+        {
+          "tMs": 10201,
+          "cpuMs": 62.5,
+          "allocatedBytes": 106032
+        },
+        {
+          "tMs": 11450,
+          "cpuMs": 109.375,
+          "allocatedBytes": 204080
+        },
+        {
+          "tMs": 12501,
+          "cpuMs": 62.5,
+          "allocatedBytes": 83512
+        },
+        {
+          "tMs": 13601,
+          "cpuMs": 93.75,
+          "allocatedBytes": 114272
+        },
+        {
+          "tMs": 14601,
+          "cpuMs": 62.5,
+          "allocatedBytes": 105968
+        },
+        {
+          "tMs": 15701,
+          "cpuMs": 46.875,
+          "allocatedBytes": 114488
+        },
+        {
+          "tMs": 16701,
+          "cpuMs": 46.875,
+          "allocatedBytes": 97616
+        },
+        {
+          "tMs": 17701,
+          "cpuMs": 46.875,
+          "allocatedBytes": 106000
+        },
+        {
+          "tMs": 18801,
+          "cpuMs": 62.5,
+          "allocatedBytes": 106304
+        },
+        {
+          "tMs": 19801,
+          "cpuMs": 62.5,
+          "allocatedBytes": 106040
+        },
+        {
+          "tMs": 20801,
+          "cpuMs": 78.125,
+          "allocatedBytes": 138872
+        },
+        {
+          "tMs": 21901,
+          "cpuMs": 62.5,
+          "allocatedBytes": 105920
+        },
+        {
+          "tMs": 22901,
+          "cpuMs": 125,
+          "allocatedBytes": 171736
+        },
+        {
+          "tMs": 23912,
+          "cpuMs": 93.75,
+          "allocatedBytes": 114048
+        },
+        {
+          "tMs": 25001,
+          "cpuMs": 46.875,
+          "allocatedBytes": 97416
+        },
+        {
+          "tMs": 26001,
+          "cpuMs": 62.5,
+          "allocatedBytes": 114224
+        },
+        {
+          "tMs": 27001,
+          "cpuMs": 46.875,
+          "allocatedBytes": 105776
+        },
+        {
+          "tMs": 28002,
+          "cpuMs": 46.875,
+          "allocatedBytes": 114208
+        },
+        {
+          "tMs": 29101,
+          "cpuMs": 46.875,
+          "allocatedBytes": 138808
+        },
+        {
+          "tMs": 30101,
+          "cpuMs": 78.125,
+          "allocatedBytes": 114416
+        },
+        {
+          "tMs": 31101,
+          "cpuMs": 62.5,
+          "allocatedBytes": 105904
+        },
+        {
+          "tMs": 32101,
+          "cpuMs": 62.5,
+          "allocatedBytes": 130624
+        },
+        {
+          "tMs": 33102,
+          "cpuMs": 62.5,
+          "allocatedBytes": 106048
+        },
+        {
+          "tMs": 34200,
+          "cpuMs": 46.875,
+          "allocatedBytes": 106264
+        },
+        {
+          "tMs": 35202,
+          "cpuMs": 62.5,
+          "allocatedBytes": 97824
+        },
+        {
+          "tMs": 36442,
+          "cpuMs": 140.625,
+          "allocatedBytes": 179168
+        },
+        {
+          "tMs": 37455,
+          "cpuMs": 78.125,
+          "allocatedBytes": 105800
+        },
+        {
+          "tMs": 38501,
+          "cpuMs": 62.5,
+          "allocatedBytes": 114272
+        },
+        {
+          "tMs": 39601,
+          "cpuMs": 62.5,
+          "allocatedBytes": 105960
+        },
+        {
+          "tMs": 40701,
+          "cpuMs": 93.75,
+          "allocatedBytes": 106304
+        },
+        {
+          "tMs": 41701,
+          "cpuMs": 78.125,
+          "allocatedBytes": 105992
+        },
+        {
+          "tMs": 42801,
+          "cpuMs": 78.125,
+          "allocatedBytes": 138736
+        },
+        {
+          "tMs": 43901,
+          "cpuMs": 46.875,
+          "allocatedBytes": 98128
+        },
+        {
+          "tMs": 44901,
+          "cpuMs": 78.125,
+          "allocatedBytes": 114272
+        }
+      ],
+      "trafficRewriteAgreesWithDueRounds": true,
+      "trafficRewriteDelta": 0,
+      "updateDurationMs": {
+        "count": 405,
+        "avg": 16.141,
+        "p50": 0,
+        "p95": 143,
+        "max": 172
+      },
+      "readDurationMs": {
+        "count": 405,
+        "avg": 0.136,
+        "p50": 0,
+        "p95": 1,
+        "max": 10
+      },
+      "countersStillInstalled": true,
+      "deviceUpdateCountersTrusted": true,
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.356,
+          "updateWallMsPerCall": 0.008
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.146,
+          "updateWallMsPerCall": 0.003
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 3236.342,
+          "updateWallMsPerCall": 71.919
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 2979.62,
+          "updateWallMsPerCall": 66.214
+        }
+      ],
+      "deviceUpdateCountersMeaning": "LHM \u6CE8\u5165\u4EE3\u7406\u770B\u5230\u7684\u6BCF\u8BBE\u5907 Update \u6B21\u6570\uFF08\u53EA\u8986\u76D6\u53EF\u6CE8\u5165\u5206\u7EC4\uFF1A\u663E\u5361/\u5185\u5B58\uFF09\uFF1B\u6743\u5A01\u7684\u6BCF\u8BBE\u5907\u6B21\u6570\u662F productionDeviceUpdates\uFF08\u751F\u4EA7\u4FA7\u8BA1\u6570\uFF0C\u542B CPU/\u7F51\u5361/\u78C1\u76D8/\u4E3B\u677F\uFF09\u3002",
+      "webActivity": {
+        "webSocketClients": 1,
+        "httpSnapshotOk": 0,
+        "httpSnapshotFailed": 0,
+        "webSocketFramesReceived": 53,
+        "webSocketFramesPerClient": [
+          {
+            "textFrames": 53,
+            "allFrames": 53,
+            "desyncs": 0
+          }
+        ],
+        "webSocketDesyncs": 0,
+        "webSocketNote": "webSocketFramesReceived \u662F\u5404\u8FDE\u63A5\u5B9E\u9645\u6536\u5230\u7684**\u5E7F\u64AD\u6587\u672C\u5E27\u6570**\uFF1B\u670D\u52A1\u7AEF\u6BCF 1 \u79D2\u5E7F\u64AD\u4E00\u6B21\uFF0C60 \u79D2\u7A33\u6001\u4E0B\u6BCF\u4E2A\u8FDE\u63A5\u5E94\u5728 60 \u5E27\u5DE6\u53F3\u3002\u4E3A 0 \u8BF4\u660E\u8FDE\u63A5\u6CA1\u771F\u6B63\u6536\u5230\u6570\u636E\uFF08\u4E0D\u662F\u0027\u6CA1\u6570\u636E\u53EF\u53D1\u0027\uFF09\u3002webSocketDesyncs \u5E94\u6052\u4E3A 0\uFF0C\u975E 0 \u8868\u793A\u5E27\u89E3\u6790\u5931\u6B65\u3001\u5E27\u8BA1\u6570\u4E0D\u53EF\u4FE1\u3002"
+      },
+      "sampleMetricValues": {
+        "CPU.Load": 31.21,
+        "CPU.Temp": 0,
+        "MEM.Load": 38.11,
+        "NET.Up": 46867.36,
+        "NET.Down": 255403.98,
+        "GPU.0.Temp": 48,
+        "GPU.0.Load": 36
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    },
+    {
+      "kind": "sampling_group",
+      "group": "F",
+      "purpose": "100 ms\u3001\u591A\u7F51\u9875 \u002B HTTP \u8F6E\u8BE2\uFF1A\u9A8C\u8BC1\u591A\u6D88\u8D39\u8005\u5171\u7528\u91C7\u6837",
+      "uiPeriodMs": 100,
+      "webEnabled": true,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 3,
+      "httpPollPerSecond": 1,
+      "warmupSeconds": 10,
+      "steadySeconds": 45,
+      "webSocketOpened": 3,
+      "readKeyCount": 12,
+      "elapsedMs": 45000,
+      "collectionRounds": 45,
+      "collectionRoundsMeaning": "\u751F\u4EA7\u4FA7\u5B9E\u9645\u53D1\u751F\u7684\u771F\u5B9E\u91C7\u96C6\u8F6E\u6570\uFF08HardwareSamplingStatistics.CollectionRounds \u589E\u91CF\uFF09",
+      "collectionRequests": 405,
+      "collectionRequestsMeaning": "\u63A2\u9488\u5411\u5E94\u7528\u53D1\u8D77\u7684\u91C7\u96C6\u8BF7\u6C42\u6B21\u6570\uFF1B\u672A\u5230\u671F\u7684\u8BF7\u6C42\u4F1A\u88AB\u95E8\u9650\u8DF3\u8FC7\uFF0C\u4E0D\u4EA7\u751F\u91C7\u96C6",
+      "collectionRoundsPerSecond": 1,
+      "collectionRequestsPerSecond": 9,
+      "valueReads": 4860,
+      "valueReadsPerRound": 12,
+      "collectionGenerations": 45,
+      "skippedRequests": 360,
+      "sharedRequests": 0,
+      "rejectedRequests": 0,
+      "forcedCollections": 0,
+      "failedCollections": 0,
+      "valueComputations": 1395,
+      "productionCollectionDurationMs": 6344.247,
+      "slowScanTriggerRounds": 15,
+      "diskBackgroundScanTriggerRounds": 4,
+      "trafficSaveDueRounds": 0,
+      "gcRequestDueRounds": 0,
+      "workingSetTrimDueRounds": 0,
+      "productionDeviceUpdates": {
+        "Cpu:AMD Ryzen 7 5800X": 45,
+        "GPU.0": 45,
+        "GPU.1": 0,
+        "Network:Radmin VPN": 45,
+        "Network:WLAN 8": 45,
+        "Network:\u4EE5\u592A\u7F51 3": 45,
+        "Network:\u4EE5\u592A\u7F51 5": 45,
+        "Network:\u672C\u5730\u8FDE\u63A5* 1": 45,
+        "Network:\u672C\u5730\u8FDE\u63A5* 2": 45,
+        "Motherboard:MSI MEG X570 UNIFY (MS-7C35)": 15,
+        "Memory:Virtual Memory": 45,
+        "Memory:Total Memory": 45,
+        "GPU:NVIDIA GeForce RTX 3080": 45
+      },
+      "productionCategoryUpdates": {
+        "Cpu": 45,
+        "Gpu": 90,
+        "Network": 270,
+        "Motherboard": 15,
+        "Memory": 90
+      },
+      "trafficFileObservedRewrites": 0,
+      "trafficRewriteNote": "\u8FD9\u662F**\u8F6E\u8BE2\u6587\u4EF6 LastWriteTime \u53D8\u5316**\u5F97\u5230\u7684\u4E0B\u754C\uFF1A\u4E24\u6B21\u8F6E\u8BE2\u4E4B\u95F4\u7684\u591A\u6B21\u5199\u5165\u4F1A\u88AB\u5408\u5E76\u6210\u4E00\u6B21\uFF0C\u6240\u4EE5\u5B83\u4E0D\u662F\u5199\u5165\u6B21\u6570\u672C\u8EAB\u3002\u628A\u5B83\u548C trafficSaveDueRounds\uFF08\u751F\u4EA7\u4FA7\u5B9E\u9645\u89E6\u53D1\u7684\u6B21\u6570\uFF09\u653E\u5728\u4E00\u8D77\u770B\uFF1A\u4E24\u8005\u4E00\u81F4\u624D\u8BF4\u660E\u0022\u5230\u671F\u4E00\u6B21\u5C31\u771F\u7684\u5199\u4E00\u6B21\u0022\u3002",
+      "dueSemantics": "slow%3,diskBg%10,traffic%60==5,gc%180==30,workingSet%300==45",
+      "dueSemanticsWarning": "\u5230\u671F\u8F6E\u6570\u6309\u3010\u5F53\u524D\u751F\u4EA7\u5B9E\u73B0\u7684\u6574\u6570\u79D2\u53D6\u6A21\u8BED\u4E49\u3011\u590D\u7B97\uFF08%3/%10/%60==5/%180==30/%300==45\uFF09\u3002\u8BA1\u5212 \u00A74.3 \u628A\u751F\u4EA7\u6539\u6210\u5355\u8C03\u622A\u6B62\u65F6\u95F4\u4E4B\u540E\uFF0C\u672C\u5217\u4F1A\u4E0E\u751F\u4EA7\u8131\u8282\u800C\u4E0D\u4F1A\u62A5\u9519\uFF0CTask 2/3 \u5FC5\u987B\u6539\u4E3A\u76F4\u63A5\u89C2\u6D4B\u5B9E\u9645\u8C03\u7528\u3002",
+      "slowScanTriggerRoundsRecomputed": 15,
+      "diskBackgroundScanTriggerRoundsRecomputed": 4,
+      "trafficSaveDueRoundsRecomputed": 0,
+      "gcRequestDueRoundsRecomputed": 0,
+      "workingSetTrimDueRoundsRecomputed": 0,
+      "dueSemanticsRecomputationAgrees": true,
+      "processCpuMs": 2765.625,
+      "wholeMachineCpuPercent": 0.3841,
+      "allocatedBytes": 8675160,
+      "perSecondSamples": [
+        {
+          "tMs": 1001,
+          "cpuMs": 93.75,
+          "allocatedBytes": 214520
+        },
+        {
+          "tMs": 2101,
+          "cpuMs": 93.75,
+          "allocatedBytes": 251896
+        },
+        {
+          "tMs": 3201,
+          "cpuMs": 62.5,
+          "allocatedBytes": 178648
+        },
+        {
+          "tMs": 4463,
+          "cpuMs": 156.25,
+          "allocatedBytes": 261592
+        },
+        {
+          "tMs": 5501,
+          "cpuMs": 78.125,
+          "allocatedBytes": 173424
+        },
+        {
+          "tMs": 6501,
+          "cpuMs": 62.5,
+          "allocatedBytes": 185456
+        },
+        {
+          "tMs": 7601,
+          "cpuMs": 31.25,
+          "allocatedBytes": 163880
+        },
+        {
+          "tMs": 8701,
+          "cpuMs": 46.875,
+          "allocatedBytes": 169112
+        },
+        {
+          "tMs": 9801,
+          "cpuMs": 62.5,
+          "allocatedBytes": 165480
+        },
+        {
+          "tMs": 10901,
+          "cpuMs": 46.875,
+          "allocatedBytes": 184800
+        },
+        {
+          "tMs": 11902,
+          "cpuMs": 46.875,
+          "allocatedBytes": 179592
+        },
+        {
+          "tMs": 13001,
+          "cpuMs": 62.5,
+          "allocatedBytes": 177640
+        },
+        {
+          "tMs": 14002,
+          "cpuMs": 62.5,
+          "allocatedBytes": 189000
+        },
+        {
+          "tMs": 15101,
+          "cpuMs": 62.5,
+          "allocatedBytes": 300672
+        },
+        {
+          "tMs": 16201,
+          "cpuMs": 78.125,
+          "allocatedBytes": 167056
+        },
+        {
+          "tMs": 17438,
+          "cpuMs": 93.75,
+          "allocatedBytes": 247696
+        },
+        {
+          "tMs": 18438,
+          "cpuMs": 46.875,
+          "allocatedBytes": 171608
+        },
+        {
+          "tMs": 19439,
+          "cpuMs": 62.5,
+          "allocatedBytes": 181872
+        },
+        {
+          "tMs": 20439,
+          "cpuMs": 62.5,
+          "allocatedBytes": 171712
+        },
+        {
+          "tMs": 21440,
+          "cpuMs": 46.875,
+          "allocatedBytes": 167584
+        },
+        {
+          "tMs": 22459,
+          "cpuMs": 62.5,
+          "allocatedBytes": 178704
+        },
+        {
+          "tMs": 23501,
+          "cpuMs": 46.875,
+          "allocatedBytes": 171496
+        },
+        {
+          "tMs": 24501,
+          "cpuMs": 187.5,
+          "allocatedBytes": 876280
+        },
+        {
+          "tMs": 25600,
+          "cpuMs": 62.5,
+          "allocatedBytes": 176424
+        },
+        {
+          "tMs": 26601,
+          "cpuMs": 62.5,
+          "allocatedBytes": 180264
+        },
+        {
+          "tMs": 27601,
+          "cpuMs": 62.5,
+          "allocatedBytes": 170104
+        },
+        {
+          "tMs": 28601,
+          "cpuMs": 62.5,
+          "allocatedBytes": 178928
+        },
+        {
+          "tMs": 29601,
+          "cpuMs": 46.875,
+          "allocatedBytes": 169904
+        },
+        {
+          "tMs": 30701,
+          "cpuMs": 62.5,
+          "allocatedBytes": 174208
+        },
+        {
+          "tMs": 31801,
+          "cpuMs": 46.875,
+          "allocatedBytes": 170552
+        },
+        {
+          "tMs": 32801,
+          "cpuMs": 46.875,
+          "allocatedBytes": 175880
+        },
+        {
+          "tMs": 33801,
+          "cpuMs": 46.875,
+          "allocatedBytes": 167368
+        },
+        {
+          "tMs": 34801,
+          "cpuMs": 62.5,
+          "allocatedBytes": 184464
+        },
+        {
+          "tMs": 35802,
+          "cpuMs": 46.875,
+          "allocatedBytes": 208968
+        },
+        {
+          "tMs": 36901,
+          "cpuMs": 46.875,
+          "allocatedBytes": 162336
+        },
+        {
+          "tMs": 37901,
+          "cpuMs": 62.5,
+          "allocatedBytes": 184280
+        },
+        {
+          "tMs": 38901,
+          "cpuMs": 46.875,
+          "allocatedBytes": 171032
+        },
+        {
+          "tMs": 40001,
+          "cpuMs": 109.375,
+          "allocatedBytes": 178344
+        },
+        {
+          "tMs": 41100,
+          "cpuMs": 46.875,
+          "allocatedBytes": 300760
+        },
+        {
+          "tMs": 42101,
+          "cpuMs": 31.25,
+          "allocatedBytes": 171064
+        },
+        {
+          "tMs": 43201,
+          "cpuMs": 46.875,
+          "allocatedBytes": 175792
+        },
+        {
+          "tMs": 44442,
+          "cpuMs": 109.375,
+          "allocatedBytes": 244768
+        }
+      ],
+      "trafficRewriteAgreesWithDueRounds": true,
+      "trafficRewriteDelta": 0,
+      "updateDurationMs": {
+        "count": 405,
+        "avg": 15.667,
+        "p50": 0,
+        "p95": 139,
+        "max": 164
+      },
+      "readDurationMs": {
+        "count": 405,
+        "avg": 0.086,
+        "p50": 0,
+        "p95": 1,
+        "max": 1
+      },
+      "countersStillInstalled": true,
+      "deviceUpdateCountersTrusted": true,
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.374,
+          "updateWallMsPerCall": 0.008
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.136,
+          "updateWallMsPerCall": 0.003
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 3119.149,
+          "updateWallMsPerCall": 69.314
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 45,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 2959.047,
+          "updateWallMsPerCall": 65.757
+        }
+      ],
+      "deviceUpdateCountersMeaning": "LHM \u6CE8\u5165\u4EE3\u7406\u770B\u5230\u7684\u6BCF\u8BBE\u5907 Update \u6B21\u6570\uFF08\u53EA\u8986\u76D6\u53EF\u6CE8\u5165\u5206\u7EC4\uFF1A\u663E\u5361/\u5185\u5B58\uFF09\uFF1B\u6743\u5A01\u7684\u6BCF\u8BBE\u5907\u6B21\u6570\u662F productionDeviceUpdates\uFF08\u751F\u4EA7\u4FA7\u8BA1\u6570\uFF0C\u542B CPU/\u7F51\u5361/\u78C1\u76D8/\u4E3B\u677F\uFF09\u3002",
+      "webActivity": {
+        "webSocketClients": 3,
+        "httpSnapshotOk": 55,
+        "httpSnapshotFailed": 0,
+        "webSocketFramesReceived": 159,
+        "webSocketFramesPerClient": [
+          {
+            "textFrames": 53,
+            "allFrames": 53,
+            "desyncs": 0
+          },
+          {
+            "textFrames": 53,
+            "allFrames": 53,
+            "desyncs": 0
+          },
+          {
+            "textFrames": 53,
+            "allFrames": 53,
+            "desyncs": 0
+          }
+        ],
+        "webSocketDesyncs": 0,
+        "webSocketNote": "webSocketFramesReceived \u662F\u5404\u8FDE\u63A5\u5B9E\u9645\u6536\u5230\u7684**\u5E7F\u64AD\u6587\u672C\u5E27\u6570**\uFF1B\u670D\u52A1\u7AEF\u6BCF 1 \u79D2\u5E7F\u64AD\u4E00\u6B21\uFF0C60 \u79D2\u7A33\u6001\u4E0B\u6BCF\u4E2A\u8FDE\u63A5\u5E94\u5728 60 \u5E27\u5DE6\u53F3\u3002\u4E3A 0 \u8BF4\u660E\u8FDE\u63A5\u6CA1\u771F\u6B63\u6536\u5230\u6570\u636E\uFF08\u4E0D\u662F\u0027\u6CA1\u6570\u636E\u53EF\u53D1\u0027\uFF09\u3002webSocketDesyncs \u5E94\u6052\u4E3A 0\uFF0C\u975E 0 \u8868\u793A\u5E27\u89E3\u6790\u5931\u6B65\u3001\u5E27\u8BA1\u6570\u4E0D\u53EF\u4FE1\u3002"
+      },
+      "sampleMetricValues": {
+        "CPU.Load": 30.51,
+        "CPU.Temp": 0,
+        "MEM.Load": 37.98,
+        "NET.Up": 1380225.25,
+        "NET.Down": 250412.78,
+        "GPU.0.Temp": 48,
+        "GPU.0.Load": 38
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    },
+    {
+      "kind": "sampling_group",
+      "group": "H2",
+      "purpose": "3000 ms\u3001Web \u5F00\u4E14\u6709\u5408\u6CD5\u7F51\u9875\uFF1A\u72EC\u7ACB Web \u9700\u6C42",
+      "uiPeriodMs": 3000,
+      "webEnabled": true,
+      "gpuItemsEnabled": true,
+      "monitoredGpuCount": 1,
+      "webSocketClients": 1,
+      "httpPollPerSecond": 0,
+      "warmupSeconds": 10,
+      "steadySeconds": 45,
+      "webSocketOpened": 1,
+      "readKeyCount": 12,
+      "elapsedMs": 45137,
+      "collectionRounds": 12,
+      "collectionRoundsMeaning": "\u751F\u4EA7\u4FA7\u5B9E\u9645\u53D1\u751F\u7684\u771F\u5B9E\u91C7\u96C6\u8F6E\u6570\uFF08HardwareSamplingStatistics.CollectionRounds \u589E\u91CF\uFF09",
+      "collectionRequests": 15,
+      "collectionRequestsMeaning": "\u63A2\u9488\u5411\u5E94\u7528\u53D1\u8D77\u7684\u91C7\u96C6\u8BF7\u6C42\u6B21\u6570\uFF1B\u672A\u5230\u671F\u7684\u8BF7\u6C42\u4F1A\u88AB\u95E8\u9650\u8DF3\u8FC7\uFF0C\u4E0D\u4EA7\u751F\u91C7\u96C6",
+      "collectionRoundsPerSecond": 0.266,
+      "collectionRequestsPerSecond": 0.332,
+      "valueReads": 180,
+      "valueReadsPerRound": 12,
+      "collectionGenerations": 12,
+      "skippedRequests": 3,
+      "sharedRequests": 0,
+      "rejectedRequests": 0,
+      "forcedCollections": 0,
+      "failedCollections": 0,
+      "valueComputations": 365,
+      "productionCollectionDurationMs": 1802.065,
+      "slowScanTriggerRounds": 0,
+      "diskBackgroundScanTriggerRounds": 2,
+      "trafficSaveDueRounds": 1,
+      "gcRequestDueRounds": 0,
+      "workingSetTrimDueRounds": 0,
+      "productionDeviceUpdates": {
+        "Cpu:AMD Ryzen 7 5800X": 12,
+        "GPU.0": 12,
+        "GPU.1": 0,
+        "Network:Radmin VPN": 12,
+        "Network:WLAN 8": 12,
+        "Network:\u4EE5\u592A\u7F51 3": 12,
+        "Network:\u4EE5\u592A\u7F51 5": 12,
+        "Network:\u672C\u5730\u8FDE\u63A5* 1": 12,
+        "Network:\u672C\u5730\u8FDE\u63A5* 2": 12,
+        "Motherboard:MSI MEG X570 UNIFY (MS-7C35)": 0,
+        "Memory:Virtual Memory": 12,
+        "Memory:Total Memory": 12,
+        "GPU:NVIDIA GeForce RTX 3080": 12
+      },
+      "productionCategoryUpdates": {
+        "Cpu": 12,
+        "Gpu": 24,
+        "Network": 72,
+        "Motherboard": 0,
+        "Memory": 24
+      },
+      "trafficFileObservedRewrites": 0,
+      "trafficRewriteNote": "\u8FD9\u662F**\u8F6E\u8BE2\u6587\u4EF6 LastWriteTime \u53D8\u5316**\u5F97\u5230\u7684\u4E0B\u754C\uFF1A\u4E24\u6B21\u8F6E\u8BE2\u4E4B\u95F4\u7684\u591A\u6B21\u5199\u5165\u4F1A\u88AB\u5408\u5E76\u6210\u4E00\u6B21\uFF0C\u6240\u4EE5\u5B83\u4E0D\u662F\u5199\u5165\u6B21\u6570\u672C\u8EAB\u3002\u628A\u5B83\u548C trafficSaveDueRounds\uFF08\u751F\u4EA7\u4FA7\u5B9E\u9645\u89E6\u53D1\u7684\u6B21\u6570\uFF09\u653E\u5728\u4E00\u8D77\u770B\uFF1A\u4E24\u8005\u4E00\u81F4\u624D\u8BF4\u660E\u0022\u5230\u671F\u4E00\u6B21\u5C31\u771F\u7684\u5199\u4E00\u6B21\u0022\u3002",
+      "dueSemantics": "slow%3,diskBg%10,traffic%60==5,gc%180==30,workingSet%300==45",
+      "dueSemanticsWarning": "\u5230\u671F\u8F6E\u6570\u6309\u3010\u5F53\u524D\u751F\u4EA7\u5B9E\u73B0\u7684\u6574\u6570\u79D2\u53D6\u6A21\u8BED\u4E49\u3011\u590D\u7B97\uFF08%3/%10/%60==5/%180==30/%300==45\uFF09\u3002\u8BA1\u5212 \u00A74.3 \u628A\u751F\u4EA7\u6539\u6210\u5355\u8C03\u622A\u6B62\u65F6\u95F4\u4E4B\u540E\uFF0C\u672C\u5217\u4F1A\u4E0E\u751F\u4EA7\u8131\u8282\u800C\u4E0D\u4F1A\u62A5\u9519\uFF0CTask 2/3 \u5FC5\u987B\u6539\u4E3A\u76F4\u63A5\u89C2\u6D4B\u5B9E\u9645\u8C03\u7528\u3002",
+      "slowScanTriggerRoundsRecomputed": 0,
+      "diskBackgroundScanTriggerRoundsRecomputed": 2,
+      "trafficSaveDueRoundsRecomputed": 1,
+      "gcRequestDueRoundsRecomputed": 0,
+      "workingSetTrimDueRoundsRecomputed": 0,
+      "dueSemanticsRecomputationAgrees": true,
+      "processCpuMs": 781.25,
+      "wholeMachineCpuPercent": 0.1082,
+      "allocatedBytes": 2198680,
+      "perSecondSamples": [
+        {
+          "tMs": 3159,
+          "cpuMs": 78.125,
+          "allocatedBytes": 191008
+        },
+        {
+          "tMs": 6001,
+          "cpuMs": 0,
+          "allocatedBytes": 55616
+        },
+        {
+          "tMs": 9138,
+          "cpuMs": 62.5,
+          "allocatedBytes": 138696
+        },
+        {
+          "tMs": 12150,
+          "cpuMs": 62.5,
+          "allocatedBytes": 163616
+        },
+        {
+          "tMs": 15157,
+          "cpuMs": 62.5,
+          "allocatedBytes": 172072
+        },
+        {
+          "tMs": 18139,
+          "cpuMs": 62.5,
+          "allocatedBytes": 123000
+        },
+        {
+          "tMs": 21150,
+          "cpuMs": 31.25,
+          "allocatedBytes": 139592
+        },
+        {
+          "tMs": 24143,
+          "cpuMs": 46.875,
+          "allocatedBytes": 200616
+        },
+        {
+          "tMs": 27166,
+          "cpuMs": 78.125,
+          "allocatedBytes": 180352
+        },
+        {
+          "tMs": 30001,
+          "cpuMs": 15.625,
+          "allocatedBytes": 145608
+        },
+        {
+          "tMs": 33166,
+          "cpuMs": 46.875,
+          "allocatedBytes": 139288
+        },
+        {
+          "tMs": 36144,
+          "cpuMs": 62.5,
+          "allocatedBytes": 155720
+        },
+        {
+          "tMs": 39172,
+          "cpuMs": 93.75,
+          "allocatedBytes": 180328
+        },
+        {
+          "tMs": 42001,
+          "cpuMs": 31.25,
+          "allocatedBytes": 73880
+        },
+        {
+          "tMs": 45137,
+          "cpuMs": 46.875,
+          "allocatedBytes": 139288
+        }
+      ],
+      "trafficRewriteAgreesWithDueRounds": true,
+      "trafficRewriteDelta": -1,
+      "updateDurationMs": {
+        "count": 15,
+        "avg": 120.2,
+        "p50": 142,
+        "p95": 171,
+        "max": 171
+      },
+      "readDurationMs": {
+        "count": 15,
+        "avg": 0.467,
+        "p50": 0,
+        "p95": 1,
+        "max": 1
+      },
+      "countersStillInstalled": true,
+      "deviceUpdateCountersTrusted": true,
+      "deviceUpdateCounters": [
+        {
+          "device": "Virtual Memory [Memory]",
+          "updateCount": 12,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.097,
+          "updateWallMsPerCall": 0.008
+        },
+        {
+          "device": "Total Memory [Memory]",
+          "updateCount": 12,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 0.038,
+          "updateWallMsPerCall": 0.003
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 Ti [GpuNvidia]",
+          "updateCount": 12,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 855.674,
+          "updateWallMsPerCall": 71.306
+        },
+        {
+          "device": "NVIDIA GeForce RTX 3080 [GpuNvidia]",
+          "updateCount": 12,
+          "updatesPerCollectionRound": 1,
+          "updateWallMs": 790.939,
+          "updateWallMsPerCall": 65.912
+        }
+      ],
+      "deviceUpdateCountersMeaning": "LHM \u6CE8\u5165\u4EE3\u7406\u770B\u5230\u7684\u6BCF\u8BBE\u5907 Update \u6B21\u6570\uFF08\u53EA\u8986\u76D6\u53EF\u6CE8\u5165\u5206\u7EC4\uFF1A\u663E\u5361/\u5185\u5B58\uFF09\uFF1B\u6743\u5A01\u7684\u6BCF\u8BBE\u5907\u6B21\u6570\u662F productionDeviceUpdates\uFF08\u751F\u4EA7\u4FA7\u8BA1\u6570\uFF0C\u542B CPU/\u7F51\u5361/\u78C1\u76D8/\u4E3B\u677F\uFF09\u3002",
+      "webActivity": {
+        "webSocketClients": 1,
+        "httpSnapshotOk": 0,
+        "httpSnapshotFailed": 0,
+        "webSocketFramesReceived": 55,
+        "webSocketFramesPerClient": [
+          {
+            "textFrames": 55,
+            "allFrames": 55,
+            "desyncs": 0
+          }
+        ],
+        "webSocketDesyncs": 0,
+        "webSocketNote": "webSocketFramesReceived \u662F\u5404\u8FDE\u63A5\u5B9E\u9645\u6536\u5230\u7684**\u5E7F\u64AD\u6587\u672C\u5E27\u6570**\uFF1B\u670D\u52A1\u7AEF\u6BCF 1 \u79D2\u5E7F\u64AD\u4E00\u6B21\uFF0C60 \u79D2\u7A33\u6001\u4E0B\u6BCF\u4E2A\u8FDE\u63A5\u5E94\u5728 60 \u5E27\u5DE6\u53F3\u3002\u4E3A 0 \u8BF4\u660E\u8FDE\u63A5\u6CA1\u771F\u6B63\u6536\u5230\u6570\u636E\uFF08\u4E0D\u662F\u0027\u6CA1\u6570\u636E\u53EF\u53D1\u0027\uFF09\u3002webSocketDesyncs \u5E94\u6052\u4E3A 0\uFF0C\u975E 0 \u8868\u793A\u5E27\u89E3\u6790\u5931\u6B65\u3001\u5E27\u8BA1\u6570\u4E0D\u53EF\u4FE1\u3002"
+      },
+      "sampleMetricValues": {
+        "CPU.Load": 31.92,
+        "CPU.Temp": 0,
+        "MEM.Load": 40.09,
+        "NET.Up": 2977686,
+        "NET.Down": 312364.09,
+        "GPU.0.Temp": 48,
+        "GPU.0.Load": 37
+      },
+      "note": "valueReads \u53EA\u7EDF\u8BA1\u63A2\u9488\u81EA\u8EAB\u7684\u8BFB\u53D6\uFF1BWeb \u5FEB\u7167\u4E0E\u5E7F\u64AD\u7684\u8BFB\u53D6\u53D1\u751F\u5728\u5E94\u7528\u8FDB\u7A0B\u5185\uFF0C\u672A\u8BA1\u5165\u3002 \u4E0D\u5305\u542B\u754C\u9762\u7ED8\u5236\u3001InfoService/Dashboard\u3001\u5386\u53F2\u8BB0\u5F55\u843D\u76D8\u3002"
+    }
+  ],
+  "deviceUpdateCosts": [
+    {
+      "kind": "device_update_cost",
+      "device": "MSI MEG X570 UNIFY (MS-7C35)",
+      "type": "Motherboard",
+      "calls": 20,
+      "wallMsPerUpdate": 0,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "AMD Ryzen 7 5800X",
+      "type": "Cpu",
+      "calls": 20,
+      "wallMsPerUpdate": 0.596,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "Virtual Memory",
+      "type": "Memory",
+      "calls": 20,
+      "wallMsPerUpdate": 0.002,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "Total Memory",
+      "type": "Memory",
+      "calls": 20,
+      "wallMsPerUpdate": 0.002,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "NVIDIA GeForce RTX 3080 Ti",
+      "type": "GpuNvidia",
+      "calls": 20,
+      "wallMsPerUpdate": 71.187,
+      "cpuMsPerUpdate": 30.469
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "NVIDIA GeForce RTX 3080",
+      "type": "GpuNvidia",
+      "calls": 20,
+      "wallMsPerUpdate": 66.211,
+      "cpuMsPerUpdate": 26.562
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "Radmin VPN",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.077,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "WLAN 8",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.052,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "\u4EE5\u592A\u7F51 3",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.05,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "\u4EE5\u592A\u7F51 5",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.085,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "\u672C\u5730\u8FDE\u63A5* 1",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.063,
+      "cpuMsPerUpdate": 0
+    },
+    {
+      "kind": "device_update_cost",
+      "device": "\u672C\u5730\u8FDE\u63A5* 2",
+      "type": "Network",
+      "calls": 20,
+      "wallMsPerUpdate": 0.061,
+      "cpuMsPerUpdate": 0
+    }
+  ],
+  "renderBench": [
+    {
+      "kind": "render_bench",
+      "surface": "winforms-compatible-buffer",
+      "mode": "vertical",
+      "scale": 1,
+      "itemCount": 13,
+      "width": 240,
+      "height": 788,
+      "draws": 397,
+      "wallMsPerDraw": 5.0441,
+      "cpuMsPerDraw": 4.8804,
+      "allocatedBytesPerDraw": 6776.1,
+      "projectedWholeMachineCpuAt10Hz": 0.305,
+      "excludes": "\u7A97\u53E3\u5448\u73B0\u3001\u684C\u9762\u5408\u6210\u3001\u900F\u660E\u6548\u679C\u3001\u4EFB\u52A1\u680F\u3001\u786C\u4EF6\u91C7\u96C6\u3001\u63D2\u4EF6"
+    },
+    {
+      "kind": "render_bench",
+      "surface": "winforms-compatible-buffer",
+      "mode": "horizontal",
+      "scale": 1,
+      "itemCount": 13,
+      "width": 768,
+      "height": 56,
+      "draws": 707,
+      "wallMsPerDraw": 2.8293,
+      "cpuMsPerDraw": 2.7847,
+      "allocatedBytesPerDraw": 4640.1,
+      "projectedWholeMachineCpuAt10Hz": 0.174,
+      "excludes": "\u7A97\u53E3\u5448\u73B0\u3001\u684C\u9762\u5408\u6210\u3001\u900F\u660E\u6548\u679C\u3001\u4EFB\u52A1\u680F\u3001\u786C\u4EF6\u91C7\u96C6\u3001\u63D2\u4EF6"
+    },
+    {
+      "kind": "render_bench",
+      "surface": "winforms-compatible-buffer",
+      "mode": "vertical",
+      "scale": 2,
+      "itemCount": 13,
+      "width": 480,
+      "height": 1576,
+      "draws": 303,
+      "wallMsPerDraw": 6.6009,
+      "cpuMsPerDraw": 6.1881,
+      "allocatedBytesPerDraw": 6776.1,
+      "projectedWholeMachineCpuAt10Hz": 0.3868,
+      "excludes": "\u7A97\u53E3\u5448\u73B0\u3001\u684C\u9762\u5408\u6210\u3001\u900F\u660E\u6548\u679C\u3001\u4EFB\u52A1\u680F\u3001\u786C\u4EF6\u91C7\u96C6\u3001\u63D2\u4EF6"
+    },
+    {
+      "kind": "render_bench",
+      "surface": "winforms-compatible-buffer",
+      "mode": "horizontal",
+      "scale": 2,
+      "itemCount": 13,
+      "width": 1434,
+      "height": 112,
+      "draws": 714,
+      "wallMsPerDraw": 2.8039,
+      "cpuMsPerDraw": 2.7574,
+      "allocatedBytesPerDraw": 4640.1,
+      "projectedWholeMachineCpuAt10Hz": 0.1723,
+      "excludes": "\u7A97\u53E3\u5448\u73B0\u3001\u684C\u9762\u5408\u6210\u3001\u900F\u660E\u6548\u679C\u3001\u4EFB\u52A1\u680F\u3001\u786C\u4EF6\u91C7\u96C6\u3001\u63D2\u4EF6"
+    }
+  ],
+  "fpsState": {
+    "deadPidRetention": [
+      {
+        "kind": "fps_dead_pid_retention",
+        "seededDeadPids": 0,
+        "retainedPidsInFrameCounts": 0,
+        "retainedPidStateEntries": 0,
+        "deadPidsCleanedUp": true,
+        "observedCycles": 12,
+        "processQueryExceptions": 0,
+        "processQueryCalls": 0,
+        "queryCallsDuringCycles": 0,
+        "costCycles": 827721,
+        "wallMsPerCycle": 0.0001,
+        "cpuMsPerCycle": 0.0004,
+        "allocatedBytesPerCycle": 64,
+        "projectedWholeMachineCpuAt2Hz": 0,
+        "presentMonStarted": false,
+        "stateShape": "\u72B6\u6001\u5B58\u50A8\u5BF9\u8C61\uFF08FpsProcessStateStore\uFF0C\u7ECF FpsCounter \u5B57\u6BB5 _store \u53D1\u73B0\uFF09",
+        "costMeasurementMethod": "\u5F3A\u7C7B\u578B\u59D4\u6258\u76F4\u63A5\u8C03\u7528\u751F\u4EA7\u4FA7\u7684\u5355\u8F6E\u63A8\u8FDB\uFF08\u53CD\u5C04\u6D3E\u53D1\u5F00\u9500\u5DF2\u6392\u9664\uFF09\uFF1B\u5899\u949F\u53EA\u8BA1\u5355\u8F6E\u63A8\u8FDB\u672C\u8EAB\uFF0CCPU/\u5206\u914D\u5DF2\u6263\u9664\u540C\u5F62\u7684\u300C\u5EFA\u72B6\u6001\u002B\u64AD\u79CD\u300D\u5F00\u9500",
+        "note": "\u6B7B PID \u7531\u751F\u4EA7\u7684\u8FDB\u7A0B\u67E5\u8BE2\u5224\u5B9A\u4E3A\u5DF2\u9000\u51FA\u540E\u6E05\u7406\uFF1BprocessQueryExceptions \u7EDF\u8BA1\u8FDB\u7A0B\u67E5\u8BE2\u629B\u51FA\u7684 ArgumentException \u6B21\u6570\uFF08\u9996\u6B21\u673A\u4F1A\u5F02\u5E38\uFF09\u3002"
+      },
+      {
+        "kind": "fps_dead_pid_retention",
+        "seededDeadPids": 1,
+        "retainedPidsInFrameCounts": 0,
+        "retainedPidStateEntries": 0,
+        "deadPidsCleanedUp": true,
+        "observedCycles": 12,
+        "processQueryExceptions": 1,
+        "processQueryCalls": 1,
+        "queryCallsDuringCycles": 1,
+        "costCycles": 148348,
+        "wallMsPerCycle": 0.0079,
+        "cpuMsPerCycle": 0.0084,
+        "allocatedBytesPerCycle": 502,
+        "projectedWholeMachineCpuAt2Hz": 0.00011,
+        "presentMonStarted": false,
+        "stateShape": "\u72B6\u6001\u5B58\u50A8\u5BF9\u8C61\uFF08FpsProcessStateStore\uFF0C\u7ECF FpsCounter \u5B57\u6BB5 _store \u53D1\u73B0\uFF09",
+        "costMeasurementMethod": "\u5F3A\u7C7B\u578B\u59D4\u6258\u76F4\u63A5\u8C03\u7528\u751F\u4EA7\u4FA7\u7684\u5355\u8F6E\u63A8\u8FDB\uFF08\u53CD\u5C04\u6D3E\u53D1\u5F00\u9500\u5DF2\u6392\u9664\uFF09\uFF1B\u5899\u949F\u53EA\u8BA1\u5355\u8F6E\u63A8\u8FDB\u672C\u8EAB\uFF0CCPU/\u5206\u914D\u5DF2\u6263\u9664\u540C\u5F62\u7684\u300C\u5EFA\u72B6\u6001\u002B\u64AD\u79CD\u300D\u5F00\u9500",
+        "note": "\u6B7B PID \u7531\u751F\u4EA7\u7684\u8FDB\u7A0B\u67E5\u8BE2\u5224\u5B9A\u4E3A\u5DF2\u9000\u51FA\u540E\u6E05\u7406\uFF1BprocessQueryExceptions \u7EDF\u8BA1\u8FDB\u7A0B\u67E5\u8BE2\u629B\u51FA\u7684 ArgumentException \u6B21\u6570\uFF08\u9996\u6B21\u673A\u4F1A\u5F02\u5E38\uFF09\u3002"
+      },
+      {
+        "kind": "fps_dead_pid_retention",
+        "seededDeadPids": 10,
+        "retainedPidsInFrameCounts": 0,
+        "retainedPidStateEntries": 0,
+        "deadPidsCleanedUp": true,
+        "observedCycles": 12,
+        "processQueryExceptions": 10,
+        "processQueryCalls": 10,
+        "queryCallsDuringCycles": 10,
+        "costCycles": 20251,
+        "wallMsPerCycle": 0.0699,
+        "cpuMsPerCycle": 0.071,
+        "allocatedBytesPerCycle": 4144,
+        "projectedWholeMachineCpuAt2Hz": 0.00089,
+        "presentMonStarted": false,
+        "stateShape": "\u72B6\u6001\u5B58\u50A8\u5BF9\u8C61\uFF08FpsProcessStateStore\uFF0C\u7ECF FpsCounter \u5B57\u6BB5 _store \u53D1\u73B0\uFF09",
+        "costMeasurementMethod": "\u5F3A\u7C7B\u578B\u59D4\u6258\u76F4\u63A5\u8C03\u7528\u751F\u4EA7\u4FA7\u7684\u5355\u8F6E\u63A8\u8FDB\uFF08\u53CD\u5C04\u6D3E\u53D1\u5F00\u9500\u5DF2\u6392\u9664\uFF09\uFF1B\u5899\u949F\u53EA\u8BA1\u5355\u8F6E\u63A8\u8FDB\u672C\u8EAB\uFF0CCPU/\u5206\u914D\u5DF2\u6263\u9664\u540C\u5F62\u7684\u300C\u5EFA\u72B6\u6001\u002B\u64AD\u79CD\u300D\u5F00\u9500",
+        "note": "\u6B7B PID \u7531\u751F\u4EA7\u7684\u8FDB\u7A0B\u67E5\u8BE2\u5224\u5B9A\u4E3A\u5DF2\u9000\u51FA\u540E\u6E05\u7406\uFF1BprocessQueryExceptions \u7EDF\u8BA1\u8FDB\u7A0B\u67E5\u8BE2\u629B\u51FA\u7684 ArgumentException \u6B21\u6570\uFF08\u9996\u6B21\u673A\u4F1A\u5F02\u5E38\uFF09\u3002"
+      },
+      {
+        "kind": "fps_dead_pid_retention",
+        "seededDeadPids": 100,
+        "retainedPidsInFrameCounts": 0,
+        "retainedPidStateEntries": 0,
+        "deadPidsCleanedUp": true,
+        "observedCycles": 12,
+        "processQueryExceptions": 100,
+        "processQueryCalls": 100,
+        "queryCallsDuringCycles": 100,
+        "costCycles": 2162,
+        "wallMsPerCycle": 0.6749,
+        "cpuMsPerCycle": 0.6649,
+        "allocatedBytesPerCycle": 40866,
+        "projectedWholeMachineCpuAt2Hz": 0.00831,
+        "presentMonStarted": false,
+        "stateShape": "\u72B6\u6001\u5B58\u50A8\u5BF9\u8C61\uFF08FpsProcessStateStore\uFF0C\u7ECF FpsCounter \u5B57\u6BB5 _store \u53D1\u73B0\uFF09",
+        "costMeasurementMethod": "\u5F3A\u7C7B\u578B\u59D4\u6258\u76F4\u63A5\u8C03\u7528\u751F\u4EA7\u4FA7\u7684\u5355\u8F6E\u63A8\u8FDB\uFF08\u53CD\u5C04\u6D3E\u53D1\u5F00\u9500\u5DF2\u6392\u9664\uFF09\uFF1B\u5899\u949F\u53EA\u8BA1\u5355\u8F6E\u63A8\u8FDB\u672C\u8EAB\uFF0CCPU/\u5206\u914D\u5DF2\u6263\u9664\u540C\u5F62\u7684\u300C\u5EFA\u72B6\u6001\u002B\u64AD\u79CD\u300D\u5F00\u9500",
+        "note": "\u6B7B PID \u7531\u751F\u4EA7\u7684\u8FDB\u7A0B\u67E5\u8BE2\u5224\u5B9A\u4E3A\u5DF2\u9000\u51FA\u540E\u6E05\u7406\uFF1BprocessQueryExceptions \u7EDF\u8BA1\u8FDB\u7A0B\u67E5\u8BE2\u629B\u51FA\u7684 ArgumentException \u6B21\u6570\uFF08\u9996\u6B21\u673A\u4F1A\u5F02\u5E38\uFF09\u3002"
+      }
+    ],
+    "webHiddenFps": {
+      "kind": "web_hidden_fps_read",
+      "visibleInPanel": false,
+      "visibleInTaskbar": false,
+      "presentMonStarted": false,
+      "scenarioNoDemand": {
+        "scenario": "\u65E0\u9700\u6C42\uFF1AFPS \u672C\u5730\u9690\u85CF \u002B \u65E0\u5408\u6CD5 Web \u8FDE\u63A5",
+        "outputContainsFps": true,
+        "fpsReadRequested": false,
+        "expectedFpsRead": false,
+        "matchesExpectation": true
+      },
+      "scenarioWithWebDemand": {
+        "scenario": "\u6709 Web \u9700\u6C42\uFF1AFPS \u672C\u5730\u9690\u85CF \u002B \u4E00\u4E2A\u5DF2\u9274\u6743 Web \u8FDE\u63A5 \u002B \u5F00\u542F\u7F51\u9875\u7248\u5E27\u7387",
+        "outputContainsFps": true,
+        "fpsReadRequested": true,
+        "expectedFpsRead": true,
+        "matchesExpectation": true
+      },
+      "warnings": [],
+      "note": "\u5408\u6210\u72B6\u6001\u4E3A\u300C\u5DF2\u91CA\u653E\u3001\u65E0\u7ED3\u679C\u300D\uFF1A\u65E2\u4E0D\u542F\u52A8\u5916\u90E8\u670D\u52A1\uFF0C\u4E5F\u4E0D\u4E0B\u8F7D\u4EFB\u4F55\u7EC4\u4EF6\uFF1B\u53EA\u9A8C\u8BC1\u300C\u7F51\u9875\u5FEB\u7167\u662F\u5426\u771F\u7684\u53BB\u8BFB FPS\u300D\u3002"
+    }
+  },
+  "metadata": {
+    "probeUtc": "2026-10-20T01:20:43.4193022Z",
+    "machineName": "QINGLING",
+    "os": "Microsoft Windows NT 10.0.26300.0",
+    "processorCount": 16,
+    "framework": ".NET 8.0.32",
+    "runtimeIdentifier": "win-x64",
+    "processArchitecture": "X64",
+    "baseDirectory": "G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\output\\",
+    "outputDirectory": "G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\rerun3",
+    "gitHead": "efeeb694a85646386f915f3f9713cc8d22713a80",
+    "mainAssemblyPath": "G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\output\\LiteMonitor\u002B\u002B.dll",
+    "mainAssemblySha256": "EC8984F2B64B73283E4B46B7E6B9ABEB248A32DB70F1C2936E0FE5019C54952B",
+    "probeAssemblySha256": "09E83EFE685BD593D4F4569BF74C29F6C0021312C0F464402F1EFA94ACD6EDB2",
+    "isAdministrator": false,
+    "readyNote": "\u521D\u59CB\u5316\u5B8C\u6210\uFF0C\u7528\u65F6 0.8s\uFF0C\u679A\u4E3E\u5230 12 \u4E2A\u786C\u4EF6\u5BF9\u8C61\u3002",
+    "hardwareInventory": [
+      {
+        "name": "MSI MEG X570 UNIFY (MS-7C35)",
+        "type": "Motherboard",
+        "sensorCount": 0,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "AMD Ryzen 7 5800X",
+        "type": "Cpu",
+        "sensorCount": 64,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "Virtual Memory",
+        "type": "Memory",
+        "sensorCount": 3,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "Total Memory",
+        "type": "Memory",
+        "sensorCount": 3,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "NVIDIA GeForce RTX 3080 Ti",
+        "type": "GpuNvidia",
+        "sensorCount": 38,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "NVIDIA GeForce RTX 3080",
+        "type": "GpuNvidia",
+        "sensorCount": 38,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "Radmin VPN",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "WLAN 8",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "\u4EE5\u592A\u7F51 3",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "\u4EE5\u592A\u7F51 5",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "\u672C\u5730\u8FDE\u63A5* 1",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      },
+      {
+        "name": "\u672C\u5730\u8FDE\u63A5* 2",
+        "type": "Network",
+        "sensorCount": 5,
+        "subHardwareCount": 0
+      }
+    ],
+    "temperatureSensors": [
+      {
+        "device": "AMD Ryzen 7 5800X",
+        "sensor": "Core (Tctl/Tdie)",
+        "value": 0
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080 Ti",
+        "sensor": "GPU Core",
+        "value": 48
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080 Ti",
+        "sensor": "GPU Hot Spot",
+        "value": 54.84375
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080 Ti",
+        "sensor": "GPU Memory Junction",
+        "value": 54
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080",
+        "sensor": "GPU Core",
+        "value": 33
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080",
+        "sensor": "GPU Hot Spot",
+        "value": 43.25
+      },
+      {
+        "device": "NVIDIA GeForce RTX 3080",
+        "sensor": "GPU Memory Junction",
+        "value": 42
+      }
+    ],
+    "settingsSummary": {
+      "refreshMs": 3000,
+      "webServerEnabled": true,
+      "webServerPort": 3530,
+      "monitoredGpuCount": 1,
+      "useWinPerCounters": true,
+      "alertTempEnabled": false,
+      "monitorItems": [
+        {
+          "key": "DASH.HOST",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DASH.Time",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DASH.Uptime",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DASH.IP",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CPU.Load",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "CPU.Temp",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "CPU.Clock",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CPU.Power",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CPU.Voltage",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CPU.Fan",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CPU.Pump",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "MEM.Load",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "FPS",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "MOBO.Temp",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DISK.Temp",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "CASE.Fan",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "BAT.Percent",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "BAT.Power",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "BAT.Voltage",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "BAT.Current",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DISK.Read",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DISK.Write",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "NET.Up",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "NET.Down",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "DATA.DayUp",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "DATA.DayDown",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "GPU.0.Load",
+          "visibleInPanel": true,
+          "visibleInTaskbar": true
+        },
+        {
+          "key": "GPU.0.Temp",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "GPU.0.Clock",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "GPU.0.Power",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "GPU.0.Fan",
+          "visibleInPanel": false,
+          "visibleInTaskbar": false
+        },
+        {
+          "key": "GPU.0.VRAM",
+          "visibleInPanel": true,
+          "visibleInTaskbar": false
+        }
+      ]
+    }
+  },
+  "finishedAt": "2026-10-20T09:20:43.5333732\u002B08:00",
+  "log": "[09:16:23] LiteMonitor\u002B\u002B \u6027\u80FD\u63A2\u9488 \u542F\u52A8\u4E8E 2026-10-20 09:16:23\r\n[09:16:23] \u53C2\u6570: --out tests\\LiteMonitor.PerformanceProbe\\rerun3 --groups D,E,F,H2 --warmup 10 --steady 45\r\n[09:16:23] \u9694\u79BB\u8F93\u51FA\u76EE\u5F55 (AppContext.BaseDirectory): G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\output\\\r\n[09:16:23] \u7ED3\u679C\u76EE\u5F55: G:\\TOOL\\LiteMonitor-fork\\.worktrees\\codex-performance-sampling\\tests\\LiteMonitor.PerformanceProbe\\rerun3\r\n[09:16:23] \u9A71\u52A8\u5C31\u7EEA\u68C0\u67E5: {\u0022needsInstall\u0022:false,\u0022status\u0022:\u0022Ready\u0022,\u0022note\u0022:\u0022\\u53EA\\u8BFB\\u68C0\\u67E5\\uFF0C\\u672A\\u5B89\\u88C5/\\u5378\\u8F7D\\u4EFB\\u4F55\\u9A71\\u52A8\\u3002\u0022}\r\n[09:16:28] \u786C\u4EF6\u5C31\u7EEA: {\u0022ready\u0022:true,\u0022note\u0022:\u0022\\u521D\\u59CB\\u5316\\u5B8C\\u6210\\uFF0C\\u7528\\u65F6 0.8s\\uFF0C\\u679A\\u4E3E\\u5230 12 \\u4E2A\\u786C\\u4EF6\\u5BF9\\u8C61\\u3002\u0022,\u0022driverNeedsInstall\u0022:false,\u0022driverStatus\u0022:\u0022\\u0022Ready\\u0022\u0022}\r\n[09:16:29] LHM Update \u8BA1\u6570\u4EE3\u7406\u5B89\u88C5: True \u8BCA\u65AD: {\u0022groupCount\u0022:9,\u0022hardwareListIsLive\u0022:false,\u0022injectedDevices\u0022:[\u0022Virtual Memory [Memory]\u0022,\u0022Total Memory [Memory]\u0022,\u0022NVIDIA GeForce RTX 3080 Ti [GpuNvidia]\u0022,\u0022NVIDIA GeForce RTX 3080 [GpuNvidia]\u0022],\u0022notInjectableGroups\u0022:[\u0022MotherboardGroup\u0022,\u0022CpuGroup\u0022,\u0022AmdGpuGroup\u0022,\u0022StorageGroup\u0022,\u0022NetworkGroup\u0022,\u0022BatteryGroup\u0022],\u0022proxyCount\u0022:4,\u0022collectionRoundsObservedDuringInstallCheck\u0022:1,\u0022updateCallsObservedAfterInstall\u0022:1,\u0022countersWorking\u0022:true}\r\n[09:16:29] --- \u5F00\u59CB\u5206\u7EC4 D: 100 ms\u3001Web \u5F00\u4E14\u65E0\u4EBA\u8BBF\u95EE\uFF1A\u9A8C\u8BC1\u7A7A\u95F2\u670D\u52A1\u4E0D\u6269\u5927\u8303\u56F4 (\u9884\u70ED 10s / \u7A33\u6001 45s)\r\n[09:17:24] --- \u5206\u7EC4 D \u5B8C\u6210: 45 \u8F6E, \u6574\u673A CPU 0.3686%\r\n[09:17:27] --- \u5F00\u59CB\u5206\u7EC4 E: 100 ms\u3001\u5355\u4E2A\u5DF2\u9274\u6743\u7F51\u9875\uFF1A\u8FDE\u63A5\u6D3B\u52A8\u65F6\u6570\u636E\u6B63\u786E\u4E14\u9650\u9891 (\u9884\u70ED 10s / \u7A33\u6001 45s)\r\n[09:18:22] --- \u5206\u7EC4 E \u5B8C\u6210: 45 \u8F6E, \u6574\u673A CPU 0.4015%\r\n[09:18:25] --- \u5F00\u59CB\u5206\u7EC4 F: 100 ms\u3001\u591A\u7F51\u9875 \u002B HTTP \u8F6E\u8BE2\uFF1A\u9A8C\u8BC1\u591A\u6D88\u8D39\u8005\u5171\u7528\u91C7\u6837 (\u9884\u70ED 10s / \u7A33\u6001 45s)\r\n[09:19:20] --- \u5206\u7EC4 F \u5B8C\u6210: 45 \u8F6E, \u6574\u673A CPU 0.3841%\r\n[09:19:23] --- \u5F00\u59CB\u5206\u7EC4 H2: 3000 ms\u3001Web \u5F00\u4E14\u6709\u5408\u6CD5\u7F51\u9875\uFF1A\u72EC\u7ACB Web \u9700\u6C42 (\u9884\u70ED 10s / \u7A33\u6001 45s)\r\n[09:20:20] --- \u5206\u7EC4 H2 \u5B8C\u6210: 12 \u8F6E, \u6574\u673A CPU 0.1082%\r\n[09:20:23] --- \u5355\u8BBE\u5907 Update \u6210\u672C\u6D4B\u91CF\r\n[09:20:27] --- \u517C\u5BB9\u7F13\u51B2\u7ED8\u5236\u5FAE\u57FA\u51C6\r\n[09:20:35] --- FPS \u72B6\u6001\u8BC1\u636E\uFF08\u4E0D\u542F\u52A8\u5916\u90E8\u670D\u52A1\uFF09\r\n",
+  "exitCode": 0,
+  "exitCodeMeaning": "0=\u6B63\u5E38\uFF1B1=\u63A2\u9488\u5F02\u5E38\uFF1B2=\u786C\u4EF6\u5C42\u4E0D\u53EF\u7528/\u9A71\u52A8\u672A\u5C31\u7EEA\uFF0C\u672A\u4EA7\u51FA\u786C\u4EF6\u6D4B\u91CF\u6570\u636E"
+}

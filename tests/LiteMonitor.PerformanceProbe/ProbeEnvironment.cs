@@ -190,10 +190,21 @@ internal sealed class ProbeEnvironment : IDisposable
                 Cfg.MonitoredGpuCount = original;
             }
 
-            // 验证：应用自己的采集循环是否真的调用到了代理
+            // 验证：应用自己的采集循环是否真的调用到了代理。
+            // ★ 生产侧现在有采集门限（HardwareSamplingCoordinator）：未到期时 UpdateAll() 会被跳过，
+            //   所以这里必须等到**真实采集**发生（CollectionRounds 增长）再判断，
+            //   否则会把"被门限跳过"误判成"计数代理失效"。
             ResetCounters();
-            Monitor.UpdateAll();
+            var stats = Monitor.SamplingStatistics;
+            long roundsBefore = stats.CollectionRounds;
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            while (DateTime.UtcNow < deadline && stats.CollectionRounds == roundsBefore)
+            {
+                try { Monitor.UpdateIfDueAsync().GetAwaiter().GetResult(); } catch { }
+                Thread.Sleep(50);
+            }
             long observed = _proxies.Sum(p => p.UpdateCount);
+            Diagnostics["collectionRoundsObservedDuringInstallCheck"] = stats.CollectionRounds - roundsBefore;
             Diagnostics["updateCallsObservedAfterInstall"] = observed;
             Diagnostics["countersWorking"] = observed > 0;
             return observed > 0;
@@ -233,11 +244,21 @@ internal sealed class ProbeEnvironment : IDisposable
     /// <summary>安装过程的诊断信息（原样写进结果 JSON，便于复现时判断计数是否可信）。</summary>
     public System.Text.Json.Nodes.JsonObject Diagnostics { get; } = new();
 
-    /// <summary>确认代理仍在分组里（硬件重载后可能丢失）。</summary>
+    /// <summary>
+    /// 确认代理仍在分组里（硬件重载/热插拔后可能丢失）。
+    ///
+    /// 这是"每卡 Update 次数"这个核心证据的运行时有效性守卫：
+    /// HardwareMonitor.ReloadComputerSafe() 会重建分组集合并换掉硬件对象，
+    /// 之后 deviceUpdateCounters 会变成 0 或残缺，而 JSON 看起来仍是一份正常基线。
+    /// 所以除了"没有非代理对象"，还要核对**可注入分组里的硬件数量**与代理数量一致
+    /// （硬件整个消失时也必须判为不可信）。
+    /// </summary>
     public bool CountersStillInstalled()
     {
         try
         {
+            if (_proxies.Count == 0) return false;
+            int liveHardware = 0;
             var groups = GetLiveGroups(Monitor.ComputerInstance);
             foreach (var group in groups)
             {
@@ -245,9 +266,12 @@ internal sealed class ProbeEnvironment : IDisposable
                 if (field == null) continue;
                 var list = (System.Collections.IList)field.GetValue(group)!;
                 foreach (var item in list)
+                {
+                    liveHardware++;
                     if (item is not CountingHardware) return false;
+                }
             }
-            return _proxies.Count > 0;
+            return liveHardware == _proxies.Count;
         }
         catch
         {
