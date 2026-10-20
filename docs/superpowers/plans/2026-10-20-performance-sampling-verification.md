@@ -974,4 +974,3 @@ dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Release --no-bui
   `.review-scratch/performance-review-54febdc/review.md`。
 - `.review-scratch/` 内的克隆、`bin/obj` 与临时产物**不随仓库提交**；如需入库原始日志，
   须先选定必要文件并检查机器路径、配置与秘密信息。
-

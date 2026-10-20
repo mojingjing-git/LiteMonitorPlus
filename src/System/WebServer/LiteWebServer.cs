@@ -424,7 +424,7 @@ namespace LiteMonitor.src.WebServer
                         // 明确未启用：单位与正常路径保持一致，数值是 "--" 占位
                         unit = MetricUtils.GetUnitStr(item.Key, null, MetricUtils.UnitContext.Panel);
                     }
-                    
+
                     // Primary Logic
                     if (item.Key == "BAT.Percent") isPrimary = true;
                     else if (item.Key == "CPU.Load") isPrimary = true;
