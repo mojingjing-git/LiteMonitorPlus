@@ -41,6 +41,7 @@ namespace LiteMonitor.AppearanceDecorProbe
             RunGradientOrientation();
             RunBarTextureTileShape();
             RunTextureResourceOwnership();
+            RunTextureBrushFailureContainment();
         }
 
         // ============================================================
@@ -887,6 +888,343 @@ namespace LiteMonitor.AppearanceDecorProbe
                 }
             }
             return count;
+        }
+
+        // ============================================================
+        // 用例 10：纹理画刷的异常安全（构造失败 / 入表失败）
+        // ============================================================
+
+        /// <summary>
+        /// 纹理画刷的异常路径必须<b>不漏资源、不改计数、不卡缓存</b>：
+        /// - 10.1 画刷<b>构造失败</b>（用可注入的创建入口触发，<b>不靠耗尽内存</b>）：
+        ///   源位图必须已被释放，缓存的条目数 / 字节数 / 创建数 / 释放数 / 淘汰数
+        ///   必须<b>回到调用前</b>，同一个 key 再次请求必须能正常创建；
+        /// - 10.2 画刷已创建、<b>入表失败</b>：已创建的画刷与源位图<b>都必须被释放</b>，
+        ///   计数同样回到调用前，重试必须能成功；
+        /// - 正常路径的既有断言（计数 / 字节归零、创建数 = 释放数）继续成立。
+        /// </summary>
+        private void RunTextureBrushFailureContainment()
+        {
+            ProbeCase c = NewCase("texture_brush_failure_containment");
+
+            // ---------- 10.1 画刷构造失败 ----------
+            DecorResourceCache cache = new DecorResourceCache();
+            try
+            {
+                DecorCacheKey key = BuildTextureKey(16, 16);
+                Bitmap? handedOver = null;
+                bool aliveAtInjection = false;
+                int tileFactoryCalls = 0;
+                int brushFactoryCalls = 0;
+
+                // 注入"必然失败的画刷创建入口"：稳定复现构造失败，不需要耗尽内存
+                string hookError;
+                bool hooked = DecorCacheFailureHooks.TryInstall(cache, "TextureBrushFactory",
+                    new Func<Bitmap, TextureBrush>(_ =>
+                    {
+                        brushFactoryCalls++;
+                        throw new InvalidOperationException("注入的纹理画刷构造失败。");
+                    }),
+                    out hookError);
+                if (!hooked) c.Fail(hookError);
+
+                int countBefore = cache.Count;
+                long bytesBefore = cache.TotalBytes;
+                long createdBefore = cache.CreatedResourceCount;
+                long createdBytesBefore = cache.CreatedBitmapBytes;
+                long releasedBefore = cache.ReleasedResourceCount;
+                long evictionsBefore = cache.EvictionCount;
+                long missesBefore = cache.MissCount;
+
+                Exception? failure = null;
+                try
+                {
+                    cache.GetOrAddTextureBrush(key, k =>
+                    {
+                        tileFactoryCalls++;
+                        handedOver = CreateSolidTile(k.WidthPx, k.HeightPx);
+                        // 对照：注入失败之前，这张位图是活的
+                        aliveAtInjection = DecorCacheFailureHooks.IsAlive(handedOver);
+                        return handedOver;
+                    }, 16, 16);
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+
+                c.Require(failure is InvalidOperationException,
+                    $"构造失败必须抛出 InvalidOperationException，实际 {(failure == null ? "没有抛异常" : failure.GetType().FullName)}");
+                c.Require(tileFactoryCalls == 1, $"源位图工厂应被调用 1 次，实际 {tileFactoryCalls} 次");
+                c.Require(brushFactoryCalls == 1, $"注入的画刷创建入口应被调用 1 次，实际 {brushFactoryCalls} 次");
+                c.Require(aliveAtInjection, "对照：注入失败之前源位图必须仍然是活的（否则已释放的判定不可信）");
+
+                // 失败的位图必须已经被释放
+                bool bitmapReleased = DecorCacheFailureHooks.IsReleased(handedOver, out string bitmapEvidence);
+                c.Require(bitmapReleased, "构造失败后源位图必须已被释放（访问它应抛异常）：" + bitmapEvidence);
+
+                // 计数必须回到调用前（不是 0，也不是多算）
+                c.Require(cache.Count == countBefore,
+                    $"构造失败后条目数应回到调用前 {countBefore}，实际 {cache.Count}");
+                c.Require(cache.TotalBytes == bytesBefore,
+                    $"构造失败后位图字节应回到调用前 {bytesBefore}，实际 {cache.TotalBytes}");
+                c.Require(cache.CreatedResourceCount == createdBefore,
+                    $"构造失败后创建资源数应回到调用前 {createdBefore}，实际 {cache.CreatedResourceCount}");
+                c.Require(cache.CreatedBitmapBytes == createdBytesBefore,
+                    $"构造失败后创建字节数应回到调用前 {createdBytesBefore}，实际 {cache.CreatedBitmapBytes}");
+                c.Require(cache.ReleasedResourceCount == releasedBefore,
+                    $"构造失败后释放条目数应回到调用前 {releasedBefore}，实际 {cache.ReleasedResourceCount}");
+                c.Require(cache.EvictionCount == evictionsBefore,
+                    $"构造失败后淘汰数应回到调用前 {evictionsBefore}，实际 {cache.EvictionCount}");
+                c.Require(cache.MissCount == missesBefore + 1,
+                    $"构造失败后未命中数只应 +1（这次请求确实未命中），实际 +{cache.MissCount - missesBefore}");
+
+                // 失败后重试同一个 key 必须能正常创建（缓存没有被卡死）
+                string resetError;
+                DecorCacheFailureHooks.TryInstall<Func<Bitmap, TextureBrush>>(cache, "TextureBrushFactory", null, out resetError);
+
+                TextureBrush? retry = null;
+                Exception? retryFailure = null;
+                try
+                {
+                    retry = cache.GetOrAddTextureBrush(key, k => CreateSolidTile(k.WidthPx, k.HeightPx), 16, 16);
+                }
+                catch (Exception ex)
+                {
+                    retryFailure = ex;
+                }
+
+                c.Require(retryFailure == null,
+                    $"构造失败后重试同一个 key 必须能创建成功，但抛出 {retryFailure?.GetType().FullName}");
+                c.Require(retry != null, "构造失败后重试同一个 key 必须能创建成功");
+                c.Require(cache.Count == countBefore + 1,
+                    $"重试后条目数应为 {countBefore + 1}，实际 {cache.Count}");
+                c.Require(cache.TotalBytes == bytesBefore + 16 * 16 * 4,
+                    $"重试后位图字节应为 {bytesBefore + 16 * 16 * 4}，实际 {cache.TotalBytes}");
+                c.Require(cache.CreatedResourceCount == createdBefore + 1,
+                    $"重试后创建资源数应为 {createdBefore + 1}，实际 {cache.CreatedResourceCount}");
+
+                c.Detail("case10_1_failure", failure?.GetType().FullName ?? "none");
+                c.Detail("case10_1_bitmapReleased", bitmapReleased);
+                c.Detail("case10_1_bitmapEvidence", bitmapEvidence);
+                c.Detail("case10_1_retrySucceeded", retry != null);
+            }
+            finally
+            {
+                cache.Dispose();
+            }
+
+            // 正常路径的记账仍然配平（释放后归零、创建数 = 释放数）
+            c.Require(cache.Count == 0, $"释放后缓存条目应为 0，实际 {cache.Count}");
+            c.Require(cache.TotalBytes == 0, $"释放后位图字节应归零，实际 {cache.TotalBytes}");
+            c.Require(cache.ReleasedResourceCount == cache.CreatedResourceCount,
+                $"释放条目数 {cache.ReleasedResourceCount} 应与创建资源数 {cache.CreatedResourceCount} 相等");
+
+            // ---------- 10.2 入表失败（画刷已创建、条目未入表） ----------
+            DecorResourceCache cache2 = new DecorResourceCache();
+            try
+            {
+                DecorCacheKey key = BuildTextureKey(16, 16);
+                Bitmap? handedOver = null;
+                TextureBrush? createdBrush = null;
+                bool brushAliveBeforeFailure = false;
+                bool bitmapAliveBeforeFailure = false;
+
+                string hookError;
+                bool hooked = DecorCacheFailureHooks.TryInstall(cache2, "TextureBrushFactory",
+                    new Func<Bitmap, TextureBrush>(src =>
+                    {
+                        createdBrush = new TextureBrush(src);
+                        return createdBrush;
+                    }),
+                    out hookError);
+                if (!hooked) c.Fail(hookError);
+
+                hooked = DecorCacheFailureHooks.TryInstall(cache2, "TextureBrushPreInsertHook",
+                    new Action(() =>
+                    {
+                        // 对照：注入失败之前，画刷与位图都还活着
+                        brushAliveBeforeFailure = DecorCacheFailureHooks.BrushIsAlive(createdBrush);
+                        bitmapAliveBeforeFailure = DecorCacheFailureHooks.IsAlive(handedOver);
+                        throw new InvalidOperationException("注入的入表失败。");
+                    }),
+                    out hookError);
+                if (!hooked) c.Fail(hookError);
+
+                int countBefore = cache2.Count;
+                long bytesBefore = cache2.TotalBytes;
+                long createdBefore = cache2.CreatedResourceCount;
+                long createdBytesBefore = cache2.CreatedBitmapBytes;
+                long releasedBefore = cache2.ReleasedResourceCount;
+                long evictionsBefore = cache2.EvictionCount;
+
+                Exception? failure = null;
+                try
+                {
+                    cache2.GetOrAddTextureBrush(key, k =>
+                    {
+                        handedOver = CreateSolidTile(k.WidthPx, k.HeightPx);
+                        return handedOver;
+                    }, 16, 16);
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+
+                c.Require(failure is InvalidOperationException,
+                    $"入表失败必须抛出 InvalidOperationException，实际 {(failure == null ? "没有抛异常" : failure.GetType().FullName)}");
+                c.Require(createdBrush != null, "入表失败之前画刷应已创建出来");
+                c.Require(brushAliveBeforeFailure,
+                    "对照：注入失败之前画刷必须仍然是活的（否则已释放的判定不可信）");
+                c.Require(bitmapAliveBeforeFailure,
+                    "对照：注入失败之前源位图必须仍然是活的（否则已释放的判定不可信）");
+
+                // 已创建的画刷与源位图都必须已经被释放
+                bool brushReleased = DecorCacheFailureHooks.IsReleased(createdBrush, out string brushEvidence);
+                c.Require(brushReleased, "入表失败后已创建的画刷必须已被释放：" + brushEvidence);
+                bool bitmapReleased = DecorCacheFailureHooks.IsReleased(handedOver, out string bitmapEvidence);
+                c.Require(bitmapReleased, "入表失败后源位图必须已被释放（访问它应抛异常）：" + bitmapEvidence);
+
+                // 计数必须回到调用前
+                c.Require(cache2.Count == countBefore,
+                    $"入表失败后条目数应回到调用前 {countBefore}，实际 {cache2.Count}");
+                c.Require(cache2.TotalBytes == bytesBefore,
+                    $"入表失败后位图字节应回到调用前 {bytesBefore}，实际 {cache2.TotalBytes}");
+                c.Require(cache2.CreatedResourceCount == createdBefore,
+                    $"入表失败后创建资源数应回到调用前 {createdBefore}，实际 {cache2.CreatedResourceCount}");
+                c.Require(cache2.CreatedBitmapBytes == createdBytesBefore,
+                    $"入表失败后创建字节数应回到调用前 {createdBytesBefore}，实际 {cache2.CreatedBitmapBytes}");
+                c.Require(cache2.ReleasedResourceCount == releasedBefore,
+                    $"入表失败后释放条目数应回到调用前 {releasedBefore}，实际 {cache2.ReleasedResourceCount}");
+                c.Require(cache2.EvictionCount == evictionsBefore,
+                    $"入表失败后淘汰数应回到调用前 {evictionsBefore}，实际 {cache2.EvictionCount}");
+
+                // 失败后重试必须能成功
+                string resetError;
+                DecorCacheFailureHooks.TryInstall<Func<Bitmap, TextureBrush>>(cache2, "TextureBrushFactory", null, out resetError);
+                DecorCacheFailureHooks.TryInstall<Action>(cache2, "TextureBrushPreInsertHook", null, out resetError);
+
+                TextureBrush? retry = null;
+                Exception? retryFailure = null;
+                try
+                {
+                    retry = cache2.GetOrAddTextureBrush(key, k => CreateSolidTile(k.WidthPx, k.HeightPx), 16, 16);
+                }
+                catch (Exception ex)
+                {
+                    retryFailure = ex;
+                }
+
+                c.Require(retryFailure == null,
+                    $"入表失败后重试同一个 key 必须能创建成功，但抛出 {retryFailure?.GetType().FullName}");
+                c.Require(retry != null, "入表失败后重试同一个 key 必须能创建成功");
+                c.Require(cache2.Count == countBefore + 1,
+                    $"重试后条目数应为 {countBefore + 1}，实际 {cache2.Count}");
+                c.Require(cache2.CreatedResourceCount == createdBefore + 1,
+                    $"重试后创建资源数应为 {createdBefore + 1}，实际 {cache2.CreatedResourceCount}");
+
+                c.Detail("case10_2_failure", failure?.GetType().FullName ?? "none");
+                c.Detail("case10_2_brushReleased", brushReleased);
+                c.Detail("case10_2_brushEvidence", brushEvidence);
+                c.Detail("case10_2_bitmapReleased", bitmapReleased);
+                c.Detail("case10_2_bitmapEvidence", bitmapEvidence);
+                c.Detail("case10_2_retrySucceeded", retry != null);
+            }
+            finally
+            {
+                cache2.Dispose();
+            }
+
+            c.Require(cache2.Count == 0, $"释放后缓存条目应为 0，实际 {cache2.Count}");
+            c.Require(cache2.TotalBytes == 0, $"释放后位图字节应归零，实际 {cache2.TotalBytes}");
+            c.Require(cache2.ReleasedResourceCount == cache2.CreatedResourceCount,
+                $"释放条目数 {cache2.ReleasedResourceCount} 应与创建资源数 {cache2.CreatedResourceCount} 相等");
+
+            // ---------- 10.3 纹理路径的容量上限仍然成立 ----------
+            RunTextureCapacityLimits(c);
+
+            c.Detail("note", "画刷创建入口与入表前钩子都是 internal 接缝（探针用反射安装）；失败路径不漏位图 / 画刷，计数回到调用前，重试可成功。");
+        }
+
+        /// <summary>
+        /// 纹理路径的容量上限仍然成立：淘汰挪到入表之后<b>不能放宽</b>条目数 / 字节上限，
+        /// "单个条目超过字节上限"的例外约定也必须保持原样。
+        /// </summary>
+        private void RunTextureCapacityLimits(ProbeCase c)
+        {
+            DecorResourceCache limited = new DecorResourceCache(maxEntries: 4, maxBitmapBytes: 4096);
+            try
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    DecorCacheKey key = BuildTextureKey(16, 16, i);
+                    limited.GetOrAddTextureBrush(key, k => CreateSolidTile(k.WidthPx, k.HeightPx), 16, 16);
+                }
+
+                c.Require(limited.Count <= limited.MaxEntries,
+                    $"纹理路径条目数 {limited.Count} 超过上限 {limited.MaxEntries}");
+                c.Require(limited.TotalBytes <= limited.MaxBitmapBytes,
+                    $"纹理路径位图字节 {limited.TotalBytes} 超过上限 {limited.MaxBitmapBytes}");
+                c.Require(limited.EvictionCount > 0, "往 4 条上限的缓存里塞 8 条纹理应发生淘汰");
+                c.Require(limited.ReleasedResourceCount + limited.Count == limited.CreatedResourceCount,
+                    $"创建资源数 {limited.CreatedResourceCount} 应等于仍在缓存的 {limited.Count} 条 + 已释放的 {limited.ReleasedResourceCount} 条");
+
+                c.Detail("case10_3_entries", limited.Count);
+                c.Detail("case10_3_bytes", limited.TotalBytes);
+                c.Detail("case10_3_evictions", limited.EvictionCount);
+            }
+            finally
+            {
+                limited.Dispose();
+            }
+
+            // 全部释放后：创建数 = 释放数、字节归零
+            c.Require(limited.Count == 0, $"释放后纹理缓存条目应为 0，实际 {limited.Count}");
+            c.Require(limited.TotalBytes == 0, $"释放后纹理缓存字节应归零，实际 {limited.TotalBytes}");
+            c.Require(limited.ReleasedResourceCount == limited.CreatedResourceCount,
+                $"释放条目数 {limited.ReleasedResourceCount} 应与创建资源数 {limited.CreatedResourceCount} 相等");
+
+            // 单个条目超过字节上限的例外：它必须留下，且下一次插入时先被淘汰
+            using (DecorResourceCache tiny = new DecorResourceCache(maxEntries: 8, maxBitmapBytes: 100))
+            {
+                DecorCacheKey bigKey = BuildTextureKey(16, 16, 100);
+                tiny.GetOrAddTextureBrush(bigKey, k => CreateSolidTile(k.WidthPx, k.HeightPx), 16, 16);
+                c.Require(tiny.Count == 1, $"超大条目应单独存在，实际条目数 {tiny.Count}");
+                c.Require(tiny.TotalBytes == 16 * 16 * 4, $"超大条目字节应为 {16 * 16 * 4}，实际 {tiny.TotalBytes}");
+
+                DecorCacheKey nextKey = BuildTextureKey(16, 16, 101);
+                tiny.GetOrAddTextureBrush(nextKey, k => CreateSolidTile(k.WidthPx, k.HeightPx), 16, 16);
+                c.Require(tiny.Count == 1, $"超大条目应在下次插入时被优先淘汰，实际条目数 {tiny.Count}");
+                c.Require(tiny.EvictionCount >= 1, "超大条目应被淘汰一次");
+            }
+        }
+
+        /// <summary>造一张<b>有内容</b>的实心瓦片（用于证明画刷"活着时画得出像素"）。</summary>
+        private static Bitmap CreateSolidTile(int widthPx, int heightPx)
+        {
+            Bitmap tile = new Bitmap(Math.Max(1, widthPx), Math.Max(1, heightPx), PixelFormat.Format32bppPArgb);
+            using (Graphics g = Graphics.FromImage(tile))
+            {
+                g.Clear(Color.FromArgb(255, 0, 229, 255));
+            }
+            return tile;
+        }
+
+        /// <summary>造一个进度条纹理类的缓存键（探针自用，与运行期上下文无关）。</summary>
+        private static DecorCacheKey BuildTextureKey(int widthPx, int heightPx, int seed = 0)
+        {
+            return new DecorCacheKey(
+                DecorCacheKey.KindBarTexture,
+                1,
+                BarStart.ToArgb(),
+                Color.Empty.ToArgb(),
+                widthPx,
+                heightPx,
+                DecorCacheKey.DirectionRadial,
+                96,
+                1000,
+                seed);
         }
 
         // ============================================================
