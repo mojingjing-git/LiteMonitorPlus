@@ -1182,6 +1182,29 @@ namespace LiteMonitor.Tests
         // ================================================================
 
         [Fact]
+        public void LiteWebServer保留1参构造函数_二进制兼容()
+        {
+            // ★ 次要#3 的护栏：1 参 ctor 的**元数据签名**不得消失
+            //   （源码兼容 ✓、二进制不兼容 ✘ —— 简报要求"只许新增、不许改既有成员签名"）。
+            //   既有 3 个调用点（MainForm_Transparent / FpsStateProbe / ProbeEnvironment）
+            //   写的是 new LiteWebServer(cfg) → 必须仍然存在并保持 public。
+            var oneArg = typeof(LiteWebServer).GetConstructor(new[] { typeof(Settings) });
+            Assert.True(oneArg != null && oneArg.IsPublic,
+                "LiteWebServer 必须保留 public LiteWebServer(Settings) 构造函数（既有 1 参 ctor 不得被改签名）");
+
+            // 新增的重载也必须还在（"保留 + 新增"形态）
+            //   注意 typeof(...) 是表达式上下文，">>"会被词法分析成移位运算符 → 泛型闭合要留空格
+            var threeArg = typeof(LiteWebServer).GetConstructor(new[]
+            {
+                typeof(Settings),
+                typeof(Func<CancellationToken, Task<bool> >),
+                typeof(Func<bool, bool>)
+            });
+            Assert.True(threeArg != null && threeArg.IsPublic,
+                "LiteWebServer 必须保留新增的 3 参构造函数（可注入采样入口与需求写入端）");
+        }
+
+        [Fact]
         public void 生产默认需求写入路径真的调用SetWebDataDemand()
         {
             // ★ 复审重要#1 的护栏（M1 变异必须让本用例变红）。
