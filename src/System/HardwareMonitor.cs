@@ -398,6 +398,12 @@ namespace LiteMonitor.src.SystemServices
         /// <summary>
         /// 一次真实采集（原 UpdateAll 的全部工作）。
         /// 只有通过协调器门限后才会被调用。
+        ///
+        /// ★ 契约（本方法的**硬性**约定，破坏它会让失败计数虚高一倍）：
+        ///   本方法必须**吞掉所有异常、绝不能把异常再抛出去**。
+        ///   失败由采集层自己记（见 <see cref="RecordCollectionFailure"/>），
+        ///   而协调器只在采样动作**抛出**异常时才会再记一次失败；
+        ///   一旦这里把异常上抛，同一次失败就会被记两次（FailedCollections 翻倍）。
         /// </summary>
         private void CollectOnce()
         {
@@ -454,9 +460,9 @@ namespace LiteMonitor.src.SystemServices
                             try { hw.Update(); RecordDeviceUpdate(hw, "Gpu"); }
                             catch (Exception ex)
                             {
-                                HardwareErrorLog.Write("UpdateAll.GPU", ex);
                                 // ★ 显卡更新失败必须可观测：否则 FailedCollections 是恒零的死指标。
-                                _samplingStatistics.RecordFailedCollection();
+                                //   走统一的失败计数接缝（写日志 + 记一次失败采集，顺序与改动前一致）。
+                                RecordCollectionFailure(_samplingStatistics, ex, "UpdateAll.GPU");
                                 System.Diagnostics.Debug.WriteLine($"[GPU Error] Update failed: {ex.Message}");
                                 needsReload = true;
                             }
@@ -516,8 +522,9 @@ namespace LiteMonitor.src.SystemServices
                 //   旧实现是 `catch { }`：全部异常被吞掉 → 协调器收到的 sampler 永远不抛 →
                 //   协调器的 catch 与 success=false 分支在生产永远不发生 →
                 //   交付出去的 FailedCollections 是**恒零的死指标**。
-                HardwareErrorLog.Write("CollectOnce", ex);
-                _samplingStatistics.RecordFailedCollection();
+                //   ★ 这里**绝不能**再把异常抛出去：采集层已经记过一次失败，
+                //   再上抛会让协调器把同一次失败**再记一次**（失败计数虚高一倍）。
+                RecordCollectionFailure(_samplingStatistics, ex, "CollectOnce");
             }
 
             // [Fix #290] 硬件故障自动恢复
@@ -812,6 +819,43 @@ namespace LiteMonitor.src.SystemServices
             if (result.TrafficSave) statistics.RecordTrafficSaveTrigger();
             if (result.GcRequest) statistics.RecordGcRequestTrigger();
             if (result.WorkingSetTrim) statistics.RecordWorkingSetTrimTrigger();
+        }
+
+        /// <summary>
+        /// 记录一次采集失败：**写错误日志 + 记一次失败采集**。
+        ///
+        /// ★ 抽成静态接缝的理由（与 <see cref="RecordMaintenanceTriggers"/> 完全同形）：
+        ///   <see cref="HardwareMonitor"/> 的构造函数会打开真实硬件树，单元测试无法实例化它；
+        ///   而"失败被计数"是本任务的头号不变量，必须**可断言**。
+        ///   失败计数是对 <see cref="HardwareSamplingStatistics"/> 的**纯内存自增**，
+        ///   把"计数 + 写日志"开放成可测接缝后，就能断言"一次失败恰好 +1"与"日志仍被写"。
+        ///
+        /// ★ 计数归属（互斥性，见 <see cref="CollectOnce"/> 的契约）：
+        ///   采集层吞掉异常时由本方法记**一次**；协调器只在采样动作**抛出**异常时才记失败。
+        ///   因此采集层**绝不能**把异常再抛出去，否则同一次失败会被记两次。
+        ///
+        /// ★ 行为与抽接缝之前**完全一致**：错误日志的 source 标签、写入位置、计数时机都不变
+        ///   （先写日志、后自增计数）。
+        /// </summary>
+        /// <param name="statistics">共享的统计计数器（为 null 时只写日志、不计数）。</param>
+        /// <param name="ex">捕获到的异常。</param>
+        /// <param name="source">错误日志的来源标签（"CollectOnce" / "UpdateAll.GPU"）。</param>
+        /// <param name="errorLogger">
+        /// 错误日志出口；为 null 时走默认的 <see cref="HardwareErrorLog"/>
+        /// （写运行目录下的持久化日志文件）。
+        /// 测试可注入替身，避免在测试输出目录留下日志文件。
+        /// </param>
+        public static void RecordCollectionFailure(
+            HardwareSamplingStatistics? statistics,
+            Exception? ex,
+            string source = "CollectOnce",
+            Action<string, Exception?>? errorLogger = null)
+        {
+            if (errorLogger == null) HardwareErrorLog.Write(source, ex);
+            else errorLogger(source, ex);
+
+            // ★ 计数时机：日志写完之后自增（与抽接缝之前一致）。
+            statistics?.RecordFailedCollection();
         }
 
         private void ReloadComputerSafe()
@@ -1151,6 +1195,9 @@ namespace LiteMonitor.src.SystemServices
     ///  - 两次执行之间**至少**间隔各自的周期（见下方"为什么不用固定网格"）；
     ///  - 状态由**实例**持有，墙上时间回拨不影响判断；
     ///  - 时钟可注入 → 单元测试用假时钟，不做真 Sleep。
+    ///  - **线程安全**：<see cref="TryConsumeSlowScan"/> / <see cref="TryConsumeDiskBackgroundScan"/>
+    ///    的"比较 + 推进"在同一个临界区内完成，即使多个线程同时调用，
+    ///    同一个到期时间也只会有一次返回 true（"同一到期时间最多消费一次"的承诺在并发下同样成立）。
     /// </summary>
     public sealed class HardwareSamplingSchedule
     {
@@ -1197,11 +1244,16 @@ namespace LiteMonitor.src.SystemServices
         ///
         /// 其余语义与 <see cref="MonotonicPeriodicTrigger"/> 一致：
         /// 同一到期时间只消费一次、跳过若干周期后最多执行一次、墙上时间回拨不影响判断。
+        ///
+        /// ★ 线程安全：<see cref="TryConsume"/> 的"比较 + 推进"在同一个临界区内完成
+        ///   （与 <see cref="MonotonicPeriodicTrigger"/> 同一写法），
+        ///   即使多个线程同时调用，同一个到期时间也只会有一次返回 true。
         /// </summary>
         private sealed class MinGapTrigger
         {
             private readonly TimeProvider _time;
             private readonly long _periodTicks;
+            private readonly object _gate = new object();
             private long _nextDue;
             private bool _armed;
 
@@ -1213,16 +1265,25 @@ namespace LiteMonitor.src.SystemServices
                 if (_periodTicks <= 0) _periodTicks = 1;
             }
 
+            /// <summary>
+            /// 到期则消费一次并返回 true；**同一到期时间只会被消费一次**。
+            /// 未到期返回 false（不执行任何动作）。
+            /// ★ 比较与推进在同一个临界区内完成：即使多个线程同时调用，
+            ///   同一个到期时间也只会有一次返回 true。
+            /// </summary>
             public bool TryConsume()
             {
                 long now = _time.GetTimestamp();
 
-                if (_armed && now < _nextDue) return false;
+                lock (_gate)
+                {
+                    if (_armed && now < _nextDue) return false;
 
-                // 下一次到期 = 现在 + 周期（保证两次执行之间至少间隔一个周期）
-                _nextDue = now > long.MaxValue - _periodTicks ? long.MaxValue : now + _periodTicks;
-                _armed = true;
-                return true;
+                    // 下一次到期 = 现在 + 周期（保证两次执行之间至少间隔一个周期）
+                    _nextDue = now > long.MaxValue - _periodTicks ? long.MaxValue : now + _periodTicks;
+                    _armed = true;
+                    return true;
+                }
             }
         }
     }

@@ -1,7 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Threading;
+using System.Threading.Tasks;
 using LibreHardwareMonitor.Hardware;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices;
@@ -192,6 +196,174 @@ namespace LiteMonitor.Tests
                 onRequest(i);
                 clock.Advance(TimeSpan.FromMilliseconds(100));
             }
+        }
+
+        // =========================================================
+        // 结构断言工具（IL 扫描）
+        // =========================================================
+
+        /// <summary>
+        /// IL 扫描小工具：只解析 <c>call</c> / <c>callvirt</c> / <c>ldstr</c> 三类指令。
+        ///
+        /// ★ 为什么用 IL 而不是源码文本断言：
+        ///   - 文本断言会命中**注释**里的字符串（"断言一个字符串存在但没有行为意义"），
+        ///     而且依赖源码文件在测试运行时存在（纯净副本 / 只发布二进制的环境里没有）；
+        ///   - IL 断言直接锁定"这个方法体里**真的调用了**哪个方法"，
+        ///     与注释无关、也不依赖源码文件，是**结构性**护栏而不是同义反复。
+        /// </summary>
+        private static class IlInspector
+        {
+            private static readonly OpCode[] OneByte = new OpCode[0x100];
+            private static readonly OpCode[] TwoByte = new OpCode[0x100];
+
+            static IlInspector()
+            {
+                foreach (var field in typeof(OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static))
+                {
+                    if (field.FieldType != typeof(OpCode)) continue;
+                    var op = (OpCode)field.GetValue(null);
+                    ushort value = unchecked((ushort)op.Value);
+                    if (value < 0x100) OneByte[value] = op;
+                    else if ((value & 0xFF00) == 0xFE00) TwoByte[value & 0xFF] = op;
+                }
+            }
+
+            /// <summary>某个方法体的扫描结果。</summary>
+            public sealed class ScanResult
+            {
+                /// <summary>方法体里被调用的方法（按出现顺序）。</summary>
+                public List<MethodBase> Calls { get; } = new List<MethodBase>();
+
+                /// <summary>方法体里用到的字符串字面量（ldstr）。</summary>
+                public List<string> Strings { get; } = new List<string>();
+
+                /// <summary>解析失败的调用指令数量（正常应为 0；不为 0 说明扫描器对该模块不可用）。</summary>
+                public int UnresolvedCalls { get; set; }
+            }
+
+            /// <summary>扫描一个方法体。</summary>
+            public static ScanResult Scan(MethodBase method)
+            {
+                var result = new ScanResult();
+                if (method == null) return result;
+
+                var body = method.GetMethodBody();
+                if (body == null) return result;
+                byte[] il = body.GetILAsByteArray();
+                if (il == null) return result;
+
+                Module module = method.Module;
+                Type[] typeArgs = method.DeclaringType != null && method.DeclaringType.IsGenericType
+                    ? method.DeclaringType.GetGenericArguments()
+                    : null;
+                Type[] methodArgs = method.IsGenericMethod ? method.GetGenericArguments() : null;
+
+                int i = 0;
+                while (i < il.Length)
+                {
+                    OpCode op;
+                    byte first = il[i];
+                    if (first == 0xFE)
+                    {
+                        if (i + 1 >= il.Length) break;
+                        op = TwoByte[il[i + 1]];
+                        i += 2;
+                    }
+                    else
+                    {
+                        op = OneByte[first];
+                        i += 1;
+                    }
+
+                    switch (op.OperandType)
+                    {
+                        case OperandType.InlineMethod:
+                            {
+                                int token = BitConverter.ToInt32(il, i);
+                                i += 4;
+                                MethodBase target = null;
+                                try { target = module.ResolveMethod(token, typeArgs, methodArgs); }
+                                catch (Exception) { /* 解析不了就记为未解析（下面的断言会暴露它） */ }
+                                if (target != null) result.Calls.Add(target);
+                                else result.UnresolvedCalls++;
+                                break;
+                            }
+                        case OperandType.InlineString:
+                            {
+                                int token = BitConverter.ToInt32(il, i);
+                                i += 4;
+                                string text = null;
+                                try { text = module.ResolveString(token); }
+                                catch (Exception) { }
+                                if (text != null) result.Strings.Add(text);
+                                break;
+                            }
+                        case OperandType.InlineI:
+                        case OperandType.ShortInlineR:
+                        case OperandType.InlineBrTarget:
+                        case OperandType.InlineField:
+                        case OperandType.InlineSig:
+                        case OperandType.InlineTok:
+                        case OperandType.InlineType:
+                            i += 4;
+                            break;
+                        case OperandType.InlineI8:
+                        case OperandType.InlineR:
+                            i += 8;
+                            break;
+                        case OperandType.ShortInlineI:
+                        case OperandType.ShortInlineBrTarget:
+                        case OperandType.ShortInlineVar:
+                            i += 1;
+                            break;
+                        case OperandType.InlineVar:
+                            i += 2;
+                            break;
+                        case OperandType.InlineSwitch:
+                            {
+                                int count = BitConverter.ToInt32(il, i);
+                                i += 4 + 4 * count;
+                                break;
+                            }
+                        default:
+                            break;   // InlineNone / InlinePhi（已废弃）
+                    }
+                }
+
+                return result;
+            }
+        }
+
+        /// <summary>枚举某个类型自身 + 其嵌套类型（编译器生成的闭包类也在内）的所有方法。</summary>
+        private static IEnumerable<MethodBase> AllMethodsIncludingNested(Type type)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic |
+                                       BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+            foreach (var method in type.GetMethods(flags)) yield return method;
+            foreach (var nested in type.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                foreach (var method in AllMethodsIncludingNested(nested)) yield return method;
+            }
+        }
+
+        /// <summary>两个方法是否指向同一个方法（按声明类型 + 名称 + 参数签名判定）。</summary>
+        private static bool SameMethod(MethodBase candidate, MethodInfo expected)
+        {
+            if (candidate == null || expected == null) return false;
+            if (candidate.DeclaringType != expected.DeclaringType) return false;
+            if (candidate.Name != expected.Name) return false;
+
+            var actualInfo = candidate as MethodInfo;
+            if (actualInfo == null) return false;
+
+            var actualParams = actualInfo.GetParameters();
+            var expectedParams = expected.GetParameters();
+            if (actualParams.Length != expectedParams.Length) return false;
+            for (int i = 0; i < actualParams.Length; i++)
+            {
+                if (actualParams[i].ParameterType != expectedParams[i].ParameterType) return false;
+            }
+            return true;
         }
 
         // =========================================================
@@ -557,16 +729,16 @@ namespace LiteMonitor.Tests
 
             var req = HardwareUpdateRequirements.Compute(cfg, hasWebDataDemand: false, usePerformanceCounters: true);
 
-            Assert.False(req.ForceAll);
+            Assert.False(req.ForceAll, "没有合法 Web 需求时 ForceAll 必须为假（Web 开关不得顺带扩大采集范围）");
             // 本地需求仍然生效
-            Assert.True(req.NeedCpu);
+            Assert.True(req.NeedCpu, "本地已启用的 CPU 指标必须仍在需求范围内");
             // 本地没开的项目不会被"Web 开关"顺带打开
-            Assert.False(req.NeedGpu);
-            Assert.False(req.NeedMem);
-            Assert.False(req.NeedNet);
-            Assert.False(req.NeedDisk);
-            Assert.False(req.NeedBat);
-            Assert.False(req.NeedMobo);
+            Assert.False(req.NeedGpu, "Web 开关不应打开 GPU 需求");
+            Assert.False(req.NeedMem, "Web 开关不应打开内存需求");
+            Assert.False(req.NeedNet, "Web 开关不应打开网卡需求");
+            Assert.False(req.NeedDisk, "Web 开关不应打开磁盘需求");
+            Assert.False(req.NeedBat, "Web 开关不应打开电池需求");
+            Assert.False(req.NeedMobo, "Web 开关不应打开主板需求");
         }
 
         [Fact]
@@ -576,14 +748,14 @@ namespace LiteMonitor.Tests
 
             var req = HardwareUpdateRequirements.Compute(cfg, hasWebDataDemand: true, usePerformanceCounters: true);
 
-            Assert.True(req.ForceAll);
-            Assert.True(req.NeedCpu);
-            Assert.True(req.NeedGpu);
-            Assert.True(req.NeedMem);
-            Assert.True(req.NeedNet);
-            Assert.True(req.NeedDisk);
-            Assert.True(req.NeedBat);
-            Assert.True(req.NeedMobo);
+            Assert.True(req.ForceAll, "有合法 Web 需求时必须按全量更新");
+            Assert.True(req.NeedCpu, "全量需求应包含 CPU");
+            Assert.True(req.NeedGpu, "全量需求应包含显卡");
+            Assert.True(req.NeedMem, "全量需求应包含内存");
+            Assert.True(req.NeedNet, "全量需求应包含网卡");
+            Assert.True(req.NeedDisk, "全量需求应包含磁盘");
+            Assert.True(req.NeedBat, "全量需求应包含电池");
+            Assert.True(req.NeedMobo, "全量需求应包含主板");
         }
 
         [Fact]
@@ -732,31 +904,49 @@ namespace LiteMonitor.Tests
         }
 
         [Fact]
-        public void 硬件侧FPS需求规则与网页占位规则完全一致()
+        public void 硬件侧FPS需求探针与网页侧调用同一个规则方法()
         {
-            // 防"两处规则漂移"的关键用例：硬件侧探针与网页 "--" 占位判断必须逐组合相等。
-            for (int local = 0; local <= 1; local++)
+            // ★ 结构断言（**不是**"比较两次调用的结果"）：
+            //   旧写法断言 `probe() == WebFpsDemand.IsFpsDemand(cfg, demand)`，
+            //   而 probe 的实现体**就是同一个调用** —— 退化成 f(x)==f(x)，
+            //   两侧一起变好一起变坏，无法发现"两侧漂移"。
+            //
+            //   这里断言的是**同一个 MethodInfo**：硬件侧探针与网页侧
+            //   都必须调用 WebFpsDemand.IsFpsDemand 这**唯一**的规则实现。
+            //   只要有人把探针改成手写副本（不再调用 WebFpsDemand），本用例立刻变红。
+            //   规则的真值表由上面 4 个 FPS 用例覆盖。
+            var rule = typeof(WebFpsDemand).GetMethod(
+                "IsFpsDemand",
+                BindingFlags.Public | BindingFlags.Static,
+                null,
+                new[] { typeof(Settings), typeof(bool) },
+                null);
+            Assert.NotNull(rule);
+
+            var cfg = MakeFpsSettings(localFpsEnabled: true, webFpsEnabled: true);
+            var probe = HardwareMonitor.CreateFpsDemandProbe(cfg, () => true);
+            Assert.NotNull(probe.Method);
+
+            // ① 硬件侧：探针自身的实现体里必须调用 WebFpsDemand.IsFpsDemand
+            var probeScan = IlInspector.Scan(probe.Method);
+            Assert.Equal(0, probeScan.UnresolvedCalls);
+            Assert.Contains(probeScan.Calls, c => SameMethod(c, rule));
+
+            // ② 网页侧：快照输出用的也是同一个方法
+            var webServerType = typeof(WebFpsDemand).Assembly.GetType("LiteMonitor.src.WebServer.LiteWebServer");
+            Assert.NotNull(webServerType);
+
+            bool webSideUsesRule = false;
+            foreach (var method in AllMethodsIncludingNested(webServerType))
             {
-                for (int webDemand = 0; webDemand <= 1; webDemand++)
+                var scan = IlInspector.Scan(method);
+                if (scan.Calls.Any(c => SameMethod(c, rule)))
                 {
-                    for (int webFps = 0; webFps <= 1; webFps++)
-                    {
-                        bool localEnabled = local == 1;
-                        bool demand = webDemand == 1;
-                        bool webFpsEnabled = webFps == 1;
-
-                        var cfg = MakeFpsSettings(localEnabled, webFpsEnabled);
-                        var probe = HardwareMonitor.CreateFpsDemandProbe(cfg, () => demand);
-
-                        bool hardwareSide = probe();
-                        bool webSide = WebFpsDemand.IsFpsDemand(cfg, demand);
-
-                        Assert.True(hardwareSide == webSide,
-                            $"local={localEnabled}, webDemand={demand}, WebFpsEnabled={webFpsEnabled} 时两侧不一致：" +
-                            $"硬件侧={hardwareSide}, 网页侧={webSide}");
-                    }
+                    webSideUsesRule = true;
+                    break;
                 }
             }
+            Assert.True(webSideUsesRule, "网页侧必须调用同一个 WebFpsDemand.IsFpsDemand，否则两侧会漂移");
         }
 
         [Fact]
@@ -786,6 +976,299 @@ namespace LiteMonitor.Tests
             cfg.MonitorItems.Add(new MonitorItemConfig { Key = "FPS", VisibleInPanel = true });
             demand = false;
             Assert.True(counter.IsFpsDemandActive);
+        }
+
+        // =========================================================
+        // 7. 失败采集计数（FailedCollections）护栏
+        //
+        //    ★ 复审 M5：把失败计数删掉 -> 计数恒为 0，而全量用例仍全绿。
+        //      本组用例把"失败恰好被记一次"变成**可回归**的护栏。
+        // =========================================================
+
+        [Fact]
+        public void 采集失败经接缝计数恰好加一()
+        {
+            var statistics = new HardwareSamplingStatistics();
+            var logged = new List<KeyValuePair<string, Exception>>();
+            var failure = new InvalidOperationException("接线测试：模拟采集异常");
+
+            HardwareMonitor.RecordCollectionFailure(
+                statistics,
+                failure,
+                "CollectOnce",
+                (source, ex) => logged.Add(new KeyValuePair<string, Exception>(source, ex)));
+
+            // ★ 头号不变量：一次失败 -> FailedCollections 恰好 +1（不得 +2）
+            Assert.Equal(1, statistics.FailedCollections);
+
+            // ★ 错误日志不能因为抽接缝而被吞掉
+            Assert.Single(logged);
+            Assert.Equal("CollectOnce", logged[0].Key);
+            Assert.Same(failure, logged[0].Value);
+        }
+
+        [Fact]
+        public void 采集层吞掉异常时协调器不重复计数()
+        {
+            // ★ 互斥性：用**真实生产类**驱动
+            //   - 采集层接缝：HardwareMonitor.RecordCollectionFailure
+            //   - 协调器：    HardwareSamplingCoordinator（真实生产类）
+            // 采集层吞掉异常时由采集层记一次，协调器**不得**再记一次。
+            var statistics = new HardwareSamplingStatistics();
+            var logged = new List<string>();
+            var failure = new InvalidOperationException("接线测试：模拟采集异常");
+
+            using var coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () => 1000,
+                sampler: (ct) =>
+                {
+                    try
+                    {
+                        throw failure;
+                    }
+                    catch (Exception ex)
+                    {
+                        // 采集层契约：吞掉异常 + 自己记一次失败（**绝不能**再抛）
+                        HardwareMonitor.RecordCollectionFailure(
+                            statistics, ex, "CollectOnce",
+                            (source, e) => logged.Add(source));
+                    }
+                    return Task.CompletedTask;
+                },
+                statistics: statistics,
+                errorLogger: (source, ex) => logged.Add(source));
+
+            coordinator.SetReady(true);
+            bool triggered = coordinator.RequestCollection();
+
+            Assert.True(triggered, "已就绪的协调器应执行一次真实采集");
+            // ★ 一次失败 -> 恰好 +1（采集层记了一次，协调器没有再记）
+            Assert.Equal(1, statistics.FailedCollections);
+            // 采集层确实吞掉了异常：协调器看到的是"成功"，只留下采集层写的那一条日志
+            Assert.Single(logged);
+            Assert.Equal("CollectOnce", logged[0]);
+        }
+
+        [Fact]
+        public void 采集层若把异常上抛则同一次失败会被记两次()
+        {
+            // ★ 反向对照（敏感度自证）：证明上一条用例的断言**能分辨** +1 与 +2。
+            //   采集层若违反契约把异常再抛出去，协调器会再记一次失败 -> 计数变成 2。
+            //   （这正是复审变异 M1 描述的现象，用例把它固定下来。）
+            var statistics = new HardwareSamplingStatistics();
+
+            using var coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () => 1000,
+                sampler: (ct) =>
+                {
+                    try
+                    {
+                        throw new InvalidOperationException("接线测试：模拟采集异常");
+                    }
+                    catch (Exception ex)
+                    {
+                        HardwareMonitor.RecordCollectionFailure(
+                            statistics, ex, "CollectOnce", (source, e) => { });
+                        throw;   // ★ 违反采集层契约：把异常再抛出去
+                    }
+                },
+                statistics: statistics,
+                errorLogger: (source, ex) => { });
+
+            coordinator.SetReady(true);
+            coordinator.RequestCollection();
+
+            Assert.Equal(2, statistics.FailedCollections);
+        }
+
+        [Fact]
+        public void 失败接缝默认仍然写真实错误日志文件()
+        {
+            // 默认出口写的是运行目录下的 LiteMonitor++_HardwareError.log。
+            // ★ 测试结束后必须还原现场（复审会检查测试输出目录有没有残留副作用文件）。
+            string logPath = Path.Combine(AppContext.BaseDirectory, "LiteMonitor++_HardwareError.log");
+            bool existedBefore = File.Exists(logPath);
+            string original = existedBefore ? File.ReadAllText(logPath) : null;
+
+            try
+            {
+                var statistics = new HardwareSamplingStatistics();
+                var failure = new InvalidOperationException("接线测试：默认错误日志出口");
+
+                HardwareMonitor.RecordCollectionFailure(statistics, failure, "UpdateAll.GPU");
+
+                Assert.Equal(1, statistics.FailedCollections);
+                Assert.True(File.Exists(logPath), "默认出口应写出硬件错误日志文件");
+                string content = File.ReadAllText(logPath);
+                Assert.Contains("[UpdateAll.GPU]", content);
+                Assert.Contains("接线测试：默认错误日志出口", content);
+            }
+            finally
+            {
+                // 还原现场：测试前不存在 -> 删掉；测试前存在 -> 写回原内容。
+                if (existedBefore)
+                {
+                    if (original != null) File.WriteAllText(logPath, original);
+                }
+                else if (File.Exists(logPath))
+                {
+                    File.Delete(logPath);
+                }
+            }
+        }
+
+        [Fact]
+        public void 两个失败出口都经过失败计数接缝()
+        {
+            // ★ 结构断言：CollectOnce 里的**两个**失败出口
+            //   （显卡分支 catch / 外层 catch）都必须调用统一的失败计数接缝，
+            //   且各自的 source 标签不能被改掉（复审会对比改动前后的日志内容）。
+            var method = typeof(HardwareMonitor).GetMethod(
+                "CollectOnce", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(method);
+
+            var scan = IlInspector.Scan(method);
+            Assert.Equal(0, scan.UnresolvedCalls);
+
+            int seamCalls = scan.Calls.Count(c =>
+                c.DeclaringType == typeof(HardwareMonitor) && c.Name == "RecordCollectionFailure");
+            Assert.Equal(2, seamCalls);
+
+            // 两个失败出口的 source 标签
+            Assert.Contains("CollectOnce", scan.Strings);
+            Assert.Contains("UpdateAll.GPU", scan.Strings);
+
+            // 反向：采集层不得再绕过接缝直接调用统计实例的内部计数方法
+            Assert.DoesNotContain(scan.Calls, c => c.Name == "RecordFailedCollection");
+        }
+
+        // =========================================================
+        // 8. 设备计数归属护栏（网卡 / 磁盘不重复计数）
+        // =========================================================
+
+        [Fact]
+        public void 采集层不直连统计实例记录设备更新()
+        {
+            // ★ 结构断言（复审 M2 的护栏）：
+            //   采集层（HardwareMonitor）**不得**直接调用统计实例的设备计数方法；
+            //   设备计数只能经 HardwareDeviceUpdateCounter（守卫：Network/Storage 被忽略）。
+            //   复审 M2 = 恢复旧调用点 + 绕过守卫 -> 两条都必须在下面变红。
+            int directCalls = 0;
+            foreach (var method in AllMethodsIncludingNested(typeof(HardwareMonitor)))
+            {
+                var scan = IlInspector.Scan(method);
+                directCalls += scan.Calls.Count(c =>
+                    c.DeclaringType == typeof(HardwareSamplingStatistics) && c.Name == "RecordDeviceUpdate");
+            }
+            Assert.Equal(0, directCalls);
+
+            // ★ 正向对照（防止扫描器失效导致上面的断言变成空断言）：
+            //   采集层的计数入口必须真的调用 HardwareDeviceUpdateCounter.Record
+            var counterType = typeof(HardwareDeviceUpdateCounter);
+            Assert.NotNull(counterType);
+
+            var entry = typeof(HardwareMonitor).GetMethod(
+                "RecordDeviceUpdate", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(entry);
+
+            var entryScan = IlInspector.Scan(entry);
+            Assert.Equal(0, entryScan.UnresolvedCalls);
+            Assert.Contains(entryScan.Calls, c =>
+                c.DeclaringType == counterType && c.Name == "Record");
+        }
+
+        [Fact]
+        public void 采集层记录网卡与磁盘不计数_记录CPU与显卡才计数()
+        {
+            var statistics = new HardwareSamplingStatistics();
+            var counter = new HardwareDeviceUpdateCounter(statistics);
+
+            // 采集层入口（守卫路径）对网卡/磁盘必须**不计数**
+            counter.Record("Network:接线测试网卡", HardwareDeviceUpdateCounter.NetworkCategory);
+            counter.Record("Storage:接线测试磁盘", HardwareDeviceUpdateCounter.StorageCategory);
+
+            // 采集层负责的分类照常计数
+            counter.Record("Cpu:接线测试CPU", "Cpu");
+            counter.Record("GPU.0", "Gpu");
+
+            var updates = statistics.SnapshotDeviceUpdates();
+            var totals = statistics.SnapshotCategoryTotals();
+
+            Assert.False(updates.ContainsKey("Network:接线测试网卡"), "网卡由子管理器计数，采集层不得再记");
+            Assert.False(updates.ContainsKey("Storage:接线测试磁盘"), "磁盘由子管理器计数，采集层不得再记");
+            Assert.False(totals.ContainsKey("Network"), "网卡分类汇总不应由采集层产生");
+            Assert.False(totals.ContainsKey("Storage"), "磁盘分类汇总不应由采集层产生");
+
+            Assert.Equal(1, updates["Cpu:接线测试CPU"]);
+            Assert.Equal(1, updates["GPU.0"]);
+            Assert.Equal(2, totals.Values.Sum());
+        }
+
+        // =========================================================
+        // 9. 调度器线程安全（同一到期时间最多消费一次）
+        // =========================================================
+
+        [Fact]
+        public void 最小间隔触发器的比较与推进在同一临界区内()
+        {
+            // ★ 确定性护栏：公开类型 HardwareSamplingSchedule 的文档承诺
+            //   "同一到期时间最多消费一次"，该承诺在并发下成立的**前提**是
+            //   "比较 + 推进"被同一把锁保护住。
+            //
+            //   并发压力用例（同上）对"去掉锁"并不敏感（竞争窗口只有几纳秒，实测抓不到），
+            //   所以这里用**结构断言**锁死：TryConsume 的方法体必须进入/退出 Monitor。
+            //   锁被去掉、被换成别的对象、或锁范围被缩小，这条用例都会变红。
+            var triggerType = typeof(HardwareSamplingSchedule).GetNestedType(
+                "MinGapTrigger", BindingFlags.NonPublic);
+            Assert.NotNull(triggerType);
+
+            var tryConsume = triggerType.GetMethod(
+                "TryConsume", BindingFlags.Public | BindingFlags.Instance);
+            Assert.NotNull(tryConsume);
+
+            var scan = IlInspector.Scan(tryConsume);
+            Assert.Equal(0, scan.UnresolvedCalls);
+
+            Assert.Contains(scan.Calls, c => c.DeclaringType == typeof(Monitor) && c.Name == "Enter");
+            Assert.Contains(scan.Calls, c => c.DeclaringType == typeof(Monitor) && c.Name == "Exit");
+        }
+
+        [Fact]
+        public void 同一到期时间并发消费只成功一次()
+        {
+            // 公开类型 HardwareSamplingSchedule 的文档承诺"同一到期时间最多消费一次"，
+            // 这条承诺必须在**并发**下也成立：比较与推进必须在同一个临界区内完成。
+            //
+            // ★ 确定性由上一条用例（结构断言）保证；本条负责记录并发语义本身。
+            int threads = 8;
+            int rounds = 20;
+            int consumed = 0;
+
+            for (int round = 0; round < rounds; round++)
+            {
+                var clock = new FakeTimeProvider();
+                var schedule = new HardwareSamplingSchedule(clock);
+
+                int local = 0;
+                var start = new ManualResetEventSlim(false);
+                var workers = new Thread[threads];
+                for (int i = 0; i < threads; i++)
+                {
+                    workers[i] = new Thread(() =>
+                    {
+                        start.Wait();
+                        if (schedule.TryConsumeSlowScan()) Interlocked.Increment(ref local);
+                    });
+                    workers[i].Start();
+                }
+
+                start.Set();
+                foreach (var worker in workers) worker.Join();
+                consumed += local;
+            }
+
+            // 每轮只允许一个线程消费成功
+            Assert.Equal(rounds, consumed);
         }
     }
 }
