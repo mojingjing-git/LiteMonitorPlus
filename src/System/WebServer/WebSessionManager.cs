@@ -803,6 +803,9 @@ namespace LiteMonitor.src.WebServer
             //   取舍：没有采用"capacity 传 0 按需增长"——那会让每帧从 0 开始倍增扩容（约 17 次 realloc + 拷贝），
             //   比现在的一次性 32KB 分配**更差**；这里改成"一次分配、长期复用"：
             //   稳态 0 分配、无 realloc 抖动，且保留"可扩容"语义（>32KB 的帧不会丢）。
+            //   ⚠ 这个流必须保持**可扩容**：最早的写法是 new MemoryStream(buffer)（不可扩容的固定缓冲），
+            //     快照 JSON 一旦超过 32 KB 就会抛 NotSupportedException（整帧丢失）——
+            //     复用的 MemoryStream(int) 是可扩容的，SetLength(0) 只重置长度、保留已扩大的容量。
             using var payloadStream = new MemoryStream(32 * 1024);
             try
             {
