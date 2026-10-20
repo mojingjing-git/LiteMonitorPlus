@@ -40,7 +40,7 @@ namespace LiteMonitor.Tests
             public FakeTimeProvider Clock;
         }
 
-        private static Fixture NewFixture()
+        private static Fixture NewFixture(Action? onDeviceSelectionChanged = null)
         {
             var fixture = new Fixture
             {
@@ -62,7 +62,8 @@ namespace LiteMonitor.Tests
                 new object(),
                 fixture.LastValid,
                 fixture.Statistics,
-                fixture.Clock);
+                fixture.Clock,
+                onDeviceSelectionChanged);
 
             return fixture;
         }
@@ -171,7 +172,6 @@ namespace LiteMonitor.Tests
         {
             var f = NewFixture();
             f.LastValid["GPU.0.Temp"] = 55f;
-            f.LastValid["GPU.0.Fan"] = 1200f;
             f.LastValid["CPU.Temp"] = 40f;
 
             // 用户把首选显卡换成了另一张卡
@@ -179,11 +179,46 @@ namespace LiteMonitor.Tests
 
             f.Provider.OnCollectionStarted(2);
 
-            // 显卡相关的最后有效值必须被丢掉（否则会显示另一张卡的温度）
-            Assert.False(f.LastValid.ContainsKey("GPU.0.Temp"));
-            Assert.False(f.LastValid.ContainsKey("GPU.0.Fan"));
-            // 其它设备的最后有效值保留
+            // 显卡相关的"最后有效值"必须被标记作废（否则会显示另一张卡的温度）
+            Assert.True(f.Provider.IsLastValidValueStale("GPU.0.Temp"));
+            Assert.True(f.Provider.IsLastValidValueStale("GPU.0.Fan"));
+            // 其它设备不受影响
+            Assert.False(f.Provider.IsLastValidValueStale("CPU.Temp"));
             Assert.True(f.LastValid.ContainsKey("CPU.Temp"));
+        }
+
+        [Fact]
+        public void 设备切换只标记不直接改共享字典()
+        {
+            var f = NewFixture();
+            f.LastValid["GPU.0.Temp"] = 55f;
+
+            f.Cfg.PreferredGpu = "NVIDIA GeForce RTX 3080";
+            f.Provider.OnCollectionStarted(2);
+
+            // 采集线程不写共享的 _lastValidMap（非线程安全，GetValue 抢锁失败时会无锁读它）。
+            // 真正的删除推迟到"有人持锁读这个 Key"的时候。
+            Assert.True(f.LastValid.ContainsKey("GPU.0.Temp"));
+        }
+
+        [Fact]
+        public void 设备选择变更会通知外部重新采样()
+        {
+            int notified = 0;
+            var f = NewFixture(onDeviceSelectionChanged: () => notified++);
+
+            // 没有变更 -> 不通知
+            f.Provider.OnCollectionStarted(1);
+            Assert.Equal(0, notified);
+
+            // 换了首选显卡 -> 通知一次（生产侧接协调器 Invalidate()）
+            f.Cfg.PreferredGpu = "NVIDIA GeForce RTX 3080";
+            f.Provider.OnCollectionStarted(2);
+            Assert.Equal(1, notified);
+
+            // 再来一轮：配置已经应用过，不重复通知
+            f.Provider.OnCollectionStarted(3);
+            Assert.Equal(1, notified);
         }
 
         [Fact]
@@ -236,6 +271,72 @@ namespace LiteMonitor.Tests
 
             Assert.Equal(first, second);
             Assert.Equal(afterFirst, f.Statistics.ValueComputations);
+        }
+
+        // =========================================================
+        // 合法 0：必须被缓存，而且不能被当成"缺失"
+        // =========================================================
+
+        [Fact]
+        public void 合法的0会被缓存_不会被当成缺失()
+        {
+            var f = NewFixture();
+
+            // 预置一个"最后有效值 = 0"（0 是合法读数，例如网卡当前没有流量）
+            f.LastValid["NET.Up"] = 0f;
+
+            f.Provider.OnCollectionStarted(1);
+            long before = f.Statistics.ValueComputations;
+
+            float? first = f.Provider.GetValue("NET.Up");
+
+            // 取到的是 0，而不是 null（0 不是缺失）
+            Assert.NotNull(first);
+            Assert.Equal(0f, first.Value);
+
+            long afterFirst = f.Statistics.ValueComputations;
+            float? second = f.Provider.GetValue("NET.Up");
+
+            // 同代次第二个消费者直接命中缓存，不再重算
+            Assert.Equal(0f, second.Value);
+            Assert.Equal(afterFirst, f.Statistics.ValueComputations);
+            Assert.Equal(before + 1, afterFirst);
+        }
+
+        [Fact]
+        public void 合法的0在CPU温度兜底上同样被缓存()
+        {
+            var f = NewFixture();
+            f.LastValid["CPU.Temp"] = 0f;
+
+            f.Provider.OnCollectionStarted(1);
+            long before = f.Statistics.ValueComputations;
+
+            float? first = f.Provider.GetValue("CPU.Temp");
+            Assert.NotNull(first);
+            Assert.Equal(0f, first.Value);
+
+            long afterFirst = f.Statistics.ValueComputations;
+            float? second = f.Provider.GetValue("CPU.Temp");
+
+            Assert.Equal(0f, second.Value);
+            Assert.Equal(afterFirst, f.Statistics.ValueComputations);
+        }
+
+        [Fact]
+        public void 采集落定后旧代次的缓存被作废()
+        {
+            var f = NewFixture();
+            f.Provider.OnCollectionStarted(1);
+
+            f.Provider.GetValue("CPU.Temp");
+            long afterFirst = f.Statistics.ValueComputations;
+
+            // 采集结束：把"采集中途被读到并写进缓存的旧值"作废
+            f.Provider.OnCollectionSettled(1);
+
+            f.Provider.GetValue("CPU.Temp");
+            Assert.Equal(afterFirst + 1, f.Statistics.ValueComputations);
         }
     }
 }

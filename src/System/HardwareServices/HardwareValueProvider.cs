@@ -79,6 +79,17 @@ namespace LiteMonitor.src.SystemServices
         private readonly TimeProvider _time;
         private readonly HardwareSamplingStatistics? _statistics;
 
+        // ★ 设备切换后作废的"最后有效值"。
+        //   只在这里做标记与查询，**不**直接改共享的 _lastValidMap（非线程安全）。
+        //   _staleValuePrefixes：作废的 Key 前缀（换卡后是 "GPU"）。
+        //   _refreshedValueKeys：切换之后已经重新算过有效值的 Key（这些 Key 的兜底恢复可用）。
+        private readonly HashSet<string> _staleValuePrefixes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _refreshedValueKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly object _staleLock = new object();
+
+        // ★ 设备选择变更通知（接线见 A2b：协调器 Invalidate()）
+        private readonly Action? _onDeviceSelectionChanged;
+
         // 对象级缓存：(Sensor对象)
         private Dictionary<string, ISensor> _manualSensorCache = new();
 
@@ -98,7 +109,7 @@ namespace LiteMonitor.src.SystemServices
         private string _lastPrefGpu = "";
         private int _lastGpuCount = 1;
         
-        public HardwareValueProvider(Computer c, Settings s, SensorMap map, NetworkManager net, DiskManager disk, FpsCounter? fpsCounter, PerformanceCounterManager perfManager, object syncLock, Dictionary<string, float> lastValid, HardwareSamplingStatistics? statistics = null, TimeProvider? timeProvider = null)
+        public HardwareValueProvider(Computer c, Settings s, SensorMap map, NetworkManager net, DiskManager disk, FpsCounter? fpsCounter, PerformanceCounterManager perfManager, object syncLock, Dictionary<string, float> lastValid, HardwareSamplingStatistics? statistics = null, TimeProvider? timeProvider = null, Action? onDeviceSelectionChanged = null)
         {
             _computer = c;
             _cfg = s;
@@ -111,6 +122,7 @@ namespace LiteMonitor.src.SystemServices
             _lastValidMap = lastValid;
             _statistics = statistics;
             _time = timeProvider ?? TimeProvider.System;
+            _onDeviceSelectionChanged = onDeviceSelectionChanged;
 
             // 初始化子服务
             _componentProcessor = new ComponentProcessor(c, s, map);
@@ -279,9 +291,16 @@ namespace LiteMonitor.src.SystemServices
 
                     // ★★★ [多显卡] 换卡后不能串用上一张卡的最后有效值 ★★★
                     // "GPU.0.Temp" 之类的 Key 在换卡后指向的是另一块卡，
-                    // 留着旧值会让界面显示另一张卡的温度。设备切换时把这些 Key 的
-                    // 最后有效值一并丢掉（失败重载时旧映射仍然保留，不走这条路径）。
-                    DropLastValidValues("GPU");
+                    // 留着旧值会让界面显示另一张卡的温度。
+                    // 这里只"标记"这些 Key 作废，不去动共享的 _lastValidMap：
+                    // 那个字典是非线程安全的，而 GetValue 抢锁失败时会无锁读它，
+                    // 采集线程直接改它会引入未定义行为。
+                    // 真正的删除推迟到"有人真的要读这个 Key"的时候，在持锁状态下做。
+                    MarkStaleGpuValues();
+
+                    // 设备选择变更 -> 允许立即重新采一次（接线见 A2b：协调器 Invalidate()）
+                    try { _onDeviceSelectionChanged?.Invoke(); }
+                    catch { /* 失效通知失败不能影响采集 */ }
                 }
 
                 // 自动检测配置变更：如果用户更改了首选风扇/磁盘/显卡，立即自动预热
@@ -298,20 +317,71 @@ namespace LiteMonitor.src.SystemServices
             }
         }
 
-        /// <summary>丢弃指定前缀 Key 的"最后有效值"（设备切换时防止串卡）。</summary>
-        private void DropLastValidValues(string prefix)
+        /// <summary>
+        /// 一轮**真实采集**落定后的收尾。
+        ///
+        /// 采集期间（hw.Update() 还没做完）如果有别的线程读了值，
+        /// 那些"更新前"的旧值会被写进本代次缓存并钉住一整个周期。
+        /// 这里在采集结束后把缓存再作废一次，让下一次读取用更新后的传感器重新算。
+        ///
+        /// ★ 接线说明：协调器需要在采样动作**之后**调用它（onCollectionSettled 回调）。
+        ///   当前主工程的接线由 A2b 补上（见报告的"A2b 接线需求清单"）。
+        /// </summary>
+        /// <param name="generation">当前采集代次编号。</param>
+        public void OnCollectionSettled(int generation)
         {
-            List<string>? stale = null;
-            foreach (string key in _lastValidMap.Keys)
+            lock (_lock)
             {
-                if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    (stale ??= new List<string>()).Add(key);
-                }
+                _cache.BeginGeneration(generation);
             }
-            if (stale == null) return;
-            foreach (string key in stale) _lastValidMap.Remove(key);
         }
+
+        /// <summary>
+        /// 标记显卡相关的"最后有效值"作废（换卡后不能串用上一张卡的数据）。
+        ///
+        /// 只标记，不改共享字典：_lastValidMap 是非线程安全的共享 Dictionary，
+        /// 而 GetValue 抢锁失败时会无锁读它；采集线程直接改它属于未定义行为。
+        /// 被标记的 Key 在真正被读取时（持锁）才从字典里删掉。
+        /// </summary>
+        private void MarkStaleGpuValues()
+        {
+            lock (_staleLock)
+            {
+                _staleValuePrefixes.Add("GPU");
+                // 换卡后，之前"已经算过"的那些 Key 不再算作已刷新
+                _refreshedValueKeys.Clear();
+            }
+        }
+
+        /// <summary>该 Key 的"最后有效值"是否已作废（设备切换后）。</summary>
+        private bool IsStaleValue(string key)
+        {
+            lock (_staleLock)
+            {
+                if (_staleValuePrefixes.Count == 0) return false;
+                if (_refreshedValueKeys.Contains(key)) return false;
+                foreach (string prefix in _staleValuePrefixes)
+                {
+                    if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                return false;
+            }
+        }
+
+        /// <summary>该 Key 重新算出了有效值 -> 不再是陈旧值。</summary>
+        private void ClearStaleValue(string key)
+        {
+            lock (_staleLock)
+            {
+                if (_staleValuePrefixes.Count > 0) _refreshedValueKeys.Add(key);
+            }
+        }
+
+        /// <summary>
+        /// 诊断：某个 Key 的"最后有效值"当前是否处于作废状态
+        /// （设备切换后，旧设备的数值不允许再拿来兜底）。
+        /// </summary>
+        public bool IsLastValidValueStale(string key) => IsStaleValue(key);
 
         /// <summary>清空启动期缓存。</summary>
         private void ClearStartupCache()
@@ -402,9 +472,11 @@ namespace LiteMonitor.src.SystemServices
                 if (!lockTaken) 
                 {
                     // ★★★ [Fix] 如果无法获取锁（硬件正在重载），优先返回上一帧的有效值，防止 UI 闪烁 ★★★
-                    // 因为 _lastValidMap 仅在 GetValue 内部（即 UI 线程）写入，
-                    // 而后台线程（UpdateAll/Reload）只读不写或完全不访问它，
-                    // 所以此时读取是安全的（虽然没有锁，但没有并发写入）。
+                    // 因为 _lastValidMap 只在 GetValue 内部写入（且都在锁内），
+                    // 而后台线程（采集/重载）不再直接改它，
+                    // 所以此时读取是相对安全的（虽然没有锁）。
+                    // ★ 设备切换后被标记作废的 Key 不能在这里返回旧卡的值。
+                    if (IsStaleValue(key)) return null;
                     if (_lastValidMap.TryGetValue(key, out float lastVal)) return lastVal;
                     return null;
                 }
@@ -640,7 +712,15 @@ namespace LiteMonitor.src.SystemServices
                     if (val.HasValue && !float.IsNaN(val.Value)) 
                     { 
                         _lastValidMap[key] = val.Value; 
+                        // 重新算出了有效值 -> 不再是设备切换前的陈旧值
+                        ClearStaleValue(key);
                         result = val.Value; 
+                    }
+                    else if (IsStaleValue(key))
+                    {
+                        // 设备切换后：这个 Key 的旧值属于上一张卡，不能拿来兜底。
+                        // 顺手把它从共享字典里删掉（此时持有 _lock，与其它写入同一把锁）。
+                        _lastValidMap.Remove(key);
                     }
                     else if (_lastValidMap.TryGetValue(key, out var last))
                     {

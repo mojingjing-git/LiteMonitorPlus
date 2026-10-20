@@ -259,18 +259,26 @@ namespace LiteMonitor.Tests
             var clock = new FakeTimeProvider();
             int attempts = 0;
             var statistics = new HardwareSamplingStatistics();
+            var logged = new List<Exception>();
 
-            var coordinator = NewCoordinator(clock, () => 1000, ct =>
-            {
-                Interlocked.Increment(ref attempts);
-                throw new InvalidOperationException("模拟硬件采集异常");
-            }, statistics);
+            var coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () => 1000,
+                sampler: ct =>
+                {
+                    Interlocked.Increment(ref attempts);
+                    throw new InvalidOperationException("模拟硬件采集异常");
+                },
+                timeProvider: clock,
+                // 注入错误出口：测试输出目录必须保持干净，不能落错误日志文件
+                errorLogger: (source, ex) => logged.Add(ex),
+                statistics: statistics);
             coordinator.SetReady(true);
 
             bool ok = await coordinator.RequestCollectionAsync();
             Assert.False(ok);
             Assert.Equal(1, attempts);
             Assert.Equal(1, statistics.FailedCollections);
+            Assert.Single(logged);
 
             // 忙标志已释放：到期后可以再采一次（不会形成异常忙循环）
             clock.Advance(TimeSpan.FromSeconds(1));
@@ -280,6 +288,62 @@ namespace LiteMonitor.Tests
             // 没有到期就不会立刻重试
             await coordinator.RequestCollectionAsync();
             Assert.Equal(2, attempts);
+        }
+
+        [Fact]
+        public async Task 结束回调抛异常不会让调用方永久挂起()
+        {
+            var clock = new FakeTimeProvider();
+            var statistics = new HardwareSamplingStatistics();
+            var logged = new List<Exception>();
+            var errorLogged = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () => 1000,
+                sampler: ct => Task.CompletedTask,
+                timeProvider: clock,
+                onCollectionCompleted: (generation, success) => throw new InvalidOperationException("回调炸了"),
+                errorLogger: (source, ex) => { logged.Add(ex); errorLogged.TrySetResult(true); },
+                statistics: statistics);
+            coordinator.SetReady(true);
+
+            // ★ starter.Task 是调用方唯一的完成信号：
+            //   回调抛异常也必须让它完成，否则 UI 的 await 永远不返回，
+            //   Tick 的 finally 走不到 -> _busy 永久为 true -> 界面彻底停止刷新。
+            Task<bool> task = coordinator.RequestCollectionAsync();
+            Task completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(5)));
+
+            Assert.Same(task, completed);
+            Assert.True(task.Result);
+
+            // 回调里的异常被协调器接住并交给错误出口
+            await errorLogged.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Single(logged);
+        }
+
+        [Fact]
+        public async Task 采集落定回调抛异常同样不会让调用方挂起()
+        {
+            var clock = new FakeTimeProvider();
+            var logged = new List<Exception>();
+            var errorLogged = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () => 1000,
+                sampler: ct => Task.CompletedTask,
+                timeProvider: clock,
+                onCollectionSettled: generation => throw new InvalidOperationException("落定回调炸了"),
+                errorLogger: (source, ex) => { logged.Add(ex); errorLogged.TrySetResult(true); });
+            coordinator.SetReady(true);
+
+            Task<bool> task = coordinator.RequestCollectionAsync();
+            Task completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(5)));
+
+            Assert.Same(task, completed);
+            Assert.True(task.Result);
+
+            await errorLogged.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Single(logged);
         }
 
         [Fact]
@@ -407,6 +471,66 @@ namespace LiteMonitor.Tests
 
             // 显式失效（初始化/重载/设备切换）后允许立即采一次
             coordinator.Invalidate();
+            Assert.True(await coordinator.RequestCollectionAsync());
+            Assert.Equal(2, collections);
+        }
+
+        [Fact]
+        public async Task 例外采集单独计数_不混进稳态轮数()
+        {
+            var clock = new FakeTimeProvider();
+            int collections = 0;
+            var statistics = new HardwareSamplingStatistics();
+
+            var coordinator = NewCoordinator(clock, () => 1000, ct =>
+            {
+                Interlocked.Increment(ref collections);
+                return Task.CompletedTask;
+            }, statistics);
+
+            // 就绪（= 初始化完成）会触发一次例外采集
+            coordinator.SetReady(true);
+            await coordinator.RequestCollectionAsync();
+
+            Assert.Equal(1, statistics.ForcedCollections);
+            Assert.Equal(1, statistics.CollectionRounds);
+
+            // 之后是正常到期采集
+            clock.Advance(TimeSpan.FromSeconds(1));
+            await coordinator.RequestCollectionAsync();
+            Assert.Equal(1, statistics.ForcedCollections);
+            Assert.Equal(2, statistics.CollectionRounds);
+
+            // 设备选择变更触发的立即采集同样单独计数
+            coordinator.Invalidate();
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            await coordinator.RequestCollectionAsync();
+            Assert.Equal(2, statistics.ForcedCollections);
+            Assert.Equal(3, statistics.CollectionRounds);
+        }
+
+        [Fact]
+        public async Task 例外采集之后回到正常周期()
+        {
+            var clock = new FakeTimeProvider();
+            int collections = 0;
+
+            var coordinator = NewCoordinator(clock, () => 1000, ct =>
+            {
+                Interlocked.Increment(ref collections);
+                return Task.CompletedTask;
+            });
+            coordinator.SetReady(true);
+
+            await coordinator.RequestCollectionAsync();   // 例外采集（t=0）
+            Assert.Equal(1, collections);
+
+            // 例外采集不占网格位置：下一轮仍然是"一个周期之后"
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            Assert.False(await coordinator.RequestCollectionAsync());
+            Assert.Equal(1, collections);
+
+            clock.Advance(TimeSpan.FromMilliseconds(900));
             Assert.True(await coordinator.RequestCollectionAsync());
             Assert.Equal(2, collections);
         }

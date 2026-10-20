@@ -20,6 +20,7 @@ namespace LiteMonitor.src.SystemServices
         private long _rejectedRequests;      // 未就绪 / 已释放 -> 拒绝
         private long _sharedRequests;        // 复用在途采集
         private long _failedCollections;     // 采集异常
+        private long _forcedCollections;     // 例外采集（初始化 / 重载 / 设备切换触发）
         private long _valueComputations;     // 真正执行了一次取值计算
         private long _slowScanTriggers;
         private long _diskBackgroundScanTriggers;
@@ -46,6 +47,12 @@ namespace LiteMonitor.src.SystemServices
         public long SharedRequests => Interlocked.Read(ref _sharedRequests);
         /// <summary>采集过程中抛出异常的次数。</summary>
         public long FailedCollections => Interlocked.Read(ref _failedCollections);
+        /// <summary>
+        /// 例外采集次数：不是"正常到期"触发的采集。
+        /// 初始化完成、重载完成、设备选择变更这三类会立即触发一次采集，
+        /// 它们单独计数，稳态统计（60 秒 ≤ 60 轮）时必须把它们排除在外。
+        /// </summary>
+        public long ForcedCollections => Interlocked.Read(ref _forcedCollections);
         /// <summary>真正执行过一次取值计算的次数（同代次重复读不会增加）。</summary>
         public long ValueComputations => Interlocked.Read(ref _valueComputations);
         /// <summary>慢扫描（主板/SuperIO 等）触发次数。</summary>
@@ -85,6 +92,17 @@ namespace LiteMonitor.src.SystemServices
         internal void RecordRejectedRequest() => Interlocked.Increment(ref _rejectedRequests);
         internal void RecordSharedRequest() => Interlocked.Increment(ref _sharedRequests);
         internal void RecordValueComputation() => Interlocked.Increment(ref _valueComputations);
+
+        /// <summary>
+        /// 记录一次采集异常。
+        /// 协调器自己捕获的异常会自动记到这里；
+        /// 采集动作内部自行吞掉的异常（例如 HardwareMonitor.CollectOnce 的 catch）
+        /// 需要由那一侧显式调用本方法，否则该计数会漏记。
+        /// </summary>
+        internal void RecordFailedCollection() => Interlocked.Increment(ref _failedCollections);
+
+        /// <summary>记录一次"例外采集"（初始化 / 重载 / 设备选择变更触发的立即采集）。</summary>
+        internal void RecordForcedCollection() => Interlocked.Increment(ref _forcedCollections);
 
         internal void RecordSlowScanTrigger() => Interlocked.Increment(ref _slowScanTriggers);
         internal void RecordDiskBackgroundScanTrigger() => Interlocked.Increment(ref _diskBackgroundScanTriggers);
@@ -148,11 +166,15 @@ namespace LiteMonitor.src.SystemServices
         private readonly Func<CancellationToken, Task> _sampler;
         private readonly Action<int>? _onCollectionStarted;
         private readonly Action<int, bool>? _onCollectionCompleted;
+        private readonly Action<int>? _onCollectionSettled;
+        private readonly Action<string, Exception>? _errorLogger;
         private readonly HardwareSamplingStatistics _statistics;
 
         private Task<bool>? _running;          // 进行中的采集任务（并发消费者共享它）
         private long _nextDue;                  // 下一次允许采集的截止时间（单调时间戳）
         private bool _hasDeadline;              // 是否已经排定过截止时间
+        private bool _forceNextCollection;      // 下一次采集是"例外采集"（初始化/重载/设备切换）
+        private bool _currentCollectionForced;  // 当前这轮采集是不是例外采集
         private long _lastCollectionStart;      // 上一次采集的"生效起点"（单调时间戳）
         private int _lastPeriodMs;              // 排定截止时间时使用的周期
         private bool _ready;                    // 是否允许采集（初始化/重载完成）
@@ -173,19 +195,29 @@ namespace LiteMonitor.src.SystemServices
         /// <param name="onCollectionStarted">采集开始回调（参数为新的采集代次）。</param>
         /// <param name="onCollectionCompleted">采集结束回调（参数为代次与是否成功）。</param>
         /// <param name="statistics">共享的统计计数器实例。</param>
+        /// <param name="onCollectionSettled">
+        /// 采集落定回调（参数为采集代次），在采样动作**之后**调用。
+        /// 取值缓存可以用它把"采集中途被读到并写进缓存的旧值"作废掉；
+        /// 为空则不调用（保持既有行为）。
+        /// </param>
+        /// <param name="errorLogger">采集异常的错误出口，默认写硬件错误日志；测试可注入替身，避免污染测试输出目录。</param>
         public HardwareSamplingCoordinator(
             Func<int> periodProvider,
             Func<CancellationToken, Task> sampler,
             TimeProvider? timeProvider = null,
             Action<int>? onCollectionStarted = null,
             Action<int, bool>? onCollectionCompleted = null,
-            HardwareSamplingStatistics? statistics = null)
+            HardwareSamplingStatistics? statistics = null,
+            Action<int>? onCollectionSettled = null,
+            Action<string, Exception>? errorLogger = null)
         {
             _periodProvider = periodProvider ?? throw new ArgumentNullException(nameof(periodProvider));
             _sampler = sampler ?? throw new ArgumentNullException(nameof(sampler));
             _time = timeProvider ?? TimeProvider.System;
             _onCollectionStarted = onCollectionStarted;
             _onCollectionCompleted = onCollectionCompleted;
+            _onCollectionSettled = onCollectionSettled;
+            _errorLogger = errorLogger ?? ((source, ex) => HardwareErrorLog.Write(source, ex));
             _statistics = statistics ?? new HardwareSamplingStatistics();
         }
 
@@ -193,6 +225,9 @@ namespace LiteMonitor.src.SystemServices
         /// 标记是否可以采集。
         /// 置 true 表示"现在允许采集"，下一次请求会立即执行一次真实采集
         /// （用于初始化完成、重载完成这类需要立刻重新采样的场景）。
+        ///
+        /// ★ 这一轮采集会被记为**例外采集**（<see cref="HardwareSamplingStatistics.ForcedCollections"/>），
+        ///   稳态统计时必须把它与"正常到期采集"分开。
         /// </summary>
         public void SetReady(bool ready)
         {
@@ -202,8 +237,9 @@ namespace LiteMonitor.src.SystemServices
                 _ready = ready;
                 if (ready)
                 {
-                    // 重新就绪 -> 允许立即采样一次
+                    // 重新就绪 -> 允许立即采样一次（记为例外采集）
                     _hasDeadline = false;
+                    _forceNextCollection = true;
                 }
             }
         }
@@ -212,6 +248,8 @@ namespace LiteMonitor.src.SystemServices
         /// 标记"需要重新采样"：下一次请求会立即执行一次真实采集。
         /// 只用于初始化 / 重载 / 设备选择变更等明确场景；
         /// 普通 UI / Web 请求不会调用它，因此无法借此绕过周期门限。
+        ///
+        /// ★ 这一轮采集会被记为**例外采集**（<see cref="HardwareSamplingStatistics.ForcedCollections"/>）。
         /// </summary>
         public void Invalidate()
         {
@@ -219,6 +257,7 @@ namespace LiteMonitor.src.SystemServices
             {
                 if (_disposed) return;
                 _hasDeadline = false;
+                _forceNextCollection = true;
             }
         }
 
@@ -306,7 +345,7 @@ namespace LiteMonitor.src.SystemServices
                 long now = _time.GetTimestamp();
                 int periodMs = CurrentPeriodMs();
 
-                if (_hasDeadline)
+                if (_hasDeadline && !_forceNextCollection)
                 {
                     if (periodMs != _lastPeriodMs)
                     {
@@ -326,6 +365,19 @@ namespace LiteMonitor.src.SystemServices
                 start = now;
                 starter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                 _running = starter.Task;
+
+                if (_forceNextCollection)
+                {
+                    // 例外采集（初始化 / 重载 / 设备选择变更）：单独计数，
+                    // 稳态统计（60 秒 ≤ 60 轮）时必须把它排除在外。
+                    _forceNextCollection = false;
+                    _currentCollectionForced = true;
+                    _statistics.RecordForcedCollection();
+                }
+                else
+                {
+                    _currentCollectionForced = false;
+                }
                 return null;
             }
         }
@@ -356,7 +408,7 @@ namespace LiteMonitor.src.SystemServices
             catch (Exception ex)
             {
                 // 采样异常：保留日志与旧有效数据，按正常周期重试，不形成忙循环
-                HardwareErrorLog.Write("HardwareSamplingCoordinator", ex);
+                _errorLogger?.Invoke("HardwareSamplingCoordinator", ex);
             }
             finally
             {
@@ -373,8 +425,11 @@ namespace LiteMonitor.src.SystemServices
                         effectiveStart = end;
                     }
 
-                    // 固定网格：截止时间每次推进恰好一个周期，不会因为请求延迟而累积漂移
-                    long next = _hasDeadline ? _nextDue + periodTicks : effectiveStart + periodTicks;
+                    // 固定网格：截止时间每次推进恰好一个周期，不会因为请求延迟而累积漂移。
+                    // 例外采集不在网格上（它是立即触发的），因此从本次起点重新锚定。
+                    long next = (_hasDeadline && !_currentCollectionForced)
+                        ? _nextDue + periodTicks
+                        : effectiveStart + periodTicks;
                     if (next <= end)
                     {
                         // 已经落后（超长任务 / 长时间没有请求）：跳过错过的周期，只安排下一次
@@ -390,8 +445,21 @@ namespace LiteMonitor.src.SystemServices
 
                 double durationMs = _time.GetElapsedTime(start, end).TotalMilliseconds;
                 _statistics.RecordCollectionFinished(generation, success, durationMs);
-                _onCollectionCompleted?.Invoke(generation, success);
+
+                // ★ 必须先完成 Task，再调用外部回调。
+                //   starter.Task 是 RequestCollectionAsync 返回给调用方的唯一完成信号，
+                //   UI 在 UIController.Tick 里 await 它；如果回调抛异常就会跳过下面的
+                //   TrySetResult，那个 await 永远不返回 -> Tick 的 finally 走不到 ->
+                //   _busy 永久为 true -> 界面彻底停止刷新。
                 starter.TrySetResult(success);
+
+                // 采集落定回调：把"采集中途被读到并写进缓存的旧值"作废掉（可选）
+                try { _onCollectionSettled?.Invoke(generation); }
+                catch (Exception ex) { _errorLogger?.Invoke("HardwareSamplingCoordinator.Settled", ex); }
+
+                // 结束回调：异常不能影响已经完成的 Task
+                try { _onCollectionCompleted?.Invoke(generation, success); }
+                catch (Exception ex) { _errorLogger?.Invoke("HardwareSamplingCoordinator.Completed", ex); }
             }
         }
 
