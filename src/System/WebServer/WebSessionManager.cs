@@ -439,11 +439,17 @@ namespace LiteMonitor.src.WebServer
             var lifetime = new CancellationTokenSource();
             var oldLifetime = Interlocked.Exchange(ref _lifetimeCts, lifetime);
             // ★ 只 Cancel，**不 Dispose**（次要#6）：
-            //   在途请求还持有 oldLifetime.Token（HandleClientAsync 入口捕获），
-            //   之后 CreateLinkedTokenSource(token) 会对**已释放**的 CTS 注册回调
-            //   → 抛 ObjectDisposedException → 该 HTTP 请求被 HandleClientAsync 的 catch 吞掉
-            //   → **客户端收不到任何响应**（窗口窄：Stop→Start 快切）。
-            //   与 _broadcastCts 在 Stop 路径上的处理一致：只取消，释放交给 GC。
+            //   **事实描述**：退役的 CTS 不释放 —— 在途请求还持有 oldLifetime.Token
+            //   （HandleClientAsync 入口捕获），不释放可以保证这个 token 不指向一个已释放的对象；
+            //   释放交给 GC（CancellationTokenSource 无终结器，本路径也不碰 token.WaitHandle，
+            //   不占非托管句柄）。
+            //   与 _broadcastCts 在 Stop 路径上的处理一致：只取消，不释放。
+            // ⚠ 不要在这里写"Dispose 会抛 ObjectDisposedException"之类的断言：
+            //   .NET 8 上（目标框架 net8.0-windows / SDK 8.0.426）实测 4 种组合
+            //   （Cancel→Dispose + CreateLinkedTokenSource / Dispose only + CreateLinkedTokenSource /
+            //     Dispose only + token.Register / Cancel→Dispose + token.Register）
+            //   **全部不抛**（CTS 先 Cancel → token 已取消 → 注册走"立即回调"分支）。
+            //   所以"不释放"的收益是"不指向已释放对象"这个确定性，而不是防 ODE。
             try { oldLifetime?.Cancel(); } catch { }
             _lifetimeToken = lifetime.Token;
 

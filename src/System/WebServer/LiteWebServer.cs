@@ -36,6 +36,17 @@ namespace LiteMonitor.src.WebServer
         
         public static LiteWebServer? Instance { get; private set; }
 
+        /// <summary>
+        /// 监听地址接缝（<c>internal</c>，**不属于公开 API**）。
+        /// </summary>
+        /// <remarks>
+        /// ★ null（默认）= 生产行为：<c>IPAddress.IPv6Any</c> + DualMode，系统不支持 IPv6 时回退 IPv4。
+        /// ★ 单元测试把它设成 <see cref="IPAddress.Loopback"/>：测试期间**只监听回环**，
+        ///   不在局域网上暴露一个带口令的服务（测试窗口里被外部扫到是不可接受的卫生问题）。
+        /// ★ 默认值保持生产语义不变 —— 这是一个**只给测试用**的接缝，不改变任何生产行为。
+        /// </remarks>
+        internal IPAddress? ListenAddress { get; set; }
+
         public bool IsRunning => _isRunning;
         public int CurrentRunningPort => _isRunning ? _currentRunningPort : -1;
 
@@ -57,8 +68,20 @@ namespace LiteMonitor.src.WebServer
         /// ★ 既有 3 个调用点（<c>MainForm_Transparent</c> / <c>FpsStateProbe</c> / <c>ProbeEnvironment</c>）
         ///   都写的是 <c>new LiteWebServer(cfg)</c>，会绑定到本版本，
         ///   行为与改造前完全一致（默认实现即生产实现）。
+        /// ★ B2 修复轮 3（F1）：委派改成**显式转发**生产默认实现，而不是"传 null 再走 ?? 兜底"。
+        ///   <para>★ <b>行为等价性（零行为变化）</b>：3 参 ctor 里是
+        ///   <c>samplingRequester ?? DefaultSamplingRequester</c> /
+        ///   <c>demandApplier ?? ApplyWebDataDemandToHardware</c>；
+        ///   本构造函数传的就是这两个 <c>private static</c> 方法本身，
+        ///   与"传 null 再走 ??"最终得到的委托**目标与方法签名完全相同**
+        ///   （static 方法 → 委托的 Target 为 null）→ 运行时行为逐位一致。</para>
+        ///   <para>★ 3 参 ctor 的 <c>??</c> 兜底**必须保留**：直接传 null 的调用方仍要拿到默认实现。</para>
+        ///   <para>★ 为什么要显式转发：只有显式转发，"生产默认需求传播路径"才在源码里一眼可见，
+        ///   源码级护栏也才能锁住它 —— 之前"传 null"时，1 参 ctor 的委派链是<b>零覆盖</b>的
+        ///   （把它改成 no-op 委派，全部用例仍然全绿）。</para>
         /// </remarks>
-        public LiteWebServer(Settings cfg) : this(cfg, null, null)
+        public LiteWebServer(Settings cfg)
+            : this(cfg, DefaultSamplingRequester, ApplyWebDataDemandToHardware)
         {
         }
 
@@ -134,18 +157,28 @@ namespace LiteMonitor.src.WebServer
             {
                 int port = _cfg.WebServerPort;
 
-                try
+                IPAddress? listenAddress = ListenAddress;
+                if (listenAddress != null)
                 {
-                    // [Fix] 优先尝试绑定 IPv6Any 并开启 DualMode，以同时支持 IPv4 和 IPv6
-                    listener = new TcpListener(IPAddress.IPv6Any, port);
-                    listener.Server.DualMode = true;
+                    // ★ 测试接缝：只监听指定地址（不开 DualMode → 不会把 IPv4 客户端也带进来）
+                    listener = new TcpListener(listenAddress, port);
                     listener.Start();
                 }
-                catch (Exception)
+                else
                 {
-                    // 如果系统不支持 IPv6，回退到 IPv4
-                    listener = new TcpListener(IPAddress.Any, port);
-                    listener.Start();
+                    try
+                    {
+                        // [Fix] 优先尝试绑定 IPv6Any 并开启 DualMode，以同时支持 IPv4 和 IPv6
+                        listener = new TcpListener(IPAddress.IPv6Any, port);
+                        listener.Server.DualMode = true;
+                        listener.Start();
+                    }
+                    catch (Exception)
+                    {
+                        // 如果系统不支持 IPv6，回退到 IPv4
+                        listener = new TcpListener(IPAddress.Any, port);
+                        listener.Start();
+                    }
                 }
 
                 _isRunning = true;
