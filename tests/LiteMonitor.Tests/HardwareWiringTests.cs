@@ -203,13 +203,20 @@ namespace LiteMonitor.Tests
         // =========================================================
 
         /// <summary>
-        /// IL 扫描小工具：只解析 <c>call</c> / <c>callvirt</c> / <c>ldstr</c> 三类指令。
+        /// IL 扫描小工具：解析 <c>call</c> / <c>callvirt</c> / <c>newobj</c> / <c>ldstr</c> /
+        /// <c>rethrow</c> / <c>throw</c> 这几类指令。
         ///
         /// ★ 为什么用 IL 而不是源码文本断言：
         ///   - 文本断言会命中**注释**里的字符串（"断言一个字符串存在但没有行为意义"），
         ///     而且依赖源码文件在测试运行时存在（纯净副本 / 只发布二进制的环境里没有）；
-        ///   - IL 断言直接锁定"这个方法体里**真的调用了**哪个方法"，
+        ///   - IL 断言直接锁定"这个方法体里**真的调用了**哪个方法"、
+        ///     以及"**真的有没有**抛异常的指令"，
         ///     与注释无关、也不依赖源码文件，是**结构性**护栏而不是同义反复。
+        ///
+        /// ★ 已知边界：
+        ///   - <c>call</c> / <c>callvirt</c> / <c>newobj</c> 都靠 <c>Module.ResolveMethod</c> 解析；
+        ///     解析不了会计入 <see cref="ScanResult.UnresolvedCalls"/>（断言会暴露它）。
+        ///   - 只统计**直接**出现在方法体里的指令；被内联/被编译器改写后的形态不覆盖。
         /// </summary>
         private static class IlInspector
         {
@@ -239,6 +246,26 @@ namespace LiteMonitor.Tests
 
                 /// <summary>解析失败的调用指令数量（正常应为 0；不为 0 说明扫描器对该模块不可用）。</summary>
                 public int UnresolvedCalls { get; set; }
+
+                /// <summary>
+                /// 方法体里 <c>rethrow</c> 指令的数量（CIL 两字节 opcode <c>0xFE 0x1A</c>）。
+                /// C# 的 <c>throw;</c> 编译成它 —— 即"把刚捕获的异常原样再抛出去"。
+                /// </summary>
+                public int RethrowCount { get; set; }
+
+                /// <summary>
+                /// 方法体里 <c>throw</c> 指令的数量（CIL 单字节 opcode <c>0x26</c>）。
+                /// C# 的 <c>throw &lt;表达式&gt;;</c> 编译成它。
+                /// </summary>
+                public int ThrowCount { get; set; }
+
+                /// <summary>
+                /// 方法体里"造一个异常出来"的调用（<c>newobj</c> 到 <see cref="Exception"/> 的派生类型）。
+                /// C# 的 <c>throw new InvalidOperationException("x", ex);</c> 编译成
+                /// <c>newobj</c> + <c>throw</c> 两步，这里把 <c>newobj</c> 这一半单独记下来，
+                /// 这样即便异常对象是被间接抛出的，护栏也能变红。
+                /// </summary>
+                public List<MethodBase> ExceptionConstructions { get; } = new List<MethodBase>();
             }
 
             /// <summary>扫描一个方法体。</summary>
@@ -275,6 +302,14 @@ namespace LiteMonitor.Tests
                         i += 1;
                     }
 
+                    // ★ N1：识别"把异常抛出去"的指令形态。
+                    //   rethrow = C# `throw;`（两字节 opcode 0xFE 0x1A）
+                    //   throw   = C# `throw <表达式>;`（单字节 opcode 0x26）
+                    //   两者都是 InlineNone（无操作数），所以在这里单独计数，
+                    //   下面的操作数解析对它们本来也不会做任何事。
+                    if (op == OpCodes.Rethrow) { result.RethrowCount++; continue; }
+                    if (op == OpCodes.Throw) { result.ThrowCount++; continue; }
+
                     switch (op.OperandType)
                     {
                         case OperandType.InlineMethod:
@@ -284,7 +319,20 @@ namespace LiteMonitor.Tests
                                 MethodBase target = null;
                                 try { target = module.ResolveMethod(token, typeArgs, methodArgs); }
                                 catch (Exception) { /* 解析不了就记为未解析（下面的断言会暴露它） */ }
-                                if (target != null) result.Calls.Add(target);
+                                if (target != null)
+                                {
+                                    result.Calls.Add(target);
+                                    // ★ N1：`newobj` 到 Exception 派生类型的构造函数 = "造一个异常出来"。
+                                    //   注意 newobj 的操作数也是 InlineMethod，所以**必须**靠 opcode 区分，
+                                    //   光看操作数类型会把普通的构造函数调用也当成异常构造。
+                                    if (op == OpCodes.Newobj &&
+                                        target.DeclaringType != null &&
+                                        typeof(Exception).IsAssignableFrom(target.DeclaringType) &&
+                                        (target is ConstructorInfo || target.Name == ".ctor"))
+                                    {
+                                        result.ExceptionConstructions.Add(target);
+                                    }
+                                }
                                 else result.UnresolvedCalls++;
                                 break;
                             }
@@ -334,12 +382,34 @@ namespace LiteMonitor.Tests
             }
         }
 
-        /// <summary>枚举某个类型自身 + 其嵌套类型（编译器生成的闭包类也在内）的所有方法。</summary>
+        /// <summary>
+        /// 枚举某个类型自身 + 其嵌套类型（编译器生成的闭包类也在内）的所有方法**与构造函数**。
+        ///
+        /// ★ 扫描范围（**已覆盖**）：
+        ///   - <paramref name="type"/> 自身声明的方法（<c>GetMethods</c> + <c>DeclaredOnly</c>）；
+        ///   - <paramref name="type"/> 自身的**构造函数**（<c>GetConstructors</c>）。
+        ///     ★ <c>GetMethods</c> **不返回构造函数** —— 这是上一轮 F2 护栏的盲区：
+        ///       把直连统计实例的调用放进 <c>HardwareMonitor</c> 的构造函数，当时**完全逃过**护栏
+        ///       （护栏对构造期直连失明）。所以构造函数必须显式枚举。
+        ///   - <paramref name="type"/> 的**所有嵌套类型**（递归），含编译器生成的闭包类 /
+        ///     异步状态机类。
+        ///
+        /// ★ 扫描范围（**明确不覆盖** —— 已知边界，不是"已覆盖"）：
+        ///   - 与 <paramref name="type"/> **没有嵌套关系**的**顶层类型**：
+        ///     <c>HardwareDeviceUpdateCounter</c>、<c>HardwareSamplingSchedule</c>、
+        ///     <c>HardwareSamplingStatistics</c>、<c>NetworkManager</c>、<c>DiskManager</c> ……
+        ///     （诊断已确认 <c>HardwareDeviceUpdateCounter</c> / <c>HardwareSamplingSchedule</c>
+        ///     **不是** <c>HardwareMonitor</c> 的嵌套类型）。
+        ///     把直连统计实例的调用放进这些类型，**本护栏不会变红**。
+        ///   - 泛型类型定义上的方法在**具体实例化**后的形态（本工程无此场景）。
+        /// </summary>
         private static IEnumerable<MethodBase> AllMethodsIncludingNested(Type type)
         {
             const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic |
                                        BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
             foreach (var method in type.GetMethods(flags)) yield return method;
+            // ★ N2：构造函数也要扫。GetConstructors 与 GetMethods 的 DeclaredOnly 语义一致。
+            foreach (var ctor in type.GetConstructors(flags)) yield return ctor;
             foreach (var nested in type.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
             {
                 foreach (var method in AllMethodsIncludingNested(nested)) yield return method;
@@ -1140,6 +1210,43 @@ namespace LiteMonitor.Tests
 
             // 反向：采集层不得再绕过接缝直接调用统计实例的内部计数方法
             Assert.DoesNotContain(scan.Calls, c => c.Name == "RecordFailedCollection");
+
+            // =====================================================
+            // ★ N1 护栏：把生产「CollectOnce 绝不重抛」这条契约**锁进测试**。
+            // =====================================================
+            //   契约原文（src/System/HardwareMonitor.cs 的 CollectOnce XML 文档）：
+            //   "本方法必须**吞掉所有异常、绝不能把异常再抛出去**"，
+            //   否则协调器会在采样动作抛异常时**再记一次**失败（同一次失败记两次，FailedCollections 翻倍）。
+            //
+            //   ★ 为什么必须用 IL 结构断言（而不是行为断言）：
+            //     HardwareMonitor 的构造函数会打开真实硬件树（new Computer() + 驱动），
+            //     单元测试**无法实例化**它 —— 所以"跑一次真的采集、断言它不抛"在本工程里做不到。
+            //     而 IL 断言直接锁定"方法体里到底有没有抛异常的指令"，与注释/源码文本无关。
+            //     ★ 上一轮那两条"反向对照"用例驱动的是**测试自建的模型**（模仿采集层的 lambda），
+            //       **不是**生产 CollectOnce —— 复审的变异（在生产 catch 里插 `throw;`）
+            //       在复审当时的 42/42 全绿，
+            //       证明那条契约当时**完全没有**被任何测试锁定。本条就是补这个洞。
+            //
+            //   ★ 覆盖三种"把异常抛出去"的 IL 形态（缺一不可）：
+            //     1) rethrow (0xFE 0x1A) —— C# `throw;`（在 catch 里直接重抛）
+            //     2) throw   (0x26)      —— C# `throw <表达式>;`
+            //     3) newobj 到 Exception 派生类型的构造函数 —— C# `throw new InvalidOperationException("x", ex);`
+            //        的"造异常"那一步；即便异常对象被间接抛出，这条也会先红。
+            //
+            //   ★ 三种形态**合成一条断言**（不短路）：任一形态被破坏，失败消息里都会
+            //     同时列出三种形态各自的命中数 —— 这样复现时能一眼对上"是哪种变异"，
+            //     也避免"第一条断言先失败、后面两条根本没跑到"的盲区。
+            int throwForms = scan.RethrowCount + scan.ThrowCount + scan.ExceptionConstructions.Count;
+            Assert.True(throwForms == 0,
+                "CollectOnce 必须吞掉所有异常、绝不能把异常抛出去" +
+                "（否则协调器会把同一次失败再记一次，FailedCollections 翻倍）。命中：" +
+                $"rethrow(0xFE 0x1A) x{scan.RethrowCount}；" +
+                $"throw(0x26) x{scan.ThrowCount}；" +
+                $"newobj 到 Exception 派生类型 x{scan.ExceptionConstructions.Count}" +
+                (scan.ExceptionConstructions.Count > 0
+                    ? " -> " + string.Join(" / ", scan.ExceptionConstructions.Select(c => c.DeclaringType?.FullName + "." + c.Name))
+                    : "") +
+                "。");
         }
 
         // =========================================================
@@ -1153,14 +1260,36 @@ namespace LiteMonitor.Tests
             //   采集层（HardwareMonitor）**不得**直接调用统计实例的设备计数方法；
             //   设备计数只能经 HardwareDeviceUpdateCounter（守卫：Network/Storage 被忽略）。
             //   复审 M2 = 恢复旧调用点 + 绕过守卫 -> 两条都必须在下面变红。
+            //
+            // ★ N2：扫描范围含 **HardwareMonitor 的构造函数**
+            //   （GetMethods 不返回构造函数 —— 上一轮护栏对"构造期直连"完全失明）。
+            //   ★ 明确不覆盖：HardwareDeviceUpdateCounter / HardwareSamplingSchedule /
+            //     HardwareSamplingStatistics 等**顶层类型**（不是 HardwareMonitor 的嵌套类型）——
+            //     直连调用放进那些类型，本护栏**不会**变红。详见 AllMethodsIncludingNested 的注释。
             int directCalls = 0;
+            int totalUnresolved = 0;
+            int scannedMembers = 0;
+            int scannedCallPoints = 0;
             foreach (var method in AllMethodsIncludingNested(typeof(HardwareMonitor)))
             {
                 var scan = IlInspector.Scan(method);
+                scannedMembers++;
+                scannedCallPoints += scan.Calls.Count;
+                totalUnresolved += scan.UnresolvedCalls;
                 directCalls += scan.Calls.Count(c =>
                     c.DeclaringType == typeof(HardwareSamplingStatistics) && c.Name == "RecordDeviceUpdate");
             }
             Assert.Equal(0, directCalls);
+
+            // ★ N3：负向扫描必须断言"零未解析 token"。
+            //   若某个成员的 IL 里出现解析不了的 token，它的调用点会被**静默漏掉**，
+            //   上面的"零直连调用"断言就退化成"部分空断言"（看起来在测，其实没测全）。
+            //   消息里带上覆盖规模（成员数 / 调用点数），便于将来发现覆盖缩水。
+            Assert.True(totalUnresolved == 0,
+                $"负向扫描必须覆盖到每一个调用点：本次扫描 {scannedMembers} 个成员" +
+                "（HardwareMonitor 自身 + 其嵌套类型，含构造函数）、" +
+                $"{scannedCallPoints} 个调用点，但有 {totalUnresolved} 个 token 解析失败" +
+                " —— 这些成员的调用点被静默漏掉了，负向断言已退化。");
 
             // ★ 正向对照（防止扫描器失效导致上面的断言变成空断言）：
             //   采集层的计数入口必须真的调用 HardwareDeviceUpdateCounter.Record
