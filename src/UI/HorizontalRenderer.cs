@@ -1,4 +1,5 @@
 using LiteMonitor.src.Core;
+using LiteMonitor.src.SystemServices.Backdrop;
 
 namespace LiteMonitor
 {
@@ -12,15 +13,56 @@ namespace LiteMonitor
     /// </summary>
     public static class HorizontalRenderer
     {
+        /// <summary>
+        /// 渲染横版面板（**旧入口，保留原有公开签名**）。
+        /// <para>走的是完全不含新外观的旧路径，保留它是为了让外观探针仍能渲染"改造前的画面"。</para>
+        /// </summary>
         public static void Render(Graphics g, Theme t, List<Column> cols, int panelWidth)
+        {
+            Render(g, t, cols, panelWidth, null);
+        }
+
+        /// <summary>
+        /// 渲染横版面板（含新外观层）。
+        /// </summary>
+        /// <param name="appearance">
+        /// 外观运行时（可空）。<b>为 null 时逐像素等同于旧路径</b>。
+        /// </param>
+        public static void Render(Graphics g, Theme t, List<Column> cols, int panelWidth, AppearanceRuntime? appearance)
         {
             int panelHeight = (int)g.VisibleClipBounds.Height;
 
-            using (var bg = new SolidBrush(ThemeManager.ParseColor(t.Color.Background)))
-                g.FillRectangle(bg, new Rectangle(0, 0, panelWidth, panelHeight));
+            ThemeAppearanceOptions? options = appearance?.Options;
+            bool hasAppearance = appearance != null && options != null;
+
+            // 0. 背景层（solid / gradient / glass 降级）—— 最底层，在底板之前
+            bool backdropOwnsBasePlate = false;
+            if (hasAppearance)
+            {
+                BackdropStatus backdrop = appearance!.Backdrop.Render(g, options!);
+                // ★ 同竖屏：非 solid 模式下背景层自己铺了**不透明底板**，
+                //   旧的实心底板填充必须让位 —— 否则渐变 / 玻璃帧会被整个盖掉。
+                backdropOwnsBasePlate = backdrop.EffectiveMode != BackdropRenderMode.Solid;
+            }
+
+            if (!backdropOwnsBasePlate)
+            {
+                using (var bg = new SolidBrush(ThemeManager.ParseColor(t.Color.Background)))
+                    g.FillRectangle(bg, new Rectangle(0, 0, panelWidth, panelHeight));
+            }
+
+            // 1. 窗口底纹（扫描线 / 网格）
+            //    ★ 横屏的模型是**列**，没有组块分组，因此窗口底纹铺满整个客户区，
+            //      并且**不**画组底纹/组框（v4 §3.3：M1 不为了"组框一致"改造横屏分组布局）。
+            if (hasAppearance)
+                appearance!.Decor.RenderWindowTexture(g, options!, null);
 
             foreach (var col in cols)
                 DrawColumn(g, col, t);
+
+            // 2. 向内的窗口边框 / 高光 —— 最后画，压在最上层
+            if (hasAppearance)
+                appearance!.Decor.RenderWindowFrame(g, options!, t.Layout.CornerRadius);
         }
 
         private static void DrawColumn(Graphics g, Column col, Theme t)

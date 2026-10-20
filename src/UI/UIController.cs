@@ -1,6 +1,7 @@
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices.InfoService;
 using LiteMonitor.src.SystemServices;
+using LiteMonitor.src.WebServer;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -28,6 +29,31 @@ namespace LiteMonitor
         private List<Column> _hxColsTaskbar = new();
         private HorizontalLayout? _hxLayout;
         private Dictionary<string, DateTime> _overheatStartTimes = new Dictionary<string, DateTime>();
+
+        // ===== 外观运行时（A13 接线）=====
+        // 唯一的外观宿主：背景层 / 装饰层 / 进度条层都从这里取，
+        // 避免出现第二处挂载点（v4 §3.3「每项入口唯一」）。
+        private AppearanceRuntime? _appearance;
+        // 与 t.Scale(dpiScale, userScale) 使用的**同一对**缩放系数。
+        // DPI 变化会经 OnDpiChanged → ApplyTheme 重新计算，这里跟着更新。
+        private float _appearanceDpiScale = 1f;
+        private float _appearanceUserScale = 1f;
+
+        /// <summary>
+        /// 外观上下文变化事件（换肤 / DPI 变化 / 布局重建后触发）。
+        /// <para>
+        /// A13 用它让**窗口轮廓**跟着重新应用：换肤会改变外框样式
+        /// （切角 ⇄ 圆角），必须重新写一次 DWM 角偏好与 Region。
+        /// </para>
+        /// </summary>
+        public event Action? AppearanceChanged;
+
+        /// <summary>外观运行时（A13 接线用；窗口轮廓控制器从这里取快照）。</summary>
+        public AppearanceRuntime? Appearance => _appearance;
+
+        /// <summary>当前外观快照（尚未初始化时为 null）。</summary>
+        public ThemeAppearanceOptions? AppearanceOptions => _appearance?.Options;
+
         public MainForm MainForm => (MainForm)_form;
         
         // 辅助判断当前渲染状态是否为横屏 (用于 AppActions 判断是否切换了模式)
@@ -97,6 +123,22 @@ namespace LiteMonitor
                 _form.ClientSize = new Size(t.Layout.Width, _form.ClientSize.Height);
             }
 
+            // ---- 外观运行时（A13）----
+            // ★ DPI 与用户缩放必须与上面 t.Scale(dpiScale, userScale) 用的**同一对值**：
+            //   主题里的旧字段已经被 LayoutScale(=dpi*user) 缩放过一次，
+            //   而新的外观字段故意没被缩放，要由 options 用同一个系数换算成物理像素。
+            //   传错就会出现"装饰尺寸与布局尺寸比例不一致"。
+            _appearanceDpiScale = dpiScale;
+            _appearanceUserScale = userScale;
+
+            _appearance ??= new AppearanceRuntime();
+            // 换肤 → 主题代次自增，各层缓存按代次失效
+            _appearance.OnThemeChanged(t, dpiScale, userScale, _form.ClientRectangle);
+
+            // Web 端颜色快照：启动时与每次换肤各发布一次
+            // （网页端刻意不推送、不轮询 —— 浏览器刷新后取到新配色）
+            WebThemeColorPublisher.PublishFromTheme(t);
+
             TaskbarRenderer.ReloadStyle(_cfg);
 
             _layout = new UILayout(t);
@@ -122,6 +164,11 @@ namespace LiteMonitor
             _timer.Interval = ComputeUiRefreshIntervalMs(_cfg.RefreshMs);
             _form.Invalidate();
             _form.Update();
+
+            // 换肤后客户区尺寸可能已变（竖屏会改 ClientSize）→ 同步一次外观上下文，
+            // 保证订阅方拿到的快照里 ClientBounds 是最新的（装饰层与窗口轮廓都按它定位）。
+            SyncAppearanceContext();
+            AppearanceChanged?.Invoke();
         }
 
         public void RebuildLayout()
@@ -156,7 +203,9 @@ namespace LiteMonitor
                     _form.ClientSize = new Size(_hxLayout.PanelWidth, h);
                     _layoutDirty = false;
                 }
-                HorizontalRenderer.Render(g, t, _hxColsHorizontal, _hxLayout.PanelWidth);
+                // 外观上下文：客户区尺寸会变（横屏会改 ClientSize），每帧同步一次
+                UpdateAppearanceContext(t);
+                HorizontalRenderer.Render(g, t, _hxColsHorizontal, _hxLayout.PanelWidth, _appearance);
                 return;
             }
 
@@ -173,7 +222,39 @@ namespace LiteMonitor
             // var dashboard = _layout.Dashboard; // 已移除
             // ==========================================
 
-            UIRenderer.Render(g, _groups, t);
+            UpdateAppearanceContext(t);
+            UIRenderer.Render(g, _groups, t, _appearance);
+        }
+
+        /// <summary>
+        /// 同步外观运行时上下文。
+        /// <para>
+        /// 客户区尺寸可能每帧变化（横竖屏切换、面板宽度变化），因此每帧同步一次；
+        /// 但 DPI 与用户缩放沿用 <see cref="ApplyTheme"/> 里记录的**同一对值** ——
+        /// 必须与 <c>t.Scale(dpiScale, userScale)</c> 一致，否则装饰层的物理尺寸
+        /// 与布局尺寸比例会错。
+        /// </para>
+        /// </summary>
+        private void UpdateAppearanceContext(Theme t)
+        {
+            if (_appearance == null) return;
+            _appearance.Update(t, _appearanceDpiScale, _appearanceUserScale, _form.ClientRectangle);
+        }
+
+        /// <summary>
+        /// 用**当前客户区尺寸**同步一次外观上下文。
+        /// <para>
+        /// 客户区尺寸会在换肤（竖屏改 ClientSize）、横竖切换、窗口缩放时变化，
+        /// 而外观快照里带着 ClientBounds（装饰层与窗口轮廓都按它定位）。
+        /// 尺寸没变时复用上一次的快照，不产生新分配。
+        /// </para>
+        /// </summary>
+        /// <returns>当前外观快照；外观运行时尚未创建时返回 null。</returns>
+        public ThemeAppearanceOptions? SyncAppearanceContext()
+        {
+            if (_appearance == null) return null;
+            UpdateAppearanceContext(ThemeManager.Current);
+            return _appearance.Options;
         }
 
         private bool _busy = false;
@@ -676,6 +757,11 @@ namespace LiteMonitor
             _timer.Stop();
             _timer.Dispose();
             _mon.Dispose();
+
+            // 释放外观运行时持有的纹理/画刷/噪点位图。
+            // 背景帧与预览源是借用引用，AppearanceRuntime 不会释放它们。
+            _appearance?.Dispose();
+            _appearance = null;
         }
     }
 }

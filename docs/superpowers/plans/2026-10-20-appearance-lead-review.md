@@ -840,3 +840,59 @@ A07 提出的候选方案是"**底纹低频重铺**"（不每帧重铺，靠跳�
 
 
 
+
+---
+
+## A13 —— M1 主面板集成接线（2026-10-20）
+
+完整结果见 `docs/superpowers/plans/2026-10-20-appearance-a13-wiring.md`。
+
+### 交付
+
+- 新增 `src/UI/AppearanceRuntime.cs`（唯一外观宿主）
+- 改 `src/UI/UIRenderer.cs`、`src/UI/HorizontalRenderer.cs`、`src/UI/UIController.cs`、`src/UI/MainForm_Transparent.cs`、`src/UI/Helpers/MainFormWinHelper.cs`
+- 新增 `tests/AppearanceWiringProbe/**`（**不进 sln**，与 PerformanceProbe 惯例一致）
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 主工程编译 | 0 错误 / 234 警告（全部为改动前既有代码，无新增） |
+| 单元测试 | 577 / 577 |
+| A13 接线探针 | **69 / 69** |
+| 外观基线重采对比 | 旧夹具 **336 逐像素 0 差异**；32 新增 = CyberPunk_Mech |
+
+### 接线中发现并修复的缺陷：底板没有让位
+
+背景层画完后，旧的实心底板填充（竖屏 `(-5,-5)` 溢出填充 / 横屏 `(0,0,w,h)` 填充）
+会紧接着把整块客户区再涂一遍 → **渐变 / 玻璃帧被整个盖掉，新背景等于白画**。
+
+修复：读 `BackdropStatus.EffectiveMode` —— `Solid`（旧主题）时底板仍走旧路径（**旧主题像素不变**），
+非 `Solid`（渐变 / 玻璃）时旧底板填充**让位**，因为背景层自己已铺了不透明底板（A08 的 `DrawBasePlate`）。
+
+像素证据：新画面底板色残留像素 **0 / 197280、0 / 306900、0 / 1775520、0 / 3156480**（四个档位全为 0）；
+旧画面对照组分别残留 53892 / 84759 / 508320 / 911236 —— 说明断言不是恒真的。
+
+### 窗口轮廓的两处结构性修复
+
+1. **写入权收敛**：`MainFormWinHelper.ApplyRoundedCorners` 从"自己写 DWM / Region"改为转发给
+   A09 的 `WindowAppearanceController`（此前两者并存会互相打架）。
+2. **Resize 绑定收敛为唯一一处**：删掉 `MainFormWinHelper.InitializeStyle` 里的那份，
+   只留 `MainForm_Transparent.BindEvents` 里的那一处（此前两处 → 轮廓被重建两遍）。
+
+另外修掉了旧代码里 `_form.Region?.Dispose(); _form.Region = new Region(gp);` 的**悬空引用**
+（赋给 `Control.Region` 的实例由 WinForms 持有，提前释放不安全）。
+
+### 与 A04 基线的口径澄清（已闭环）
+
+重采基线用 `5d5201f` 重建的探针跑完 368 个夹具，与 A04 原基线对比：
+`identical = 336`、`changed = 0`、`missingInCurrent = 0`、`newInCurrent = 32`。
+`allIdentical = False` 只是因为**多了 CyberPunk_Mech 的 32 个新夹具**，
+**原有 336 个旧夹具逐像素 0 差异** ⇒ L-02 的序列化器改动 + A12 的新主题**没有改变任何旧主题的渲染像素**。
+
+### 交接 A14
+
+1. 用 A04 同口径（4 卡 @96/2.0 = **480×2708**）复测装饰层 CPU，与基线 70.86 ms **分开报告**；
+2. 补测 A08 **每帧 CPU 预算**（接线后才有意义）；
+3. 实机验证 DPI 往返 / 句柄重建 / 100 次换肤 / 圆角→切角→圆角；
+4. A15–A17（M2 实时玻璃）在 A14 通过后启动。
