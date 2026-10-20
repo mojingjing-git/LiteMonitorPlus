@@ -36,10 +36,14 @@ tests/LiteMonitor.PerformanceProbe/
 ├── MicroBenchmarks.cs    单设备 Update 成本 + 兼容缓冲绘制
 ├── FpsStateProbe.cs      失效 PID 残留 + Web 隐藏 FPS
 ├── output\               ★ 隔离运行期输出目录（已 git 忽略）
-└── baseline\             ★ 已提交的基线原始数据
-    ├── probe-results.json   第 1 轮完整基线
-    ├── probe-run.txt        第 1 轮运行日志
-    └── repeat\              第 2 轮独立重复（用于量化单轮波动）
+├── baseline\             ★ 已提交的基线原始数据
+│   ├── probe-results.json   第 1 轮完整基线
+│   ├── probe-run.txt        第 1 轮运行日志
+│   └── repeat\              第 2 轮独立重复（用于量化单轮波动）
+├── rerun3\               ★ 实施后第一次重跑（D/E/F/H2 四组，45 s 稳态）
+└── run-final-r1|r2|r3\   ★ Task 6 最终复测（三轮 × 9 组，预热 15 s / 稳态 60 s）
+    ├── probe-results.json   该轮全部原始数据
+    └── probe-run.txt        该轮运行日志
 ```
 
 **隔离保证**
@@ -268,12 +272,39 @@ dotnet tests/LiteMonitor.PerformanceProbe/output/LiteMonitor.PerformanceProbe.dl
 那是**换了计法**（Web 侧改成真实计帧），**不是**性能变化。
 `counterSemantics.knownDeadCounters` 里也写了这一条。
 
+### 6.8 ⚠ `webHiddenFps` 的"有需求"场景期望值已过期（**不是产品缺陷**）
+
+`fpsState.webHiddenFps.scenarioWithWebDemand` 这一格的 `expectedFpsRead` / `matchesExpectation`
+是在"生产只要有需求就会读 FPS"的规则下写的。**提交 `197601c`（B2）之后，生产快照取值路径
+加上了可信度守卫**（`LiteWebServer.ResolveValue`）：
+
+```text
+先判 fpsDemand  →  再判 hasFpsData  →  最后才 readValue
+```
+
+于是"有需求但**尚无可信 FPS 数据**"时**同样不读**、仍输出 `--`。
+探针的合成 FPS 状态是「已释放、无结果」→ `HasFpsData = false` →
+生产**正确地**不读 → 探针这一格显示 `fpsReadRequested=false` / `matchesExpectation=false`。
+
+| 批次 | 场景②结果 | 说明 |
+|---|---|---|
+| `rerun3/`（`efeeb69`，B2 之前） | `fpsReadRequested=true` ✅ | 当时生产还没有 `hasFpsData` 守卫 |
+| `run-final-r1\|r2\|r3/`（`b777ec0`） | `fpsReadRequested=false` ❌ | 生产规则变了，**探针期望没跟着变** |
+
+**读这一格时请注意**：它**不能**用来判断"生产在有需求时是否去读 FPS"——
+"有需求 + 有可信数据 → 读"这条路径需要真实 PresentMon 提供可信数据，
+本轮测不了（见 §7）。生产侧该路径由单测覆盖
+（`WebDemandTests.FPS启用时读取真实数值而不是占位`、
+`WebSamplingDemandTests.有可信FPS数据时输出真实数值`）。
+**场景①（无需求 → 不读）依然有效**，且是本轮唯一可用的行为级证据。
+
 ---
 
 ## 7. 已知限制
 
 - 探针驱动的是 `UpdateAll()`，**不是**完整的 WinForms 窗口：不含窗口呈现、桌面合成、
-  透明效果、任务栏嵌入。完整窗口测量属于 Task 6。
+  透明效果、任务栏嵌入。完整窗口测量属于 Task 6（已在 verification 文档 §9.7 用**完整程序**
+  单独做了两次运行，但只做到**单次 40 s 窗口观察**，不足以做可下结论的三轮对比）。
 - Web 快照/广播的取值发生在应用进程内，**不计入** `valueReads`；只有进程 CPU 总量包含它们。
 - `webSocketFramesReceived` 数的是**收到的 WebSocket 文本帧**（服务端每秒广播一次快照）。
   它为 0 表示连接没真正收到数据，不是"没数据可发"。
@@ -283,6 +314,9 @@ dotnet tests/LiteMonitor.PerformanceProbe/output/LiteMonitor.PerformanceProbe.dl
     不依赖具体类型名；定位不到就输出 `skipped` 并说明，**不编造数字**。
   - Web 隐藏 FPS：分「无需求」与「有 Web 需求」两个场景，验证网页快照**是否真的去读 FPS**，
     需求信号用生产自己的需求状态对象登记（不建立真实网络连接）。
+    ⚠ **"有需求"场景的期望值已过期**（见 §6.8）——生产加了 `hasFpsData` 守卫，
+    合成状态没有可信数据时**正确地不读**，探针这一格会显示"不符合期望"。
+    **场景①（无需求 → 不读）才是当前可用的行为级证据。**
 - FPS 需求组（§6.2 的 I 组）**未实机验证**：启动真实 PresentMon 需要下载外部程序，本轮禁止。
   探针只验证不依赖外部服务的 FPS 状态行为。
 - `--quick` 的数据**不能**当基线，只用于验证流程能跑通。
