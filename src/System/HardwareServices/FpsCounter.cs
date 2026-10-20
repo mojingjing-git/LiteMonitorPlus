@@ -769,6 +769,29 @@ namespace LiteMonitor.src.SystemServices
         private int _serviceStarted = 0;               // 外部服务已成功启动且尚未观察到退出（1=已启动）
         private long _startBlockedByBackoff = 0;       // 因"启动失败退避"被拒绝的拉起次数（观测限频效果）
 
+        // ★★★ [新增] 生命周期代次（启动 / 停止 / 最终释放共享） ★★★
+        //   每次"停止外部服务"（含最终释放）都会递增。
+        //   启动流程在慢操作（EnsureAvailable，真机可达 120 秒）返回后、
+        //   以及进程创建之后，都用它判断"期间生命周期是否已经改变"：
+        //   变了 ⇒ 不得再创建外部进程；已经创建了 ⇒ 必须撤销并停掉它。
+        private long _lifecycleGeneration = 0;
+
+        // ★★★ [新增] 进程创建在途计数 ★★★
+        //   >0 表示"正在创建外部进程，或正在撤销这次创建"。
+        //   最终释放用它做**有界等待**：保证"释放返回后不会再有进程被创建"。
+        private int _processCreationInFlight = 0;
+
+        // 在途创建归零时的等待同步点
+        private readonly object _creationDrainSync = new object();
+
+        // ★★★ [新增] 生命周期互斥锁（启动 / 停止 / 最终释放共享） ★★★
+        //   保护的临界区：
+        //     - 启动侧："再校验 → 发布运行状态 / 撤销刚创建的进程"
+        //     - 停止侧："停止启动器 → 回落运行状态"
+        //   临界区**不跨越**慢操作（EnsureAvailable）与进程创建（Start），
+        //   因此最终释放不会因为外部进程创建卡住而被无限期挂起。
+        private readonly object _lifecycleGate = new object();
+
         // ★★★ [新增] 静态关机标志 ★★★
         private static bool _isSystemShuttingDown = false;
 
@@ -819,6 +842,11 @@ namespace LiteMonitor.src.SystemServices
 
         // 启动失败后的重试退避（避免每 500ms 重复尝试）
         private const int StartRetryBackoffMs = 30000;
+
+        // 最终释放时等待"在途进程创建"结束的上限（毫秒）。
+        // 有界等待：既保证"释放返回后不会再有进程被创建"，
+        // 又不会因为外部进程创建卡死而让释放无限期挂起。
+        private const int DisposeCreationDrainTimeoutMs = 5000;
 
         // 文件路径常量
         private static readonly string BaseDir = AppDomain.CurrentDomain.BaseDirectory; // 使用 AppDomain 确保准确
@@ -1173,11 +1201,23 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         public void StopService()
         {
-            // ★ 先清"已启动"标记：主动停止不是"启动失败"，
-            //   不能因此给后续重新拉起记上一条 30 秒退避。
-            Interlocked.Exchange(ref _serviceStarted, 0);
-            try { _launcher.Stop(); } catch { }
-            _isRunning = false;
+            // ★★★ [新增] 生命周期代次递增（**在取锁之前**） ★★★
+            //   让在途启动立即失效：慢操作（EnsureAvailable）返回后、
+            //   以及进程创建之后，都会发现"生命周期已经改变"
+            //   ⇒ 不得发布运行状态，且必须撤销刚创建的进程。
+            //   （代次先于取锁递增：在途启动即使正在等锁，也一样能看到代次已变。）
+            Interlocked.Increment(ref _lifecycleGeneration);
+
+            // ★ 与启动侧共享生命周期互斥：
+            //   保证"发布运行状态"与"回落运行状态"这两段不会交错。
+            lock (_lifecycleGate)
+            {
+                // ★ 先清"已启动"标记：主动停止不是"启动失败"，
+                //   不能因此给后续重新拉起记上一条 30 秒退避。
+                Interlocked.Exchange(ref _serviceStarted, 0);
+                try { _launcher.Stop(); } catch { }
+                _isRunning = false;
+            }
 
             // 完整清除 FPS 状态（帧计数、累加历史、平滑历史、结果、名称缓存）
             _store.Clear();
@@ -1250,6 +1290,10 @@ namespace LiteMonitor.src.SystemServices
                 // 立刻因无权限退出的 PresentMon，形成"每几秒拉起一次失败进程"的忙循环。
                 if (!_administratorProbe()) return;
 
+                // ★★★ [新增] 记录生命周期代次快照 ★★★
+                //   慢操作（EnsureAvailable）返回后用它判断"期间是否发生过停止 / 最终释放"。
+                long generation = Interlocked.Read(ref _lifecycleGeneration);
+
                 // 确保外部服务可用（必要时下载组件，带退避避免失败重试忙循环）
                 if (!_launcher.EnsureAvailable())
                 {
@@ -1257,22 +1301,57 @@ namespace LiteMonitor.src.SystemServices
                     return;
                 }
 
-                if (!_launcher.Start(OnPresentMonLine, out string? error))
-                {
-                    Log($"FPS 服务启动失败: {error}");
-                    ScheduleStartRetry();
-                    return;
-                }
+                // ★★★ [新增] 慢操作返回后必须重新校验（释放状态 / 生命周期代次 / 需求） ★★★
+                //   少了这一段：释放发生在慢准备期间时，慢准备返回后仍会创建外部进程，
+                //   而负责收尾它的后台健康检查循环已经被取消
+                //   ⇒ 留下一个**无人清理**的 FPS 外部进程。
+                if (Volatile.Read(ref _disposed) != 0) return;
+                if (Interlocked.Read(ref _lifecycleGeneration) != generation) return;
+                if (!ResolveDemand()) return;
 
-                // 更新服务状态
-                // ★ 标记"已成功启动"必须**先于** _isRunning = true：
-                //   退出回调若恰好落在这两行之间（纳秒级窗口），
-                //   旧顺序下 RecordUnexpectedExitBackoff 会看到 _serviceStarted 仍为 0 而提前返回
-                //   → 这次失败**没被记账** → 下一次 GetFps() 会多拉起一次。
-                //   先置位则无论退出回调何时到达，都必然记上一条退避（Interlocked.Exchange 幂等，不会记两条）。
-                Interlocked.Exchange(ref _serviceStarted, 1);
-                _isRunning = true;
-                Interlocked.Exchange(ref _lastDataTicks, _clock());
+                // ★★★ [新增] 进程创建与"停止 / 最终释放"共享生命周期同步 ★★★
+                //   在途区间覆盖"调用 Start() → 发布状态 / 撤销创建"，
+                //   最终释放据此做有界等待，保证"释放返回后不会再有进程被创建"。
+                Interlocked.Increment(ref _processCreationInFlight);
+                try
+                {
+                    if (!_launcher.Start(OnPresentMonLine, out string? error))
+                    {
+                        Log($"FPS 服务启动失败: {error}");
+                        ScheduleStartRetry();
+                        return;
+                    }
+
+                    // ★ 与停止 / 最终释放共享生命周期互斥：
+                    //   "再校验 → 发布状态 / 撤销创建"是一个不可交错的整体。
+                    lock (_lifecycleGate)
+                    {
+                        // ★★★ [新增] 撤销检查 ★★★
+                        //   覆盖"再校验通过之后、Start() 真正创建进程之前"发生释放的窗口：
+                        //   此时必须把刚创建的进程停掉，
+                        //   否则会留下一个**无人清理**的外部进程。
+                        if (Volatile.Read(ref _disposed) != 0 ||
+                            Interlocked.Read(ref _lifecycleGeneration) != generation)
+                        {
+                            try { _launcher.Stop(); } catch { }
+                            return;
+                        }
+
+                        // 更新服务状态
+                        // ★ 标记"已成功启动"必须**先于** _isRunning = true：
+                        //   退出回调若恰好落在这两行之间（纳秒级窗口），
+                        //   旧顺序下 RecordUnexpectedExitBackoff 会看到 _serviceStarted 仍为 0 而提前返回
+                        //   → 这次失败**没被记账** → 下一次 GetFps() 会多拉起一次。
+                        //   先置位则无论退出回调何时到达，都必然记上一条退避（Interlocked.Exchange 幂等，不会记两条）。
+                        Interlocked.Exchange(ref _serviceStarted, 1);
+                        _isRunning = true;
+                        Interlocked.Exchange(ref _lastDataTicks, _clock());
+                    }
+                }
+                finally
+                {
+                    ExitProcessCreationInFlight();
+                }
             }
             catch
             {
@@ -1281,6 +1360,41 @@ namespace LiteMonitor.src.SystemServices
             finally
             {
                 Volatile.Write(ref _startGate, 0);
+            }
+        }
+
+        /// <summary>
+        /// 退出"进程创建在途"区间；归零时唤醒等待者（最终释放的有界等待）。
+        /// </summary>
+        private void ExitProcessCreationInFlight()
+        {
+            if (Interlocked.Decrement(ref _processCreationInFlight) == 0)
+            {
+                lock (_creationDrainSync) { Monitor.PulseAll(_creationDrainSync); }
+            }
+        }
+
+        /// <summary>
+        /// 有界等待在途的进程创建结束（单调时钟计时）。
+        ///
+        /// 用途：最终释放据此保证"**Dispose 返回后不会再有进程被创建**"——
+        /// 正在创建的那一个会被启动流程撤销（停掉），
+        /// 还没进入创建阶段的那个会在慢操作返回后被重新校验拦下。
+        /// </summary>
+        private void WaitForProcessCreationDrain(int timeoutMs)
+        {
+            if (Volatile.Read(ref _processCreationInFlight) == 0) return;
+
+            var sw = Stopwatch.StartNew();
+            lock (_creationDrainSync)
+            {
+                while (Volatile.Read(ref _processCreationInFlight) > 0)
+                {
+                    int remaining = timeoutMs - (int)sw.ElapsedMilliseconds;
+                    if (remaining <= 0) return;
+                    // 分片等待：即使错过一次唤醒，最多再多等一个分片就会重新检查
+                    Monitor.Wait(_creationDrainSync, Math.Min(remaining, 50));
+                }
             }
         }
 
@@ -1408,7 +1522,16 @@ namespace LiteMonitor.src.SystemServices
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 
+            // ★ 与启动侧共享生命周期同步：代次递增 + 停止启动器 + 回落运行状态。
+            //   在途的启动流程会因此看到"生命周期已变" → 不得再创建进程；
+            //   已经创建出来的那一个会被撤销（停掉）。
             StopService();
+
+            // ★★★ [新增] 有界等待在途的进程创建结束 ★★★
+            //   保证"**Dispose 返回后不会再有进程被创建**"：
+            //   正在创建的那一个会在返回前完成撤销（停掉）；
+            //   还没进入创建阶段的那个会在慢操作返回后被重新校验拦下。
+            WaitForProcessCreationDrain(DisposeCreationDrainTimeoutMs);
 
             // 只取消，不释放 CancellationTokenSource：
             // 后台循环与 RestartService 仍会读取 _cts.Token，
