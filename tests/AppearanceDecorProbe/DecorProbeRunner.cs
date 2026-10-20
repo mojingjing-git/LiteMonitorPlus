@@ -39,6 +39,8 @@ namespace LiteMonitor.AppearanceDecorProbe
             RunCacheLimits();
             RunInvalidation();
             RunGradientOrientation();
+            RunBarTextureTileShape();
+            RunTextureResourceOwnership();
         }
 
         // ============================================================
@@ -610,6 +612,281 @@ namespace LiteMonitor.AppearanceDecorProbe
             }
 
             c.Detail("convention", "角度按屏幕坐标顺时针为正：0°=左→右，90°=上→下，180°=右→左，270°=下→上");
+        }
+
+        // ============================================================
+        // 用例 8：进度条纹理瓦片的斜纹形态（贯穿内部 + 平铺连续）
+        // ============================================================
+
+        private void RunBarTextureTileShape()
+        {
+            ProbeCase c = NewCase("bar_texture_tile_diagonal_continuity");
+
+            // 瓦片边长 = 条高 × 2（与 BarRenderer 的规则一致），覆盖多种条高
+            int[] tiles = { 12, 16, 20, 24, 32 };
+
+            JsonArray arr = new();
+            foreach (int tile in tiles)
+            {
+                int thickness = DecorTextureFactory.GetBarTextureThickness(tile, tile);
+                int period = DecorTextureFactory.GetBarTexturePeriod(tile, tile);
+
+                // 周期必须是边长的公约数，否则平铺后接缝处斜线错位
+                c.Require(period > 0 && tile % period == 0,
+                    $"瓦片 {tile}：周期 {period} 必须整除边长 {tile}（否则平铺不连续）");
+
+                Bitmap? created = DecorTextureFactory.CreateBarTextureTile(tile, tile, BarStart);
+                c.Require(created != null, $"瓦片 {tile}×{tile} 应创建成功");
+                if (created == null) continue;
+                using Bitmap bmp = created;
+
+                int painted = 0;
+                int interiorPainted = 0;
+                List<int> residues = new();
+                for (int y = 0; y < tile; y++)
+                {
+                    for (int x = 0; x < tile; x++)
+                    {
+                        if (bmp.GetPixel(x, y).A == 0) continue;
+                        painted++;
+                        if (x >= 2 && x < tile - 2 && y >= 2 && y < tile - 2) interiorPainted++;
+                        residues.Add((x + y) % period);
+                    }
+                }
+
+                // 1) 斜纹必须贯穿瓦片内部
+                //    （旧实现把两条线正好画在角点上，16×16 瓦片只有 7 个非透明像素，
+                //      去掉两像素边缘后内部为 0 个）
+                c.Require(painted > 0, $"瓦片 {tile}：应画出斜纹，实际非透明像素 {painted} 个");
+                c.Require(interiorPainted > 0,
+                    $"瓦片 {tile}：内部（去掉 2 像素边缘）应有斜纹，实际 {interiorPainted} 个");
+
+                // 2) 斜线必须属于**单一相位族**（x + y = phase + k × 周期）：
+                //    所有非透明像素的 (x+y) mod 周期 落在同一个窄窗口里
+                int window = MinimalCircularWindow(residues, period);
+                c.Require(window <= thickness * 2 + 4,
+                    $"瓦片 {tile}：斜线应属于同一相位族（(x+y) mod {period} 的最小覆盖窗口 {window} 超过 {thickness * 2 + 4}）");
+
+                // 3) 平铺连续：把瓦片平铺 3×3，斜纹必须跨接缝连成一条不断的斜线
+                int broken = CheckTiledDiagonal(bmp, tile, out int tiledPainted);
+                c.Require(tiledPainted > 0, $"瓦片 {tile}：平铺后应有斜纹像素");
+                c.Require(broken == 0, $"瓦片 {tile}：平铺后有 {broken} 处斜纹在接缝处断开（平铺不连续）");
+
+                arr.Add(new JsonObject
+                {
+                    ["tile"] = tile,
+                    ["thickness"] = thickness,
+                    ["period"] = period,
+                    ["paintedPixels"] = painted,
+                    ["interiorPaintedPixels"] = interiorPainted,
+                    ["phaseWindow"] = window,
+                    ["tiledPaintedPixels"] = tiledPainted,
+                    ["brokenDiagonalLinks"] = broken
+                });
+            }
+
+            c.Detail("tiles", arr);
+            c.Detail("convention", "斜线族 x+y = phase + k×gcd(宽,高)；内部非空 + 单一相位 + 跨接缝不断 = 贯穿内部且平铺连续。");
+        }
+
+        /// <summary>
+        /// 把瓦片平铺到 3×3 的画布上，检查斜纹是否<b>跨接缝连成一条不断的斜线</b>。
+        /// 斜线是 45°，方向为 (x+1, y−1)：只要该方向上的下一个像素也是斜纹像素，
+        /// 斜线就没有断。返回断链处数（0 = 连续）。
+        /// </summary>
+        private static int CheckTiledDiagonal(Bitmap tile, int size, out int paintedCount)
+        {
+            int side = size * 3;
+            using Bitmap canvas = new Bitmap(side, side, PixelFormat.Format32bppPArgb);
+            using (Graphics g = Graphics.FromImage(canvas))
+            {
+                g.Clear(Color.Transparent);
+                using (TextureBrush brush = new TextureBrush(tile))
+                {
+                    g.FillRectangle(brush, new Rectangle(0, 0, side, side));
+                }
+            }
+
+            // 阈值 32：避开抗锯齿最淡的一圈（8% 覆盖率的边缘像素）
+            bool[,] mask = new bool[side, side];
+            paintedCount = 0;
+            for (int y = 0; y < side; y++)
+            {
+                for (int x = 0; x < side; x++)
+                {
+                    if (canvas.GetPixel(x, y).A < 32) continue;
+                    mask[x, y] = true;
+                    paintedCount++;
+                }
+            }
+
+            int broken = 0;
+            for (int y = 0; y < side; y++)
+            {
+                for (int x = 0; x < side; x++)
+                {
+                    if (!mask[x, y]) continue;
+                    int nx = x + 1;
+                    int ny = y - 1;
+                    if (nx < 0 || nx >= side || ny < 0 || ny >= side) continue;   // 出画布不算断链
+                    if (!mask[nx, ny]) broken++;
+                }
+            }
+            return broken;
+        }
+
+        /// <summary>
+        /// 求一组余数在<b>环形</b>（模 period）上的最小覆盖窗口（步数）。
+        /// 余数集合越集中，窗口越小；用于判定"是否属于同一个相位族"。
+        /// </summary>
+        private static int MinimalCircularWindow(List<int> values, int period)
+        {
+            if (values.Count == 0) return period;
+
+            List<int> sorted = new(values);
+            sorted.Sort();
+
+            List<int> distinct = new();
+            foreach (int v in sorted)
+            {
+                if (distinct.Count == 0 || distinct[distinct.Count - 1] != v) distinct.Add(v);
+            }
+            if (distinct.Count == 1) return 0;
+
+            int maxGap = 0;
+            for (int i = 0; i < distinct.Count; i++)
+            {
+                int next = (i + 1 < distinct.Count) ? distinct[i + 1] : distinct[0] + period;
+                int gap = next - distinct[i];
+                if (gap > maxGap) maxGap = gap;
+            }
+            return period - maxGap;
+        }
+
+        // ============================================================
+        // 用例 9：纹理资源的所有权与释放路径
+        // ============================================================
+
+        private void RunTextureResourceOwnership()
+        {
+            ProbeCase c = NewCase("texture_resource_ownership");
+
+            // ---------- 9.1 缓存取出的画刷必须真的能画出内容 ----------
+            // TextureBrush **不复制**源位图：源位图必须与画刷同生共死。
+            // ---------- 9.1 缓存取出的画刷必须真的能画出内容 ----------
+            // TextureBrush **不复制**源位图：源位图必须与画刷同生共死。
+            // （把源位图提前释放的实现，画刷拿到的是一张已释放的位图 → 画不出东西。）
+            int paintedFromCacheBrush = 0;
+            {
+                Theme theme0 = BuildTheme(1, 3, 12, 0, 0, 0, 2);
+                ThemeAppearanceOptions options0 = ThemeAppearanceOptions.Create(
+                    theme0, 1.0f, 1.0f, new Rectangle(0, 0, 240, 120), 1);
+
+                using DecorResourceHost host0 = new DecorResourceHost();
+                host0.UpdateContext(options0);
+
+                TextureBrush? brush = host0.GetOrAddTiledBrush(
+                    options0, DecorCacheKey.KindBarTexture, BarStart, 16, 16);
+                c.Require(brush != null, "应取到纹理画刷");
+
+                if (brush != null)
+                {
+                    try
+                    {
+                        using Bitmap canvas = new Bitmap(16, 16, PixelFormat.Format32bppPArgb);
+                        using (Graphics g = Graphics.FromImage(canvas))
+                        {
+                            g.Clear(Color.Transparent);
+                            g.FillRectangle(brush, new Rectangle(0, 0, 16, 16));
+                        }
+                        paintedFromCacheBrush = CountPainted(canvas, 1);
+                    }
+                    catch (Exception ex)
+                    {
+                        c.Fail("用缓存里的纹理画刷绘制时抛出异常：" + ex.Message);
+                    }
+                }
+            }
+            c.Require(paintedFromCacheBrush > 0,
+                "缓存取出的纹理画刷必须能画出内容（源位图必须与画刷同时存活）");
+
+            // ---------- 9.2 缓存：创建若干纹理 → 淘汰 → 计数归零且不再持有图像 ----------
+            Theme theme = BuildTheme(1, 3, 12, 0, 0, 0, 2);
+            ThemeAppearanceOptions options = ThemeAppearanceOptions.Create(
+                theme, 1.0f, 1.0f, new Rectangle(0, 0, 240, 120), 1);
+
+            using DecorResourceHost host = new DecorResourceHost();
+            host.UpdateContext(options);
+
+            List<TextureBrush> brushes = new();
+            long expectedBytes = 0;
+            for (int i = 0; i < 8; i++)
+            {
+                int tile = 8 + i;
+                TextureBrush? brush = host.GetOrAddTiledBrush(
+                    options, DecorCacheKey.KindBarTexture, BarStart, tile, tile);
+                if (brush != null) brushes.Add(brush);
+                expectedBytes += (long)tile * tile * 4;
+            }
+
+            c.Require(host.Cache.Count == 8, $"应有 8 条纹理缓存，实际 {host.Cache.Count}");
+            c.Require(host.Cache.TotalBytes == expectedBytes,
+                $"纹理缓存字节应按显式瓦片尺寸核算：期望 {expectedBytes}，实际 {host.Cache.TotalBytes}");
+            c.Require(host.Cache.CreatedResourceCount == 8,
+                $"应创建 8 个资源，实际 {host.Cache.CreatedResourceCount}");
+
+            int removed = host.Cache.InvalidateAll();
+            c.Require(removed == 8, $"应淘汰 8 条缓存，实际 {removed}");
+            c.Require(host.Cache.Count == 0, $"淘汰后缓存条目应为 0，实际 {host.Cache.Count}");
+            c.Require(host.Cache.TotalBytes == 0, $"淘汰后位图字节应归零，实际 {host.Cache.TotalBytes}");
+            c.Require(host.Cache.ReleasedResourceCount == host.Cache.CreatedResourceCount,
+                $"释放的资源数 {host.Cache.ReleasedResourceCount} 应与创建的 {host.Cache.CreatedResourceCount} 相等");
+
+            // 淘汰后的画刷必须已经失效（要么抛异常，要么画不出任何像素）
+            int stillAlive = 0;
+            foreach (TextureBrush brush in brushes)
+            {
+                bool threw = false;
+                int painted = 0;
+                try
+                {
+                    using Bitmap canvas = new Bitmap(8, 8, PixelFormat.Format32bppPArgb);
+                    using (Graphics g = Graphics.FromImage(canvas))
+                    {
+                        g.Clear(Color.Transparent);
+                        g.FillRectangle(brush, new Rectangle(0, 0, 8, 8));
+                    }
+                    painted = CountPainted(canvas, 1);
+                }
+                catch (Exception)
+                {
+                    threw = true;
+                }
+                if (!threw && painted > 0) stillAlive++;
+            }
+            c.Require(stillAlive == 0, $"淘汰后仍有 {stillAlive} 个画刷可以继续绘制（缓存没有释放它）");
+
+            c.Detail("paintedFromCacheBrush", paintedFromCacheBrush);
+            c.Detail("cacheEntries", host.Cache.Count);
+            c.Detail("cacheBytes", host.Cache.TotalBytes);
+            c.Detail("createdResources", host.Cache.CreatedResourceCount);
+            c.Detail("releasedResources", host.Cache.ReleasedResourceCount);
+            c.Detail("evictions", host.Cache.EvictionCount);
+            c.Detail("note", "源位图与画刷都由缓存持有、一起释放；字节按显式尺寸核算，不再取画刷的 Image。");
+        }
+
+        /// <summary>统计 alpha ≥ 最小值的像素数。</summary>
+        private static int CountPainted(Bitmap bitmap, int minAlpha)
+        {
+            int count = 0;
+            for (int y = 0; y < bitmap.Height; y++)
+            {
+                for (int x = 0; x < bitmap.Width; x++)
+                {
+                    if (bitmap.GetPixel(x, y).A >= minAlpha) count++;
+                }
+            }
+            return count;
         }
 
         // ============================================================

@@ -268,6 +268,65 @@ namespace LiteMonitor.AppearanceDecorRendererProbe
             return changed;
         }
 
+        /// <summary>
+        /// 统计指定矩形内被改动的像素数（哨兵色比对）。
+        /// </summary>
+        public static int CountChangedInside(Bitmap canvas, Rectangle region, Color sentinel)
+        {
+            byte[] pixels = GetPixels(canvas);
+            int changed = 0;
+            int width = canvas.Width;
+            byte sr = sentinel.R;
+            byte sg = sentinel.G;
+            byte sb = sentinel.B;
+            byte sa = sentinel.A;
+
+            for (int y = region.Top; y < region.Bottom; y++)
+            {
+                if (y < 0 || y >= canvas.Height) continue;
+                for (int x = region.Left; x < region.Right; x++)
+                {
+                    if (x < 0 || x >= width) continue;
+
+                    int offset = y * width * 4 + x * 4;
+                    if (pixels[offset + 3] != sa || pixels[offset] != sb || pixels[offset + 1] != sg || pixels[offset + 2] != sr)
+                    {
+                        changed++;
+                    }
+                }
+            }
+            return changed;
+        }
+
+        /// <summary>
+        /// 求一组余数在<b>环形</b>（模 period）上的最小覆盖窗口（步数）。
+        /// 余数集合越集中，窗口越小；用于判定"是否属于同一个相位族"
+        /// （45° 斜线 ⇒ 同一相位；竖直条纹 ⇒ 余数摊满整个周期）。
+        /// </summary>
+        public static int MinimalCircularWindow(List<int> values, int period)
+        {
+            if (values.Count == 0) return period;
+
+            List<int> sorted = new(values);
+            sorted.Sort();
+
+            List<int> distinct = new();
+            foreach (int v in sorted)
+            {
+                if (distinct.Count == 0 || distinct[distinct.Count - 1] != v) distinct.Add(v);
+            }
+            if (distinct.Count == 1) return 0;
+
+            int maxGap = 0;
+            for (int i = 0; i < distinct.Count; i++)
+            {
+                int next = (i + 1 < distinct.Count) ? distinct[i + 1] : distinct[0] + period;
+                int gap = next - distinct[i];
+                if (gap > maxGap) maxGap = gap;
+            }
+            return period - maxGap;
+        }
+
         /// <summary>取某个像素的 ARGB。</summary>
         public static Color GetArgb(Bitmap bitmap, int x, int y) => bitmap.GetPixel(x, y);
 

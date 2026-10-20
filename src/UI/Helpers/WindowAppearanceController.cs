@@ -98,6 +98,30 @@ namespace LiteMonitor.src.UI.Helpers
     }
 
     /// <summary>
+    /// 一次轮廓重应用所需的同源几何：外观快照 + 圆角半径。
+    /// <para>
+    /// ★ 为什么要成对出现：切角边长取 <c>options.FrameLengthPx</c>，
+    ///   圆角半径取主题的 <c>layout.cornerRadius</c>，
+    ///   两者都必须与绘制层（UIRenderer.RenderWindowFrame）用同一个值，
+    ///   否则窗口轮廓与画出来的边框对不上。
+    /// </para>
+    /// </summary>
+    public readonly struct WindowAppearanceSnapshot
+    {
+        public WindowAppearanceSnapshot(ThemeAppearanceOptions? options, int cornerRadiusPx)
+        {
+            Options = options;
+            CornerRadiusPx = cornerRadiusPx;
+        }
+
+        /// <summary>当前外观快照（与绘制层同一份；为 null 表示这一刻拿不到快照）。</summary>
+        public ThemeAppearanceOptions? Options { get; }
+
+        /// <summary>圆角半径（物理像素，与绘制层外框用同一个值）。</summary>
+        public int CornerRadiusPx { get; }
+    }
+
+    /// <summary>
     /// 窗口轮廓控制器（A09）的运行时计数（只读，供自证探针断言"没有泄漏"）。
     /// </summary>
     public sealed class WindowAppearanceDiagnostics
@@ -247,6 +271,21 @@ namespace LiteMonitor.src.UI.Helpers
         public bool HasAppliedRegion => _regionAssigned;
 
         /// <summary>
+        /// 当前外观快照提供者（可空）：由 A13 挂载，返回**这一刻**的外观快照与圆角半径。
+        /// <para>
+        /// ★ 为什么需要它（R4）：<see cref="Reapply"/> 若沿用上次快照里的
+        ///   <c>FrameLengthPx</c>，而那份值**已经按旧窗口高度夹紧过**，
+        ///   窗口变高后轮廓几何就会与绘制层（重新计算的快照）分叉。
+        ///   挂上提供者后，尺寸变化时重新取一次当前快照，
+        ///   轮廓几何与绘制几何始终来自同一份快照。
+        /// </para>
+        /// <para>
+        /// 提供者必须在 UI 线程上调用（与本组件一致）。
+        /// </para>
+        /// </summary>
+        public Func<WindowAppearanceSnapshot?>? SnapshotProvider { get; set; }
+
+        /// <summary>
         /// 旧路径（FrameStyle=0）在**无 DWM 圆角能力**的系统（Win10）上使用的圆角半径（像素）。
         /// <para>
         /// -1（默认）= 自动读取 <c>ThemeManager.Current.Layout.CornerRadius</c>，与既有
@@ -332,19 +371,30 @@ namespace LiteMonitor.src.UI.Helpers
         }
 
         /// <summary>
-        /// 用上次的主题外观**重新应用**窗口轮廓（尺寸 / DPI / 横竖变化后由 A13 调用）。
+        /// 用**当前**的外观快照重新应用窗口轮廓（尺寸 / DPI / 横竖变化后由 A13 调用）。
         /// <para>
         /// ★ 本方法<b>不绑定</b>任何事件：A13 只保留**一处** Resize 绑定并在其中调用它。
         /// </para>
         /// <para>
-        /// 尺寸变了 → 轮廓必须跟着变，因此这里用窗体<b>当前</b>客户区重新计算 bounds，
-        /// 而样式参数（切角边长 / 半径 / 缩进）沿用上次 Apply 的值。
+        /// ★ 尺寸变了 → 轮廓必须跟着变，而切角边长是**按高度夹紧**过的
+        ///   （<c>options.FrameLengthPx</c> 会被夹到 <c>clientBounds.Height / 2</c>）。
+        ///   因此这里优先取调用方提供的**当前快照**（与绘制层同一份）重新 Apply；
+        ///   只有拿不到快照时才回退到上次 Apply 的样式参数（bounds 用窗体当前客户区）。
         /// </para>
         /// </summary>
         public WindowShapeResult Reapply()
         {
             EnsureUiThread(nameof(Reapply));
             ThrowIfDisposed();
+
+            // ★ 优先用当前快照：让轮廓几何与绘制层几何来自同一份快照，
+            //   避免沿用旧尺寸下已被夹紧的切角边长。
+            WindowAppearanceSnapshot? current = ResolveCurrentSnapshot();
+            if (current.HasValue)
+            {
+                ThemeAppearanceOptions? options = current.Value.Options;
+                if (options != null) return Apply(options, current.Value.CornerRadiusPx);
+            }
 
             if (_lastOptions == null)
             {
@@ -354,6 +404,26 @@ namespace LiteMonitor.src.UI.Helpers
 
             Rectangle bounds = NormalizeToClientOrigin(_form.ClientRectangle);
             return ApplyShape(_lastFrameStyle, bounds, _lastCornerLengthPx, _lastRadiusPx, _lastInsetPx, _lastOptions.DeviceDpi);
+        }
+
+        /// <summary>
+        /// 取当前外观快照（由调用方提供）；拿不到或出错时返回 null，
+        /// 调用方回退到上次 Apply 的样式参数（至少保证窗口还有形状）。
+        /// </summary>
+        private WindowAppearanceSnapshot? ResolveCurrentSnapshot()
+        {
+            Func<WindowAppearanceSnapshot?>? provider = SnapshotProvider;
+            if (provider == null) return null;
+
+            try
+            {
+                return provider();
+            }
+            catch
+            {
+                // 取不到快照不算失败：回退到旧快照，窗口形状不至于消失
+                return null;
+            }
         }
 
         /// <summary>

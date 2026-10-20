@@ -47,8 +47,25 @@ namespace LiteMonitor
 
             if (!backdropOwnsBasePlate)
             {
-                using (var bg = new SolidBrush(ThemeManager.ParseColor(t.Color.Background)))
-                    g.FillRectangle(bg, new Rectangle(0, 0, panelWidth, panelHeight));
+                if (hasAppearance)
+                {
+                    // ★ 新入口：底板锚定**完整客户区**，由 Graphics 裁剪限制实际写入范围。
+                    //   旧实现用 (0,0,panelWidth,panelHeight)，其中 panelHeight 取自
+                    //   g.VisibleClipBounds —— 局部失效时它就是那块裁剪区的高度，
+                    //   底板画不满整块，失效区里补不上底色（独立验收 R5）。
+                    //
+                    // ★ 这里**不外扩**：横屏旧入口画的就是 (0,0,panelWidth,panelHeight)，
+                    //   抗锯齿下两者的边缘半透明带必须一致，否则"旧主题新旧入口逐像素一致"会失败。
+                    //   （竖屏旧入口本来就是溢出填充，新入口才需要外扩来等价。）
+                    using (var bg = new SolidBrush(ThemeManager.ParseColor(t.Color.Background)))
+                        g.FillRectangle(bg, options!.ClientBounds);
+                }
+                else
+                {
+                    // ★ 旧入口：保持原样（无 options，拿不到完整客户区）。
+                    using (var bg = new SolidBrush(ThemeManager.ParseColor(t.Color.Background)))
+                        g.FillRectangle(bg, new Rectangle(0, 0, panelWidth, panelHeight));
+                }
             }
 
             // 1. 窗口底纹（扫描线 / 网格）

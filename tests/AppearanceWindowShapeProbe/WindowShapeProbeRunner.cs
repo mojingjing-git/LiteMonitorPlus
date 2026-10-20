@@ -4,9 +4,11 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading;
 using LiteMonitor.src.Core;
@@ -57,6 +59,10 @@ namespace LiteMonitor.AppearanceWindowShapeProbe
                 RunPathCopiedIntoRegion();
                 RunDwmReadback(form, controller);
                 RunHandleDestroyed();
+                RunResizeReclampsCornerLength();
+                RunThemeSwitchUpdatesCornerLength();
+                RunLayoutSwitchUpdatesCornerLength();
+                RunResizeBindingUnique();
 
                 _probeGraphics?.Dispose();
                 _probeBitmap?.Dispose();
@@ -683,8 +689,404 @@ namespace LiteMonitor.AppearanceWindowShapeProbe
         }
 
         // ============================================================
+        // 用例 11：尺寸变化后切角长度必须按新高度重新夹紧（R4 反例）
+        // ============================================================
+
+        private void RunResizeReclampsCornerLength()
+        {
+            ProbeCase c = NewCase("resize_reclamps_corner_length");
+
+            using Form form = CreateProbeForm(240, 80);
+            using WindowAppearanceController controller = new WindowAppearanceController(form);
+            MainFormWinHelper helper = new MainFormWinHelper(form);
+            helper.AttachWindowAppearance(controller);
+
+            // 模拟生产接线：快照提供者（与 MainForm 的 SyncAppearanceContext 同源）
+            ProbeSnapshotSource source = new ProbeSnapshotSource(BuildChamferTheme(64));
+            controller.SnapshotProvider = () => source.SnapshotFor(form);
+
+            // ★ 唯一的 Resize 订阅（与 MainForm_Transparent.BindEvents 一致）
+            int resizeCount = 0;
+            form.Resize += (_, __) => { resizeCount++; helper.ApplyRoundedCorners(); };
+
+            // ① 初始：小高度 → 切角被夹到 80 / 2 = 40
+            ThemeAppearanceOptions small = source.Sync(form);
+            c.Require(small.FrameLengthPx == 40,
+                $"240×80 的切角长度应被夹到 40，实际 {small.FrameLengthPx}");
+            controller.Apply(small, source.CornerRadiusPx);
+            c.Require(controller.LastCornerLengthPx == 40,
+                $"初始切角长度应为 40，实际 {controller.LastCornerLengthPx}");
+            int smallCorner = RequireOutlineMatchesSnapshot(c, form, controller, small, "初始 240×80");
+
+            Region? smallRegion = form.Region;
+            float smallLeft = smallRegion != null ? ScanLeftAt(smallRegion, 5f) : -1f;
+            c.Require(Math.Abs(smallLeft - (smallCorner - 5f)) <= 1f,
+                $"240×80 下 y=5 处的左边界应为 {smallCorner - 5}，实际 {smallLeft}");
+            c.Require(smallLeft < 50f,
+                "240×80 时点 (50,5) 应落在旧 Region 内（复现验收方的测量前提）");
+
+            // ② 变高：240×200 → 切角长度必须按新高度重算（64）
+            form.Size = new Size(240, 200);
+            c.Require(resizeCount >= 1,
+                "尺寸变化后 Resize 事件没有触发（窗口轮廓不会重算）");
+
+            ThemeAppearanceOptions tall = source.Sync(form);
+            c.Require(tall.FrameLengthPx == 64,
+                $"240×200 的切角长度应为 64，实际 {tall.FrameLengthPx}");
+            c.Require(controller.LastCornerLengthPx == 64,
+                $"窗口变高后切角长度必须按新高度重算为 64，实际 {controller.LastCornerLengthPx}" +
+                "（沿用了旧高度下被夹紧的 40）");
+            int tallCorner = RequireOutlineMatchesSnapshot(c, form, controller, tall, "变高后 240×200");
+            c.Require(tallCorner == 64,
+                $"240×200 下实际生效的切角边长应为 64，实际 {tallCorner}");
+
+            Region? tallRegion = form.Region;
+            float tallLeft = tallRegion != null ? ScanLeftAt(tallRegion, 5f) : -1f;
+            c.Require(Math.Abs(tallLeft - (tallCorner - 5f)) <= 1f,
+                $"240×200 下 y=5 处的左边界应为 {tallCorner - 5}，实际 {tallLeft}");
+            c.Require(tallLeft > 50f,
+                "窗口变高后点 (50,5) 必须落在新 Region 之外（它仍在旧 Region 内）");
+            int grownCornerLength = controller.LastCornerLengthPx;
+
+            // ③ 再缩小：切角长度必须重新被夹紧
+            form.Size = new Size(240, 80);
+            ThemeAppearanceOptions smallAgain = source.Sync(form);
+            c.Require(smallAgain.FrameLengthPx == 40,
+                $"回到 240×80 的切角长度应为 40，实际 {smallAgain.FrameLengthPx}");
+            c.Require(controller.LastCornerLengthPx == 40,
+                $"缩小后切角长度应重新被夹到 40，实际 {controller.LastCornerLengthPx}");
+            RequireOutlineMatchesSnapshot(c, form, controller, smallAgain, "再缩小 240×80");
+
+            c.Detail("initialCornerLengthPx", 40);
+            c.Detail("grownCornerLengthPx", grownCornerLength);
+            c.Detail("shrunkCornerLengthPx", controller.LastCornerLengthPx);
+            c.Detail("resizeEvents", resizeCount);
+        }
+
+        // ============================================================
+        // 用例 12：同尺寸换肤 → 切角长度随新主题更新（R4 反例）
+        // ============================================================
+
+        private void RunThemeSwitchUpdatesCornerLength()
+        {
+            ProbeCase c = NewCase("theme_switch_updates_corner_length");
+
+            using Form form = CreateProbeForm(240, 200);
+            using WindowAppearanceController controller = new WindowAppearanceController(form);
+            MainFormWinHelper helper = new MainFormWinHelper(form);
+            helper.AttachWindowAppearance(controller);
+
+            ProbeSnapshotSource source = new ProbeSnapshotSource(BuildChamferTheme(16));
+            controller.SnapshotProvider = () => source.SnapshotFor(form);
+
+            int resizeCount = 0;
+            form.Resize += (_, __) => { resizeCount++; helper.ApplyRoundedCorners(); };
+
+            // ① 主题 A：切角 16
+            ThemeAppearanceOptions themeA = source.Sync(form);
+            c.Require(themeA.FrameLengthPx == 16,
+                $"主题 A（frameLength=16）的切角长度应为 16，实际 {themeA.FrameLengthPx}");
+            controller.Apply(themeA, source.CornerRadiusPx);
+            RequireOutlineMatchesSnapshot(c, form, controller, themeA, "主题 A");
+
+            // ② 同尺寸换肤 → 主题 B（切角 48）：尺寸没变，只有主题变了
+            source.CurrentTheme = BuildChamferTheme(48);
+            ThemeAppearanceOptions themeB = source.Sync(form);
+            c.Require(themeB.FrameLengthPx == 48,
+                $"主题 B（frameLength=48）的切角长度应为 48，实际 {themeB.FrameLengthPx}");
+            c.Require(themeB.ClientBounds == themeA.ClientBounds,
+                "换肤前后客户区尺寸应当相同（同尺寸换肤）");
+
+            controller.Reapply();   // 生产上：换肤 → 轮廓重算走的就是这条路径
+            c.Require(controller.LastCornerLengthPx == 48,
+                $"同尺寸换肤后切角长度必须随新主题更新为 48，实际 {controller.LastCornerLengthPx}");
+            RequireOutlineMatchesSnapshot(c, form, controller, themeB, "主题 B");
+
+            // ③ 换肤后再变尺寸：事件路径也必须跟着新主题走
+            form.Size = new Size(240, 201);
+            c.Require(resizeCount >= 1, "尺寸变化后 Resize 事件没有触发");
+            ThemeAppearanceOptions themeBResized = source.Sync(form);
+            c.Require(controller.LastCornerLengthPx == themeBResized.FrameLengthPx,
+                $"换肤后变尺寸的切角长度应为 {themeBResized.FrameLengthPx}，实际 {controller.LastCornerLengthPx}");
+            RequireOutlineMatchesSnapshot(c, form, controller, themeBResized, "主题 B 变尺寸");
+
+            // ④ 换回主题 A：切角长度必须回落
+            source.CurrentTheme = BuildChamferTheme(16);
+            controller.Reapply();
+            ThemeAppearanceOptions themeAAgain = source.Sync(form);
+            c.Require(controller.LastCornerLengthPx == 16,
+                $"换回主题 A 后切角长度应为 16，实际 {controller.LastCornerLengthPx}");
+            RequireOutlineMatchesSnapshot(c, form, controller, themeAAgain, "主题 A 回来");
+
+            c.Detail("themeACornerLengthPx", 16);
+            c.Detail("themeBCornerLengthPx", 48);
+        }
+
+        // ============================================================
+        // 用例 13：布局切换（竖屏 → 横屏）→ 客户区高度变了，切角长度重算（R4 反例）
+        // ============================================================
+
+        private void RunLayoutSwitchUpdatesCornerLength()
+        {
+            ProbeCase c = NewCase("layout_switch_updates_corner_length");
+
+            using Form form = CreateProbeForm(240, 100);   // 竖屏：高度小 → 切角被夹到 50
+            using WindowAppearanceController controller = new WindowAppearanceController(form);
+            MainFormWinHelper helper = new MainFormWinHelper(form);
+            helper.AttachWindowAppearance(controller);
+
+            ProbeSnapshotSource source = new ProbeSnapshotSource(BuildChamferTheme(64));
+            controller.SnapshotProvider = () => source.SnapshotFor(form);
+
+            int resizeCount = 0;
+            form.Resize += (_, __) => { resizeCount++; helper.ApplyRoundedCorners(); };
+
+            // ① 竖屏 240×100 → 切角被夹到 50
+            ThemeAppearanceOptions portrait = source.Sync(form);
+            c.Require(portrait.FrameLengthPx == 50,
+                $"竖屏 240×100 的切角长度应被夹到 50，实际 {portrait.FrameLengthPx}");
+            controller.Apply(portrait, source.CornerRadiusPx);
+            RequireOutlineMatchesSnapshot(c, form, controller, portrait, "竖屏 240×100");
+
+            // ② 切到横屏 900×240 → 高度变大，切角不再被夹紧（64）
+            form.Size = new Size(900, 240);
+            c.Require(resizeCount >= 1, "布局切换后 Resize 事件没有触发");
+            ThemeAppearanceOptions landscape = source.Sync(form);
+            c.Require(landscape.FrameLengthPx == 64,
+                $"横屏 900×240 的切角长度应为 64，实际 {landscape.FrameLengthPx}");
+            c.Require(controller.LastCornerLengthPx == 64,
+                $"布局切换后切角长度必须按新高度重算为 64，实际 {controller.LastCornerLengthPx}");
+            RequireOutlineMatchesSnapshot(c, form, controller, landscape, "横屏 900×240");
+
+            // ③ 再切回竖屏 → 切角重新被夹紧（50）
+            form.Size = new Size(240, 100);
+            ThemeAppearanceOptions portraitAgain = source.Sync(form);
+            c.Require(portraitAgain.FrameLengthPx == 50,
+                $"切回竖屏 240×100 的切角长度应为 50，实际 {portraitAgain.FrameLengthPx}");
+            c.Require(controller.LastCornerLengthPx == 50,
+                $"切回竖屏后切角长度应重新被夹到 50，实际 {controller.LastCornerLengthPx}");
+            RequireOutlineMatchesSnapshot(c, form, controller, portraitAgain, "切回竖屏 240×100");
+
+            c.Detail("portraitCornerLengthPx", 50);
+            c.Detail("landscapeCornerLengthPx", 64);
+            c.Detail("resizeEvents", resizeCount);
+        }
+
+        // ============================================================
+        // 用例 14：Resize 订阅仍然只有一处（A13 的硬约束）
+        // ============================================================
+
+        private void RunResizeBindingUnique()
+        {
+            ProbeCase c = NewCase("resize_binding_unique");
+
+            string? root = FindRepoRoot();
+            if (root == null)
+            {
+                c.Detail("skipped", "未找到仓库根目录（LiteMonitor.csproj），跳过源码扫描");
+                return;
+            }
+
+            // 只扫窗口轮廓接线涉及的这三个文件：
+            //   Resize 绑定必须只有一处（MainForm_Transparent），控制器与 helper 都不得再绑。
+            string[] files =
+            {
+                Path.Combine(root, "src", "UI", "MainForm_Transparent.cs"),
+                Path.Combine(root, "src", "UI", "Helpers", "MainFormWinHelper.cs"),
+                Path.Combine(root, "src", "UI", "Helpers", "WindowAppearanceController.cs")
+            };
+
+            JsonArray arr = new();
+            int total = 0;
+            foreach (string file in files)
+            {
+                if (!File.Exists(file))
+                {
+                    c.Fail("找不到源文件：" + file);
+                    continue;
+                }
+
+                string text = File.ReadAllText(file, Encoding.UTF8);
+                int count = CountOccurrences(text, "Resize +=");
+                total += count;
+                arr.Add(new JsonObject
+                {
+                    ["file"] = Path.GetFileName(file),
+                    ["resizeSubscriptions"] = count
+                });
+            }
+
+            c.Require(total == 1, $"窗口轮廓的 Resize 订阅必须只有一处，实际 {total} 处");
+            c.Detail("files", arr);
+            c.Detail("total", total);
+        }
+
+        // ============================================================
         // 辅助
         // ============================================================
+
+        /// <summary>
+        /// 模拟生产接线里的"当前外观快照"来源。
+        /// <para>
+        /// 与 MainForm 的 <c>SyncAppearanceContext()</c> 同构：用**当前**客户区尺寸重建快照，
+        /// 因此快照里的 <c>FrameLengthPx</c> 一定是按当前高度夹紧过的值。
+        /// </para>
+        /// </summary>
+        private sealed class ProbeSnapshotSource
+        {
+            private Theme _theme;
+
+            public ProbeSnapshotSource(Theme theme, int cornerRadiusPx = 8)
+            {
+                _theme = theme;
+                CornerRadiusPx = cornerRadiusPx;
+            }
+
+            /// <summary>圆角半径（物理像素，与绘制层外框用同一个值）。</summary>
+            public int CornerRadiusPx { get; }
+
+            /// <summary>当前主题（换肤时替换）。</summary>
+            public Theme CurrentTheme
+            {
+                get => _theme;
+                set => _theme = value;
+            }
+
+            /// <summary>用当前客户区尺寸重建快照（同 AppearanceRuntime.Update 的语义）。</summary>
+            public ThemeAppearanceOptions Sync(Form form)
+            {
+                return ThemeAppearanceOptions.Create(_theme, 1f, 1f, form.ClientRectangle, 1);
+            }
+
+            /// <summary>控制器用的快照提供者委托（与 MainForm 的挂载方式一致）。</summary>
+            public WindowAppearanceSnapshot? SnapshotFor(Form form)
+            {
+                return new WindowAppearanceSnapshot(Sync(form), CornerRadiusPx);
+            }
+        }
+
+        /// <summary>构造一个切角主题（frameLength 为 96 DPI 逻辑值）。</summary>
+        private static Theme BuildChamferTheme(int frameLength)
+        {
+            return new Theme
+            {
+                Name = "probe-chamfer",
+                Layout = new LayoutConfig
+                {
+                    FrameStyle = ThemeAppearanceOptions.FrameStyleChamfer,
+                    FrameLength = frameLength,
+                    FrameWidth = 8,
+                    CornerRadius = 8
+                }
+            };
+        }
+
+        /// <summary>
+        /// 断言"窗口轮廓几何 == 当前快照推导出的几何"。
+        /// <para>
+        /// 期望几何由**当前快照**独立推导：切角边长 = <c>options.FrameLengthPx</c>，
+        /// 客户区 = <c>options.ClientBounds</c>；再按几何层的夹紧规则（避免重合顶点）
+        /// 算出实际生效的切角边长 —— 与绘制层用的是同一份快照与同一组参数。
+        /// </para>
+        /// </summary>
+        /// <returns>实际生效的切角边长（物理像素）。</returns>
+        private int RequireOutlineMatchesSnapshot(
+            ProbeCase c,
+            Form form,
+            WindowAppearanceController controller,
+            ThemeAppearanceOptions snapshot,
+            string label)
+        {
+            // ① 轮廓用的切角边长必须就是当前快照里的值（不能是旧尺寸下被夹紧的值）
+            c.Require(controller.LastCornerLengthPx == snapshot.FrameLengthPx,
+                $"{label}: 轮廓用的切角边长应为当前快照的 {snapshot.FrameLengthPx}，实际 {controller.LastCornerLengthPx}");
+
+            Region? actual = form.Region;
+            c.Require(actual != null, $"{label}: 应有 Region");
+            if (actual == null) return snapshot.FrameLengthPx;
+
+            Rectangle expect = snapshot.ClientBounds;
+
+            // ② Region 实际边界 == 快照里的客户区
+            RectangleF bounds = GetRegionBounds(actual);
+            c.Require(
+                Math.Abs(bounds.X - expect.X) < 0.5f && Math.Abs(bounds.Y - expect.Y) < 0.5f
+                && Math.Abs(bounds.Width - expect.Width) < 0.5f && Math.Abs(bounds.Height - expect.Height) < 0.5f,
+                $"{label}: Region 实际边界 {bounds.Width}x{bounds.Height}@({bounds.X},{bounds.Y})" +
+                $" 与快照客户区 {expect.Width}x{expect.Height}@({expect.X},{expect.Y}) 不一致");
+
+            // ③ Region 实际轮廓 == 由当前快照独立推导出来的切角几何
+            int corner = DecorGeometry.ClampCornerLengthPx(snapshot.FrameLengthPx, expect);
+            using Region reference = BuildReferenceChamfer(expect, corner);
+            string diff = CompareScans(actual, reference);
+            c.Require(diff.Length == 0, $"{label}: Region 实际轮廓与当前快照推导的轮廓不一致（{diff}）");
+
+            // ④ 顶部切角位置 == 当前快照推导出的切角边长
+            float scanX = FirstScanX(actual);
+            c.Require(Math.Abs(scanX - corner) < 0.5f,
+                $"{label}: 顶部切角位置应为 {corner} 物理像素，实际 {scanX}");
+
+            return corner;
+        }
+
+        /// <summary>比较两个 Region 的扫描线几何（逐条对比 X / Y / 宽 / 高）。</summary>
+        private static string CompareScans(Region actual, Region expected)
+        {
+            RectangleF[] a = actual.GetRegionScans(new Matrix());
+            RectangleF[] e = expected.GetRegionScans(new Matrix());
+            if (a.Length != e.Length) return $"扫描线条数不同（实际 {a.Length} / 期望 {e.Length}）";
+
+            for (int i = 0; i < a.Length; i++)
+            {
+                if (Math.Abs(a[i].X - e[i].X) > 0.5f || Math.Abs(a[i].Y - e[i].Y) > 0.5f
+                    || Math.Abs(a[i].Width - e[i].Width) > 0.5f || Math.Abs(a[i].Height - e[i].Height) > 0.5f)
+                {
+                    return $"第 {i} 条扫描线不同" +
+                           $"（实际 {a[i].X},{a[i].Y},{a[i].Width},{a[i].Height}" +
+                           $" / 期望 {e[i].X},{e[i].Y},{e[i].Width},{e[i].Height}）";
+                }
+            }
+
+            return "";
+        }
+
+        /// <summary>取指定 y 所在扫描线的左边界（物理像素）；找不到返回 -1。</summary>
+        private static float ScanLeftAt(Region region, float y)
+        {
+            foreach (RectangleF r in region.GetRegionScans(new Matrix()))
+            {
+                if (y >= r.Y && y < r.Y + r.Height) return r.X;
+            }
+
+            return -1f;
+        }
+
+        /// <summary>向上找仓库根目录（以 LiteMonitor.csproj 为准）。</summary>
+        private static string? FindRepoRoot()
+        {
+            DirectoryInfo? dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir != null)
+            {
+                if (File.Exists(Path.Combine(dir.FullName, "LiteMonitor.csproj"))) return dir.FullName;
+                dir = dir.Parent;
+            }
+
+            return null;
+        }
+
+        /// <summary>统计子串出现次数。</summary>
+        private static int CountOccurrences(string text, string value)
+        {
+            int count = 0;
+            int index = 0;
+            while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+            {
+                count++;
+                index += value.Length;
+            }
+
+            return count;
+        }
 
         private ProbeCase NewCase(string name)
         {

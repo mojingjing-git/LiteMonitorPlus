@@ -15,6 +15,10 @@ namespace LiteMonitor.src.UI.Decor
     ///   需要变换时用 <see cref="DecorPainter.CloneTextureBrush"/> 克隆出独占对象。
     /// - 需要自己控制生命周期的位图请直接用
     ///   <see cref="DecorTextureFactory"/>，不要经过本缓存。
+    /// - <b>纹理画刷</b>：缓存<b>同时拥有源位图与画刷</b>（画刷不复制源位图，
+    ///   两者必须同生共死），淘汰时一起释放；
+    ///   字节按调用方<b>显式给出</b>的瓦片尺寸核算（不取画刷的 <c>Image</c>，
+    ///   每取一次都会得到一个新的副本，取了不释放就是多留一份 GDI 图像）。
     ///
     /// ★ 容量与淘汰策略（可复核）：
     /// - 条目上限 <see cref="DefaultMaxEntries"/> = 128；
@@ -39,6 +43,12 @@ namespace LiteMonitor.src.UI.Decor
         {
             public DecorCacheKey Key;
             public object Value = null!;
+            /// <summary>
+            /// 条目<b>额外拥有</b>的资源（纹理画刷的源位图）。
+            /// TextureBrush <b>不会复制</b>源位图，源位图必须比画刷活得久，
+            /// 所以它由缓存一起持有、一起释放。
+            /// </summary>
+            public IDisposable? Owned;
             public long Bytes;
             public LinkedListNode<Entry>? Node;
         }
@@ -58,6 +68,7 @@ namespace LiteMonitor.src.UI.Decor
         private long _evictionCount;
         private long _createdResourceCount;
         private long _createdBitmapBytes;
+        private long _releasedResourceCount;
 
         /// <summary>
         /// 创建缓存。
@@ -96,6 +107,14 @@ namespace LiteMonitor.src.UI.Decor
 
         /// <summary>累计创建过的位图字节数。</summary>
         public long CreatedBitmapBytes { get { lock (_gate) return _createdBitmapBytes; } }
+
+        /// <summary>
+        /// 累计释放过的<b>缓存条目</b>数。
+        /// 用来证明"创建过的每一个条目都有确定的释放点"——
+        /// 淘汰或释放缓存后它应当与 <see cref="CreatedResourceCount"/> 相等
+        /// （纹理条目的画刷与源位图是一起释放的）。
+        /// </summary>
+        public long ReleasedResourceCount { get { lock (_gate) return _releasedResourceCount; } }
 
         // ============================================================
         // 读取
@@ -187,14 +206,57 @@ namespace LiteMonitor.src.UI.Decor
         }
 
         /// <summary>
-        /// 取或建一个纹理画刷。缓存拥有画刷，并负责连同画刷引用的位图一起释放。
+        /// 取或建一个纹理画刷。缓存<b>同时拥有源位图与画刷</b>，淘汰时两者一起释放。
         /// <b>返回的是借用引用：不要 Dispose，也不要修改其 Transform。</b>
+        ///
+        /// ★ 所有权合同（v4 §3.3 的补充）：
+        /// - 工厂只负责<b>产出源位图</b>（所有权随即转移给缓存，工厂不要再释放它）；
+        ///   画刷由缓存创建，<b>TextureBrush 不会复制源位图</b>，
+        ///   源位图必须与画刷同生共死，所以两者都由缓存持有；
+        /// - 字节按<b>显式给出的瓦片尺寸</b>核算，<b>不取画刷的 Image</b>——
+        ///   每取一次都会得到一个<b>新的副本</b>，取了不释放就是白留一份 GDI 图像；
+        /// - 淘汰时释放的就是缓存自己创建的那一个画刷和它自己的那一张源位图，
+        ///   <b>记账与释放指向同一份图像</b>。
         /// </summary>
         /// <param name="key">缓存键。</param>
-        /// <param name="factory">创建工厂（画刷必须自己创建并独占其位图）。</param>
-        public TextureBrush GetOrAddTextureBrush(DecorCacheKey key, Func<DecorCacheKey, TextureBrush> factory)
+        /// <param name="tileFactory">瓦片位图工厂（位图的所有权转移给缓存）。</param>
+        /// <param name="tileWidthPx">瓦片宽度（物理像素，用于字节核算）。</param>
+        /// <param name="tileHeightPx">瓦片高度（物理像素，用于字节核算）。</param>
+        public TextureBrush GetOrAddTextureBrush(DecorCacheKey key, Func<DecorCacheKey, Bitmap> tileFactory, int tileWidthPx, int tileHeightPx)
         {
-            return GetOrAdd(key, factory);
+            if (tileFactory == null) throw new ArgumentNullException(nameof(tileFactory));
+
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+
+                if (_map.TryGetValue(key, out Entry? found))
+                {
+                    _hitCount++;
+                    Touch(found);
+                    return (TextureBrush)found.Value;
+                }
+
+                _missCount++;
+
+                // 源位图的所有权在此转移给缓存
+                Bitmap source = tileFactory(key);
+                if (source == null) throw new InvalidOperationException("装饰缓存工厂返回了 null。");
+
+                long bytes = (long)Math.Max(1, tileWidthPx) * Math.Max(1, tileHeightPx) * 4;
+                _createdResourceCount++;
+                _createdBitmapBytes += bytes;
+
+                EvictFor(bytes);
+
+                // 画刷与源位图同属缓存：淘汰时一起释放
+                TextureBrush brush = new TextureBrush(source);
+                Entry entry = new Entry { Key = key, Value = brush, Owned = source, Bytes = bytes };
+                entry.Node = _lru.AddFirst(entry);
+                _map[key] = entry;
+                _totalBytes += bytes;
+                return brush;
+            }
         }
 
         /// <summary>
@@ -370,25 +432,34 @@ namespace LiteMonitor.src.UI.Decor
             if (_totalBytes < 0) _totalBytes = 0;
             if (countEviction) _evictionCount++;
 
-            DisposeValue(entry.Value);
+            DisposeValue(entry.Value, entry.Owned);
+            _releasedResourceCount++;
         }
 
-        private static void DisposeValue(object? value)
+        private static void DisposeValue(object? value, IDisposable? owned)
         {
-            switch (value)
+            try
             {
-                case TextureBrush tb:
-                    // TextureBrush 释放时不会释放它引用的位图，这里一并处理
-                    Image? img = tb.Image;
-                    tb.Dispose();
-                    img?.Dispose();
-                    break;
-                case GraphicsPath gp:
-                    gp.Dispose();
-                    break;
-                case IDisposable d:
-                    d.Dispose();
-                    break;
+                switch (value)
+                {
+                    case TextureBrush tb:
+                        // ★ 画刷不复制源位图：源位图由缓存一起持有（entry.Owned），
+                        //   两者都在这里释放。
+                        //   这里不再取 tb.Image：每取一次都会得到一个**新的副本**，
+                        //   取了不释放就等于多留一份 GDI 图像（旧实现就是这么漏的）。
+                        tb.Dispose();
+                        break;
+                    case GraphicsPath gp:
+                        gp.Dispose();
+                        break;
+                    case IDisposable d:
+                        d.Dispose();
+                        break;
+                }
+            }
+            finally
+            {
+                owned?.Dispose();
             }
         }
 
@@ -398,8 +469,11 @@ namespace LiteMonitor.src.UI.Decor
             {
                 case Bitmap bmp:
                     return (long)bmp.Width * bmp.Height * 4;
-                case TextureBrush tb when tb.Image is Image timg:
-                    return (long)timg.Width * timg.Height * 4;
+                case TextureBrush:
+                    // 纹理画刷走 <see cref="GetOrAddTextureBrush"/>（按显式瓦片尺寸核算）。
+                    // 兜底分支也**不取 tb.Image**（每取一次都是一个新的副本，
+                    // 取了不释放就是泄漏），直接用核算值。
+                    return Math.Max(0, estimated);
                 case Image img:
                     return (long)img.Width * img.Height * 4;
                 default:

@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.Text.Json.Nodes;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices.Backdrop;
@@ -39,6 +40,12 @@ namespace LiteMonitor.AppearanceWiringProbe
         /// <summary>已执行的用例。</summary>
         public List<ProbeCase> Cases { get; } = new();
 
+        /// <summary>
+        /// 像素证据（PNG）输出目录；为 null / 空时不导出 PNG。
+        /// <para>哈希只能回答"变没变"，PNG 才能回答"变在哪"。</para>
+        /// </summary>
+        public string? PngDir { get; set; }
+
         /// <summary>执行全部用例。</summary>
         public void RunAll()
         {
@@ -48,7 +55,9 @@ namespace LiteMonitor.AppearanceWiringProbe
             RunMechHorizontalEffective();
             RunLegacyOptionsInvariants();
             RunRuntimeSnapshotReuse();
+            RunGroupRegionBufferReuse();
             RunThemeGenerationBump();
+            RunBasePlateAnchoring();
             RunWindowShapeWiring();
         }
 
@@ -119,6 +128,9 @@ namespace LiteMonitor.AppearanceWiringProbe
                     c.Details["width"] = scene.Width;
                     c.Details["height"] = scene.Height;
                     c.Details["differentPixels"] = diff;
+                    // ★ 像素哈希：用于"渲染路径优化前后画面必须完全一致"的回归对比
+                    c.Details["legacyPixelSha256"] = WiringFixture.HashPixels(legacy);
+                    c.Details["wiredPixelSha256"] = WiringFixture.HashPixels(wired);
                     if (diff != 0)
                     {
                         c.Fail($"新入口与旧入口有 {diff} 个像素不同（期望 0）");
@@ -154,12 +166,23 @@ namespace LiteMonitor.AppearanceWiringProbe
                 c.Details["width"] = scene.Width;
                 c.Details["height"] = scene.Height;
                 c.Details["differentPixels"] = diff;
+                // ★ 像素哈希：用于"渲染路径优化前后画面必须完全一致"的回归对比
+                c.Details["legacyPixelSha256"] = WiringFixture.HashPixels(legacy);
+                c.Details["wiredPixelSha256"] = WiringFixture.HashPixels(wired);
                 c.Details["frameStyle"] = options.FrameStyle;
                 c.Details["frameLengthPx"] = options.FrameLengthPx;
                 c.Details["scanline"] = options.Scanline;
                 c.Details["glow"] = options.Glow;
                 c.Details["grid"] = options.Grid;
                 c.Details["barStyle"] = options.BarStyle;
+
+                // 像素证据：导出新入口的画面 PNG，供"渲染路径优化前后像素零变化"逐像素比对
+                if (!string.IsNullOrEmpty(PngDir))
+                {
+                    string pngName = $"mech-portrait-dpi{dpi}-scale{userScale:0.0}.png";
+                    WiringFixture.SavePng(wired, Path.Combine(PngDir!, pngName));
+                    c.Details["wiredPng"] = pngName;
+                }
 
                 if (diff <= 0)
                 {
@@ -205,6 +228,42 @@ namespace LiteMonitor.AppearanceWiringProbe
                 {
                     c.Fail("对照组异常：旧画面里没有任何底板色像素，断言失去意义");
                 }
+
+                // 覆盖度证据：背景层必须把**整个客户区**铺满 ——
+                // 客户区最外一圈若 alpha < 255，说明底板 / 渐变没盖到边界（漏补底色）。
+                (int rowMin, int rowMax, int rowNotOpaque) = WiringFixture.GetRowAlphaSummary(wired, 0);
+                (int colMin, int colMax, int colNotOpaque) = WiringFixture.GetColumnAlphaSummary(wired, 0);
+                int semiTransparent = WiringFixture.CountSemiTransparentPixels(wired);
+                c.Details["clientBounds"] = $"{options.ClientBounds.X},{options.ClientBounds.Y}," +
+                                           $"{options.ClientBounds.Width},{options.ClientBounds.Height}";
+                c.Details["canvasSize"] = $"{scene.Width},{scene.Height}";
+                c.Details["gradientStartColor"] = options.GradientStartColor.ToString();
+                c.Details["gradientEndColor"] = options.GradientEndColor.ToString();
+                c.Details["gradientStartAlpha"] = options.GradientStartColor.A;
+                c.Details["gradientEndAlpha"] = options.GradientEndColor.A;
+                c.Details["wiredSemiTransparentPixels"] = semiTransparent;
+                c.Details["wiredRow0AlphaMin"] = rowMin;
+                c.Details["wiredRow0AlphaMax"] = rowMax;
+                c.Details["wiredRow0NotOpaque"] = rowNotOpaque;
+                c.Details["wiredCol0AlphaMin"] = colMin;
+                c.Details["wiredCol0AlphaMax"] = colMax;
+                c.Details["wiredCol0NotOpaque"] = colNotOpaque;
+
+                // ★ 断言：背景层必须真的铺满整个客户区。
+                //   根因（见 A14 验收文档 §2.3）：绘制层开了 SmoothingMode.AntiAlias，
+                //   PixelOffsetMode 默认对位图等价 Half —— 严格按 ClientBounds 填充时
+                //   抗锯齿只覆盖最外一圈像素的约一半，客户区边界必然留下半透明像素。
+                if (semiTransparent != 0)
+                {
+                    c.Fail($"新画面里还有 {semiTransparent} 个半透明像素（期望 0）" +
+                           " —— 背景层没把客户区铺满，最外一圈会漏色");
+                }
+                if (rowNotOpaque != 0 || colNotOpaque != 0)
+                {
+                    c.Fail($"客户区首行有 {rowNotOpaque} 个、首列有 {colNotOpaque} 个半透明像素（期望 0）" +
+                           " —— 背景层没覆盖到客户区边界");
+                }
+
                 Add(c);
             }
         }
@@ -235,6 +294,8 @@ namespace LiteMonitor.AppearanceWiringProbe
                 int diff = WiringFixture.CountDifferentPixels(legacy, wired);
                 ProbeCase c = NewCase($"机能主题横屏装饰生效/dpi{dpi}/scale{userScale:0.0}");
                 c.Details["differentPixels"] = diff;
+                c.Details["legacyPixelSha256"] = WiringFixture.HashPixels(legacy);
+                c.Details["wiredPixelSha256"] = WiringFixture.HashPixels(wired);
                 if (diff <= 0)
                 {
                     c.Fail("新入口与旧入口完全相同（期望新装饰产生差异）");
@@ -319,7 +380,69 @@ namespace LiteMonitor.AppearanceWiringProbe
         }
 
         // ============================================================
-        // ⑦ 换肤 → 主题代次自增
+        // ⑦ 组区域缓冲复用不产生跨帧污染
+        // ============================================================
+
+        /// <summary>
+        /// 窗口底纹要"排除组块区域"，组块矩形随布局变化。
+        /// <c>AppearanceRuntime.RentGroupRegions</c> 用**一个复用的 List** 承载它
+        /// （避免每帧 new List 破坏"新效果关闭 → 热路径不增加托管分配"）。
+        /// <para>
+        /// ★ 本用例盯的是**复用是否安全**：先用 7 组把缓冲填满，再渲染 3 组场景，
+        ///   结果必须与"干净运行时直接渲染 3 组"逐像素一致 ——
+        ///   否则说明上一次的组区域残留进了这一帧。
+        /// </para>
+        /// </summary>
+        private void RunGroupRegionBufferReuse()
+        {
+            ProbeCase c = NewCase("外观运行时/组区域缓冲复用不产生跨帧污染");
+
+            try
+            {
+                Theme theme = WiringFixture.LoadTheme(WiringFixture.MechThemeName);
+                theme.Scale(1f, 1f);
+
+                using AppearanceRuntime runtime = new AppearanceRuntime();
+
+                // 大场景：7 组（用来"污染"复用缓冲）
+                WiringScene big = WiringFixture.BuildPortrait(theme, 1f, WiringFixture.GroupCount);
+                // 小场景：3 组
+                WiringScene small = WiringFixture.BuildPortrait(theme, 1f, 3);
+
+                // 画布按小场景的尺寸建（两张图才能逐像素比）
+                using Bitmap canvas = new Bitmap(
+                    Math.Max(1, small.Width), Math.Max(1, small.Height), PixelFormat.Format32bppPArgb);
+
+                runtime.Update(theme, 1f, 1f, new Rectangle(0, 0, small.Width, small.Height));
+                WiringFixture.RenderOnto(canvas, big, runtime);      // 先画 7 组
+                WiringFixture.ClearCanvas(canvas);
+                WiringFixture.RenderOnto(canvas, small, runtime);    // 再画 3 组（缓冲此时应已正确清空）
+
+                // 对照：干净运行时直接渲染 3 组
+                using AppearanceRuntime freshRuntime = new AppearanceRuntime();
+                freshRuntime.Update(theme, 1f, 1f, new Rectangle(0, 0, small.Width, small.Height));
+                using Bitmap reference = WiringFixture.Render(small, freshRuntime);
+
+                int diff = WiringFixture.CountDifferentPixels(reference, canvas);
+                c.Details["differentPixels"] = diff;
+                c.Details["bigGroups"] = WiringFixture.GroupCount;
+                c.Details["smallGroups"] = 3;
+                c.Details["size"] = $"{small.Width}x{small.Height}";
+                if (diff != 0)
+                {
+                    c.Fail($"复用缓冲后 3 组场景与干净运行时相差 {diff} 个像素（期望 0）—— 组区域缓冲有跨帧污染");
+                }
+            }
+            catch (Exception ex)
+            {
+                c.Fail("用例抛出异常：" + ex.GetType().Name + " — " + ex.Message);
+            }
+
+            Add(c);
+        }
+
+        // ============================================================
+        // ⑧ 换肤 → 主题代次自增
         // ============================================================
 
         private void RunThemeGenerationBump()
@@ -349,9 +472,83 @@ namespace LiteMonitor.AppearanceWiringProbe
         }
 
         // ============================================================
-        // ⑧ 窗口轮廓接线：切角 → DONOTROUND(1)，旧主题 → ROUND(2)
+        // ============================================================
+        // ⑨ 底板锚定与局部失效补底色（独立验收 R5）
         // ============================================================
 
+        /// <summary>
+        /// 底板必须锚定**完整客户区**，否则局部失效时补不上底色。
+        /// <para>
+        /// ★ 反例来自独立验收 R5：客户区 240×160、背景 #123456、调用方裁剪 (37,43,20,20)，
+        ///   新入口绘制后，失效区内点 (40,45) 仍是预填的洋红色 FFFF00FF。
+        ///   根因：旧实现用 g.VisibleClipBounds 定位底板 —— 局部失效时它就是那块裁剪区，
+        ///   底板会从窗口原点偏移着画，压根没盖到失效区。
+        /// <para>
+        /// ★ 本用例用"预填哨兵色 + 裁剪区"复现：渲染后裁剪区内若还有哨兵色，
+        ///   就说明那块没被补上底色。旧入口**保留**该缺陷（它拿不到完整客户区，
+        ///   改动会破坏旧主题像素基线），所以只对新入口断言。
+        /// </para>
+        /// </summary>
+        private void RunBasePlateAnchoring()
+        {
+            const string backgroundHex = "#123456";
+            Color sentinel = Color.Magenta;
+            Rectangle clipRect = new Rectangle(37, 43, 20, 20);
+
+            foreach (bool horizontal in new[] { false, true })
+            {
+                string label = horizontal ? "横屏" : "竖屏";
+                ProbeCase c = NewCase($"底板锚定/局部失效补底色/{label}");
+
+                Theme theme = WiringFixture.LoadTheme(WiringFixture.LegacyThemeNames[0]);
+                theme.Color.Background = backgroundHex;
+
+                WiringScene scene = horizontal
+                    ? WiringFixture.BuildHorizontal(theme, WiringFixture.PanelWidthLogical, 160)
+                    : WiringFixture.BuildPortrait(theme, 1.0f);
+
+                // ---- 新入口：底板锚定完整客户区 ⇒ 失效区必须被补上底色 ----
+                using Bitmap canvas = new Bitmap(scene.Width, scene.Height, PixelFormat.Format32bppArgb);
+                using (Graphics g = Graphics.FromImage(canvas))
+                {
+                    g.Clear(sentinel);
+                }
+
+                using (AppearanceRuntime runtime = new AppearanceRuntime())
+                {
+                    runtime.Update(theme, 1.0f, 1.0f, new Rectangle(0, 0, scene.Width, scene.Height));
+                    WiringFixture.RenderOnto(canvas, scene, runtime, clipRect);
+                }
+
+                int sentinelLeft = WiringFixture.CountColorPixelsInRect(canvas, clipRect, sentinel);
+                c.Details["clientBounds"] = $"0,0,{scene.Width},{scene.Height}";
+                c.Details["clipRect"] = $"{clipRect.X},{clipRect.Y},{clipRect.Width},{clipRect.Height}";
+                c.Details["sentinelPixelsLeftInClip"] = sentinelLeft;
+                c.Details["clipAreaPixels"] = clipRect.Width * clipRect.Height;
+
+                if (sentinelLeft != 0)
+                {
+                    c.Fail($"失效区内还有 {sentinelLeft} 个哨兵色像素（期望 0）" +
+                           " —— 底板没有锚定完整客户区，局部重绘会漏补底色");
+                }
+
+                // ---- 旧入口对照：记录现状（已知继承问题，不在此断言）----
+                using Bitmap legacyCanvas = new Bitmap(scene.Width, scene.Height, PixelFormat.Format32bppArgb);
+                using (Graphics g = Graphics.FromImage(legacyCanvas))
+                {
+                    g.Clear(sentinel);
+                }
+                WiringFixture.RenderOnto(legacyCanvas, scene, null, clipRect);
+                c.Details["legacySentinelPixelsLeftInClip"] =
+                    WiringFixture.CountColorPixelsInRect(legacyCanvas, clipRect, sentinel);
+
+                Add(c);
+            }
+        }
+
+        // ============================================================
+        // ⑩ 窗口轮廓接线：切角 → DONOTROUND(1)，旧主题 → ROUND(2)
+        // ============================================================
         private void RunWindowShapeWiring()
         {
             ProbeCase c = NewCase("窗口轮廓/接线行为（切角 DONOTROUND=1，旧主题回 ROUND=2）");

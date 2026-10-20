@@ -240,6 +240,17 @@ internal sealed class ProbeOptions
     public string AppearanceInvalidation { get; private set; } = "all";
     /// <summary>与哪一份基线做逐像素对比（结果目录）。</summary>
     public string CompareDir { get; private set; } = "";
+    /// <summary>
+    /// 是否做"旧入口 vs 新入口"配对测量（A14 / v4 §7.4 的装饰层额外 CPU 口径）。
+    /// <para>不传时行为与既有基线**完全一致**（纯加法，不影响既有可比性）。</para>
+    /// </summary>
+    public bool AppearancePaired { get; private set; }
+    /// <summary>配对测量轮数（v4 §7.4 要求同机至少三轮配对）。</summary>
+    public int AppearancePairedRounds { get; private set; } = 3;
+    /// <summary>夹具过滤（按 fixtureId 子串，逗号分隔；留空 = 不过滤）。</summary>
+    public string AppearanceFilter { get; private set; } = "";
+    /// <summary>装饰分解测量的主题名（非空 = 只跑分解模式，不跑常规夹具矩阵）。</summary>
+    public string AppearanceDecompose { get; private set; } = "";
     /// <summary>原始命令行（写进结果 JSON 备查）。</summary>
     public string[] RawArgs { get; private set; } = Array.Empty<string>();
 
@@ -285,6 +296,11 @@ internal sealed class ProbeOptions
                 case "--appearance-draws": options.AppearanceDraws = int.Parse(Next()); break;
                 case "--appearance-invalidation": options.AppearanceInvalidation = Next(); break;
                 case "--compare": options.CompareDir = Path.GetFullPath(Next()); break;
+                // ===== A14 配对测量（旧入口 vs 新入口）=====
+                case "--appearance-paired": options.AppearancePaired = true; break;
+                case "--appearance-paired-rounds": options.AppearancePairedRounds = int.Parse(Next()); break;
+                case "--appearance-filter": options.AppearanceFilter = Next(); break;
+                case "--appearance-decompose": options.AppearanceDecompose = Next(); break;
                 case "--quick":
                     options.WarmupSeconds = 3;
                     options.SteadySeconds = 10;

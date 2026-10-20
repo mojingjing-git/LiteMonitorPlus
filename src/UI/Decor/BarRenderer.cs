@@ -29,6 +29,11 @@ namespace LiteMonitor.src.UI.Decor
     ///
     /// ★ 层次：条属于"原有标题 / 指标 / 条"层，位于组底纹 / 组框之后、
     ///   向内的窗口边框 / 高光之前。
+    ///
+    /// ★ 裁剪：新样式只画"填充部分"时用
+    ///   <c>SetClip(形状, CombineMode.Intersect)</c>，
+    ///   <b>与调用方的裁剪求交集</b>，绝不替换它
+    ///   （替换会画到调用方裁剪之外，事后 Restore 也撤销不了）。
     /// </summary>
     public sealed class BarRenderer : IDisposable
     {
@@ -240,7 +245,12 @@ namespace LiteMonitor.src.UI.Decor
                 shape = UIUtils.RoundRect(
                     new Rectangle(barRect.X, barRect.Y, fillWidth, barRect.Height),
                     barRect.Height / 2);
-                g.SetClip(shape);
+
+                // ★ 必须用 CombineMode.Intersect 保留调用方的裁剪：
+                //   SetClip 默认**替换**已有裁剪，画到裁剪外的像素已经落到画布上，
+                //   事后 Restore 也撤销不了（实测条槽 (20,40,180,8) / 50% 填充 /
+                //   调用方裁剪 (37,43,20,20) 时，越界像素有 602 个）。
+                g.SetClip(shape, CombineMode.Intersect);
                 return DecorPainter.FillGradientSlot(g, slot, barRect, ratio);
             }
             finally
@@ -275,7 +285,10 @@ namespace LiteMonitor.src.UI.Decor
                 shape = UIUtils.RoundRect(
                     new Rectangle(barRect.X, barRect.Y, fillWidth, barRect.Height),
                     barRect.Height / 2);
-                g.SetClip(shape);
+
+                // ★ 同上：必须与调用方的裁剪求交集，不能替换它。
+                //   半透明底 + 斜纹如果画到裁剪外，局部重画时还会反复叠加变深。
+                g.SetClip(shape, CombineMode.Intersect);
 
                 Rectangle filled = new Rectangle(barRect.X, barRect.Y, fillWidth, barRect.Height);
                 int baseAlpha = Math.Max(1, barColor.A / TextureBaseAlphaDivisor);

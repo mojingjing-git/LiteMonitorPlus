@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices.Backdrop;
@@ -37,6 +38,13 @@ namespace LiteMonitor
         private Rectangle _lastBounds;
         private int _themeGeneration;
         private bool _disposed;
+
+        // ---- 复用的组块区域缓冲 ----
+        // ★ 为什么需要它：窗口底纹要"排除组块区域"，而组块矩形会随布局变化。
+        //   若每帧 new 一个 List，v4 §7.4「新效果关闭 → 热路径不增加托管分配」就会被打破
+        //   （List 本身 + 它的内部数组 = 每帧 2 次托管分配）。
+        //   这里复用一个 List：Clear() 不释放容量，布局稳定后每帧 0 次分配。
+        private readonly List<DecorGroupRegion> _groupRegions = new();
 
         /// <summary>
         /// 创建外观运行时。
@@ -111,6 +119,13 @@ namespace LiteMonitor
             // 上下文变了 → 让缓存按"代次 / DPI / 用户缩放"自行失效（槽位尺寸由缓存键区分）
             _host.UpdateContext(_options);
 
+            // ★ 背景层（噪点纹理）的失效合同（独立验收 R1）：
+            //   BackdropRenderer.Invalidate() 之前在 src/** 里从未被调用 ——
+            //   换肤 / 尺寸 / DPI 变化后背景层仍持有旧纹理。
+            //   本方法正是这三个时机唯一的汇合点（主题引用、DPI、用户缩放、客户区任一变化），
+            //   且**只在上下文真的变化时**才走到这里 ⇒ 稳态每帧 0 次重建。
+            _backdrop.Invalidate();
+
             return _options;
         }
 
@@ -140,6 +155,37 @@ namespace LiteMonitor
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             _host.OnSizeChanged();
+
+            // ★ 背景层纹理同样要失效（窗口尺寸变了，旧纹理不再适用）。
+            //   这里不走 Update —— 客户区矩形要等布局算完才知道，
+            //   但背景层的纹理与尺寸无关，先失效掉总没有坏处。
+            _backdrop.Invalidate();
+        }
+
+        /// <summary>
+        /// 取当前分组布局对应的**组块区域列表**（供窗口底纹排除组块区域用）。
+        /// <para>
+        /// ★ 返回的是**内部复用缓冲**，调用方只能读，不能长期持有；
+        ///   下一次调用会把内容覆盖。渲染层只在当帧内使用它，安全。
+        /// </para>
+        /// <para>
+        /// ★ 这里刻意**不复用**结果缓存：组块矩形会随布局变化（换肤、横竖切换、缩放），
+        ///   每次重建的开销远小于"缓存失效算错"的风险；而 List 的容量会被复用，
+        ///   所以稳态下仍然是 0 次托管分配。
+        /// </para>
+        /// </summary>
+        public IReadOnlyList<DecorGroupRegion> RentGroupRegions(List<GroupLayoutInfo> groups, Theme theme)
+        {
+            _groupRegions.Clear();
+            if (groups == null || theme == null) return _groupRegions;
+
+            int radiusPx = theme.Layout.GroupRadius;
+            foreach (GroupLayoutInfo gr in groups)
+            {
+                if (gr.Bounds.Width <= 0 || gr.Bounds.Height <= 0) continue;
+                _groupRegions.Add(new DecorGroupRegion(gr.Bounds, radiusPx));
+            }
+            return _groupRegions;
         }
 
         /// <summary>

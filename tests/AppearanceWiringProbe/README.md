@@ -36,8 +36,31 @@ tests/AppearanceWiringProbe/output/AppearanceWiringProbe.exe [--out <证据目�
 | ④ | 机能主题横屏（2 档位） | 新旧必须有差异；`FrameEnabled` 开启 |
 | ⑤ | 旧主题外观快照不变量 | 10 个旧主题的快照里 `FrameEnabled`/`Scanline`/`Glow`/`Grid` 均为 false、`BarStyle` 为旧条、`BackdropMode` 为 `solid`、`BackgroundFrame` 为空、`ClientBounds` 与传入一致 |
 | ⑥ | 外观运行时快照复用与失效 | 参数不变时连续 100 次 `Update` 返回**同一个**快照对象；客户区尺寸 / DPI 变化时**必须重建** |
-| ⑦ | 换肤时代次自增 | 每次 `OnThemeChanged` 代次 +1 |
-| ⑧ | 窗口轮廓接线行为 | 旧主题 → `DWM 角偏好 = 2 (ROUND)`；切角主题 → `1 (DONOTROUND)` 且 **Region 已设置**、切角边长 == `options.FrameLengthPx`；尺寸变化后重应用仍保持切角；切回旧主题恢复 `ROUND(2)` |
+| ⑦ | 组区域缓冲复用不产生跨帧污染 | 先用 7 组场景填满复用缓冲，再渲染 3 组场景，结果必须与"干净运行时直接渲染 3 组"**逐像素一致** |
+| ⑧ | 换肤时代次自增 | 每次 `OnThemeChanged` 代次 +1 |
+| ⑨ | 底板锚定与局部失效补底色（竖屏 + 横屏） | 模拟局部失效（裁剪区 `(37,43,20,20)` + 预填洋红哨兵色）后走**新入口**绘制，失效区内**哨兵色像素必须为 0** —— 证明底板锚定了完整客户区（独立验收 R5）；旧入口的同一数值只记录不判定（它拿不到完整客户区，保留既有行为） |
+| ⑩ | 窗口轮廓接线行为 | 旧主题 → `DWM 角偏好 = 2 (ROUND)`；切角主题 → `1 (DONOTROUND)` 且 **Region 已设置**、切角边长 == `options.FrameLengthPx`；尺寸变化后重应用仍保持切角；切回旧主题恢复 `ROUND(2)` |
+
+## 覆盖度诊断（A14 新增）
+
+机能主题用例除断言外，还输出以下**可测量证据**（`details` 字段）：
+
+| 字段 | 含义 |
+|---|---|
+| `clientBounds` | 实际使用的客户区矩形（应为 `0,0,宽,高`） |
+| `gradientStartColor` / `gradientEndColor` / `gradientStartAlpha` / `gradientEndAlpha` | 渐变两端色与其 alpha |
+| `wiredSemiTransparentPixels` | 新画面里 **alpha < 255** 的像素数 —— **必须为 0** |
+| `wiredRow0NotOpaque` / `wiredCol0NotOpaque` | 客户区首行 / 首列中不满 255 的像素数 —— **必须为 0** |
+| `wiredPng` | 新入口画面的 PNG 文件名（供逐像素定位差异） |
+
+★ 这组诊断针对一个真实盲区：绘制层开了 `SmoothingMode.AntiAlias`，
+而 `PixelOffsetMode` 保持默认（对位图等价 `Half`），
+于是抗锯齿的填充**只覆盖目标矩形边界像素的约一半** ——
+若严格按 `ClientBounds` 填充，客户区最外一圈必然留下半透明像素（漏色）。
+哈希只能回答"变没变"，PNG 与 alpha 统计才能回答"**变在哪**"。
+
+⚠️ 导出的 PNG 由 32bppPArgb 克隆而来，**alpha 仍是预乘值**：
+读 PNG 的 alpha 只用于**位置**判断，颜色数值要回看原始字节。
 
 ## 档位覆盖
 
@@ -48,6 +71,6 @@ tests/AppearanceWiringProbe/output/AppearanceWiringProbe.exe [--out <证据目�
 
 ## 窗口轮廓用例的线程要求
 
-用例 ⑧ 会创建真实 `Form`（只取 `form.Handle` 创建句柄，**不显示**、位置在 `-32000,-32000` 离屏）。
+用例 ⑩ 会创建真实 `Form`（只取 `form.Handle` 创建句柄，**不显示**、位置在 `-32000,-32000` 离屏）。
 WinForms 窗体必须在 **STA 线程**上创建与操作，因此该用例在独立的 STA 线程里执行
 （与 A09 自证探针 `AppearanceWindowShapeProbe` 的规矩一致）。

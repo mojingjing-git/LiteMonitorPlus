@@ -33,8 +33,10 @@ dotnet tests/AppearanceDecorRendererProbe/output/AppearanceDecorRendererProbe.dl
 | 5 | `legacy_themes_pixel_identical` | 10 个旧主题 → 新旧路径逐像素一致（哈希相同、差异像素 0） |
 | 6 | `horizontal_layout_reuse` | 横屏复用底板 / 底纹 / 外框，不新增组框分组，无条指标不凭空出现条 |
 | 7 | `bar_styles_clipping` | 旧条（style=0）与改造前逐像素一致；渐变条 / 纹理条在 0% / 50% / 100% 的裁剪边界正确 |
-| 8 | `progress_cache_platform` | 10,000 次持续变化的进度值 → 缓存条目进入有界平台、淘汰 0 |
-| 9 | `frame_cost_budget` | 每帧成本（普通档 / 4 卡 + 两倍物理尺寸档），对照 v4 §7.4 初始预算 |
+| 8 | `bar_styles_preserve_caller_clip` | 条槽 (20,40,180,8) / 50% 填充 / 调用方裁剪 (37,43,20,20)：裁剪区外 0 像素被改动；3 次局部重绘（先补失效区底板）与 1 次完整绘制逐像素一致 |
+| 9 | `bar_texture_stripes_visible` | 纹理条在 6 种（条高 × Y 偏移）下都能看到斜纹，且斜纹是 45° 斜线（`(x+y) mod 瓦片边长` 落在同一窄窗口） |
+| 10 | `progress_cache_platform` | 10,000 次持续变化的进度值 → 缓存条目进入有界平台、淘汰 0 |
+| 11 | `frame_cost_budget` | 每帧成本（普通档 / 4 卡 + 两倍物理尺寸档），对照 v4 §7.4 初始预算 |
 
 ## 说明
 

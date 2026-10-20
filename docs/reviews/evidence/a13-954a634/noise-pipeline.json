@@ -1,0 +1,41 @@
+{
+  "noise_pipeline": [
+    {
+      "intensity": 10,
+      "drawn": true
+    },
+    {
+      "intensity": 10,
+      "drawn": true
+    },
+    {
+      "intensity": 20,
+      "drawn": true
+    },
+    {
+      "intensity": 20,
+      "drawn": true
+    },
+    {
+      "intensity": 30,
+      "drawn": true
+    },
+    {
+      "intensity": 30,
+      "drawn": true
+    },
+    {
+      "intensity": 40,
+      "drawn": true
+    },
+    {
+      "intensity": 40,
+      "drawn": true
+    },
+    {
+      "intensity": 50,
+      "drawn": false,
+      "exception": "System.ArgumentException: Parameter is not valid.\r\n   at System.Drawing.Graphics.CheckErrorStatus(Int32 status)\r\n   at System.Drawing.Graphics.FillRectangle(Brush brush, Int32 x, Int32 y, Int32 width, Int32 height)\r\n   at System.Drawing.Graphics.FillRectangle(Brush brush, Rectangle rect)\r\n   at LiteMonitor.src.SystemServices.Backdrop.BackdropRenderer.DrawNoise(Graphics g, ThemeAppearanceOptions options)\r\n   at LiteMonitor.src.SystemServices.Backdrop.BackdropRenderer.Render(Graphics g, ThemeAppearanceOptions options)\r\n   at LiteMonitor.UIRenderer.Render(Graphics g, List\u00601 groups, Theme t, AppearanceRuntime appearance)\r\n   at Program.NoisePipeline() in G:\\TOOL\\LiteMonitor-fork\\.review-scratch\\appearance-a13-audit-954a634\\repros\\Program.cs:line 243"
+    }
+  ]
+}

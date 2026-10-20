@@ -119,6 +119,38 @@ internal static class AppearanceProbeRunner
                 throw new InvalidOperationException("没有可用主题，无法建立外观基线。");
 
             var specs = AppearanceFixtureMatrix.Build(data, options.AppearanceFixtureSet, themes);
+            if (!string.IsNullOrWhiteSpace(options.AppearanceDecompose))
+            {
+                // ★ 装饰分解模式：只回答"额外 CPU 花在哪一层"，不跑常规夹具矩阵。
+                Write($"模式: 装饰分解测量（主题 {options.AppearanceDecompose}）");
+                results["decomposition"] = RunDecompose(data, cfg, options);
+                results["fixtureSummary"] = new JsonObject
+                {
+                    ["mode"] = "decompose-only",
+                    ["note"] = "分解模式只跑变体测量，不跑常规夹具矩阵。",
+                };
+                results["metadata"] = BuildMetadata();
+                results["finishedAt"] = DateTime.Now.ToString("o");
+                results["log"] = Log.ToString();
+                results["exitCode"] = 0;
+
+                Directory.CreateDirectory(options.OutputDir);
+                string decomposePath = Path.Combine(options.OutputDir, ResultFileName);
+                string decomposeLog = Path.Combine(options.OutputDir, LogFileName);
+                File.WriteAllText(decomposePath, results.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+                File.WriteAllText(decomposeLog, Log.ToString(), new UTF8Encoding(false));
+                Write($"结果已写入: {decomposePath}");
+                return 0;
+            }
+            if (!string.IsNullOrWhiteSpace(options.AppearanceFilter))
+            {
+                var filters = options.AppearanceFilter.Split(
+                    ',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                specs = specs
+                    .Where(s => filters.Any(f => s.Id.Contains(f, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+                Write($"夹具过滤: {filters.Length} 个关键词 → 命中 {specs.Count} 个夹具");
+            }
             Write($"夹具数量: {specs.Count} (set={options.AppearanceFixtureSet})");
 
             var fixtureArray = new JsonArray();
@@ -148,6 +180,7 @@ internal static class AppearanceProbeRunner
                         ["error"] = $"{ex.GetType().Name}: {ex.Message}",
                     });
                     Write($"!! 夹具失败 {spec.Id}: {ex.GetType().Name}: {ex.Message}");
+                    Write($"   堆栈: {ex.StackTrace}");
                 }
                 if ((i + 1) % 25 == 0 || i + 1 == specs.Count)
                     Write($"  进度 {i + 1}/{specs.Count} (用时 {sw.Elapsed.TotalSeconds:F1}s)");
@@ -298,6 +331,13 @@ internal static class AppearanceProbeRunner
         process.Refresh();
         double cpuMsPerDraw = (process.TotalProcessorTime.TotalMilliseconds - cpuBefore) / Math.Max(1, draws);
 
+        // A14 配对测量：同一夹具、同一帧数据，旧入口 vs 新入口（v4 §7.4 的装饰层额外 CPU 口径）。
+        // ★ 必须放在 ctx.Theme.DisposeFonts() **之前** —— 主题字体一旦被释放，
+        //   后续绘制访问 Font.Height 会抛 ArgumentException（绘制层在标题处读字体高度）。
+        JsonObject? paired = options.AppearancePaired
+            ? MeasurePaired(ctx, data, spec, g, options)
+            : null;
+
         // 最终画面：回到规范状态（第 0 帧），保证 PNG 与像素哈希可复现。
         ApplyFrame(ctx, data, 0);
         Draw(g, ctx);
@@ -309,6 +349,7 @@ internal static class AppearanceProbeRunner
         ctx.Theme.DisposeFonts();
 
         double wallMsPerDraw = clock.Elapsed.TotalMilliseconds / Math.Max(1, draws);
+
         return new JsonObject
         {
             ["kind"] = "appearance_fixture",
@@ -331,6 +372,7 @@ internal static class AppearanceProbeRunner
             ["wallMsPerDraw"] = Math.Round(wallMsPerDraw, 4),
             ["cpuMsPerDraw"] = Math.Round(cpuMsPerDraw, 4),
             ["allocatedBytesPerDraw"] = Math.Round((double)allocated / Math.Max(1, draws), 1),
+            ["paired"] = paired,
             ["projectedWholeMachineCpuAt12_5Hz"] = Math.Round(cpuMsPerDraw * 12.5 / 1000 / Environment.ProcessorCount * 100, 4),
             ["pngPath"] = RelativeToOutput(pngPath, options.OutputDir),
             ["pngSha256"] = pngHash,
@@ -339,6 +381,301 @@ internal static class AppearanceProbeRunner
             ["edgeKind"] = spec.EdgeKind == "" ? null : spec.EdgeKind,
             ["notes"] = new JsonArray(ctx.Notes.Select(n => (JsonNode)JsonValue.Create(n)!).ToArray()),
             ["excludes"] = "DWM、窗口呈现、桌面合成、窗口透明度、任务栏、硬件采集、驱动、插件",
+        };
+    }
+
+    // ==================================================================
+    // A14 配对测量：旧入口 vs 新入口
+    // ==================================================================
+
+    /// <summary>
+    /// 配对测量（A14 / v4 §7.4）：**同一夹具、同一帧数据**，分别用
+    /// 旧入口（不含新外观）与新入口（A13 接线后的生产路径）渲染，
+    /// 报告"新入口相对旧入口的额外 CPU 与额外托管分配"。
+    /// <para>
+    /// ★ 两条路径画的是**同一张图**（固定帧号）→ 差值只反映渲染路径本身的成本。
+    /// ★ **帧级交替**：每一帧都先测一条路径、紧接着测另一条，
+    ///   这样系统负载 / CPU 频率漂移在**每一对**里都被抵消，而不是只靠轮次平均。
+    /// ★ **按轮翻转先后顺序**（第 1 轮 old→new，第 2 轮 new→old），
+    ///   消除"谁先画谁受益于缓存"的系统性偏差。
+    /// ★ 主判据用**逐帧配对差值的中位数**（抗单帧抖动）；
+    ///   Windows 进程 CPU 时间粒度约 15.6ms，不适合判 0.1ms 级差异，故不作主判据。
+    /// ★ 托管分配是**硬判据**：v4 §7.4「新效果关闭 → 热路径不增加托管分配」。
+    /// </para>
+    /// </summary>
+    private static JsonObject? MeasurePaired(
+        AppearanceContext ctx,
+        AppearanceFixtureData data,
+        AppearanceFixtureSpec spec,
+        Graphics g,
+        ProbeOptions options)
+    {
+        int rounds = Math.Max(1, options.AppearancePairedRounds);
+        int draws = Math.Max(1, options.AppearanceDraws);
+
+        using var runtime = new AppearanceRuntime();
+        float dpiScale = spec.Dpi / 96f;
+        float userScale = (float)spec.UserScale;
+        runtime.Update(ctx.Theme, dpiScale, userScale, new Rectangle(0, 0, ctx.Width, ctx.Height));
+
+        // 固定帧号 → 两条路径画的是同一张图
+        const int fixedFrame = 1;
+        ApplyFrame(ctx, data, fixedFrame);
+
+        var perRound = new JsonArray();
+        var allDiffs = new List<double>();
+        var oldMedians = new List<double>();
+        var newMedians = new List<double>();
+
+        for (int r = 0; r < rounds; r++)
+        {
+            // 预热（不计入）：两条路径各自的字体 / 画刷 / 纹理缓存都进入稳态
+            for (int i = 0; i < 3; i++) { Draw(g, ctx, null); Draw(g, ctx, runtime); }
+
+            var oldSamples = new double[draws];
+            var newSamples = new double[draws];
+            var diffs = new double[draws];
+            bool oldFirst = (r % 2 == 0);
+
+            for (int i = 0; i < draws; i++)
+            {
+                double oldMs, newMs;
+                if (oldFirst)
+                {
+                    long t0 = Stopwatch.GetTimestamp();
+                    Draw(g, ctx, null);
+                    long t1 = Stopwatch.GetTimestamp();
+                    Draw(g, ctx, runtime);
+                    long t2 = Stopwatch.GetTimestamp();
+                    oldMs = (t1 - t0) * 1000.0 / Stopwatch.Frequency;
+                    newMs = (t2 - t1) * 1000.0 / Stopwatch.Frequency;
+                }
+                else
+                {
+                    long t0 = Stopwatch.GetTimestamp();
+                    Draw(g, ctx, runtime);
+                    long t1 = Stopwatch.GetTimestamp();
+                    Draw(g, ctx, null);
+                    long t2 = Stopwatch.GetTimestamp();
+                    newMs = (t1 - t0) * 1000.0 / Stopwatch.Frequency;
+                    oldMs = (t2 - t1) * 1000.0 / Stopwatch.Frequency;
+                }
+                oldSamples[i] = oldMs;
+                newSamples[i] = newMs;
+                diffs[i] = newMs - oldMs;
+            }
+
+            double oldMedian = Median(oldSamples);
+            double newMedian = Median(newSamples);
+            double diffMedian = Median(diffs);
+            oldMedians.Add(oldMedian);
+            newMedians.Add(newMedian);
+            allDiffs.AddRange(diffs);
+
+            perRound.Add(new JsonObject
+            {
+                ["round"] = r + 1,
+                ["order"] = oldFirst ? "legacy→wired" : "wired→legacy",
+                ["legacyMedianMsPerDraw"] = Round(oldMedian, 4),
+                ["wiredMedianMsPerDraw"] = Round(newMedian, 4),
+                ["extraMsPerDraw"] = Round(diffMedian, 4),
+                ["extraMsPerDrawMean"] = Round(diffs.Average(), 4),
+            });
+        }
+
+        // 托管分配：单独测（不夹在计时里），两条路径各测一轮
+        long legacyAllocPerDraw = MeasureAllocPerDraw(g, ctx, null, draws);
+        long wiredAllocPerDraw = MeasureAllocPerDraw(g, ctx, runtime, draws);
+
+        double legacyMedian = oldMedians.Average();
+        double wiredMedian = newMedians.Average();
+        double extra = Median(allDiffs.ToArray());
+        double extraMean = allDiffs.Average();
+
+        return new JsonObject
+        {
+            ["rounds"] = rounds,
+            ["drawsPerRound"] = draws,
+            ["legacyMedianMsPerDraw"] = Round(legacyMedian, 4),
+            ["wiredMedianMsPerDraw"] = Round(wiredMedian, 4),
+            ["extraMsPerDraw"] = Round(extra, 4),
+            ["extraMsPerDrawMean"] = Round(extraMean, 4),
+            ["extraMsPerDrawP10"] = Round(Percentile(allDiffs, 0.10), 4),
+            ["extraMsPerDrawP90"] = Round(Percentile(allDiffs, 0.90), 4),
+            ["legacyAllocBytesPerDraw"] = legacyAllocPerDraw,
+            ["wiredAllocBytesPerDraw"] = wiredAllocPerDraw,
+            ["extraAllocBytesPerDraw"] = wiredAllocPerDraw - legacyAllocPerDraw,
+            ["perRound"] = perRound,
+            ["frameMode"] = "fixed-frame + 帧级交替（两条路径画同一张图，逐帧配对取差值）",
+            ["note"] = "主判据为逐帧配对差值的中位数（离屏渲染为 CPU-bound）；" +
+                      "Windows 进程 CPU 时间粒度约 15.6ms，不适合判 0.1ms 级差异，故不作为主判据。" +
+                      "托管分配为硬判据：v4 7.4 要求「新效果关闭 → 热路径不增加托管分配」。" +
+                      "遗留偏差：先画的那条路径略占便宜，已按轮翻转顺序抵消。",
+        };
+    }
+
+    /// <summary>只测每帧托管分配（不计时）。</summary>
+    private static long MeasureAllocPerDraw(Graphics g, AppearanceContext ctx, AppearanceRuntime? appearance, int draws)
+    {
+        for (int i = 0; i < 3; i++) Draw(g, ctx, appearance);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < draws; i++) Draw(g, ctx, appearance);
+        long alloc = GC.GetAllocatedBytesForCurrentThread() - before;
+        return alloc / Math.Max(1, draws);
+    }
+
+    /// <summary>中位数（内部会对副本排序，不改调用方数组）。</summary>
+    private static double Median(double[] samples)
+    {
+        if (samples.Length == 0) return 0;
+        double[] copy = (double[])samples.Clone();
+        Array.Sort(copy);
+        int mid = copy.Length / 2;
+        return copy.Length % 2 == 1 ? copy[mid] : (copy[mid - 1] + copy[mid]) / 2.0;
+    }
+
+    /// <summary>百分位（线性插值）。</summary>
+    private static double Percentile(List<double> samples, double p)
+    {
+        if (samples.Count == 0) return 0;
+        double[] copy = samples.ToArray();
+        Array.Sort(copy);
+        double pos = p * (copy.Length - 1);
+        int lo = (int)Math.Floor(pos);
+        int hi = (int)Math.Ceiling(pos);
+        if (lo == hi) return copy[lo];
+        return copy[lo] + (copy[hi] - copy[lo]) * (pos - lo);
+    }
+
+    private static double Round(double value, int digits) => Math.Round(value, digits);
+
+    // ==================================================================
+    // A14 装饰分解测量：额外 CPU 花在哪一层
+    // ==================================================================
+
+    /// <summary>
+    /// 装饰分解测量（A14）：把"新入口相对旧入口的额外 CPU"**按层拆开**，
+    /// 回答"钱花在哪一层"。
+    /// <para>
+    /// ★ 变体 00（所有新效果关闭）的额外 CPU 应当 ≈ 0 ——
+    ///   它同时是**测量可信度自检**：如果 00 明显不为 0，说明配对测量本身不可信。
+    /// </para>
+    /// <para>
+    /// ★ 变体只改**内存里**的主题对象（不碰用户的主题 JSON 文件）。
+    ///   改动只涉及新外观字段（frameStyle / frameWidth / frameLength / scanline /
+    ///   glow / grid / barStyle）以及 backdrop.mode —— 前者不参与布局计算，
+    ///   所以各变体的**布局与画面结构完全一致**，差值可直接相减。
+    /// </para>
+    /// </summary>
+    private static JsonObject RunDecompose(AppearanceFixtureData data, Settings cfg, ProbeOptions options)
+    {
+        string themeName = options.AppearanceDecompose;
+        var variants = BuildDecomposeVariants();
+
+        // v4 §7.4 的两个判定档位
+        var levels = new (string Name, int Gpu, int Dpi, double Scale)[]
+        {
+            ("普通档(1卡@96/1.0)", 1, 96, 1.0),
+            ("4卡两倍档(4卡@96/2.0)", 4, 96, 2.0),
+        };
+
+        var levelArray = new JsonArray();
+        foreach (var level in levels)
+        {
+            var variantArray = new JsonArray();
+            double previousExtra = 0;
+
+            foreach (var (id, desc, apply) in variants)
+            {
+                var spec = new AppearanceFixtureSpec
+                {
+                    Theme = themeName,
+                    Mode = "vertical",
+                    GpuCount = level.Gpu,
+                    Dpi = level.Dpi,
+                    UserScale = level.Scale,
+                    PanelWidth = data.PanelWidth,
+                };
+
+                var ctx = BuildContext(spec, data, cfg);
+                apply(ctx.Theme);
+
+                using var bitmap = new Bitmap(Math.Max(1, ctx.Width), Math.Max(1, ctx.Height), PixelFormat.Format32bppArgb);
+                bitmap.SetResolution(spec.Dpi, spec.Dpi);
+                using var g = Graphics.FromImage(bitmap);
+                g.Clear(Color.Transparent);
+
+                JsonObject paired = MeasurePaired(ctx, data, spec, g, options)!;
+                ctx.Theme.DisposeFonts();
+
+                double extra = paired["extraMsPerDraw"]?.GetValue<double>() ?? 0;
+                // ★ JsonNode 不能被挂到第二个父节点上，必须取出原始值再放。
+                variantArray.Add(new JsonObject
+                {
+                    ["variant"] = id,
+                    ["description"] = desc,
+                    ["width"] = ctx.Width,
+                    ["height"] = ctx.Height,
+                    ["legacyMedianMsPerDraw"] = paired["legacyMedianMsPerDraw"]?.GetValue<double>(),
+                    ["wiredMedianMsPerDraw"] = paired["wiredMedianMsPerDraw"]?.GetValue<double>(),
+                    ["extraMsPerDraw"] = extra,
+                    ["deltaFromPreviousMsPerDraw"] = Math.Round(extra - previousExtra, 4),
+                    ["extraAllocBytesPerDraw"] = paired["extraAllocBytesPerDraw"]?.GetValue<long>(),
+                });
+                previousExtra = extra;
+
+                Write($"  {level.Name} / {id}: 额外 {extra:F3} ms/帧, 分配 +{paired["extraAllocBytesPerDraw"]} 字节/帧");
+            }
+
+            levelArray.Add(new JsonObject
+            {
+                ["level"] = level.Name,
+                ["variants"] = variantArray,
+            });
+        }
+
+        return new JsonObject
+        {
+            ["theme"] = themeName,
+            ["levels"] = levelArray,
+            ["note"] = "deltaFromPreviousMsPerDraw = 相对上一个变体的增量，即「该层自己的成本」。" +
+                       "变体 00 的额外 CPU 应当 ≈ 0（测量可信度自检）。",
+        };
+    }
+
+    /// <summary>装饰分解的变体定义（按"逐层打开"的顺序）。</summary>
+    private static List<(string Id, string Desc, Action<Theme> Apply)> BuildDecomposeVariants()
+    {
+        return new List<(string, string, Action<Theme>)>
+        {
+            ("00-全部关闭", "所有新效果关闭（额外 CPU 应当 ≈ 0，兼作测量可信度自检）", t =>
+            {
+                t.Layout.FrameStyle = 0; t.Layout.FrameWidth = 0; t.Layout.FrameLength = 0;
+                t.Layout.Scanline = 0; t.Layout.Glow = 0; t.Layout.Grid = 0; t.Layout.BarStyle = 0;
+                if (t.Backdrop != null) t.Backdrop.Mode = "solid";
+            }),
+            ("01-仅渐变背景", "只开背景渐变（tint 的 opacity=0 → tint 层关闭）", t =>
+            {
+                t.Layout.FrameStyle = 0; t.Layout.FrameWidth = 0; t.Layout.FrameLength = 0;
+                t.Layout.Scanline = 0; t.Layout.Glow = 0; t.Layout.Grid = 0; t.Layout.BarStyle = 0;
+            }),
+            ("02-加扫描线", "渐变 + 扫描线(30)", t =>
+            {
+                t.Layout.FrameStyle = 0; t.Layout.FrameWidth = 0; t.Layout.FrameLength = 0;
+                t.Layout.Scanline = 30; t.Layout.Glow = 0; t.Layout.Grid = 0; t.Layout.BarStyle = 0;
+            }),
+            ("03-加网格", "渐变 + 扫描线 + 网格(20)", t =>
+            {
+                t.Layout.FrameStyle = 0; t.Layout.FrameWidth = 0; t.Layout.FrameLength = 0;
+                t.Layout.Scanline = 30; t.Layout.Glow = 0; t.Layout.Grid = 20; t.Layout.BarStyle = 0;
+            }),
+            ("04-加外框+辉光", "渐变 + 扫描线 + 网格 + 切角外框(3px) + 辉光(55)", t =>
+            {
+                t.Layout.FrameStyle = 1; t.Layout.FrameWidth = 3; t.Layout.FrameLength = 14;
+                t.Layout.Scanline = 30; t.Layout.Glow = 55; t.Layout.Grid = 20; t.Layout.BarStyle = 0;
+            }),
+            ("05-加渐变进度条", "CyberPunk_Mech 原样（全开）", t => { }),
         };
     }
 
@@ -613,12 +950,12 @@ internal static class AppearanceProbeRunner
         return data.ValueBase + t;
     }
 
-    private static void Draw(Graphics g, AppearanceContext ctx)
+    private static void Draw(Graphics g, AppearanceContext ctx, AppearanceRuntime? appearance = null)
     {
         if (ctx.IsHorizontal)
-            HorizontalRenderer.Render(g, ctx.Theme, ctx.Columns, ctx.Width);
+            HorizontalRenderer.Render(g, ctx.Theme, ctx.Columns, ctx.Width, appearance);
         else
-            UIRenderer.Render(g, ctx.Groups, ctx.Theme);
+            UIRenderer.Render(g, ctx.Groups, ctx.Theme, appearance);
     }
 
     // ==================================================================

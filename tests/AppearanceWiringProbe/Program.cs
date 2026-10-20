@@ -41,7 +41,7 @@ namespace LiteMonitor.AppearanceWiringProbe
                 // 隔离：不读也不写用户常用配置目录
                 WiringFixture.InstallSettingsSingleton();
 
-                WiringProbeRunner runner = new WiringProbeRunner();
+                WiringProbeRunner runner = new WiringProbeRunner { PngDir = Path.Combine(outDir, "png") };
                 Stopwatch sw = Stopwatch.StartNew();
                 runner.RunAll();
                 sw.Stop();

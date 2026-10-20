@@ -1,0 +1,65 @@
+{
+  "sourceCommit": "954a634",
+  "archiveSha256": "464060D4BCA2CDC0670D666F80AA30550CF76B04510ECD59E8E3B0EAD569652A",
+  "mainDllSha256": "032E3EA8A4F47753D8E57C1D5746D9023D6195A3D6B8B47EBAD47F064C8AEAD4",
+  "build": {
+    "errors": 0,
+    "succeeded": true,
+    "warnings": 254
+  },
+  "unitTests": {
+    "trx": "G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/evidence/unit/a13-unit-unrestricted.trx",
+    "passed": 577,
+    "skipped": 0,
+    "failed": 0
+  },
+  "wiring": {
+    "allPassed": true,
+    "count": 70
+  },
+  "windowShape": {
+    "os": "10.0.26300.0",
+    "allPassed": true,
+    "count": 11
+  },
+  "legacyAppearanceProbe": {
+    "apiEntry": "legacy overload (no AppearanceRuntime)",
+    "resultSha256": "C39901F7F02B8B2BDF05450477A06D067C5160E212A178A5EED34E83E33D6A00",
+    "startedAt": "2026-10-20T20:25:04.3414215+08:00",
+    "finishedAt": "2026-10-20T20:34:46.0265571+08:00",
+    "fixtureCount": 368,
+    "fixtureErrors": 0,
+    "fixtureSummary": {
+      "total": 368,
+      "succeeded": 368,
+      "failed": 0,
+      "elapsedSeconds": 372.93
+    },
+    "invalidation": {
+      "scenarioCount": 44,
+      "allMatched": 0,
+      "someMismatch": 44,
+      "variantSummary": {
+        "fixedRect": {
+          "match": 42,
+          "mismatch": 2
+        },
+        "fixedRectWithBackgroundPrefill": {
+          "match": 44,
+          "mismatch": 0
+        },
+        "itemDriven": {
+          "match": 0,
+          "mismatch": 44
+        },
+        "itemDrivenWithBackgroundPrefill": {
+          "match": 44,
+          "mismatch": 0
+        }
+      }
+    },
+    "exitCode": 0,
+    "exitCodeMeaning": "0=正常；1=外观探针异常",
+    "noCpuBudgetPassClaim": true
+  }
+}

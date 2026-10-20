@@ -1,12 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Text;
+using System.Drawing.Imaging;
 using System.Windows.Forms;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices.Backdrop;
-using LiteMonitor.src.UI.Decor;
 
 namespace LiteMonitor.ThemeEditor
 {
@@ -26,10 +24,31 @@ namespace LiteMonitor.ThemeEditor
     /// 4. 预览<b>不启动桌面捕获</b>：玻璃使用固定样例图，并在画面上注明"预览"。
     /// 5. 实际 DPI 取当前控件的 <see cref="Control.DeviceDpi"/>，不用全局 UIUtils.ScaleFactor。
     /// 6. 归一化只发生在运行时副本（ThemeAppearanceOptions），绝不回写用户 JSON。
+    ///
+    /// ★ 正式渲染器合同（A13 收口 / 独立验收 R2）：
+    /// 1. 预览与主窗口<b>共用同一套渲染器</b>：本控件持有 <see cref="AppearanceRuntime"/>，
+    ///    绘制时走 <c>UIRenderer.Render(g, groups, theme, appearance)</c> 四参重载 ——
+    ///    外框、辉光、窗口底纹（扫描线 / 网格）与新进度条样式因此与主窗口<b>完全一致</b>。
+    /// 2. 预览<b>不再自绘</b>假扫描线 / 假网格，也不再使用"透明背景"变通：
+    ///    背景层、底纹、外框、辉光、进度条一律由正式渲染层绘制。
+    /// 3. 生命周期：主题切换（主题代次自增）、尺寸变化、DPI 变化都会让运行时快照失效重建；
+    ///    <see cref="AppearanceRuntime"/> 在 <see cref="Dispose(bool)"/> 里释放，绝不泄漏。
+    /// 4. 玻璃底图仍然只来自<b>固定样例图</b>（<see cref="PreviewFrameSource"/>），
+    ///    预览路径<b>绝不</b>访问真实桌面。
     /// </summary>
     public class ThemePreviewControl : Panel
     {
         private Theme? _theme;
+
+        /// <summary>预览副本（主题 / DPI 变化时重建；其余情况复用，保证运行时快照稳定）。</summary>
+        private Theme? _previewTheme;
+
+        /// <summary>预览副本的来源主题（用来判断副本是否需要重建）。</summary>
+        private Theme? _previewThemeSource;
+
+        /// <summary>预览副本使用的 DPI 比例（与 <see cref="_previewTheme"/> 配套）。</summary>
+        private float _previewDpiScale = -1f;
+
         private UILayout? _layout;
         private readonly List<GroupLayoutInfo> _groups = new();
         private float _dpiScale = 1.0f;
@@ -38,17 +57,32 @@ namespace LiteMonitor.ThemeEditor
         private Bitmap? _cachedBitmap;
         private Size _lastSize;
 
-        /// <summary>背景层渲染器：<b>不注册任何实时后端</b>，玻璃只会用固定样例图。</summary>
-        private readonly BackdropRenderer _backdrop = new();
+        /// <summary>正式外观运行时：预览与主窗口共用同一套渲染器与资源生命周期。</summary>
+        private readonly AppearanceRuntime _appearance;
+
+        /// <summary>预览固定样例图的帧来源（只提供固定图案，绝不访问真实桌面）。</summary>
+        private readonly PreviewFrameSource _previewSource;
 
         /// <summary>预览专用的固定样例图（静态图案，绝不来自桌面捕获）。</summary>
         private Bitmap? _previewSample;
+
+        /// <summary>主题是否已换代（换代时让运行时主题代次自增、各层缓存失效）。</summary>
+        private bool _themeChanged = true;
+
+        /// <summary>控件是否已释放（释放后不再触碰运行时）。</summary>
+        private bool _disposed;
 
         public ThemePreviewControl()
         {
             DoubleBuffered = true;
             BackColor = Color.White;
             BorderStyle = BorderStyle.FixedSingle;
+
+            // 固定样例图来源：玻璃预览唯一的底图来源（不注册任何实时后端）
+            _previewSource = new PreviewFrameSource();
+
+            // 正式外观运行时：背景层 / 装饰层 / 进度条与主窗口完全同源
+            _appearance = new AppearanceRuntime(_previewSource);
 
             // DPI 缩放支持 - 手动计算内边距
             _dpiScale = GetDpiScale();
@@ -72,10 +106,19 @@ namespace LiteMonitor.ThemeEditor
             _theme = theme;
             _dpiScale = GetDpiScale();
 
+            // ★ 主题可能是**就地修改**的（编辑器改一个字段就会调一次 SetTheme），
+            //   所以每次都强制重建预览副本 —— 不能按引用复用，否则改动的字段不会进预览。
+            _previewTheme = null;
+            _previewThemeSource = null;
+
             // 创建 DPI 缩放后的主题副本用于预览（独立布局副本，见类注释合同）
             _layout = new UILayout(CreatePreviewTheme(theme, _dpiScale));
 
             BuildMockData();
+
+            // 换肤：主题代次自增，让各层缓存（纹理 / 渐变槽 / 噪点）失效
+            _themeChanged = true;
+
             Invalidate();
         }
 
@@ -171,17 +214,102 @@ namespace LiteMonitor.ThemeEditor
             return groups;
         }
 
+        // ================================================================
+        // 预览渲染（走正式渲染器）
+        // ================================================================
+
         /// <summary>
         /// 把预览主题渲染到指定画布（静态、可测试）。
-        ///
-        /// ★ 层次（v4 §3.3）：背景层 → 底纹（扫描线/网格）→ 内容 → 向内的窗口外框。
-        /// ★ 预览只画"假底纹"与外框；辉光与新进度条样式要等 A07/A13 的正式渲染器接入。
+        /// <para>
+        /// ★ 层次（v4 §3.3）：背景层 → 底纹（扫描线/网格）→ 内容 → 向内的窗口外框 + 辉光。
+        /// </para>
+        /// <para>
+        /// ★ 全部由<b>正式渲染器</b>绘制：<see cref="AppearanceRuntime"/> 提供外观上下文，
+        /// <c>UIRenderer</c> 的四参重载负责背景层、窗口底纹、组块装饰、进度条与外框 / 辉光。
+        /// 预览**不再**自绘假扫描线 / 假网格，也**不再**使用"透明背景"变通。
+        /// </para>
         /// </summary>
         /// <param name="g">目标画布。</param>
         /// <param name="groups">要渲染的分组（Mock 数据）。</param>
         /// <param name="previewTheme">预览主题（由 <see cref="CreatePreviewTheme"/> 生成）。</param>
         /// <param name="bounds">完整客户区矩形（物理像素）。</param>
-        /// <param name="backdrop">背景层渲染器（可空 = 不画背景层）。</param>
+        /// <param name="appearance">正式外观运行时（调用方持有并负责释放）。</param>
+        /// <param name="dpiScale">实际 DPI 比例（仅在运行时还没有上下文时用于补一次快照）。</param>
+        public static void RenderPreview(
+            Graphics g,
+            List<GroupLayoutInfo> groups,
+            Theme previewTheme,
+            Rectangle bounds,
+            AppearanceRuntime appearance,
+            float dpiScale = 1.0f)
+        {
+            if (g == null) throw new ArgumentNullException(nameof(g));
+            if (previewTheme == null) throw new ArgumentNullException(nameof(previewTheme));
+            if (groups == null) throw new ArgumentNullException(nameof(groups));
+            if (appearance == null) throw new ArgumentNullException(nameof(appearance));
+
+            // 调用方还没建立上下文时补一次，保证一定走正式渲染层（而不是旧的三参入口）
+            if (appearance.Options == null)
+                appearance.Update(previewTheme, dpiScale <= 0f ? 1.0f : dpiScale, 1.0f, bounds);
+
+            // 正式渲染入口：背景层 → 窗口底纹 → 组块 → 内容 → 向内的窗口外框 + 辉光
+            UIRenderer.Render(g, groups, previewTheme, appearance);
+
+            // 预览提示（玻璃用的是固定样例图，不是实时桌面）
+            ThemeAppearanceOptions? options = appearance.Options;
+            if (options != null && options.GlassRequested)
+            {
+                DrawPreviewNotice(g, bounds);
+            }
+        }
+
+        /// <summary>
+        /// 兼容入口（不传外观运行时）：自建运行时，用完即释放。
+        /// <para>
+        /// ★ 保留它是为了让**既有调用方与独立复现程序**（它们拿不到运行时实例）继续编译。
+        ///   背景层只画**一次**（由正式渲染器画），因此画面与主窗口逐像素一致。
+        /// </para>
+        /// </summary>
+        /// <param name="g">目标画布。</param>
+        /// <param name="groups">要渲染的分组（Mock 数据）。</param>
+        /// <param name="previewTheme">预览主题。</param>
+        /// <param name="bounds">完整客户区矩形（物理像素）。</param>
+        public static void RenderPreview(
+            Graphics g,
+            List<GroupLayoutInfo> groups,
+            Theme previewTheme,
+            Rectangle bounds)
+        {
+            if (g == null) throw new ArgumentNullException(nameof(g));
+            if (previewTheme == null) throw new ArgumentNullException(nameof(previewTheme));
+            if (groups == null) throw new ArgumentNullException(nameof(groups));
+
+            // 预览专用运行时：固定样例图是唯一的帧来源，绝不注册实时背景后端
+            using var appearance = new AppearanceRuntime(new PreviewFrameSource(null));
+            appearance.Update(previewTheme, 1.0f, 1.0f, bounds);
+
+            RenderPreview(g, groups, previewTheme, bounds, appearance, 1.0f);
+        }
+
+        /// <summary>
+        /// 兼容入口：自建外观运行时（用完即释放），并把背景层的诊断状态留在调用方给的渲染器上。
+        /// <para>
+        /// ★ 保留这个重载是为了兼容既有调用方（它自建运行时，调用方拿不到运行时实例）。
+        /// 新代码请直接用带 <see cref="AppearanceRuntime"/> 的重载：运行时由调用方长期持有，
+        /// 纹理 / 渐变槽缓存才能跨帧复用。
+        /// </para>
+        /// <para>
+        /// ★ 背景层**只画一次**：正式渲染器（走固定样例图的帧来源）负责真正落到画布上。
+        ///   调用方给的 <paramref name="backdrop"/> 只用来记录 <c>LastStatus</c> 诊断，
+        ///   它被渲染到一张**离屏画布**上 —— 若直接落到目标画布，背景就会被画两遍，
+        ///   而染色 / 噪点这类**半透明层叠加后会变深**，画面就不再与主窗口一致。
+        /// </para>
+        /// </summary>
+        /// <param name="g">目标画布。</param>
+        /// <param name="groups">要渲染的分组（Mock 数据）。</param>
+        /// <param name="previewTheme">预览主题（由 <see cref="CreatePreviewTheme"/> 生成）。</param>
+        /// <param name="bounds">完整客户区矩形（物理像素）。</param>
+        /// <param name="backdrop">背景层渲染器（可空 = 不记录诊断）。</param>
         /// <param name="previewSource">预览固定样例图（玻璃用；可空）。</param>
         /// <param name="dpiScale">实际 DPI 比例（用于新尺寸的唯一一次换算）。</param>
         public static void RenderPreview(
@@ -197,130 +325,31 @@ namespace LiteMonitor.ThemeEditor
             if (previewTheme == null) throw new ArgumentNullException(nameof(previewTheme));
             if (groups == null) throw new ArgumentNullException(nameof(groups));
 
-            // 运行时副本：归一化只发生在这里，绝不回写用户 JSON
-            ThemeAppearanceOptions options = ThemeAppearanceOptions.Create(
-                previewTheme,
-                dpiScale <= 0f ? 1.0f : dpiScale,
-                1.0f,
-                bounds,
-                0,
-                null,
-                previewSource);
+            // 预览专用运行时：固定样例图是唯一的帧来源，绝不注册实时背景后端
+            using var appearance = new AppearanceRuntime(new PreviewFrameSource(previewSource));
+            appearance.Update(previewTheme, dpiScale <= 0f ? 1.0f : dpiScale, 1.0f, bounds);
 
-            bool backdropActive = IsBackdropActive(options, previewSource);
-
-            // 1) 背景层（玻璃 = 固定样例图；绝不启动捕获）
-            if (backdropActive && backdrop != null)
+            // 背景层诊断：渲染到**离屏画布**，只为拿到 LastStatus，不碰目标画布
+            if (backdrop != null)
             {
-                backdrop.Render(g, options);
-            }
-
-            // 2) 底纹（扫描线 / 网格）：预览用假绘制，
-            //    正式实现由 A07 的 DecorRenderer 接管（A13 之后完整验收）。
-            DrawPreviewTexture(g, options);
-
-            // 3) 内容：UIRenderer 会用背景色铺满整块画布，
-            //    启用外观效果时改用"透明背景"变体，让背景层 / 底纹透出来。
-            bool needTransparentBackground = backdropActive || options.ScanlineEnabled || options.GridEnabled;
-            Theme contentTheme = needTransparentBackground
-                ? BuildContentTheme(previewTheme, transparentBackground: true)
-                : previewTheme;
-
-            UIRenderer.Render(g, groups, contentTheme);
-
-            // 4) 向内的窗口外框（最后一层）
-            if (options.FrameEnabled)
-            {
-                DecorPainter.FillInnerFrame(
-                    g,
+                ThemeAppearanceOptions options = ThemeAppearanceOptions.Create(
+                    previewTheme,
+                    dpiScale <= 0f ? 1.0f : dpiScale,
+                    1.0f,
                     bounds,
-                    options.FrameStyle,
-                    options.FrameWidthPx,
-                    options.FrameLengthPx,
-                    previewTheme.Layout.CornerRadius,
-                    options.BorderColor);
-            }
+                    0,
+                    null,
+                    previewSource);
 
-            // 5) 预览提示（玻璃用的是固定样例图，不是实时桌面）
-            if (options.GlassRequested)
-            {
-                DrawPreviewNotice(g, bounds);
-            }
-        }
-
-        /// <summary>背景层是否真的会产生画面（solid / 未知模式 = 零副作用）。</summary>
-        private static bool IsBackdropActive(ThemeAppearanceOptions options, Image? previewSource)
-        {
-            string mode = options.BackdropMode ?? ThemeAppearanceOptions.BackdropModeSolid;
-
-            if (string.Equals(mode, ThemeAppearanceOptions.BackdropModeGradient, StringComparison.Ordinal)) return true;
-            if (string.Equals(mode, ThemeAppearanceOptions.BackdropModeGlass, StringComparison.Ordinal)) return previewSource != null;
-
-            return false;
-        }
-
-        /// <summary>
-        /// 预览用"透明背景"变体：把背景色清空，
-        /// UIUtils.GetBrush("") 会返回透明画刷 → UIRenderer 的背景铺底变成空操作。
-        /// </summary>
-        private static Theme BuildContentTheme(Theme previewTheme, bool transparentBackground)
-        {
-            if (!transparentBackground) return previewTheme;
-
-            ColorConfig color = AppearanceThemeConfig.CloneColor(previewTheme.Color ?? new ColorConfig());
-            color.Background = string.Empty;
-
-            return new Theme
-            {
-                Name = previewTheme.Name,
-                Version = previewTheme.Version,
-                Layout = previewTheme.Layout,          // 借用（只读）
-                Font = previewTheme.Font,
-                Thresholds = previewTheme.Thresholds,
-                Color = color,
-                Backdrop = previewTheme.Backdrop,
-                // 字体：只借用，不释放
-                FontTitle = previewTheme.FontTitle,
-                FontGroup = previewTheme.FontGroup,
-                FontItem = previewTheme.FontItem,
-                FontValue = previewTheme.FontValue,
-                FontTaskbar = previewTheme.FontTaskbar
-            };
-        }
-
-        /// <summary>
-        /// 假底纹：扫描线（横线）与网格（横竖线）。
-        /// ★ 只是为了让编辑器的外观字段"看得见"，
-        ///   正式实现由 A07 的 DecorRenderer 负责（A13 之后完整验收）。
-        /// </summary>
-        private static void DrawPreviewTexture(Graphics g, ThemeAppearanceOptions options)
-        {
-            Rectangle b = options.ClientBounds;
-            if (b.Width <= 0 || b.Height <= 0) return;
-
-            if (options.ScanlineEnabled)
-            {
-                int alpha = (int)Math.Round(options.Scanline * 255d / 100d, MidpointRounding.AwayFromZero);
-                if (alpha > 0)
+                using var offscreen = new Bitmap(
+                    Math.Max(1, bounds.Width), Math.Max(1, bounds.Height), PixelFormat.Format32bppPArgb);
+                using (Graphics gOff = Graphics.FromImage(offscreen))
                 {
-                    using var pen = new Pen(Color.FromArgb(alpha, 255, 255, 255), 1);
-                    for (int y = b.Top; y < b.Bottom; y += 3)
-                        g.DrawLine(pen, b.Left, y, b.Right, y);
+                    backdrop.Render(gOff, options);
                 }
             }
 
-            if (options.GridEnabled)
-            {
-                int alpha = (int)Math.Round(options.Grid * 255d / 100d, MidpointRounding.AwayFromZero);
-                if (alpha > 0)
-                {
-                    using var pen = new Pen(Color.FromArgb(alpha, 120, 200, 255), 1);
-                    for (int x = b.Left; x < b.Right; x += 24)
-                        g.DrawLine(pen, x, b.Top, x, b.Bottom);
-                    for (int y = b.Top; y < b.Height + b.Top; y += 24)
-                        g.DrawLine(pen, b.Left, y, b.Right, y);
-                }
-            }
+            RenderPreview(g, groups, previewTheme, bounds, appearance, dpiScale);
         }
 
         /// <summary>预览提示文字：玻璃用的是固定样例图。</summary>
@@ -348,7 +377,7 @@ namespace LiteMonitor.ThemeEditor
         {
             base.OnPaint(e);
 
-            if (_theme == null || _layout == null)
+            if (_theme == null || _layout == null || _disposed)
                 return;
 
             e.Graphics.Clear(Color.FromArgb(245, 245, 245));
@@ -368,7 +397,8 @@ namespace LiteMonitor.ThemeEditor
                 float dpiScale = GetDpiScale();
                 _dpiScale = dpiScale;
 
-                var previewTheme = CreatePreviewTheme(_theme, dpiScale);
+                // 预览副本：主题或 DPI 变化时才重建（复用时运行时快照才能保持稳定）
+                Theme previewTheme = GetPreviewTheme(dpiScale);
                 var previewLayout = new UILayout(previewTheme);
                 int h = previewLayout.Build(_groups);
 
@@ -383,6 +413,22 @@ namespace LiteMonitor.ThemeEditor
                     _lastSize = requiredSize;
                 }
 
+                // 固定样例图交给帧来源（玻璃预览的唯一底图来源）
+                _previewSource.Sample = GetPreviewSample();
+
+                var bounds = new Rectangle(0, 0, requiredSize.Width, requiredSize.Height);
+
+                // 正式外观上下文：换代时主题代次自增，其余情况复用上一次快照
+                if (_themeChanged)
+                {
+                    _appearance.OnThemeChanged(previewTheme, dpiScale, 1.0f, bounds);
+                    _themeChanged = false;
+                }
+                else
+                {
+                    _appearance.Update(previewTheme, dpiScale, 1.0f, bounds);
+                }
+
                 using (Graphics gBmp = Graphics.FromImage(_cachedBitmap))
                 {
                     gBmp.Clear(Color.Transparent); // 清空上次内容
@@ -390,13 +436,13 @@ namespace LiteMonitor.ThemeEditor
                     gBmp.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
                     gBmp.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
 
+                    // 正式渲染器：背景层 / 底纹 / 外框 / 辉光 / 进度条与主窗口同源
                     RenderPreview(
                         gBmp,
                         _groups,
                         previewTheme,
-                        new Rectangle(0, 0, requiredSize.Width, requiredSize.Height),
-                        _backdrop,
-                        GetPreviewSample(),
+                        bounds,
+                        _appearance,
                         dpiScale);
                 }
 
@@ -411,6 +457,30 @@ namespace LiteMonitor.ThemeEditor
                     new PointF(5, 5)
                 );
             }
+        }
+
+        /// <summary>
+        /// 取当前预览副本：主题或 DPI 变化时重建，其余情况复用
+        /// （复用才能让运行时的外观快照保持稳定，不逐帧重建）。
+        /// <para>
+        /// ★ <see cref="SetTheme"/> 会把这里的缓存作废：编辑器是**就地改主题**的，
+        ///   同一个主题对象的内容随时可能变，不能按引用复用旧副本。
+        /// </para>
+        /// </summary>
+        private Theme GetPreviewTheme(float dpiScale)
+        {
+            if (_previewTheme != null
+                && ReferenceEquals(_previewThemeSource, _theme)
+                && _previewDpiScale.Equals(dpiScale))
+            {
+                return _previewTheme;
+            }
+
+            _previewThemeSource = _theme;
+            _previewDpiScale = dpiScale;
+            _previewTheme = CreatePreviewTheme(_theme!, dpiScale);
+
+            return _previewTheme;
         }
 
         /// <summary>
@@ -447,8 +517,10 @@ namespace LiteMonitor.ThemeEditor
         /// </summary>
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
+            if (disposing && !_disposed)
             {
+                _disposed = true;
+
                 _cachedBitmap?.Dispose();
                 _cachedBitmap = null;
 
@@ -456,7 +528,8 @@ namespace LiteMonitor.ThemeEditor
                 _previewSample?.Dispose();
                 _previewSample = null;
 
-                _backdrop.Dispose();
+                // 正式外观运行时：纹理缓存、画刷、噪点位图都在这里释放
+                _appearance.Dispose();
             }
             base.Dispose(disposing);
         }
@@ -468,6 +541,11 @@ namespace LiteMonitor.ThemeEditor
             if (_layout != null)
             {
                 _layout.Build(_groups);
+
+                // 尺寸变化：槽位尺寸不再复用，让各层缓存全量失效
+                if (!_disposed)
+                    _appearance.OnSizeChanged();
+
                 Invalidate();
             }
         }

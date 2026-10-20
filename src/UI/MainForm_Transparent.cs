@@ -160,6 +160,12 @@ namespace LiteMonitor
             //   必须在 UI 线程构造（控制器记录构造线程 ID，并拒绝跨线程调用）。
             _windowAppearance = new WindowAppearanceController(this);
             _winHelper.AttachWindowAppearance(_windowAppearance);
+
+            // ★ R4：把"当前外观快照"的取法交给控制器 ——
+            //   Resize 时窗口轮廓必须按**新客户区尺寸**重新取一次快照，
+            //   否则会沿用旧快照里已被旧高度夹紧的切角长度（轮廓几何与绘制层几何分叉）。
+            //   取法与绘制层完全一致：同一个 SyncAppearanceContext + 同一个 layout.cornerRadius。
+            _windowAppearance.SnapshotProvider = CurrentAppearanceSnapshot;
             
             //资源管理器重启监听
             _wmTaskbarCreated = MainFormWinHelper.RegisterTaskbarCreatedMessage();
@@ -227,6 +233,8 @@ namespace LiteMonitor
             // DPI / Resize
             // ★ A13：窗口轮廓的 Resize 绑定**只有这一处**。
             //   MainFormWinHelper 里原先那份已删除 —— 两处绑定会把轮廓重建两遍。
+            //   ★ 尺寸变化时轮廓会按**当前**快照重算（切角边长按新高度重新夹紧），
+            //   见 WindowAppearanceController.SnapshotProvider。
             this.Resize += (_, __) => _winHelper.ApplyRoundedCorners();
             this.VisibleChanged += (_, __) => { if (Visible) _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert: true); };
             this.HandleCreated += (_, __) =>
@@ -254,14 +262,28 @@ namespace LiteMonitor
         /// </summary>
         private void ApplyWindowAppearance()
         {
-            if (_ui == null) return;
+            WindowAppearanceSnapshot? snapshot = CurrentAppearanceSnapshot();
+            if (!snapshot.HasValue) return;
 
-            ThemeAppearanceOptions? options = _ui.SyncAppearanceContext();
+            ThemeAppearanceOptions? options = snapshot.Value.Options;
             if (options == null) return;
 
-            // 半径取当前主题的 layout.cornerRadius —— 与 UIRenderer.RenderWindowFrame 传入的同一个值
-            int cornerRadiusPx = ThemeManager.Current.Layout.CornerRadius;
-            _windowAppearance?.Apply(options, cornerRadiusPx);
+            _windowAppearance?.Apply(options, snapshot.Value.CornerRadiusPx);
+        }
+
+        /// <summary>
+        /// 取**当前**的外观快照与圆角半径 —— 窗口轮廓与绘制层的唯一同源来源。
+        /// <para>
+        /// ★ 快照来自 <c>SyncAppearanceContext()</c>（绘制层每帧用的就是它，
+        ///   里面的 <c>FrameLengthPx</c> 已按**当前**客户区高度夹紧）；
+        ///   半径取主题的 <c>layout.cornerRadius</c>（绘制层外框用的也是它）。
+        /// </para>
+        /// </summary>
+        private WindowAppearanceSnapshot? CurrentAppearanceSnapshot()
+        {
+            ThemeAppearanceOptions? options = _ui?.SyncAppearanceContext();
+            if (options == null) return null;
+            return new WindowAppearanceSnapshot(options, ThemeManager.Current.Layout.CornerRadius);
         }
 
         public void ShowMainWindow()

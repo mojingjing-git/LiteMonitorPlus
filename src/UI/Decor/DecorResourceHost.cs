@@ -268,7 +268,8 @@ namespace LiteMonitor.src.UI.Decor
         ///
         /// ★ <b>图案内容完全由缓存键决定</b>：类别 + 颜色 + 瓦片尺寸 + 种子 + 变体参数，
         ///   所以同样的输入一定命中同一条缓存，不会出现"改了参数还是旧纹理"。
-        /// ★ 缓存拥有画刷，并负责连同它引用的位图一起释放；
+        /// ★ 缓存<b>同时拥有源位图与画刷</b>（TextureBrush 不复制源位图，
+        ///   两者同生共死），淘汰时一起释放；
         ///   <b>借用者不要 Dispose，也不要改 Transform</b>（需要变换请用
         ///   <see cref="DecorPainter.CloneTextureBrush"/>）。
         /// </summary>
@@ -310,6 +311,8 @@ namespace LiteMonitor.src.UI.Decor
                 seed,
                 variant);
 
+            // ★ 工厂只产出**源位图**，所有权转移给缓存：
+            //   画刷由缓存创建，缓存同时持有源位图（TextureBrush 不复制源位图）。
             return Cache.GetOrAddTextureBrush(key, k =>
             {
                 Bitmap? tile = kind switch
@@ -321,8 +324,8 @@ namespace LiteMonitor.src.UI.Decor
                     _ => null
                 };
                 if (tile == null) throw new InvalidOperationException($"装饰纹理工厂无法生成类别 {kind} 的瓦片。");
-                return new TextureBrush(tile);
-            });
+                return tile;
+            }, key.WidthPx, key.HeightPx);
         }
 
         // ============================================================

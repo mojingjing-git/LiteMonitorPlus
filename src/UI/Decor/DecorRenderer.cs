@@ -438,11 +438,12 @@ namespace LiteMonitor.src.UI.Decor
                 0,
                 PackPatternParams(scanSpacing, gridSize));
 
+            // ★ 工厂只产出**源位图**，所有权转移给缓存：
+            //   画刷由缓存创建，缓存同时持有源位图（TextureBrush 不复制源位图）。
             return _host.Cache.GetOrAddTextureBrush(key, k =>
             {
-                Bitmap tile = BuildCombinedPatternTile(k.WidthPx, scanSpacing, gridSize, scanColor, gridColor);
-                return new TextureBrush(tile);
-            });
+                return BuildCombinedPatternTile(k.WidthPx, scanSpacing, gridSize, scanColor, gridColor);
+            }, key.WidthPx, key.HeightPx);
         }
 
         /// <summary>

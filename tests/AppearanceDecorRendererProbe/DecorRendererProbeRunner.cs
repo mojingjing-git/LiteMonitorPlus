@@ -20,8 +20,12 @@ namespace LiteMonitor.AppearanceDecorRendererProbe
     /// 5. <c>legacy_themes_pixel_identical</c> —— 10 个旧主题逐像素一致；
     /// 6. <c>horizontal_layout_reuse</c> —— 横屏复用底板 / 底纹 / 外框，不新增组框、无条；
     /// 7. <c>bar_styles_clipping</c> —— 旧条逐像素一致 + 新条 0% / 50% / 100% 裁剪；
-    /// 8. <c>progress_cache_platform</c> —— 10,000 次变化进度后缓存进入有界平台；
-    /// 9. <c>frame_cost_budget</c> —— 每帧成本（对照 v4 §7.4）。
+    /// 8. <c>bar_styles_preserve_caller_clip</c> —— 新条必须保留调用方的裁剪
+    ///    （且多次局部重绘 ≡ 完整绘制，半透明纹理不得叠加变深）；
+    /// 9. <c>bar_texture_stripes_visible</c> —— 纹理条的斜纹必须可见且是 45° 斜线
+    ///    （多个条高 / Y 偏移）；
+    /// 10. <c>progress_cache_platform</c> —— 10,000 次变化进度后缓存进入有界平台；
+    /// 11. <c>frame_cost_budget</c> —— 每帧成本（对照 v4 §7.4）。
     /// </summary>
     internal sealed class DecorRendererProbeRunner
     {
@@ -38,6 +42,8 @@ namespace LiteMonitor.AppearanceDecorRendererProbe
             RunLegacyThemes();
             RunHorizontal();
             RunBarStyles();
+            RunBarClipPreservation();
+            RunBarTextureStripes();
             RunProgressCache();
             RunFrameCost();
         }
@@ -604,6 +610,169 @@ namespace LiteMonitor.AppearanceDecorRendererProbe
             }
 
             c.Detail("clipping", arr);
+        }
+
+        // ============================================================
+        // 用例 7.1：两个新条样式都必须**保留调用方的裁剪**
+        // ============================================================
+        private void RunBarClipPreservation()
+        {
+            ProbeCase c = NewCase("bar_styles_preserve_caller_clip");
+
+            Rectangle barRect = new Rectangle(20, 40, 180, 8);
+            Rectangle callerClip = new Rectangle(37, 43, 20, 20);
+            Color sentinel = Color.FromArgb(255, 7, 11, 13);
+            Color background = Color.FromArgb(255, 24, 26, 32);
+
+            JsonArray arr = new();
+            foreach (int style in new[] { ThemeAppearanceOptions.BarStyleGradient, ThemeAppearanceOptions.BarStyleTexture })
+            {
+                Theme styleTheme = ProbeFixture.BuildMechTheme("A07-Clip-" + style,
+                    frameStyle: 0, frameWidth: 0, frameLength: 0, scanline: 0, glow: 0, grid: 0, barStyle: style);
+                ThemeAppearanceOptions styleOptions = ThemeAppearanceOptions.Create(
+                    styleTheme, 1.0f, 1.0f, new Rectangle(0, 0, 240, 120), 1);
+                Color barColor = UIUtils.GetStateColor(0, styleTheme, false);
+
+                using DecorResourceHost styleHost = new DecorResourceHost();
+                using BarRenderer styleBars = new BarRenderer(styleHost);
+                styleHost.UpdateContext(styleOptions);
+
+                // ---------- 7.1.1 裁剪区外的像素必须一个都不变 ----------
+                using Bitmap canvas = ProbeFixture.CreateCanvas(240, 120);
+                using (Graphics g = Graphics.FromImage(canvas))
+                {
+                    g.Clear(sentinel);
+                    g.SetClip(callerClip);
+                    styleBars.RenderBarSlot(g, styleOptions, barRect, 0.5, barColor);
+                }
+
+                int changedOutside = ProbeFixture.CountChangedOutside(canvas, callerClip, sentinel);
+                int changedInside = ProbeFixture.CountChangedInside(canvas, callerClip, sentinel);
+
+                c.Require(changedOutside == 0,
+                    $"样式 {style}：调用方裁剪区外有 {changedOutside} 个像素被改动（SetClip 替换了调用方的裁剪）");
+                c.Require(changedInside > 0,
+                    $"样式 {style}：调用方裁剪区内应有像素被改动，实际 {changedInside}");
+
+                // ---------- 7.1.2 多次局部重绘 ≡ 完整绘制 ----------
+                // 半透明底 + 斜纹如果画到裁剪外，局部重画时还会反复叠加变深。
+                using Bitmap full = ProbeFixture.CreateCanvas(240, 120);
+                using (Graphics g = Graphics.FromImage(full))
+                {
+                    g.Clear(background);
+                    g.SetClip(callerClip);
+                    styleBars.RenderBarSlot(g, styleOptions, barRect, 0.5, barColor);
+                }
+
+                using Bitmap partial = ProbeFixture.CreateCanvas(240, 120);
+                using (Graphics g = Graphics.FromImage(partial))
+                {
+                    g.Clear(background);
+                    for (int i = 0; i < 3; i++)
+                    {
+                        g.ResetClip();
+                        g.SetClip(callerClip);
+
+                        // 生产链路的局部重绘：先把失效区底板补齐，再画条
+                        using (SolidBrush bg = new SolidBrush(background))
+                        {
+                            g.FillRectangle(bg, callerClip);
+                        }
+                        styleBars.RenderBarSlot(g, styleOptions, barRect, 0.5, barColor);
+                    }
+                }
+
+                int diff = ProbeFixture.CountDifferentPixels(full, partial);
+                c.Require(diff == 0,
+                    $"样式 {style}：3 次局部重绘与 1 次完整绘制有 {diff} 个像素不同（半透明纹理叠加变深）");
+
+                arr.Add(new JsonObject
+                {
+                    ["barStyle"] = style,
+                    ["changedOutsideCallerClip"] = changedOutside,
+                    ["changedInsideCallerClip"] = changedInside,
+                    ["partialVsFullDifferentPixels"] = diff
+                });
+            }
+
+            c.Detail("barRect", "(20,40,180,8)");
+            c.Detail("callerClip", "(37,43,20,20)");
+            c.Detail("results", arr);
+        }
+
+        // ============================================================
+        // 用例 7.2：纹理条的斜纹必须可见，且必须是 45° 斜线
+        // ============================================================
+        private void RunBarTextureStripes()
+        {
+            ProbeCase c = NewCase("bar_texture_stripes_visible");
+
+            // 条高 → 瓦片边长 = 条高 × 2（BarRenderer 的规则），并覆盖不同的 Y 偏移
+            (int height, int yOffset)[] cases = { (6, 40), (8, 40), (8, 43), (10, 37), (12, 45), (16, 41) };
+
+            Theme styleTheme = ProbeFixture.BuildMechTheme("A07-Texture",
+                frameStyle: 0, frameWidth: 0, frameLength: 0, scanline: 0, glow: 0, grid: 0,
+                barStyle: ThemeAppearanceOptions.BarStyleTexture);
+            ThemeAppearanceOptions styleOptions = ThemeAppearanceOptions.Create(
+                styleTheme, 1.0f, 1.0f, new Rectangle(0, 0, 240, 120), 1);
+            Color barColor = UIUtils.GetStateColor(0, styleTheme, false);
+
+            using DecorResourceHost styleHost = new DecorResourceHost();
+            using BarRenderer styleBars = new BarRenderer(styleHost);
+            styleHost.UpdateContext(styleOptions);
+
+            JsonArray arr = new();
+            foreach ((int height, int yOffset) in cases)
+            {
+                int tile = Math.Max(4, height * 2);
+                int thickness = DecorTextureFactory.GetBarTextureThickness(tile, tile);
+                int period = DecorTextureFactory.GetBarTexturePeriod(tile, tile);
+                Rectangle barRect = new Rectangle(20, yOffset, 180, height);
+                int fillWidth = (int)(barRect.Width * 0.5);
+
+                // 透明画布（不画轨道）：斜纹是不透明的，半透明底只有约 127 的 alpha
+                using Bitmap canvas = ProbeFixture.CreateCanvas(240, 120);
+                using (Graphics g = Graphics.FromImage(canvas))
+                {
+                    g.Clear(Color.Transparent);
+                    styleBars.RenderBarSlot(g, styleOptions, barRect, 0.5, barColor);
+                }
+
+                List<int> residues = new();
+                int stripes = 0;
+                for (int y = barRect.Top; y < barRect.Bottom; y++)
+                {
+                    for (int x = barRect.Left; x < barRect.Left + fillWidth; x++)
+                    {
+                        if (canvas.GetPixel(x, y).A < 200) continue;
+                        stripes++;
+                        residues.Add((x + y) % period);
+                    }
+                }
+
+                c.Require(stripes > 0,
+                    $"条高 {height} / Y 偏移 {yOffset}：应看到斜纹，实际 0 个斜纹像素（条里只剩平底）");
+
+                // 45° 斜线 ⇒ 所有斜纹像素的 (x+y) mod 周期 落在同一个窄窗口里；
+                // 竖直条纹会把这组余数摊满整个周期。
+                int window = ProbeFixture.MinimalCircularWindow(residues, period);
+                c.Require(window <= thickness * 2 + 4,
+                    $"条高 {height} / Y 偏移 {yOffset}：斜纹应是 45° 斜线" +
+                    $"（(x+y) mod {period} 的最小覆盖窗口 {window} 超过 {thickness * 2 + 4}）");
+
+                arr.Add(new JsonObject
+                {
+                    ["barHeight"] = height,
+                    ["yOffset"] = yOffset,
+                    ["tile"] = tile,
+                    ["thickness"] = thickness,
+                    ["period"] = period,
+                    ["stripePixels"] = stripes,
+                    ["phaseWindow"] = window
+                });
+            }
+
+            c.Detail("cases", arr);
         }
 
         // ============================================================

@@ -13,6 +13,8 @@
 | `cache_limits` | 300 个不同尺寸的槽位 → 条目数 ≤ 128；64 个 4MiB 槽位 → 位图总字节 ≤ 16MiB |
 | `invalidation_entry_points` | 主题代次 / DPI / 用户缩放 / 尺寸变化的显式失效入口 |
 | `gradient_orientation_evidence` | 渐变角度约定取证（0°=左→右，90°=上→下） |
+| `bar_texture_tile_diagonal_continuity` | 进度条纹理瓦片的斜纹形态：周期必须整除边长、内部（去掉 2 像素边缘）必须有斜纹、斜线必须属于同一相位族（`(x+y) mod 周期` 落在窄窗口内）、平铺 3×3 后沿 (x+1, y−1) 方向断链数为 0 |
+| `texture_resource_ownership` | 纹理资源所有权：**缓存取出的画刷必须真的能画出内容**（`TextureBrush` 不复制源位图，源位图必须与画刷同生共死）、8 条纹理淘汰后缓存计数与字节归零、创建数 = 释放数、淘汰后的画刷已失效 |
 
 ## 怎么跑
 

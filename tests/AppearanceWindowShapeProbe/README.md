@@ -35,6 +35,10 @@ tests\AppearanceWindowShapeProbe\output\AppearanceWindowShapeProbe.exe --out <�
 | `path_copied_into_region` | `Region` 复制路径内容 → 路径可立即释放 |
 | `dwm_corner_preference_readback` | 用**真实** DWM 调用后用 `DwmGetWindowAttribute` 读回角偏好（1 / 2 / 2） |
 | `handle_destroyed_no_win32` | 句柄重建后重新应用；句柄销毁后不再调用任何 Win32，也不抛异常 |
+| `resize_reclamps_corner_length` | **R4 反例**：旧快照被小高度夹紧后，窗口变高必须按新高度重算切角长度（40 → 64），并断言 Region 轮廓 == 当前快照推导出的轮廓 |
+| `theme_switch_updates_corner_length` | **R4 反例**：同尺寸换肤后切角长度随新主题的 `frameLength` 更新（16 → 48 → 16） |
+| `layout_switch_updates_corner_length` | **R4 反例**：横竖布局切换导致客户区高度变化后，切角长度重新夹紧（50 → 64 → 50） |
+| `resize_binding_unique` | **A13 硬约束**：窗口轮廓接线的 `Resize +=` 订阅仍然只有一处（源码扫描） |
 
 ## 已知限制
 

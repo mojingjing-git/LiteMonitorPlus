@@ -30,7 +30,9 @@ namespace LiteMonitor.AppearanceThemeCheck
     /// 5. 背景规则：非 solid 模式必须显式写 opacity；opacity>0 必须显式写 tint；
     ///    透明 tint 不破坏 glass → gradient → solid 降级链；
     /// 6. 往返：保存后再加载，所有字段值不变，源文件显式写出的键没有丢失；
-    /// 7. 可读性：按最坏合成面计算 WCAG 对比度并对照判据表。
+    /// 7. 可读性：按最坏合成面计算 WCAG 对比度并对照判据表；
+    /// 8. 预览一致性（A13 收口 R2）：编辑器预览与主渲染入口的效果必须一致
+    ///    （只切 Glow / BarStyle 时，预览像素必须跟着变）。
     ///
     /// 退出码：0 = 全部通过；1 = 有失败项；2 = 环境定位失败。
     /// </summary>
@@ -94,6 +96,8 @@ namespace LiteMonitor.AppearanceThemeCheck
 
             foreach (ThemeSpec spec in ThemeSpecs.All())
                 CheckTheme(spec, repoRoot, roundTripDir);
+
+            PreviewConsistencyCheck.Run(repoRoot);
 
             Console.WriteLine();
             Console.WriteLine($"合计：通过 {_passed} 项，失败 {_failed} 项。");
@@ -739,14 +743,14 @@ namespace LiteMonitor.AppearanceThemeCheck
         }
 
         /// <summary>打印一个分组标题。</summary>
-        private static void Section(string title)
+        internal static void Section(string title)
         {
             Console.WriteLine();
             Console.WriteLine("== " + title + " ==");
         }
 
         /// <summary>记录一次通过。</summary>
-        private static void Check(bool condition, string label, string? detail = null)
+        internal static void Check(bool condition, string label, string? detail = null)
         {
             if (condition)
             {
@@ -760,7 +764,7 @@ namespace LiteMonitor.AppearanceThemeCheck
         }
 
         /// <summary>记录一次失败（没有对照值）。</summary>
-        private static void Fail(string message)
+        internal static void Fail(string message)
         {
             _failed++;
             Console.WriteLine("  [FAIL] " + message);

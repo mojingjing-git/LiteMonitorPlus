@@ -112,6 +112,10 @@ namespace LiteMonitor.AppearanceWiringProbe
         /// <para>宽度按 <c>panelWidthLogical × finalScale</c> 设定，与生产 <c>ApplyTheme</c> 同口径。</para>
         /// </summary>
         public static WiringScene BuildPortrait(Theme theme, float finalScale)
+            => BuildPortrait(theme, finalScale, GroupCount);
+
+        /// <summary>造一个竖屏场景（指定组数，每组 2 项）。</summary>
+        public static WiringScene BuildPortrait(Theme theme, float finalScale, int groupCount)
         {
             theme.Layout.Width = (int)(PanelWidthLogical * finalScale);
 
@@ -120,7 +124,7 @@ namespace LiteMonitor.AppearanceWiringProbe
             string[] itemLabels = { "CPU", "MEM", "HOST", "TEMP", "CPU 2", "MEM 2" };
 
             List<GroupLayoutInfo> groups = new();
-            for (int gi = 0; gi < GroupCount; gi++)
+            for (int gi = 0; gi < groupCount; gi++)
             {
                 List<MetricItem> items = new();
                 for (int ii = 0; ii < ItemsPerGroup; ii++)
@@ -189,14 +193,75 @@ namespace LiteMonitor.AppearanceWiringProbe
         public static Bitmap Render(WiringScene scene, AppearanceRuntime? appearance)
         {
             Bitmap canvas = new Bitmap(Math.Max(1, scene.Width), Math.Max(1, scene.Height), PixelFormat.Format32bppPArgb);
+            RenderOnto(canvas, scene, appearance);
+            return canvas;
+        }
+
+        /// <summary>
+        /// 把一帧渲染到**已有画布**上（不清空）。
+        /// <para>用于"同一张画布先后渲染不同布局"的跨帧污染检测。</para>
+        /// </summary>
+        /// <param name="canvas">目标画布。</param>
+        /// <param name="scene">场景。</param>
+        /// <param name="appearance">外观运行时（null = 旧入口）。</param>
+        /// <param name="clip">
+        /// 可选的**调用方裁剪区**（模拟局部失效）。
+        /// <para>
+        /// ★ 局部失效时 WinForms 会把 Graphics 的可见区限制在失效矩形上，
+        ///   绘制层如果按 <c>VisibleClipBounds</c> 定位底板就会画偏 ——
+        ///   这个参数用来复现该场景（独立验收 R5 的反例）。
+        /// </para>
+        /// </param>
+        public static void RenderOnto(Bitmap canvas, WiringScene scene, AppearanceRuntime? appearance, Rectangle? clip = null)
+        {
             using (Graphics g = Graphics.FromImage(canvas))
             {
+                if (clip.HasValue)
+                {
+                    using Region region = new Region(clip.Value);
+                    g.Clip = region;
+                }
+
                 if (scene.IsHorizontal)
                     HorizontalRenderer.Render(g, scene.Theme, scene.Columns, scene.Width, appearance);
                 else
                     UIRenderer.Render(g, scene.Groups, scene.Theme, appearance);
             }
-            return canvas;
+        }
+
+        /// <summary>
+        /// 统计指定矩形内**恰好等于某颜色**的像素数。
+        /// <para>
+        /// ★ 用途：模拟局部失效时先在画布上预填一个哨兵色（如洋红），
+        ///   渲染后若该色仍出现在失效区里，就说明那一块**没有被补底色**。
+        /// </para>
+        /// </summary>
+        public static int CountColorPixelsInRect(Bitmap bitmap, Rectangle rect, Color color)
+        {
+            int count = 0;
+            int x0 = Math.Max(0, rect.Left);
+            int y0 = Math.Max(0, rect.Top);
+            int x1 = Math.Min(bitmap.Width, rect.Right);
+            int y1 = Math.Min(bitmap.Height, rect.Bottom);
+
+            for (int y = y0; y < y1; y++)
+            {
+                for (int x = x0; x < x1; x++)
+                {
+                    if (bitmap.GetPixel(x, y).ToArgb() == color.ToArgb()) count++;
+                }
+            }
+            return count;
+        }
+
+        /// <summary>把画布清成全透明（作为"重新开始"的起点）。</summary>
+        public static void ClearCanvas(Bitmap canvas)
+        {
+            using (Graphics g = Graphics.FromImage(canvas))
+            {
+                g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                g.Clear(Color.Transparent);
+            }
         }
 
         // ============================================================
@@ -225,6 +290,89 @@ namespace LiteMonitor.AppearanceWiringProbe
         {
             byte[] hash = SHA256.HashData(GetPixels(bitmap));
             return Convert.ToHexString(hash).ToLowerInvariant();
+        }
+
+        /// <summary>
+        /// 把画布存成 PNG（**像素级回归证据**）。
+        /// <para>
+        /// ★ 画布是 32bppPArgb（预乘 alpha），存盘前克隆成 32bppArgb 以解除预乘，
+        ///   否则半透明像素的颜色会被还原成错误的值。
+        /// ★ 哈希只能回答"变没变"，PNG 才能回答"变在哪"——
+        ///   渲染路径优化前后必须像素零变化时，靠它逐像素定位差异区域。
+        /// </para>
+        /// </summary>
+        public static void SavePng(Bitmap bitmap, string path)
+        {
+            string? dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+            using Image image = bitmap.Clone(
+                new Rectangle(0, 0, bitmap.Width, bitmap.Height), PixelFormat.Format32bppArgb);
+            image.Save(path, ImageFormat.Png);
+        }
+
+        /// <summary>
+        /// 统计 alpha **小于 255** 的像素数（画布上"没被画满"的像素）。
+        /// <para>
+        /// ★ 画布是 32bppPArgb（预乘 alpha），alpha 通道仍是真实 alpha。
+        /// ★ 用途：证明背景层是否真的把**整个客户区**铺满了 ——
+        ///   客户区最外一圈如果 alpha &lt; 255，说明底板 / 渐变没有覆盖到边界。
+        /// </para>
+        /// </summary>
+        public static int CountSemiTransparentPixels(Bitmap bitmap)
+        {
+            byte[] pixels = GetPixels(bitmap);
+            int count = 0;
+            for (int i = 3; i < pixels.Length; i += 4)
+            {
+                if (pixels[i] != 255) count++;
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// 取某一行的 alpha 统计：最小值 / 最大值 / 不满 255 的像素数。
+        /// </summary>
+        public static (int Min, int Max, int NotOpaque) GetRowAlphaSummary(Bitmap bitmap, int row)
+        {
+            if (row < 0 || row >= bitmap.Height) return (0, 0, 0);
+
+            byte[] pixels = GetPixels(bitmap);
+            int stride = bitmap.Width * 4;
+            int min = 255;
+            int max = 0;
+            int notOpaque = 0;
+            int offset = row * stride;
+            for (int x = 0; x < bitmap.Width; x++)
+            {
+                int alpha = pixels[offset + x * 4 + 3];
+                if (alpha < min) min = alpha;
+                if (alpha > max) max = alpha;
+                if (alpha != 255) notOpaque++;
+            }
+            return (min, max, notOpaque);
+        }
+
+        /// <summary>
+        /// 取某一列的 alpha 统计：最小值 / 最大值 / 不满 255 的像素数。
+        /// </summary>
+        public static (int Min, int Max, int NotOpaque) GetColumnAlphaSummary(Bitmap bitmap, int column)
+        {
+            if (column < 0 || column >= bitmap.Width) return (0, 0, 0);
+
+            byte[] pixels = GetPixels(bitmap);
+            int stride = bitmap.Width * 4;
+            int min = 255;
+            int max = 0;
+            int notOpaque = 0;
+            for (int y = 0; y < bitmap.Height; y++)
+            {
+                int alpha = pixels[y * stride + column * 4 + 3];
+                if (alpha < min) min = alpha;
+                if (alpha > max) max = alpha;
+                if (alpha != 255) notOpaque++;
+            }
+            return (min, max, notOpaque);
         }
 
         /// <summary>统计两张画布不同的像素数（尺寸不同返回 -1）。</summary>

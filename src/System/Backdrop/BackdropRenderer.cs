@@ -125,7 +125,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
                 GraphicsState state = g.Save();
                 try
                 {
-                    DrawBasePlate(g, options);
+                    if (NeedsBasePlate(status.EffectiveMode, options)) DrawBasePlate(g, options);
 
                     if (status.EffectiveMode == BackdropRenderMode.Gradient)
                     {
@@ -172,24 +172,50 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         // ------------------------------------------------------------
 
         // 不透明底板：保证每次绘制都从确定底板开始，重复绘制不会累积变色
+        // ★ 用"外扩矩形"填充：抗锯齿下严格按客户区填充会让最外一圈只被覆盖一半（漏色）。
         private static void DrawBasePlate(Graphics g, ThemeAppearanceOptions options)
         {
             Color bg = options.BackgroundColor;
             Color plate = Color.FromArgb(255, bg.R, bg.G, bg.B);
             using var brush = new SolidBrush(plate);
-            g.FillRectangle(brush, options.ClientBounds);
+            g.FillRectangle(brush, ThemeAppearanceOptions.GetEdgeCoveredBounds(options.ClientBounds));
+        }
+
+        /// <summary>
+        /// 是否需要铺那张**不透明底板**。
+        /// <para>
+        /// ★ 渐变模式：若渐变两端色都**完全不透明**，<see cref="DrawGradient"/> 会把
+        ///   整块客户区盖满 ⇒ 底板是纯浪费的一次全屏不透明填充
+        ///   （A14 实测：4 卡两倍档约 2.2 ms/帧）。
+        ///   此时跳过底板，**画面像素完全不变**（底板本来就被完全覆盖）。
+        /// <para>
+        /// ★ 玻璃 / 其它模式：帧是半透明的，必须有底板来兜住 ⇒ 一律铺。
+        /// <para>
+        /// ★ 幂等性仍然成立：不透明渐变每次都会盖满整块客户区，
+        ///   连续绘制 N 次的结果与第 1 次完全一致。
+        /// </para>
+        /// </summary>
+        private static bool NeedsBasePlate(BackdropRenderMode mode, ThemeAppearanceOptions options)
+        {
+            if (mode != BackdropRenderMode.Gradient) return true;
+            return options.GradientStartColor.A < 255 || options.GradientEndColor.A < 255;
         }
 
         // 静态渐变：按 GradientAngle 的语义自行求轴，支持任意角度
         private static void DrawGradient(Graphics g, ThemeAppearanceOptions options)
         {
+            // ★ 渐变轴仍按**精确客户区**计算 —— 渐变的颜色分布（两端色落在哪里）
+            //   不能因为抗锯齿补偿而改变，否则画面观感会漂。
             using LinearGradientBrush? brush = BackdropGradient.CreateBrush(
                 options.ClientBounds,
                 options.GradientAngle,
                 options.GradientStartColor,
                 options.GradientEndColor);
             if (brush is null) return;
-            g.FillRectangle(brush, options.ClientBounds);
+
+            // ★ 填充范围外扩：抗锯齿下严格按客户区填充，客户区最外一圈只被覆盖一半（漏色）。
+            //   溢出部分会被 Graphics 裁剪丢弃；超出渐变轴的部分由 GDI+ 自然钳到端点色。
+            g.FillRectangle(brush, ThemeAppearanceOptions.GetEdgeCoveredBounds(options.ClientBounds));
         }
 
         // 实时帧 / 预览固定源：铺满完整客户区（帧是借用的，不释放）
@@ -207,7 +233,8 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             if (alpha <= 0) return;
             Color tint = options.TintColor;
             using var brush = new SolidBrush(Color.FromArgb(alpha, tint.R, tint.G, tint.B));
-            g.FillRectangle(brush, options.ClientBounds);
+            // ★ 同样外扩：染色层必须覆盖整块客户区，否则边缘会留一圈没上色的带。
+            g.FillRectangle(brush, ThemeAppearanceOptions.GetEdgeCoveredBounds(options.ClientBounds));
         }
 
         // 固定种子的噪点（强度 0 时这里根本不会被调用）
@@ -215,7 +242,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         {
             TextureBrush? brush = _noise.GetBrush(options.BackdropNoise);
             if (brush is null) return;
-            g.FillRectangle(brush, options.ClientBounds);
+            g.FillRectangle(brush, ThemeAppearanceOptions.GetEdgeCoveredBounds(options.ClientBounds));
         }
 
         // 边缘辉光（颜色取背景染色色）

@@ -20,7 +20,8 @@ namespace LiteMonitor.AppearanceStaticBackdropProbe
     //  2. gradient 缺省两端色 + 缺省角度 90°，以及显式两端色与 0/90/180/270/45 角度
     //  3. glass 后端不可用 → 明确降级 gradient → solid，并给出可读原因
     //  4. tint 存在/缺省 × Opacity 0/0.5/1，Opacity 只作用于背景层
-    //  5. noise=0 零开销；noise>0 有界且可复现
+    //  5. noise=0 零开销；noise>0 有界且可复现；
+    //     超过容量的强度切换后画刷仍可用；真实渲染路径不抛异常；失效入口清空缓存
     //  6. edge glow=0 零开销
     //  7. 连续 100 次绘制像素完全一致（幂等）
     //  8. 1×1 / 宽高为 0 → 跳过绘制不抛异常
@@ -32,6 +33,9 @@ namespace LiteMonitor.AppearanceStaticBackdropProbe
     {
         private static readonly List<CaseResult> Cases = new();
         private static int _threadsBefore;
+
+        /// <summary>噪点纹理块的位图预算上限（4 块 × 128×128×4 字节）。</summary>
+        private const long MaxNoiseBytes = (long)BackdropNoiseCache.MaxEntries * BackdropNoiseCache.TileSize * BackdropNoiseCache.TileSize * 4;
 
         private static int Main(string[] args)
         {
@@ -53,6 +57,9 @@ namespace LiteMonitor.AppearanceStaticBackdropProbe
             RunCase("C4-tint-opacity", "tint 存在/缺省 × Opacity 0/0.5/1，只作用于背景层", CaseTintOpacity);
             RunCase("C5a-noise-zero", "noise=0：不分配位图", CaseNoiseZero);
             RunCase("C5b-noise-deterministic", "noise>0：有界且固定种子可复现", CaseNoiseDeterministic);
+            RunCase("C5c-noise-cache-eviction", "超过容量的强度切换：每个画刷都仍然可用", CaseNoiseCacheEviction);
+            RunCase("C5d-noise-render-path", "真实渲染路径（DrawNoise）在强度切换后不抛异常", CaseNoiseRenderPath);
+            RunCase("C5e-noise-invalidate-contract", "背景缓存失效入口：释放纹理与画刷且可重建", CaseNoiseInvalidateContract);
             RunCase("C6-edgeglow-zero", "edge glow=0：零开销", CaseEdgeGlowZero);
             RunCase("C7-idempotent-100", "连续 100 次绘制像素完全一致", CaseIdempotent100);
             RunCase("C8a-bounds-1x1", "1×1 客户区：不抛异常", CaseBounds1x1);
@@ -553,6 +560,140 @@ namespace LiteMonitor.AppearanceStaticBackdropProbe
             c.Details["note"] = "稳态分配里含画布与 Graphics 本身，只用于观察不再出现位图分配";
         }
 
+        // C5c：噪点缓存淘汰反例 —— 超过容量的强度切换后，每一个画刷都仍然可用
+        // 缺陷现象：新项入表时 LastUsed=0，被淘汰逻辑当成"最旧"自己释放自己，
+        // 而 GetBrush 仍把它返回 → 调用方 FillRectangle 抛 ArgumentException
+        private static void CaseNoiseCacheEviction(CaseResult c)
+        {
+            int[] sequence = { 10, 10, 20, 20, 30, 30, 40, 40, 50 };
+            var steps = new List<string>();
+            using var cache = new BackdropNoiseCache();
+            using Bitmap surface = ProbeSupport.NewSurface(32, 32);
+
+            for (int i = 0; i < sequence.Length; i++)
+            {
+                int intensity = sequence[i];
+                try
+                {
+                    TextureBrush? brush = cache.GetBrush(intensity);
+                    Require(c, brush != null, $"第 {i + 1} 步（强度 {intensity}）没有拿到画刷");
+                    if (brush is null) continue;
+
+                    // 必须真的落笔：只断言非 null 发现不了"画刷已经被释放"
+                    using (Graphics g = Graphics.FromImage(surface))
+                    {
+                        g.Clear(Color.Transparent);
+                        g.FillRectangle(brush, 0, 0, surface.Width, surface.Height);
+                    }
+                    int painted = CountPaintedPixels(surface);
+                    Require(c, painted > 0, $"第 {i + 1} 步（强度 {intensity}）的画刷没有画出任何像素");
+                    steps.Add($"{intensity}:ok(painted={painted},entries={cache.EntryCount})");
+                }
+                catch (Exception ex)
+                {
+                    Require(c, false, $"第 {i + 1} 步（强度 {intensity}）抛出异常：{ex.GetType().Name} — {ex.Message}");
+                    steps.Add($"{intensity}:EX({ex.GetType().Name}: {ex.Message})");
+                }
+            }
+
+            c.Details["sequence"] = string.Join(",", sequence);
+            c.Details["steps"] = string.Join(" | ", steps);
+            c.Details["entryCount"] = cache.EntryCount;
+            c.Details["totalBytes"] = cache.TotalBytes;
+            Require(c, cache.EntryCount <= BackdropNoiseCache.MaxEntries, $"缓存块数 {cache.EntryCount} 超过上限 {BackdropNoiseCache.MaxEntries}");
+            Require(c, cache.TotalBytes <= MaxNoiseBytes, $"噪点位图占用 {cache.TotalBytes} 字节，超过预算 {MaxNoiseBytes}");
+        }
+
+        // C5d：真实渲染路径（BackdropRenderer.Render → DrawNoise）在强度切换后不抛异常
+        // 同一个渲染器 ⇒ 同一个噪点缓存 ⇒ 与验收报告里的复现条件一致
+        private static void CaseNoiseRenderPath(CaseResult c)
+        {
+            int[] sequence = { 10, 10, 20, 20, 30, 30, 40, 40, 50 };
+            using var renderer = new BackdropRenderer();
+            var steps = new List<string>();
+
+            for (int i = 0; i < sequence.Length; i++)
+            {
+                int intensity = sequence[i];
+                var options = ProbeSupport.MakeOptions(new BackdropConfig { Mode = "gradient", Opacity = 0, Noise = intensity });
+                try
+                {
+                    using Bitmap surface = ProbeSupport.NewSurface(64, 48);
+                    BackdropStatus status;
+                    using (Graphics g = Graphics.FromImage(surface))
+                    {
+                        status = renderer.Render(g, options);
+                    }
+                    Require(c, (status.Layers & BackdropLayer.Noise) != 0, $"第 {i + 1} 步（强度 {intensity}）没有报告噪点层");
+                    steps.Add($"{intensity}:ok(hash={ProbeSupport.Hash(surface).Substring(0, 8)},entries={renderer.NoiseCacheEntryCount})");
+                }
+                catch (Exception ex)
+                {
+                    Require(c, false, $"第 {i + 1} 步（强度 {intensity}）渲染抛出异常：{ex.GetType().Name} — {ex.Message}");
+                    steps.Add($"{intensity}:EX({ex.GetType().Name}: {ex.Message})");
+                }
+            }
+
+            c.Details["sequence"] = string.Join(",", sequence);
+            c.Details["steps"] = string.Join(" | ", steps);
+            c.Details["noiseCacheEntryCount"] = renderer.NoiseCacheEntryCount;
+            c.Details["noiseCacheBytes"] = renderer.NoiseCacheBytes;
+            Require(c, renderer.NoiseCacheEntryCount <= BackdropNoiseCache.MaxEntries, $"缓存块数 {renderer.NoiseCacheEntryCount} 超过上限 {BackdropNoiseCache.MaxEntries}");
+            Require(c, renderer.NoiseCacheBytes <= MaxNoiseBytes, $"噪点位图占用 {renderer.NoiseCacheBytes} 字节，超过预算 {MaxNoiseBytes}");
+
+            // 噪点确实生效：与 noise=0 的画面必须不同
+            string quietHash = RenderHash(new BackdropConfig { Mode = "gradient", Opacity = 0, Noise = 0 });
+            string noisyHash = RenderHash(new BackdropConfig { Mode = "gradient", Opacity = 0, Noise = 40 });
+            c.Details["quietHash"] = quietHash;
+            c.Details["noisyHash"] = noisyHash;
+            Require(c, quietHash != noisyHash, "噪点没有改变画面");
+        }
+
+        // C5e：背景缓存的失效入口（换肤 / 尺寸 / DPI 共用这一个）确实释放纹理与画刷
+        private static void CaseNoiseInvalidateContract(CaseResult c)
+        {
+            var options = ProbeSupport.MakeOptions(new BackdropConfig { Mode = "gradient", Opacity = 0, Noise = 40 });
+
+            using var renderer = new BackdropRenderer();
+            using Bitmap before = ProbeSupport.NewSurface(64, 48);
+            using (Graphics g = Graphics.FromImage(before))
+            {
+                renderer.Render(g, options);
+            }
+            string hashBefore = ProbeSupport.Hash(before);
+            int entriesBefore = renderer.NoiseCacheEntryCount;
+            long bytesBefore = renderer.NoiseCacheBytes;
+            Require(c, entriesBefore > 0, "渲染后噪点缓存是空的");
+
+            // 换肤 / 尺寸 / DPI 变化都必须走这个入口
+            renderer.Invalidate();
+            c.Details["entriesBefore"] = entriesBefore;
+            c.Details["bytesBefore"] = bytesBefore;
+            c.Details["entriesAfterInvalidate"] = renderer.NoiseCacheEntryCount;
+            c.Details["bytesAfterInvalidate"] = renderer.NoiseCacheBytes;
+            Require(c, renderer.NoiseCacheEntryCount == 0, "Invalidate 后仍保留噪点纹理块");
+            Require(c, renderer.NoiseCacheBytes == 0, "Invalidate 后仍占用位图预算");
+
+            // 失效之后必须能重建，且画面与失效前一致（固定种子可复现）
+            using Bitmap after = ProbeSupport.NewSurface(64, 48);
+            using (Graphics g = Graphics.FromImage(after))
+            {
+                renderer.Render(g, options);
+            }
+            c.Details["hashBefore"] = hashBefore;
+            c.Details["hashAfterInvalidate"] = ProbeSupport.Hash(after);
+            Require(c, renderer.NoiseCacheEntryCount == 1, "Invalidate 之后没有重建噪点纹理");
+            Require(c, ProbeSupport.Hash(after) == hashBefore, "失效后重建的画面与失效前不一致");
+
+            // 缓存自身的失效入口同样是"全部释放"
+            using var cache = new BackdropNoiseCache();
+            cache.GetBrush(30);
+            Require(c, cache.EntryCount == 1, "缓存没有记录纹理块");
+            cache.Invalidate();
+            Require(c, cache.EntryCount == 0, "缓存失效后仍保留纹理块");
+            Require(c, cache.TotalBytes == 0, "缓存失效后仍占用位图预算");
+        }
+
         // C6：edge glow = 0 零开销
         private static void CaseEdgeGlowZero(CaseResult c)
         {
@@ -738,6 +879,33 @@ namespace LiteMonitor.AppearanceStaticBackdropProbe
                 status = renderer.Render(g, options);
             }
             return surface.GetPixel(32, 24);
+        }
+
+        /// <summary>渲染一张 64×48 画布并返回像素哈希（用于比较不同配置的渲染结果）。</summary>
+        private static string RenderHash(BackdropConfig backdrop)
+        {
+            var options = ProbeSupport.MakeOptions(backdrop);
+            using var renderer = new BackdropRenderer();
+            using Bitmap surface = ProbeSupport.NewSurface(64, 48);
+            using (Graphics g = Graphics.FromImage(surface))
+            {
+                renderer.Render(g, options);
+            }
+            return ProbeSupport.Hash(surface);
+        }
+
+        /// <summary>统计画布上 alpha 大于 0 的像素数（用来确认画刷真的落笔了）。</summary>
+        private static int CountPaintedPixels(Bitmap surface)
+        {
+            int painted = 0;
+            for (int y = 0; y < surface.Height; y++)
+            {
+                for (int x = 0; x < surface.Width; x++)
+                {
+                    if (surface.GetPixel(x, y).A > 0) painted++;
+                }
+            }
+            return painted;
         }
 
         private static long MeasureSolidAlloc(BackdropRenderer renderer, ThemeAppearanceOptions options, Bitmap surface)
