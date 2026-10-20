@@ -201,16 +201,30 @@ namespace LiteMonitor.Tests
             var clock = new FakeTimeProvider();
             int collections = 0;
             using var release = new ManualResetEventSlim(false);
+            using var samplerStarted = new ManualResetEventSlim(false);
 
             var coordinator = NewCoordinator(clock, () => 1000, async ct =>
             {
                 Interlocked.Increment(ref collections);
-                release.Wait(TimeSpan.FromSeconds(5));
+                // ★ 同步点：通知"采样动作真的开始了"。
+                //   并发请求必须落在采集**在途**的窗口里，否则这条用例名不副实。
+                samplerStarted.Set();
+                // ★ 这里的超时只是"防挂死"的安全网，不再充当同步手段：
+                //   原 5 秒窗口太窄，测试线程一旦被调度延迟超过 5 秒，
+                //   采集会自行超时结束、_running 被清空，后面的请求就不再共享同一任务。
+                release.Wait(TimeSpan.FromSeconds(20));
                 await Task.CompletedTask;
             });
             coordinator.SetReady(true);
 
             var first = coordinator.RequestCollectionAsync();
+
+            // ★ 同步点：等采样动作真的开始，再发并发请求。
+            //   happens-before：采样动作开始 -> 并发请求到达 -> 共享同一个在途任务。
+            //   不依赖线程池调度快慢，也不用 Thread.Sleep 碰运气。
+            Assert.True(samplerStarted.Wait(TimeSpan.FromSeconds(20)),
+                "采样动作未在超时内启动，测试无法确定并发窗口");
+
             var second = coordinator.RequestCollectionAsync();
             var third = coordinator.RequestCollectionAsync();
 
@@ -746,6 +760,135 @@ namespace LiteMonitor.Tests
 
             // 3) 跳过的采集不是失败：失败计数保持 1（既没有 +1，也没有被清零）
             Assert.Equal(1, statistics.FailedCollections);
+        }
+
+        // =========================================================
+        // 取消（OperationCanceledException）≠ 失败采集
+        //
+        //    采集动作被取消时，这一轮**确实开始过**
+        //    （RecordCollectionStarted 已经把 CollectionRounds +1），
+        //    但它既不是成功也不是失败：
+        //      - 记成失败 -> FailedCollections 凭空 +1（取消 / 关闭是过程的副产品，
+        //                    不是采集失败；交付文档里的"采集异常"数就是含噪的数字）；
+        //      - 记成成功 -> 成功轮数虚高，调用方以为这一轮采到了新数据。
+        //    自洽的口径：**轮数已 +1、耗时计入、失败不 +1、对外仍报告"没采到"**。
+        // =========================================================
+
+        [Fact]
+        public async Task 取消的采集不计入失败采集()
+        {
+            var clock = new FakeTimeProvider();
+            var statistics = new HardwareSamplingStatistics();
+            var logged = new List<Exception>();
+            using var cts = new CancellationTokenSource();
+            // ★ 确定性：这一轮采集一定被取消（不靠 Thread.Sleep、不靠时序运气）。
+            cts.Cancel();
+
+            var coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () => 1000,
+                sampler: async ct =>
+                {
+                    // 假时钟：这次采集"消耗"了 250 毫秒才被取消
+                    clock.Advance(TimeSpan.FromMilliseconds(250));
+                    // token 已被取消 -> 抛 TaskCanceledException（OperationCanceledException 的派生类）
+                    await Task.Delay(Timeout.Infinite, ct);
+                },
+                timeProvider: clock,
+                // 注入错误出口：测试输出目录必须保持干净，不能落错误日志文件
+                errorLogger: (source, ex) => { logged.Add(ex); },
+                statistics: statistics);
+            coordinator.SetReady(true);
+
+            // 取消不是成功：这一轮没有拿到新数据，对外仍然报告 false
+            Assert.False(await coordinator.RequestCollectionAsync(cts.Token));
+
+            // ★ 核心：取消不是失败
+            Assert.Equal(0, statistics.FailedCollections);
+            // 这一轮确实开始了（不是"按要求没开始"的关闭期跳过）
+            Assert.Equal(1, statistics.CollectionRounds);
+            // 取消不是异常：不写错误日志（失败才写）
+            Assert.Empty(logged);
+            // 采集确实消耗过时间 -> 耗时必须计入，否则"总耗时"会漏掉一次真实消耗
+            Assert.Equal(250d, statistics.LastCollectionDurationMs);
+            Assert.Equal(250d, statistics.TotalCollectionDurationMs);
+        }
+
+        [Fact]
+        public async Task 取消的采集不冒充成功()
+        {
+            // ★ 反向对照（敏感度自证）：证明上一条用例的断言**能分辨**"取消 ≠ 成功"。
+            //   如果把取消记成成功，失败计数仍然是 0 —— 唯一能分辨的信号是
+            //   "对外完成信号"和"结束回调的 success 标志"。
+            var clock = new FakeTimeProvider();
+            var statistics = new HardwareSamplingStatistics();
+            var completed = new List<bool>();
+            var completedSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            var coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () => 1000,
+                sampler: async ct => { await Task.Delay(Timeout.Infinite, ct); },
+                timeProvider: clock,
+                onCollectionCompleted: (generation, success) =>
+                {
+                    completed.Add(success);
+                    completedSignal.TrySetResult(success);
+                },
+                // 注入错误出口：测试输出目录必须保持干净，不能落错误日志文件
+                errorLogger: (source, ex) => { },
+                statistics: statistics);
+            coordinator.SetReady(true);
+
+            // 对外：被取消的采集没有拿到新数据 -> 必须报告 false
+            Assert.False(await coordinator.RequestCollectionAsync(cts.Token));
+
+            // ★ 结束回调是在 starter.TrySetResult **之后**才被调用的，
+            //   这里用信号量等它（确定性 happens-before），不用 Thread.Sleep。
+            await completedSignal.Task.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Single(completed);
+            Assert.False(completed[0]);
+
+            // 而且这一轮不是失败
+            Assert.Equal(0, statistics.FailedCollections);
+        }
+
+        [Fact]
+        public async Task 取消与真实失败互不干扰()
+        {
+            var clock = new FakeTimeProvider();
+            var statistics = new HardwareSamplingStatistics();
+            int attempt = 0;
+
+            var coordinator = new HardwareSamplingCoordinator(
+                periodProvider: () => 1000,
+                sampler: ct =>
+                {
+                    int n = Interlocked.Increment(ref attempt);
+                    if (n == 1)
+                    {
+                        // 第一次：真正的采集异常
+                        throw new InvalidOperationException("模拟硬件采集异常");
+                    }
+                    // 第二次：被取消
+                    throw new OperationCanceledException();
+                },
+                timeProvider: clock,
+                // 注入错误出口：测试输出目录必须保持干净，不能落错误日志文件
+                errorLogger: (source, ex) => { },
+                statistics: statistics);
+            coordinator.SetReady(true);
+
+            // 1) 真正的失败 -> 恰好 +1
+            Assert.False(await coordinator.RequestCollectionAsync());
+            Assert.Equal(1, statistics.FailedCollections);
+            Assert.Equal(1, statistics.CollectionRounds);
+
+            // 2) 到期后第二轮被取消 -> 失败计数保持 1（既没有 +1，也没有被清零）
+            clock.Advance(TimeSpan.FromSeconds(1));
+            Assert.False(await coordinator.RequestCollectionAsync());
+            Assert.Equal(1, statistics.FailedCollections);
+            Assert.Equal(2, statistics.CollectionRounds);
         }
 
         // =========================================================
