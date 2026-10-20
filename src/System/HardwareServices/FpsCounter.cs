@@ -6,12 +6,665 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Security.Principal;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32; // ★★★ 新增引用 ★★★
 
 // LiteMonitor 系统服务命名空间
 namespace LiteMonitor.src.SystemServices
 {
+    // ================================================================
+    // 进程查询抽象（可注入，便于单元测试隔离真实进程列表）
+    // ================================================================
+
+    /// <summary>
+    /// FPS 进程查询结果状态
+    /// </summary>
+    public enum FpsProcessQueryStatus
+    {
+        /// <summary>查询成功，进程存在</summary>
+        Found = 0,
+
+        /// <summary>进程确实不存在（已退出）</summary>
+        Exited = 1,
+
+        /// <summary>查询失败（权限不足 / 瞬时错误），<b>不等于</b>已退出</summary>
+        Unknown = 2
+    }
+
+    /// <summary>
+    /// FPS 进程查询结果
+    /// </summary>
+    public readonly struct FpsProcessQueryResult
+    {
+        /// <summary>查询状态</summary>
+        public FpsProcessQueryStatus Status { get; }
+
+        /// <summary>进程名（查询失败或已退出时为空串）</summary>
+        public string Name { get; }
+
+        /// <summary>
+        /// 进程身份标识（一般是进程创建时间）。
+        /// 用于识别 PID 重用：0 表示未知。
+        /// </summary>
+        public long Identity { get; }
+
+        private FpsProcessQueryResult(FpsProcessQueryStatus status, string name, long identity)
+        {
+            Status = status;
+            Name = name ?? string.Empty;
+            Identity = identity;
+        }
+
+        /// <summary>构造"查询成功"结果</summary>
+        public static FpsProcessQueryResult CreateFound(string name, long identity = 0)
+            => new FpsProcessQueryResult(FpsProcessQueryStatus.Found, name, identity);
+
+        /// <summary>构造"进程已退出"结果</summary>
+        public static FpsProcessQueryResult CreateExited()
+            => new FpsProcessQueryResult(FpsProcessQueryStatus.Exited, string.Empty, 0);
+
+        /// <summary>
+        /// 构造"查询失败"结果。
+        /// 名称沿用原实现的 "Unknown"：查询失败不等于进程退出，但同样不参与 FPS 统计。
+        /// </summary>
+        public static FpsProcessQueryResult CreateUnknown()
+            => new FpsProcessQueryResult(FpsProcessQueryStatus.Unknown, "Unknown", 0);
+    }
+
+    /// <summary>
+    /// 可注入的进程查询器。
+    /// 默认实现使用 <see cref="Process"/>，测试可注入假实现以避免依赖真实进程列表。
+    /// </summary>
+    public interface IFpsProcessQuery
+    {
+        /// <summary>查询指定 PID 的进程名与身份</summary>
+        FpsProcessQueryResult Query(int pid);
+    }
+
+    // ================================================================
+    // 外部 FPS 采集服务启动抽象（可注入，避免测试触碰真实 PresentMon / ETW / 网络）
+    // ================================================================
+
+    /// <summary>
+    /// 可注入的外部 FPS 采集服务启动器
+    /// </summary>
+    public interface IFpsServiceLauncher
+    {
+        /// <summary>确保外部服务可运行（必要时下载组件）；不可用返回 false</summary>
+        bool EnsureAvailable();
+
+        /// <summary>启动外部服务；每收到一行输出回调一次 <paramref name="onLine"/></summary>
+        bool Start(Action<string> onLine, out string? error);
+
+        /// <summary>停止外部服务</summary>
+        void Stop();
+
+        /// <summary>外部服务进程是否仍在运行</summary>
+        bool IsRunning { get; }
+    }
+
+    /// <summary>
+    /// FPS 状态存储选项
+    /// </summary>
+    public sealed class FpsStateOptions
+    {
+        /// <summary>闲置清理期限（毫秒），默认 30 秒</summary>
+        public int IdleTimeoutMs { get; set; } = 30000;
+
+        /// <summary>查询失败后的最小重试间隔（毫秒），默认 5 秒</summary>
+        public int QueryRetryMs { get; set; } = 5000;
+
+        /// <summary>成功查询结果的复用期限（毫秒），默认 5 秒。用于发现进程退出与 PID 重用</summary>
+        public int ProcessRefreshMs { get; set; } = 5000;
+
+        /// <summary>毫秒单调时钟（便于测试注入假时钟）</summary>
+        public Func<long>? Clock { get; set; }
+
+        /// <summary>需要排除（不参与 FPS 统计）的进程名</summary>
+        public ISet<string>? ExcludedProcesses { get; set; }
+    }
+
+    /// <summary>
+    /// 单个 PID 的诊断信息
+    /// </summary>
+    public readonly struct FpsProcessDiagnostic
+    {
+        /// <summary>进程 PID</summary>
+        public int Pid { get; }
+
+        /// <summary>代次（PID 被重用时递增）</summary>
+        public long Generation { get; }
+
+        /// <summary>缓存的进程名</summary>
+        public string Name { get; }
+
+        /// <summary>当前算出的 FPS（低于阈值时为 0）</summary>
+        public float Fps { get; }
+
+        /// <summary>距最后一次收到帧的毫秒数</summary>
+        public long LastFrameAgeMs { get; }
+
+        /// <summary>上次进程查询是否失败</summary>
+        public bool QueryFailed { get; }
+
+        /// <summary>是否还保留平滑历史</summary>
+        public bool HasHistory { get; }
+
+        /// <summary>滑动累计窗口中保留的采样数（0 表示历史已被清空）</summary>
+        public int HistorySamples { get; }
+
+        internal FpsProcessDiagnostic(int pid, long generation, string name, float fps, long lastFrameAgeMs, bool queryFailed, bool hasHistory, int historySamples)
+        {
+            Pid = pid;
+            Generation = generation;
+            Name = name;
+            Fps = fps;
+            LastFrameAgeMs = lastFrameAgeMs;
+            QueryFailed = queryFailed;
+            HasHistory = hasHistory;
+            HistorySamples = historySamples;
+        }
+    }
+
+    /// <summary>
+    /// FPS 进程状态存储。
+    ///
+    /// 负责维护「每个 PID 的帧计数 / 活动时间 / 查询结果 / 平滑历史 / 清理条件」，
+    /// 是本文件中与外部世界无关的纯状态逻辑，可通过注入 <see cref="IFpsProcessQuery"/>
+    /// 与假时钟进行单元测试，不依赖真实进程列表。
+    ///
+    /// 关键约束：
+    /// - 已退出的 PID 及时从帧计数、累加历史、平滑历史、结果、名称缓存中整体移除；
+    /// - 查询失败（Unknown）做有界重试与负缓存，同一 PID 至少间隔 5 秒再查；
+    /// - 长期不再产生帧的记录按闲置期限（默认 30 秒）有界清理；
+    /// - 解析（写入帧）与统计/清理并发时，真实新增帧不会被过期清理永久丢弃。
+    /// </summary>
+    public sealed class FpsProcessStateStore
+    {
+        /// <summary>累计窗口大小：4 次采样 = 2.0 秒</summary>
+        private const int AccumulatorSize = 4;
+
+        /// <summary>奥运会窗口大小：6 次采样</summary>
+        private const int OlympicSize = 6;
+
+        /// <summary>低于该 FPS 不上报</summary>
+        private const float MinReportedFps = 1.0f;
+
+        /// <summary>一次采样的记录：帧数与持续时间</summary>
+        private struct FrameSample
+        {
+            public int Count;
+            public double Duration;
+        }
+
+        /// <summary>单个 PID 的状态记录</summary>
+        private sealed class Entry
+        {
+            private int _frames;           // 未消费的帧数
+            private long _lastFrameTicks;  // 最后一次收到帧的单调时刻
+            private long _lastQueryTicks;  // 最后一次发起进程查询的单调时刻
+            private int _queryState;       // 0=未查询 1=成功 2=失败
+            private int _sealed;           // 1=已封存（清理流程占用，禁止再写入帧）
+            private string _name = string.Empty;
+            private long _identity;        // 进程身份标识（创建时间），0=未知
+            private float _fps;            // 当前算出的 FPS
+
+            public readonly Queue<FrameSample> Accumulator = new Queue<FrameSample>(AccumulatorSize);
+            public readonly Queue<float> Olympic = new Queue<float>(OlympicSize);
+
+            public int Pid { get; }
+            public long Generation { get; set; }
+
+            public Entry(int pid) { Pid = pid; }
+
+            public float Fps => _fps;
+            public string Name => _name;
+            public long Identity => _identity;
+            public bool HasIdentity => _identity != 0;
+            public bool QueryFailed => _queryState == 2;
+            public bool HasResult => _queryState == 1;
+            public long LastFrameTicks => Interlocked.Read(ref _lastFrameTicks);
+            public long LastQueryTicks => Interlocked.Read(ref _lastQueryTicks);
+            public bool HasHistory => Accumulator.Count > 0 || Olympic.Count > 0;
+
+            /// <summary>记录一帧；条目已封存时返回 false（调用方需换新条目）</summary>
+            public bool TryAddFrame(long ticks)
+            {
+                if (Volatile.Read(ref _sealed) != 0) return false;
+                Interlocked.Increment(ref _frames);
+                Interlocked.Exchange(ref _lastFrameTicks, ticks);
+                if (Volatile.Read(ref _sealed) != 0)
+                {
+                    // 与封存流程竞争：撤销本次计数，交由调用方重试，避免帧被丢进已退休条目
+                    Interlocked.Decrement(ref _frames);
+                    return false;
+                }
+                return true;
+            }
+
+            /// <summary>原子取走当前未消费的帧数</summary>
+            public int TakeFrames() => Interlocked.Exchange(ref _frames, 0);
+
+            /// <summary>把帧数放回（清理流程决定不清理时使用）</summary>
+            public void RestoreFrames(int count) { if (count > 0) Interlocked.Add(ref _frames, count); }
+
+            public void SetQueryState(int state) => Volatile.Write(ref _queryState, state);
+            public void SetLastQueryTicks(long ticks) => Interlocked.Exchange(ref _lastQueryTicks, ticks);
+            public void SetName(string name) => _name = name;
+            public void SetIdentity(long identity) => _identity = identity;
+            public void SetFps(float fps) => _fps = fps;
+
+            /// <summary>清空累加/平滑历史与 FPS（PID 被重用时使用）</summary>
+            public void ResetHistory()
+            {
+                Accumulator.Clear();
+                Olympic.Clear();
+                _fps = 0f;
+            }
+
+            /// <summary>封存条目；成功返回 true</summary>
+            public bool Seal() => Interlocked.Exchange(ref _sealed, 1) == 0;
+
+            /// <summary>解除封存</summary>
+            public void Unseal() => Volatile.Write(ref _sealed, 0);
+        }
+
+        private readonly ConcurrentDictionary<int, Entry> _entries = new();
+        private readonly object _cycleGate = new();   // 保护一轮统计（平滑队列非线程安全）
+        private readonly object _gate = new();        // 保护条目增删（结构变更）
+        private readonly IFpsProcessQuery _query;
+        private readonly Func<long> _clock;
+        private readonly int _idleTimeoutMs;
+        private readonly int _queryRetryMs;
+        private readonly int _processRefreshMs;
+        private readonly ISet<string> _excluded;
+
+        private int _queryCount;            // 累计发起过的进程查询次数
+        private long _totalFramesObserved;  // 累计被统计消费的帧数
+
+        /// <summary>构造状态存储</summary>
+        /// <param name="query">进程查询器（可注入）</param>
+        /// <param name="options">状态选项（可注入假时钟）</param>
+        public FpsProcessStateStore(IFpsProcessQuery query, FpsStateOptions? options = null)
+        {
+            _query = query ?? throw new ArgumentNullException(nameof(query));
+            options ??= new FpsStateOptions();
+
+            _idleTimeoutMs = Math.Max(1000, options.IdleTimeoutMs);
+            _queryRetryMs = Math.Max(100, options.QueryRetryMs);
+            _processRefreshMs = Math.Max(100, options.ProcessRefreshMs);
+            _clock = options.Clock ?? (() => Environment.TickCount64);
+            _excluded = options.ExcludedProcesses ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>当前记录的 PID 数量</summary>
+        public int ProcessCount => _entries.Count;
+
+        /// <summary>累计发起过的进程查询次数（用于观测限频效果）</summary>
+        public int QueryCount => Volatile.Read(ref _queryCount);
+
+        /// <summary>累计被统计消费的帧数（用于观测是否丢帧）</summary>
+        public long TotalFramesObserved => Interlocked.Read(ref _totalFramesObserved);
+
+        /// <summary>是否存在可上报的 FPS 数据</summary>
+        public bool HasActiveFps
+        {
+            get
+            {
+                foreach (var kv in _entries)
+                {
+                    if (kv.Value.Fps >= MinReportedFps) return true;
+                }
+                return false;
+            }
+        }
+
+        /// <summary>解析一行 PresentMon 输出并记录一帧</summary>
+        /// <param name="line">PresentMon 输出的一行文本</param>
+        /// <returns>是否成功解析出 PID 并记录</returns>
+        public bool RecordLine(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return false;
+            if (line[0] == 'A') return false; // 快速检查 "Application" 表头
+
+            // 优化解析：手动查找第一个和第二个逗号，避免 Split(',') 产生大量字符串碎片的 GC 压力
+            int firstComma = line.IndexOf(',');
+            if (firstComma == -1) return false;
+
+            int secondComma = line.IndexOf(',', firstComma + 1);
+            int length = (secondComma == -1) ? line.Length - firstComma - 1 : secondComma - firstComma - 1;
+            if (length <= 0) return false;
+
+            // 使用 ReadOnlySpan 避免 Substring 内存分配
+            ReadOnlySpan<char> pidSpan = line.AsMemory(firstComma + 1, length).Span;
+            if (!int.TryParse(pidSpan, out int pid)) return false;
+
+            RecordFrame(pid);
+            return true;
+        }
+
+        /// <summary>记录一个 PID 的一帧（线程安全）</summary>
+        public void RecordFrame(int pid)
+        {
+            long now = _clock();
+
+            // 快路径：已有条目且未被封存
+            Entry entry = _entries.GetOrAdd(pid, p => new Entry(p));
+            if (entry.TryAddFrame(now)) return;
+
+            // 慢路径：条目已被清理流程封存 → 换成新条目，帧不能丢
+            lock (_gate)
+            {
+                Entry current = _entries.GetOrAdd(pid, p => new Entry(p));
+                if (current.TryAddFrame(now)) return;
+
+                int carried = current.TakeFrames();
+                var fresh = new Entry(pid) { Generation = current.Generation };
+                fresh.RestoreFrames(carried);
+                fresh.TryAddFrame(now);
+                _entries[pid] = fresh;
+            }
+        }
+
+        /// <summary>
+        /// 推进一轮统计与清理。
+        /// </summary>
+        /// <param name="elapsedSeconds">本轮实际经过时间（秒）</param>
+        /// <returns>本轮被清理掉的 PID 数量</returns>
+        public int AdvanceCycle(double elapsedSeconds)
+        {
+            if (elapsedSeconds <= 0) return 0;
+
+            lock (_cycleGate)
+            {
+                long now = _clock();
+                int cleaned = 0;
+
+                foreach (var kv in _entries)
+                {
+                    int pid = kv.Key;
+                    Entry entry = kv.Value;
+
+                    // 本周期帧数（原子取走，避免与解析线程竞争导致丢帧）
+                    int currentCount = entry.TakeFrames();
+                    if (currentCount > 0) Interlocked.Add(ref _totalFramesObserved, currentCount);
+
+                    // 解析进程身份与名称（带负缓存与重试期限）
+                    FpsProcessQueryResult query = ResolveProcess(entry, now);
+                    if (query.Status == FpsProcessQueryStatus.Exited)
+                    {
+                        // 进程确实已退出 → 整体清除该 PID 的全部状态
+                        if (RetireEntry(pid, entry, force: true)) cleaned++;
+                        continue;
+                    }
+
+                    string processName = query.Name;
+                    if (query.Status == FpsProcessQueryStatus.Unknown || _excluded.Contains(processName))
+                    {
+                        // 排除进程 / 查询未知的进程：不参与统计（保持原实现语义）
+                        entry.SetFps(0f);
+                        continue;
+                    }
+
+                    // 闲置清理：长期不再产生帧的记录按期限有界移除
+                    if (now - entry.LastFrameTicks >= _idleTimeoutMs)
+                    {
+                        if (RetireEntry(pid, entry, force: false)) cleaned++;
+                        continue;
+                    }
+
+                    // ===== 以下为原有平滑算法（保持不变） =====
+                    // 第一层：滑动累计算法（解决 600~1200 FPS 波动）
+                    entry.Accumulator.Enqueue(new FrameSample { Count = currentCount, Duration = elapsedSeconds });
+                    while (entry.Accumulator.Count > AccumulatorSize) entry.Accumulator.Dequeue();
+
+                    // 累计求和：计算最近 2 秒内的总帧数和总时间
+                    long totalCount = 0;
+                    double totalTime = 0;
+                    foreach (var sample in entry.Accumulator)
+                    {
+                        totalCount += sample.Count;
+                        totalTime += sample.Duration;
+                    }
+
+                    // 计算初步稳定的 FPS（基于累计数据）
+                    float rawStableFps = 0;
+                    if (totalTime > 0) rawStableFps = (float)(totalCount / totalTime);
+
+                    // 瞬时响应优化：对于刚启动的进程，如果帧率很高，直接使用瞬时值
+                    if (entry.Accumulator.Count < 2 && (currentCount / elapsedSeconds) > 100)
+                    {
+                        rawStableFps = (float)(currentCount / elapsedSeconds);
+                    }
+
+                    // 第二层：奥运会平滑算法（解决数值毛刺）
+                    entry.Olympic.Enqueue(rawStableFps);
+                    while (entry.Olympic.Count > OlympicSize) entry.Olympic.Dequeue();
+
+                    // 计算最终平滑的 FPS：去头去尾取平均（奥运会算法优化版）
+                    float finalFps = 0;
+                    int count = entry.Olympic.Count;
+                    if (count >= 4)
+                    {
+                        float min = float.MaxValue;
+                        float max = float.MinValue;
+                        float sum = 0;
+                        foreach (var f in entry.Olympic)
+                        {
+                            if (f < min) min = f;
+                            if (f > max) max = f;
+                            sum += f;
+                        }
+                        // 去掉一个最高值和一个最低值，计算剩余值的平均值
+                        finalFps = (sum - min - max) / (count - 2);
+                    }
+                    else
+                    {
+                        // 数据不足时直接取平均
+                        float sum = 0;
+                        foreach (var f in entry.Olympic) sum += f;
+                        finalFps = sum / count;
+                    }
+
+                    // 结果存储
+                    if (finalFps < MinReportedFps)
+                    {
+                        // FPS 过低，不上报。
+                        // ★ 与原实现不同：这里不再立即抹掉累加/平滑历史，
+                        //   短暂的停顿不应立刻清空平滑状态，交由闲置期限统一清理。
+                        entry.SetFps(0f);
+                    }
+                    else
+                    {
+                        // 更新该进程的最终 FPS
+                        entry.SetFps(finalFps);
+                    }
+                }
+
+                return cleaned;
+            }
+        }
+
+        /// <summary>取指定 PID 的 FPS（低于阈值或不存在返回 false）</summary>
+        public bool TryGetFps(int pid, out float fps)
+        {
+            fps = 0f;
+            if (!_entries.TryGetValue(pid, out Entry? entry)) return false;
+            if (entry.Fps < MinReportedFps) return false;
+            fps = entry.Fps;
+            return true;
+        }
+
+        /// <summary>找出当前 FPS 最高的进程（与原实现一致的选取规则）</summary>
+        public bool TryGetTopProcess(out int pid, out float fps)
+        {
+            pid = 0;
+            fps = -1f;
+            foreach (var kv in _entries)
+            {
+                float value = kv.Value.Fps;
+                if (value >= MinReportedFps && value > fps)
+                {
+                    fps = value;
+                    pid = kv.Key;
+                }
+            }
+            return pid != 0;
+        }
+
+        /// <summary>取指定 PID 缓存的进程名（未解析出名称时返回空串）</summary>
+        public string GetProcessName(int pid)
+        {
+            return _entries.TryGetValue(pid, out Entry? entry) ? entry.Name : string.Empty;
+        }
+
+        /// <summary>清空全部 FPS 状态</summary>
+        public void Clear()
+        {
+            _entries.Clear();
+            Interlocked.Exchange(ref _totalFramesObserved, 0);
+        }
+
+        /// <summary>导出当前诊断信息（测试与排障用）</summary>
+        public List<FpsProcessDiagnostic> GetDiagnostics()
+        {
+            long now = _clock();
+            var list = new List<FpsProcessDiagnostic>(_entries.Count);
+            foreach (var kv in _entries)
+            {
+                Entry entry = kv.Value;
+                list.Add(new FpsProcessDiagnostic(
+                    entry.Pid,
+                    entry.Generation,
+                    entry.Name,
+                    entry.Fps,
+                    now - entry.LastFrameTicks,
+                    entry.QueryFailed,
+                    entry.HasHistory,
+                    entry.Accumulator.Count));
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// 解析进程名与身份。
+        /// - 查询失败：负缓存，同一 PID 至少间隔 QueryRetryMs（默认 5 秒）才允许再查；
+        /// - 查询成功：结果在 ProcessRefreshMs（默认 5 秒）内复用，用于发现退出与 PID 重用。
+        /// </summary>
+        private FpsProcessQueryResult ResolveProcess(Entry entry, long now)
+        {
+            if (entry.QueryFailed)
+            {
+                // 负缓存：不能每 500ms 就重复抛同一个查询异常
+                if (now - entry.LastQueryTicks < _queryRetryMs)
+                {
+                    return FpsProcessQueryResult.CreateUnknown();
+                }
+            }
+            else if (entry.HasResult)
+            {
+                if (now - entry.LastQueryTicks < _processRefreshMs)
+                {
+                    return FpsProcessQueryResult.CreateFound(entry.Name, entry.Identity);
+                }
+            }
+
+            entry.SetLastQueryTicks(now);
+            Interlocked.Increment(ref _queryCount);
+
+            FpsProcessQueryResult result;
+            try
+            {
+                result = _query.Query(entry.Pid);
+            }
+            catch
+            {
+                // 查询器抛异常按"未知"处理：权限问题或瞬时失败都不等于已退出
+                result = FpsProcessQueryResult.CreateUnknown();
+            }
+
+            switch (result.Status)
+            {
+                case FpsProcessQueryStatus.Found:
+                    // PID 重用判定：身份标识或进程名变化 => 新进程，旧名称与历史不能套上去
+                    bool reused = (entry.HasResult && entry.HasIdentity && result.Identity != 0 && entry.Identity != result.Identity)
+                                  || (entry.HasResult && !string.IsNullOrEmpty(entry.Name)
+                                      && !string.Equals(entry.Name, result.Name, StringComparison.OrdinalIgnoreCase));
+                    if (reused)
+                    {
+                        entry.ResetHistory();
+                        entry.Generation++;
+                    }
+                    entry.SetName(result.Name);
+                    if (result.Identity != 0) entry.SetIdentity(result.Identity);
+                    entry.SetQueryState(1);
+                    break;
+
+                case FpsProcessQueryStatus.Exited:
+                    entry.SetQueryState(1);
+                    break;
+
+                default:
+                    entry.SetQueryState(2);
+                    break;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 清理一个 PID 的全部状态（帧计数、累加历史、平滑历史、结果、名称缓存一并清除）。
+        /// </summary>
+        /// <param name="pid">进程 PID</param>
+        /// <param name="entry">目标条目</param>
+        /// <param name="force">true=进程已确认退出，立即清理；false=仅在没有新帧时清理</param>
+        /// <returns>是否真的被清理</returns>
+        private bool RetireEntry(int pid, Entry entry, bool force)
+        {
+            lock (_gate)
+            {
+                if (!_entries.TryGetValue(pid, out Entry? current) || !ReferenceEquals(current, entry))
+                {
+                    return false; // 已经被其他流程替换或移除
+                }
+
+                if (!entry.Seal()) return false; // 已被其他流程封存
+
+                int pending = entry.TakeFrames();
+                if (pending > 0 && !force)
+                {
+                    // 刚刚还有真实新帧：不是闲置记录，不能误删
+                    entry.RestoreFrames(pending);
+                    entry.Unseal();
+                    return false;
+                }
+
+                _entries.TryRemove(pid, out _);
+
+                if (pending > 0)
+                {
+                    // 残留帧转移到存活条目，避免真实新增帧被过期清理永久丢弃
+                    var fresh = new Entry(pid) { Generation = entry.Generation };
+                    if (_entries.TryAdd(pid, fresh))
+                    {
+                        fresh.RestoreFrames(pending);
+                    }
+                    else if (_entries.TryGetValue(pid, out Entry? alive) && !ReferenceEquals(alive, entry))
+                    {
+                        alive.RestoreFrames(pending);
+                    }
+                    else
+                    {
+                        fresh.RestoreFrames(pending);
+                    }
+                }
+
+                return true;
+            }
+        }
+    }
+
     /// <summary>
     /// FPS 计数器类，用于监控系统中各进程的帧率
     /// 使用 PresentMon 收集帧率数据，并通过多层算法平滑处理确保数据稳定
@@ -20,9 +673,14 @@ namespace LiteMonitor.src.SystemServices
     public class FpsCounter : IDisposable
     {
         // 状态标志
-        private bool _isRunning = false;     // FPS 计数服务运行状态
-        private bool _isRestarting = false;  // 服务重启状态
-        
+        private volatile bool _isRunning = false;     // FPS 计数服务运行状态
+        private int _isRestarting = 0;                 // 服务重启状态（0/1）
+        private int _startGate = 0;                   // 启动防重入闸门（0=空闲 1=启动中）
+        private int _disposed = 0;                     // 最终释放标记
+        private long _lastAccessTicks = 0;             // 最后一次被请求 FPS 数据的时间（单调毫秒）
+        private long _lastDataTicks = 0;               // 最后一次收到数据的时间（单调毫秒）
+        private long _nextStartAttemptTicks = 0;       // 启动失败后的重试退避截止时间
+
         // ★★★ [新增] 静态关机标志 ★★★
         private static bool _isSystemShuttingDown = false;
 
@@ -32,41 +690,28 @@ namespace LiteMonitor.src.SystemServices
             try { SystemEvents.SessionEnding += (s, e) => _isSystemShuttingDown = true; } catch { }
         }
 
-        // ★★★ [新增] 启动锁和最后 activity 时间，用于控制进程生命周期 ★★★
-        private bool _isStarting = false;    // 防止重复启动的标志
-        private DateTime _lastAccessTime = DateTime.MinValue; // 最后一次被 UI 请求数据的时间
-        
-        private Process? _presentMonProc;     // PresentMon 进程实例
-        private DateTime _lastDataTime = DateTime.MinValue; // 最后一次收到数据的时间
-        
         // ★★★ [新增] 引用 DriverInstaller ★★★
         private readonly DriverInstaller _driverInstaller;
 
+        // ★★★ [新增] 可注入的外部服务启动器与进程查询器（便于单元测试） ★★★
+        private readonly IFpsServiceLauncher _launcher;
+        private readonly IFpsProcessQuery _processQuery;
+
+        // ★★★ [新增] FPS 状态存储（每 PID 的帧计数/活动/查询/历史/清理条件） ★★★
+        private readonly FpsProcessStateStore _store;
+
+        // 后台任务的取消源：只用于最终 Dispose，空闲停止不会取消（保证可恢复）
+        private readonly CancellationTokenSource _cts = new();
+
         // 秒表计时，用于计算采样周期
         private Stopwatch _cycleTimer = new Stopwatch();
-        
-        // 原始数据累加：Key=PID，Value=本周期内的帧数
-        private readonly ConcurrentDictionary<int, int> _processFrameCounts = new();
-        
-        // 第一层：滑动累计窗口（解决管道拥堵导致的 600~1200 FPS 跳动）
-        // Key: PID, Value: 过去 N 次采样的记录
-        private readonly ConcurrentDictionary<int, Queue<FrameSample>> _accumulatorHistory = new();
-
-        // 第二层：奥运会平滑队列（解决数值毛刺）
-        private readonly ConcurrentDictionary<int, Queue<float>> _olympicHistory = new();
-        
-        // 最终算出来的各进程稳定 FPS
-        private readonly ConcurrentDictionary<int, float> _calculatedProcessFps = new();
-        
-        // ★★★ [新增] 进程名缓存，减少 GetProcessById 的 CPU 消耗 ★★★
-        private readonly ConcurrentDictionary<int, string> _processNameCache = new();
 
         // ★★★ [新增] 排除进程列表，减少字符串比较开销 ★★★
-        private static readonly HashSet<string> ExcludedProcesses = new(StringComparer.OrdinalIgnoreCase) 
-        { 
-            "LiteMonitor++", "LiteMonitorPlusFPS", "PresentMon", "Unknown" 
+        private static readonly HashSet<string> ExcludedProcesses = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "LiteMonitor++", "LiteMonitorPlusFPS", "PresentMon", "Unknown"
         };
-        
+
         // 锁定机制变量，用于实现粘性锁定逻辑
         private int _currentFocusPid = 0;       // 当前聚焦的进程 PID
         private int _pendingPid = 0;            // 待切换的进程 PID
@@ -74,12 +719,12 @@ namespace LiteMonitor.src.SystemServices
 
         // PresentMon 会话名称
         private const string SESSION_NAME = "LiteMonitor++_Golden_Session";
-        
-        // 累计窗口大小：4次采样 = 2.0秒（抹平 GpuTest 波动）
-        private const int ACCUMULATOR_SIZE = 4;
-        
-        // 奥运会窗口大小：6次采样（平滑微小抖动）
-        private const int OLYMPIC_SIZE = 6;
+
+        // 历史行为：无访问请求超过该秒数后停止外部服务
+        private const int IdleStopSeconds = 5;
+
+        // 启动失败后的重试退避（避免每 500ms 重复尝试）
+        private const int StartRetryBackoffMs = 30000;
 
         // 文件路径常量
         private static readonly string BaseDir = AppDomain.CurrentDomain.BaseDirectory; // 使用 AppDomain 确保准确
@@ -87,39 +732,48 @@ namespace LiteMonitor.src.SystemServices
         private static readonly string AssetDir = Path.Combine(BaseDir, "resources");
         private static readonly string ExePath = Path.Combine(AssetDir, "LiteMonitorPlusFPS.exe");
         private static readonly string LogPath = Path.Combine(BaseDir, "fps_debug.log");
-        
-        /// <summary>
-        /// 内部结构体：一次采样的记录
-        /// 存储某段时间内的帧数和持续时间
-        /// </summary>
-        private struct FrameSample
-        {
-            public int Count;       // 这一段收到的帧数
-            public double Duration; // 这一段花费的时间(秒)
-        }
 
         /// <summary>
-        /// FpsCounter 构造函数
+        /// FPS 构造函数
         /// 初始化环境并启动后台任务
         /// </summary>
         /// <param name="installer">注入 DriverInstaller 以复用下载逻辑</param>
         public FpsCounter(DriverInstaller installer)
+            : this(installer, null, null)
+        {
+        }
+
+        /// <summary>
+        /// FPS 构造函数（可注入外部服务启动器与进程查询器，便于单元测试）
+        /// </summary>
+        /// <param name="installer">注入 DriverInstaller 以复用下载逻辑</param>
+        /// <param name="launcher">外部 FPS 采集服务启动器；为 null 时使用默认的 PresentMon 启动器</param>
+        /// <param name="processQuery">进程查询器；为 null 时使用基于 Process 的默认实现</param>
+        public FpsCounter(DriverInstaller installer, IFpsServiceLauncher? launcher, IFpsProcessQuery? processQuery)
         {
             _driverInstaller = installer;
+            _launcher = launcher ?? new PresentMonServiceLauncher(installer);
+            _processQuery = processQuery ?? new SystemProcessQuery();
+
+            _store = new FpsProcessStateStore(_processQuery, new FpsStateOptions
+            {
+                ExcludedProcesses = ExcludedProcesses
+            });
 
             // [修改] 确保目录存在 (DriverInstaller 也会做，这里双重保险)
             try { if (!Directory.Exists(AssetDir)) Directory.CreateDirectory(AssetDir); } catch { }
-            
+
             // 清除旧日志文件
             try { File.Delete(LogPath); } catch { }
 
             // 500ms 刷新一次 FPS 计算（稳定版频率）
             Task.Run(async () =>
             {
-                _cycleTimer.Start(); 
-                while (true)
+                _cycleTimer.Start();
+                while (!_cts.IsCancellationRequested)
                 {
-                    await Task.Delay(500); 
+                    try { await Task.Delay(500, _cts.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
                     CalculateFps();
                 }
             });
@@ -127,15 +781,36 @@ namespace LiteMonitor.src.SystemServices
             // 3秒检查一次服务健康状态和生命周期
             Task.Run(async () =>
             {
-                while (true)
+                while (!_cts.IsCancellationRequested)
                 {
-                    await Task.Delay(3000);
+                    try { await Task.Delay(3000, _cts.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
                     CheckHealth();
                 }
             });
-            
+
             // ★★★ [修改] 构造函数中不再自动启动服务，改为按需启动 ★★★
         }
+
+        /// <summary>
+        /// FPS 需求提供器（可注入）。
+        ///
+        /// 返回 true 表示当前存在 FPS 采集需求。未设置（null）时保持历史行为：
+        /// 最近 <see cref="IdleStopSeconds"/> 秒内被访问过即视为有需求。
+        ///
+        /// 后续阶段（Web FPS 开关）应注入形如 <c>() =&gt; localFpsDemand || webFpsDemand</c> 的实现；
+        /// 本类只负责"是否应该继续运行"的判定位置，不自行决定需求规则。
+        /// </summary>
+        public Func<bool>? FpsDemandProvider { get; set; }
+
+        /// <summary>当前 FPS 需求状态（外部可查询）</summary>
+        public bool IsFpsDemandActive => ResolveDemand();
+
+        /// <summary>FPS 采集服务当前是否正在运行（外部可查询）</summary>
+        public bool IsServiceRunning => _isRunning;
+
+        /// <summary>当前是否存在可上报的 FPS 数据（外部可查询；false 时不应把 FPS 报成 0）</summary>
+        public bool HasFpsData => _store.HasActiveFps;
 
         private void Log(string msg)
         {
@@ -146,42 +821,32 @@ namespace LiteMonitor.src.SystemServices
         /// 获取当前聚焦进程的 FPS 值
         /// 实现了粘性锁定逻辑，避免频繁切换焦点
         /// </summary>
-        /// <returns>当前聚焦进程的 FPS 值，无数据时返回 0</returns>
+        /// <returns>当前焦点进程的 FPS 值，无数据时返回 0</returns>
         public float? GetFps()
         {
             // ★★★ [修改] 记录本次访问时间，并触发惰性启动 ★★★
-            _lastAccessTime = DateTime.Now;
+            Interlocked.Exchange(ref _lastAccessTicks, Environment.TickCount64);
+
+            // 已最终释放：不再启动服务
+            if (Volatile.Read(ref _disposed) != 0) return 0f;
+
+            // 没有需求：不启动外部服务
+            if (!ResolveDemand()) return 0f;
 
             // 如果没运行且没在启动中，尝试启动服务
-            if (!_isRunning && !_isStarting && !_isRestarting)
-            {
-                _isStarting = true; // 简单锁
-                Task.Run(() => StartService());
-            }
+            EnsureServiceStarted();
 
             if (!_isRunning) return 0f;
-            if (_calculatedProcessFps.IsEmpty) 
+
+            // 粘性锁定逻辑：找出全场 FPS 最高的进程（优化版，避免 OrderBy 全量排序）
+            if (!_store.TryGetTopProcess(out int challengerPid, out float challengerFps))
             {
                 _currentFocusPid = 0;
                 return 0f;
             }
 
-            // 粘性锁定逻辑：找出全场 FPS 最高的进程（优化版，避免 OrderBy 全量排序）
-            int challengerPid = 0;
-            float challengerFps = -1f;
-            foreach (var pair in _calculatedProcessFps)
-            {
-                if (pair.Value > challengerFps)
-                {
-                    challengerFps = pair.Value;
-                    challengerPid = pair.Key;
-                }
-            }
-
-            if (challengerPid == 0) return 0f;
-
             // 焦点进程仲裁逻辑
-            if (_currentFocusPid == 0 || !_calculatedProcessFps.ContainsKey(_currentFocusPid))
+            if (_currentFocusPid == 0 || !_store.TryGetFps(_currentFocusPid, out _))
             {
                 // 当前无焦点或焦点进程已退出，直接切换
                 _currentFocusPid = challengerPid;
@@ -190,8 +855,8 @@ namespace LiteMonitor.src.SystemServices
             else if (challengerPid != _currentFocusPid)
             {
                 // 有新的挑战者进程
-                float currentFps = _calculatedProcessFps[_currentFocusPid];
-                
+                _store.TryGetFps(_currentFocusPid, out float currentFps);
+
                 // 判断是否是 DWM 进程（桌面窗口管理器）
                 bool isChallengerDwm = IsDwm(challengerPid);
 
@@ -208,7 +873,7 @@ namespace LiteMonitor.src.SystemServices
                         if (challengerFps > currentFps * 2.0f) _pendingCount += 10;
 
                         // 连续 4 个周期（约2秒）保持领先 -> 切换焦点
-                        if (_pendingCount >= 2) 
+                        if (_pendingCount >= 2)
                         {
                             _currentFocusPid = challengerPid;
                             _pendingCount = 0;
@@ -234,11 +899,11 @@ namespace LiteMonitor.src.SystemServices
             }
 
             // 返回当前焦点进程的 FPS 值
-            if (_calculatedProcessFps.TryGetValue(_currentFocusPid, out float val))
+            if (_store.TryGetFps(_currentFocusPid, out float val))
             {
                 return (float)Math.Round(val);
             }
-            
+
             return 0f;
         }
 
@@ -249,7 +914,25 @@ namespace LiteMonitor.src.SystemServices
         /// <returns>是 DWM 进程返回 true，否则返回 false</returns>
         private bool IsDwm(int pid)
         {
-            return GetProcessName(pid).Equals("dwm", StringComparison.OrdinalIgnoreCase);
+            return _store.GetProcessName(pid).Equals("dwm", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 解析当前是否存在 FPS 需求。
+        /// 未注入 <see cref="FpsDemandProvider"/> 时保持历史行为：最近被访问过即视为有需求。
+        /// </summary>
+        private bool ResolveDemand()
+        {
+            Func<bool>? provider = FpsDemandProvider;
+            if (provider != null)
+            {
+                try { return provider(); }
+                catch { return false; }
+            }
+
+            long last = Interlocked.Read(ref _lastAccessTicks);
+            if (last == 0) return false;
+            return Environment.TickCount64 - last <= IdleStopSeconds * 1000L;
         }
 
         /// <summary>
@@ -257,25 +940,54 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         private void CheckHealth()
         {
-            if (_isRestarting || _isStarting) return;
+            if (Volatile.Read(ref _disposed) != 0) return;
+            if (Volatile.Read(ref _isRestarting) != 0 || Volatile.Read(ref _startGate) != 0) return;
 
-            // ★★★ [新增] 自动关闭逻辑：如果超过 5 秒没有 UI 请求 FPS 数据，关闭进程 ★★★
-            if (_isRunning && (DateTime.Now - _lastAccessTime).TotalSeconds > 5)
+            bool demand = ResolveDemand();
+
+            // ★★★ [修改] 没有需求时做可恢复停止（不是最终释放），需求恢复后可再次启动 ★★★
+            if (_isRunning && !demand)
             {
-                Dispose(); // 销毁进程
+                StopService();
                 return;
             }
 
-            // 只有在应该运行（有请求）的情况下才检查僵死状态
-            if (_isRunning && (DateTime.Now - _lastAccessTime).TotalSeconds <= 5)
+            // 需求存在但服务没在运行：补启动（可恢复）。
+            // 这样"需求为真 ⇒ 服务应当运行"，外部只需提供需求判定，不必自己去触发启动。
+            if (demand && !_isRunning)
+            {
+                EnsureServiceStarted();
+                return;
+            }
+
+            // 只有在应该运行（有需求）的情况下才检查僵死状态
+            if (_isRunning && demand)
             {
                 // 判断服务是否异常：超过3秒没有收到数据或进程已退出
-                bool isDead = (DateTime.Now - _lastDataTime).TotalSeconds > 3;
-                if (_presentMonProc == null || _presentMonProc.HasExited) isDead = true;
-                
+                bool isDead = (Environment.TickCount64 - _lastDataTicks) > 3000;
+                if (!_launcher.IsRunning) isDead = true;
+
                 // 异常时重启服务
                 if (isDead) Task.Run(() => RestartService());
             }
+        }
+
+        /// <summary>
+        /// 可恢复停止：停止外部 FPS 采集服务并清空 FPS 状态，但保留再次启动的能力。
+        /// 与 <see cref="Dispose"/>（最终释放）不同：本方法不会结束后台任务，
+        /// FPS 需求恢复后仍可重新启动。
+        /// </summary>
+        public void StopService()
+        {
+            try { _launcher.Stop(); } catch { }
+            _isRunning = false;
+
+            // 完整清除 FPS 状态（帧计数、累加历史、平滑历史、结果、名称缓存）
+            _store.Clear();
+
+            _currentFocusPid = 0;
+            _pendingPid = 0;
+            _pendingCount = 0;
         }
 
         /// <summary>
@@ -283,17 +995,31 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         private async Task RestartService()
         {
-            _isRestarting = true;
+            if (Interlocked.CompareExchange(ref _isRestarting, 1, 0) != 0) return;
             try
             {
-                // 释放当前资源
-                Dispose();
+                // 释放当前资源（可恢复停止，不是最终释放）
+                StopService();
                 // 短暂延迟确保资源完全释放
-                await Task.Delay(1000);
+                try { await Task.Delay(1000, _cts.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
                 // 重新启动服务
                 StartService();
             }
-            finally { _isRestarting = false; }
+            finally { Volatile.Write(ref _isRestarting, 0); }
+        }
+
+        /// <summary>
+        /// 确保外部服务已启动（多消费者并发调用只会真正启动一次）
+        /// </summary>
+        private void EnsureServiceStarted()
+        {
+            if (_isRunning) return;
+            if (Volatile.Read(ref _disposed) != 0) return;
+            if (Volatile.Read(ref _startGate) != 0) return;   // 已有启动流程在进行
+            if (Environment.TickCount64 < Interlocked.Read(ref _nextStartAttemptTicks)) return; // 失败退避
+
+            Task.Run(() => StartService());
         }
 
         /// <summary>
@@ -302,75 +1028,63 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         private void StartService()
         {
+            // ★★★ [修改] 原子防重入：并发启动请求只有一个会真正执行 ★★★
+            if (Interlocked.CompareExchange(ref _startGate, 1, 0) != 0) return;
+
             try
             {
-                _isStarting = true;
+                if (Volatile.Read(ref _disposed) != 0) return;
 
-                // 检查是否有管理员权限（PresentMon 需要管理员权限）
-                if (!IsAdministrator()) return;
-                
-                // ★★★ [修改] 如果 PresentMon 不存在，调用 DriverInstaller 自动下载 ★★★
-                if (!File.Exists(ExePath))
+                // ★★★ [修改] 拿到闸门后再复查：排队中的启动任务不能重复拉起第二个实例 ★★★
+                if (_isRunning) return;
+                if (Environment.TickCount64 < Interlocked.Read(ref _nextStartAttemptTicks)) return; // 失败退避
+
+                // 没有需求：不启动、不下载
+                if (!ResolveDemand()) return;
+
+                // 确保外部服务可用（必要时下载组件，带退避避免失败重试忙循环）
+                if (!_launcher.EnsureAvailable())
                 {
-                    var downloadTask = _driverInstaller.CheckAndDownloadPresentMon(silent: true);
-                    downloadTask.Wait(); 
+                    ScheduleStartRetry();
+                    return;
                 }
-                
-                if (!File.Exists(ExePath)) return;
 
-                // 清理可能存在的僵尸进程
-                ForceKillZombies();
-
-                // 配置 PresentMon 进程启动信息
-                var psi = new ProcessStartInfo
+                if (!_launcher.Start(OnPresentMonLine, out string? error))
                 {
-                    FileName = ExePath,
-                    Arguments = $"-session_name {SESSION_NAME} -stop_existing_session -output_stdout",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true, 
-                    CreateNoWindow = true
-                };
-
-                // 启动 PresentMon 进程
-                _presentMonProc = Process.Start(psi);
-                if (_presentMonProc == null) return;
+                    Log($"FPS 服务启动失败: {error}");
+                    ScheduleStartRetry();
+                    return;
+                }
 
                 // 更新服务状态
                 _isRunning = true;
-                _lastDataTime = DateTime.Now; 
-                // 忽略错误输出
-                _presentMonProc.ErrorDataReceived += (s, e) => { };
-                _presentMonProc.BeginErrorReadLine();
-
-                // 监控进程退出状态
-                Task.Run(async () => { await _presentMonProc.WaitForExitAsync(); _isRunning = false; });
-
-                // 异步处理 PresentMon 输出数据
-                Task.Run(async () =>
-                {
-                    try
-                    {
-                        while (!_presentMonProc.StandardOutput.EndOfStream)
-                        {
-                            string? line = await _presentMonProc.StandardOutput.ReadLineAsync();
-                            if (!string.IsNullOrWhiteSpace(line)) 
-                            {
-                                // 解析输出数据
-                                ParseLine(line);
-                                // 更新最后数据时间
-                                _lastDataTime = DateTime.Now;
-                            }
-                        }
-                    }
-                    catch { }
-                });
+                Interlocked.Exchange(ref _lastDataTicks, Environment.TickCount64);
             }
-            catch { }
+            catch
+            {
+                ScheduleStartRetry();
+            }
             finally
             {
-                _isStarting = false;
+                Volatile.Write(ref _startGate, 0);
             }
+        }
+
+        /// <summary>
+        /// 启动失败后的退避，避免每 500ms 重复尝试（忙循环）
+        /// </summary>
+        private void ScheduleStartRetry()
+        {
+            Interlocked.Exchange(ref _nextStartAttemptTicks, Environment.TickCount64 + StartRetryBackoffMs);
+        }
+
+        /// <summary>
+        /// PresentMon 输出回调：解析一行并更新时间戳
+        /// </summary>
+        private void OnPresentMonLine(string line)
+        {
+            Interlocked.Exchange(ref _lastDataTicks, Environment.TickCount64);
+            ParseLine(line);
         }
 
         /// <summary>
@@ -382,25 +1096,7 @@ namespace LiteMonitor.src.SystemServices
         {
             try
             {
-                // 跳过表头行
-                if (line.Length == 0 || line[0] == 'A') return; // 快速检查 "Application"
-
-                // 优化解析：手动查找第一个和第二个逗号，避免 Split(',') 产生大量字符串碎片的 GC 压力
-                int firstComma = line.IndexOf(',');
-                if (firstComma == -1) return;
-
-                int secondComma = line.IndexOf(',', firstComma + 1);
-                int length = (secondComma == -1) ? line.Length - firstComma - 1 : secondComma - firstComma - 1;
-
-                if (length > 0)
-                {
-                    // 使用 ReadOnlySpan 避免 Substring 内存分配
-                    ReadOnlySpan<char> pidSpan = line.AsMemory(firstComma + 1, length).Span;
-                    if (int.TryParse(pidSpan, out int pid))
-                    {
-                        _processFrameCounts.AddOrUpdate(pid, 1, (k, v) => v + 1);
-                    }
-                }
+                _store.RecordLine(line);
             }
             catch { }
         }
@@ -415,125 +1111,12 @@ namespace LiteMonitor.src.SystemServices
 
             // 获取本周期的精确时间（约 0.5s）
             double elapsedSeconds = _cycleTimer.Elapsed.TotalSeconds;
-            _cycleTimer.Restart(); 
+            _cycleTimer.Restart();
 
             if (elapsedSeconds <= 0) return;
 
-            // 清理逻辑：如果没有原始数据，清空计算结果
-            if (_processFrameCounts.IsEmpty)
-            {
-                 if (!_calculatedProcessFps.IsEmpty) _calculatedProcessFps.Clear();
-                 return;
-            }
-
-            // 遍历所有收集到的进程帧数据
-            foreach (var kv in _processFrameCounts)
-            {
-                int pid = kv.Key;
-                int currentCount = kv.Value;
-                _processFrameCounts[pid] = 0; // 读后归零，准备下一个周期
-
-                // 获取进程名称，过滤不需要监控的进程
-                string pName = GetProcessName(pid);
-                if (ExcludedProcesses.Contains(pName))
-                {
-                    _calculatedProcessFps.TryRemove(pid, out _);
-                    continue;
-                }
-
-                // 第一层：滑动累计算法（解决 600~1200 FPS 波动）
-                var accHistory = _accumulatorHistory.GetOrAdd(pid, new Queue<FrameSample>());
-                
-                // 入队新的采样记录（保持最近 4 次采样）
-                accHistory.Enqueue(new FrameSample { Count = currentCount, Duration = elapsedSeconds });
-                while (accHistory.Count > ACCUMULATOR_SIZE) accHistory.Dequeue();
-
-                // 累计求和：计算最近 2 秒内的总帧数和总时间
-                long totalCount = 0;
-                double totalTime = 0;
-                foreach (var sample in accHistory)
-                {
-                    totalCount += sample.Count;
-                    totalTime += sample.Duration;
-                }
-
-                // 计算初步稳定的 FPS（基于累计数据）
-                float rawStableFps = 0;
-                if (totalTime > 0) rawStableFps = (float)(totalCount / totalTime);
-                
-                // 瞬时响应优化：对于刚启动的进程，如果帧率很高，直接使用瞬时值
-                if (accHistory.Count < 2 && (currentCount / elapsedSeconds) > 100)
-                {
-                    rawStableFps = (float)(currentCount / elapsedSeconds);
-                }
-
-                // 第二层：奥运会平滑算法（解决数值毛刺）
-                var olyHistory = _olympicHistory.GetOrAdd(pid, new Queue<float>());
-                olyHistory.Enqueue(rawStableFps);
-                while (olyHistory.Count > OLYMPIC_SIZE) olyHistory.Dequeue();
-
-                // 计算最终平滑的 FPS：去头去尾取平均（奥运会算法优化版）
-                float finalFps = 0;
-                int count = olyHistory.Count;
-                if (count >= 4)
-                {
-                    float min = float.MaxValue;
-                    float max = float.MinValue;
-                    float sum = 0;
-                    foreach (var f in olyHistory)
-                    {
-                        if (f < min) min = f;
-                        if (f > max) max = f;
-                        sum += f;
-                    }
-                    // 去掉一个最高值和一个最低值，计算剩余值的平均值
-                    finalFps = (sum - min - max) / (count - 2);
-                }
-                else
-                {
-                    // 数据不足时直接取平均
-                    float sum = 0;
-                    foreach (var f in olyHistory) sum += f;
-                    finalFps = sum / count;
-                }
-
-                // 结果存储与清理
-                if (finalFps < 1.0f) 
-                {
-                    // FPS 过低，移除该进程
-                    _calculatedProcessFps.TryRemove(pid, out _);
-                    _processNameCache.TryRemove(pid, out _); // ★★★ 同步清理进程名缓存 ★★★
-                    if (currentCount == 0 && totalCount == 0) 
-                    {
-                        // 完全没有帧数据，清理历史记录
-                        _accumulatorHistory.TryRemove(pid, out _);
-                        _olympicHistory.TryRemove(pid, out _);
-                    }
-                }
-                else 
-                {
-                    // 更新该进程的最终 FPS
-                    _calculatedProcessFps[pid] = finalFps;
-                }
-            }
-        }
-
-        /// <summary>
-        /// 获取进程名称（带缓存优化）
-        /// </summary>
-        /// <param name="pid">进程 PID</param>
-        /// <returns>进程名称，失败时返回 "Unknown"</returns>
-        private string GetProcessName(int pid)
-        {
-            if (_processNameCache.TryGetValue(pid, out string? cachedName)) return cachedName;
-
-            try 
-            { 
-                string name = Process.GetProcessById(pid).ProcessName; 
-                _processNameCache.TryAdd(pid, name);
-                return name;
-            } 
-            catch { return "Unknown"; }
+            // 统计与清理（含已退出 PID 移除、闲置清理、查询限频）
+            _store.AdvanceCycle(elapsedSeconds);
         }
 
         /// <summary>
@@ -548,7 +1131,7 @@ namespace LiteMonitor.src.SystemServices
             {
                 // 1. 优先终止所有名为 LiteMonitorPlusFPS 的进程 (最重要)
                 foreach (var p in Process.GetProcessesByName("LiteMonitorPlusFPS")) { try { p.Kill(); } catch { } }
-                
+
                 // 2. 停止 LiteMonitorPlusFPS 会话
                 // 仅在 CLR 未关闭时尝试调用 logman，避免在程序退出极晚期引发异常
                 if (!Environment.HasShutdownStarted)
@@ -572,16 +1155,186 @@ namespace LiteMonitor.src.SystemServices
         }
 
         /// <summary>
-        /// 释放资源
+        /// 最终释放资源：停止外部服务并结束后台任务。
+        /// 与 <see cref="StopService"/>（可恢复停止）区分：本方法之后无法再启动。
         /// </summary>
         public void Dispose()
         {
-            try { 
-                // 终止 PresentMon 进程并清理僵尸进程
-                _presentMonProc?.Kill(); 
-                ForceKillZombies(); 
-                _isRunning = false; // 同步重置状态
-            } catch { }
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
+            StopService();
+
+            try { _cts.Cancel(); } catch { }
+            try { _cts.Dispose(); } catch { }
+        }
+
+        // ================================================================
+        // 默认实现：基于 Process 的进程查询器
+        // ================================================================
+        private sealed class SystemProcessQuery : IFpsProcessQuery
+        {
+            public FpsProcessQueryResult Query(int pid)
+            {
+                try
+                {
+                    // Process 对象用完立即释放
+                    using Process proc = Process.GetProcessById(pid);
+
+                    string name;
+                    try { name = proc.ProcessName; }
+                    catch (ArgumentException) { return FpsProcessQueryResult.CreateExited(); }
+                    catch { return FpsProcessQueryResult.CreateUnknown(); }
+
+                    long identity = 0;
+                    try { identity = proc.StartTime.ToUniversalTime().Ticks; } catch { identity = 0; }
+
+                    return FpsProcessQueryResult.CreateFound(name, identity);
+                }
+                catch (ArgumentException)
+                {
+                    // 进程不存在（已退出）
+                    return FpsProcessQueryResult.CreateExited();
+                }
+                catch
+                {
+                    // 权限不足或瞬时失败：不等于已退出
+                    return FpsProcessQueryResult.CreateUnknown();
+                }
+            }
+        }
+
+        // ================================================================
+        // 默认实现：PresentMon 启动器
+        // ================================================================
+        private sealed class PresentMonServiceLauncher : IFpsServiceLauncher
+        {
+            private readonly DriverInstaller? _installer;
+            private Process? _process;
+            private long _nextEnsureTicks;
+
+            public PresentMonServiceLauncher(DriverInstaller? installer)
+            {
+                _installer = installer;
+            }
+
+            public bool IsRunning
+            {
+                get
+                {
+                    Process? proc = _process;
+                    if (proc == null) return false;
+                    try { return !proc.HasExited; }
+                    catch { return false; }
+                }
+            }
+
+            public bool EnsureAvailable()
+            {
+                if (File.Exists(ExePath)) return true;
+
+                // 下载退避：失败时不要每 500ms 重复发起下载
+                long now = Environment.TickCount64;
+                if (now < Interlocked.Read(ref _nextEnsureTicks)) return false;
+                Interlocked.Exchange(ref _nextEnsureTicks, now + 60000);
+
+                // PresentMon 需要管理员权限
+                if (!IsAdministrator()) return false;
+
+                try
+                {
+                    if (_installer != null)
+                    {
+                        _installer.CheckAndDownloadPresentMon(silent: true).Wait(120000);
+                    }
+                }
+                catch { }
+
+                return File.Exists(ExePath);
+            }
+
+            public bool Start(Action<string> onLine, out string? error)
+            {
+                error = null;
+                Process? proc = null;
+                try
+                {
+                    // 清理可能存在的僵尸进程
+                    ForceKillZombies();
+
+                    // 配置 PresentMon 进程启动信息
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = ExePath,
+                        Arguments = $"-session_name {SESSION_NAME} -stop_existing_session -output_stdout",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    };
+
+                    // 启动 PresentMon 进程
+                    proc = Process.Start(psi);
+                    if (proc == null)
+                    {
+                        error = "PresentMon 启动失败";
+                        return false;
+                    }
+
+                    _process = proc;
+
+                    // 忽略错误输出
+                    proc.ErrorDataReceived += (s, e) => { };
+                    proc.BeginErrorReadLine();
+
+                    // 监控进程退出状态
+                    Task.Run(async () => { try { await proc.WaitForExitAsync(); } catch { } });
+
+                    // 异步处理 PresentMon 输出数据
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            while (!proc.StandardOutput.EndOfStream)
+                            {
+                                string? line = await proc.StandardOutput.ReadLineAsync();
+                                if (!string.IsNullOrWhiteSpace(line))
+                                {
+                                    onLine(line);
+                                }
+                            }
+                        }
+                        catch { }
+                    });
+
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                    try { proc?.Dispose(); } catch { }
+                    return false;
+                }
+            }
+
+            public void Stop()
+            {
+                Process? proc = Interlocked.Exchange(ref _process, null);
+                try
+                {
+                    if (proc != null)
+                    {
+                        if (!proc.HasExited) proc.Kill();
+                    }
+                }
+                catch { }
+                finally
+                {
+                    try { proc?.Dispose(); } catch { }
+                }
+
+                // 清理僵尸进程与 ETW 会话
+                ForceKillZombies();
+            }
         }
     }
 }
