@@ -46,6 +46,57 @@ namespace LiteMonitor.src.UI
             this.ResumeLayout(true);
         }
 
+        /// <summary>
+        /// 释放页面缓存。
+        ///
+        /// <c>_pages</c> 里的页面只有**当前挂载**的那一个在 <c>_pnlContent</c> 的控件树里，
+        /// 窗体 Dispose 顺着控件树只能碰到它。其余页面从未被挂载过
+        /// （<see cref="SwitchPage"/> 里的 <c>_pnlContent.Controls.Clear()</c> 是「摘下来留着复用」，
+        /// 不是「销毁」），窗体关掉后没有任何引用链能确定性地释放它们，
+        /// 只能等 <see cref="Control"/> 的终结器回收 —— 在那之前它们的子控件窗口句柄与
+        /// GDI 对象一直占着。
+        ///
+        /// 因此这里显式释放全部页面。对已经在控件树里的那个页面重复 Dispose 是安全的
+        /// （<see cref="Control.Dispose()"/> 幂等），不必区分当前页。
+        ///
+        /// 覆盖范围（全仓库 5 个打开点都会走到这里）：
+        /// 三处 <c>using { ShowDialog(); }</c>（MenuManager 设置项、MenuMonitorHelper ×2）由 using 调 Dispose；
+        /// 两处 <c>new SettingsForm(...).Show()</c>（MainFormBizHelper.OpenSettings、TaskbarBizHelper 双击）
+        /// 由 <see cref="Form.Close()"/> 在非模态路径上自己 Dispose —— 不是只触发 FormClosed 就结束。
+        /// 已用 WinForms 探针确认：主窗体持有消息循环时，次级非模态窗体 Close() 返回时
+        /// IsDisposed 已为 true、句柄已销毁、已从 Application.OpenForms 移除。
+        /// 因此不需要额外挂 FormClosed 做兜底；挂了也只是多一次幂等调用。
+        /// </summary>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                DisposeCachedPages();
+            }
+
+            base.Dispose(disposing);
+        }
+
+        /// <summary>
+        /// 释放 <c>_pages</c> 里的所有页面并清空缓存。可重复调用。
+        ///
+        /// 释放一个仍是容器子控件的页面时，<see cref="Control.Dispose()"/> 会顺手把它从父容器的
+        /// <c>Controls</c> 里摘掉（实测 <c>Count</c> 1 → 0、<c>Contains</c> 为 false），
+        /// 所以不存在「已释放却仍挂在 <c>_pnlContent</c> 里」的悬挂页，
+        /// 调用前不必先手工 <c>Controls.Clear()</c>。
+        /// </summary>
+        private void DisposeCachedPages()
+        {
+            if (_pages.Count == 0) return;
+
+            foreach (var kv in _pages)
+            {
+                kv.Value.Dispose();
+            }
+
+            _pages.Clear();
+        }
+
         public SettingsForm(Settings cfg, UIController ui, MainForm mainForm)
         { 
             _cfg = cfg; 
@@ -91,7 +142,13 @@ namespace LiteMonitor.src.UI
 
             // 底部按钮
             var pnlBottom = new Panel { Dock = DockStyle.Bottom, Height = UIUtils.S(60), BackColor = UIColors.MainBg };
-            pnlBottom.Paint += (s, e) => e.Graphics.DrawLine(new Pen(UIColors.Border), 0, 0, Width, 0);
+            // Paint 里每次重绘都新建 Pen 且从未释放：底部栏每次被覆盖/重绘就漏一个 GDI 对象。
+            // 用 using 收口；不缓存成静态字段是为了让主题换色时自动生效（缓存会留下旧颜色的 Pen）。
+            pnlBottom.Paint += (s, e) =>
+            {
+                using var pen = new Pen(UIColors.Border);
+                e.Graphics.DrawLine(pen, 0, 0, Width, 0);
+            };
 
             var flowBtns = new FlowLayoutPanel 
             { 
@@ -138,8 +195,12 @@ namespace LiteMonitor.src.UI
 
         private void InitPages()
         {
+            // 先释放上一批页面再清缓存：_pages.Clear() 只是丢引用，
+            // 被丢掉的页面（及其子控件的窗口句柄）要等终结器才回收。
+            // 当前只在构造时调用一次，这里是防止将来重调时退化成泄漏。
+            DisposeCachedPages();
+
             _pnlNavContainer.Controls.Clear();
-            _pages.Clear();
             
             // 注册所有页面
             AddNav("MainPanel", LanguageManager.T("Menu.MainFormSettings"), new MainPanelPage());
