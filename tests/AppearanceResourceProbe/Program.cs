@@ -23,8 +23,13 @@ namespace LiteMonitor.AppearanceResourceProbe
     ///   AppearanceResourceProbe (--pid &lt;pid&gt; | --name &lt;进程名&gt;)
     ///                       [--label &lt;场景名&gt;] [--interval-ms &lt;n&gt;]
     ///                       [--duration-sec &lt;n&gt;] [--out &lt;证据目录&gt;]
+    ///                       [--idle-baseline]
     ///
-    /// 退出码：0 = 采样完成；1 = 参数/环境错误；2 = 采样过程中出错。
+    /// 退出码：
+    ///   0 = 全部门槛通过；
+    ///   1 = 参数/环境错误；
+    ///   2 = 采样过程中出错；
+    ///   3 = 有门槛未通过**或样本不足无法判定**（★ 不作通过结论）。
     ///
     /// ★ 本探针**不引用主工程**：只用 BCL + 三个 Win32 API，
     ///   编译不碰主工程的 obj/ ⇒ 可与其它会话的 build/test 并发执行。
@@ -49,6 +54,20 @@ namespace LiteMonitor.AppearanceResourceProbe
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint GetGuiResources(IntPtr hProcess, uint uiFlags);
 
+        // ── 判定门槛（统一口径，来源见 A17 清单 §2.4）──
+
+        /// <summary>句柄 / GDI / USER：后半段最小二乘斜率上限（个/分钟）。</summary>
+        private const double SlopeThresholdPerMinute = 5.0;
+
+        /// <summary>私存：单场景增量上限（字节）= 30 MB。</summary>
+        private const long PrivateDeltaThresholdBytes = 30L * 1024 * 1024;
+
+        /// <summary>后半段最少样本数 —— 少于这个数，斜率不可判定。</summary>
+        private const int MinSecondHalfSamples = 4;
+
+        /// <summary>后半段最少时间跨度（毫秒）—— 跨度太短，外推「每分钟」没有意义。</summary>
+        private const long MinSecondHalfSpanMs = 5000;
+
         private sealed class Sample
         {
             public int Index { get; set; }
@@ -58,6 +77,30 @@ namespace LiteMonitor.AppearanceResourceProbe
             public int UserObjects { get; set; }
             public long PrivateBytes { get; set; }
             public long WorkingSetBytes { get; set; }
+
+            /// <summary>本次采样没能读到目标进程（进程可能已退出）⇒ 读数不可信。</summary>
+            public bool ReadFailed { get; set; }
+        }
+
+        /// <summary>一次采样的判定结果。</summary>
+        private sealed class Verdict
+        {
+            /// <summary>样本是否足以判定（不足 ⇒ false，**不作通过结论**）。</summary>
+            public bool Judgable { get; set; } = true;
+
+            /// <summary>可判定，且所有门槛都过。</summary>
+            public bool Passed { get; set; } = true;
+
+            /// <summary>进程退出码：0 = 全通过；3 = 未通过或不可判定。</summary>
+            public int ExitCode { get; set; }
+
+            /// <summary>门槛未通过。</summary>
+            public List<string> Failures { get; } = new List<string>();
+
+            /// <summary>样本不足 / 读数不可信 ⇒ 不可判定（≠ 未通过，但同样不作通过结论）。</summary>
+            public List<string> Undetermined { get; } = new List<string>();
+
+            public List<string> Notes { get; } = new List<string>();
         }
 
         [STAThread]
@@ -78,6 +121,7 @@ namespace LiteMonitor.AppearanceResourceProbe
             int intervalMs = 1000;
             int durationSec = 60;
             string outDir = Path.Combine(AppContext.BaseDirectory, "evidence");
+            bool idleBaseline = false;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -113,6 +157,9 @@ namespace LiteMonitor.AppearanceResourceProbe
                     case "--out":
                         if (!TryNext(args, ref i, out outDir)) { Console.Error.WriteLine("参数 --out 缺少值。"); return 1; }
                         break;
+                    case "--idle-baseline":
+                        idleBaseline = true;
+                        break;
                     case "--help":
                     case "-h":
                         PrintUsage();
@@ -135,14 +182,15 @@ namespace LiteMonitor.AppearanceResourceProbe
             {
                 if (pid <= 0) pid = ResolvePid(procName!);
                 Console.WriteLine("目标进程：" + pid + "（" + SafeProcessName(pid) + "）");
-                Console.WriteLine("场景标签：" + label);
+                Console.WriteLine("场景标签：" + label + (idleBaseline ? "（空闲基线）" : ""));
                 Console.WriteLine("采样：" + durationSec + " 秒，间隔 " + intervalMs + " ms");
                 Console.WriteLine();
 
                 var samples = CollectSamples(pid, intervalMs, durationSec, label);
-                WriteEvidence(outDir, label, pid, samples);
-                PrintSummary(samples);
-                return 0;
+                var verdict = Evaluate(samples, idleBaseline);
+                WriteEvidence(outDir, label, pid, samples, verdict, idleBaseline);
+                PrintSummary(samples, verdict, idleBaseline);
+                return verdict.ExitCode;
             }
             catch (Exception ex)
             {
@@ -212,7 +260,8 @@ namespace LiteMonitor.AppearanceResourceProbe
                     }
                     catch (Exception)
                     {
-                        // 进程可能刚好退出了 —— 保留已采到的样本。
+                        // 进程可能刚好退出了 —— 保留已采到的样本，但标记读数不可信。
+                        s.ReadFailed = true;
                     }
 
                     s.GdiObjects = (int)GetGuiResources(handle, GR_GDIOBJECTS);
@@ -225,7 +274,8 @@ namespace LiteMonitor.AppearanceResourceProbe
                         "  GDI=" + s.GdiObjects.ToString(CultureInfo.InvariantCulture) +
                         "  USER=" + s.UserObjects.ToString(CultureInfo.InvariantCulture) +
                         "  私存=" + (s.PrivateBytes / 1024 / 1024) + "MB" +
-                        "  工作集=" + (s.WorkingSetBytes / 1024 / 1024) + "MB");
+                        "  工作集=" + (s.WorkingSetBytes / 1024 / 1024) + "MB" +
+                        (s.ReadFailed ? "  ⚠ 本次未读到目标进程" : ""));
 
                     if (i < total - 1) Thread.Sleep(intervalMs);
                 }
@@ -239,66 +289,211 @@ namespace LiteMonitor.AppearanceResourceProbe
 
         /// <summary>
         /// 增长斜率：只看**后半段**，避开启动/预热瞬态。
+        /// 用**最小二乘直线拟合**（不是两端点差分）—— 单次 GC 或一次 UI 拖动
+        /// 在两端点差分里能被放大成 ±几十，30 分钟长时场景尤易误判。
+        ///
+        /// x 用相对首样本的毫秒数，避免绝对时间戳带来的数值稳定性问题。
+        /// 返回 null = **不可判定**（样本不足 / 跨度太短）。
         /// 单位：个/分钟。
         /// </summary>
-        private static double SlopePerMinute(List<Sample> samples, Func<Sample, double> selector)
+        private static double? SlopePerMinute(List<Sample> samples, Func<Sample, double> selector)
         {
-            if (samples.Count < 4) return 0;
-            int from = samples.Count / 2;
-            var seg = samples.Skip(from).ToList();
-            double dtMs = seg[seg.Count - 1].ElapsedMs - seg[0].ElapsedMs;
-            if (dtMs <= 0) return 0;
-            double dv = selector(seg[seg.Count - 1]) - selector(seg[0]);
-            return dv / dtMs * 60000.0;
+            if (samples.Count < 2) return null;
+
+            var seg = samples.Skip(samples.Count / 2).ToList();
+            if (seg.Count < MinSecondHalfSamples) return null;
+
+            double spanMs = seg[seg.Count - 1].ElapsedMs - seg[0].ElapsedMs;
+            if (spanMs < MinSecondHalfSpanMs) return null;
+
+            double x0 = seg[0].ElapsedMs;
+            double sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+            foreach (var s in seg)
+            {
+                double x = s.ElapsedMs - x0;
+                double y = selector(s);
+                sumX += x;
+                sumY += y;
+                sumXY += x * y;
+                sumXX += x * x;
+            }
+
+            double n = seg.Count;
+            double denom = n * sumXX - sumX * sumX;
+            if (Math.Abs(denom) < 1e-9) return null;
+
+            double perMs = (n * sumXY - sumX * sumY) / denom;
+            return perMs * 60000.0;
         }
 
-        private static void PrintSummary(List<Sample> samples)
+        /// <summary>后半段的样本数与时间跨度（用于报告与不可判定说明）。</summary>
+        private static (int Count, long SpanMs) SecondHalfShape(List<Sample> samples)
         {
-            if (samples.Count == 0) { Console.WriteLine("没有采到样本。"); return; }
+            if (samples.Count < 2) return (0, 0);
+            var seg = samples.Skip(samples.Count / 2).ToList();
+            return (seg.Count, seg[seg.Count - 1].ElapsedMs - seg[0].ElapsedMs);
+        }
+
+        /// <summary>
+        /// 统一门槛判定：
+        ///   - 句柄 / GDI / USER：后半段最小二乘斜率 ≤ 5 个/分钟；
+        ///   - 私存：单场景增量 ≤ 30 MB；
+        ///   - 样本不足 ⇒ **不可判定**，不作出通过结论（退出码 3）。
+        /// </summary>
+        private static Verdict Evaluate(List<Sample> samples, bool idleBaseline)
+        {
+            var v = new Verdict();
+
+            if (samples.Count == 0)
+            {
+                v.Judgable = false;
+                v.Passed = false;
+                v.Undetermined.Add("没有采到任何样本 —— 无法判定。");
+                v.ExitCode = 3;
+                return v;
+            }
+
+            // 目标进程中途退出 ⇒ 读数不可信
+            // （句柄/GDI/USER 会掉到 0，看起来像「不增长」⇒ 假通过）。
+            if (samples.Any(s => s.ReadFailed))
+            {
+                v.Judgable = false;
+                v.Passed = false;
+                v.Undetermined.Add("有样本读不到目标进程（进程可能已退出）—— 读数不可信，无法判定。");
+            }
+
+            // 三项资源指标共用同一个门槛；不可判定时合并成一条，避免刷屏。
+            var unjudgeable = new List<string>();
+            EvaluateSlope(v, "句柄", samples, s => s.HandleCount, unjudgeable);
+            EvaluateSlope(v, "GDI 对象", samples, s => s.GdiObjects, unjudgeable);
+            EvaluateSlope(v, "USER 对象", samples, s => s.UserObjects, unjudgeable);
+
+            if (unjudgeable.Count > 0)
+            {
+                v.Judgable = false;
+                v.Passed = false;
+                v.Undetermined.Add(
+                    string.Join(" / ", unjudgeable) + " —— 样本不足，无法判定" +
+                    "（后半段需要 ≥ " + MinSecondHalfSamples + " 个样本且跨度 ≥ " +
+                    (MinSecondHalfSpanMs / 1000) + " 秒）。");
+            }
+
+            long privateDelta = samples[samples.Count - 1].PrivateBytes - samples[0].PrivateBytes;
+            if (privateDelta > PrivateDeltaThresholdBytes)
+            {
+                v.Passed = false;
+                v.Failures.Add(
+                    "私存 —— 单场景增量 " + (privateDelta / 1024 / 1024) + "MB > 门槛 " +
+                    (PrivateDeltaThresholdBytes / 1024 / 1024) + "MB，判「内存持续增长」。");
+            }
+
+            if (idleBaseline)
+            {
+                v.Notes.Add(
+                    "空闲基线：绝对增量 Δ 应接近 0 —— 上面每个指标的「起→末 Δ」即为 Δ，" +
+                    "工具只对**斜率**做硬门槛，Δ 单独报告供人工确认。");
+            }
+
+            v.ExitCode = (v.Judgable && v.Passed) ? 0 : 3;
+            return v;
+        }
+
+        private static void EvaluateSlope(Verdict v, string name, List<Sample> samples, Func<Sample, double> selector, List<string> unjudgeable)
+        {
+            double? slope = SlopePerMinute(samples, selector);
+            if (slope == null)
+            {
+                unjudgeable.Add(name);
+                return;
+            }
+
+            if (slope.Value > SlopeThresholdPerMinute)
+            {
+                v.Passed = false;
+                v.Failures.Add(
+                    name + " —— 后半段斜率 " + Format(slope.Value) + " 个/分钟 > 门槛 " +
+                    Format(SlopeThresholdPerMinute) + " 个/分钟，判「" + name + "持续增长」。");
+            }
+        }
+
+        private static void PrintSummary(List<Sample> samples, Verdict verdict, bool idleBaseline)
+        {
+            Console.WriteLine();
+            Console.WriteLine("── 汇总 ──");
+            Console.WriteLine("样本数            ：" + samples.Count);
+
+            var shape = SecondHalfShape(samples);
+            Console.WriteLine("后半段            ：" + shape.Count + " 个样本 / 跨度 " +
+                              (shape.SpanMs / 1000.0).ToString("F1") + " 秒" +
+                              "（判定要求 ≥ " + MinSecondHalfSamples + " 个样本 / ≥ " +
+                              (MinSecondHalfSpanMs / 1000) + " 秒）");
+
+            if (samples.Count == 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("── 判定 ──");
+                foreach (var u in verdict.Undetermined) Console.WriteLine("⚠ " + u);
+                return;
+            }
 
             var first = samples[0];
             var last = samples[samples.Count - 1];
 
-            double handleSlope = SlopePerMinute(samples, s => s.HandleCount);
-            double gdiSlope = SlopePerMinute(samples, s => s.GdiObjects);
-            double userSlope = SlopePerMinute(samples, s => s.UserObjects);
-            double privSlope = SlopePerMinute(samples, s => s.PrivateBytes);
+            double? handleSlope = SlopePerMinute(samples, s => s.HandleCount);
+            double? gdiSlope = SlopePerMinute(samples, s => s.GdiObjects);
+            double? userSlope = SlopePerMinute(samples, s => s.UserObjects);
+            double? privSlope = SlopePerMinute(samples, s => s.PrivateBytes);
 
-            Console.WriteLine();
-            Console.WriteLine("── 汇总 ──");
-            Console.WriteLine("样本数            ：" + samples.Count);
             Console.WriteLine("句柄  起→末       ：" + first.HandleCount + " → " + last.HandleCount + "（Δ " + (last.HandleCount - first.HandleCount) + "）");
-            Console.WriteLine("句柄  后半段斜率   ：" + Format(handleSlope) + " 个/分钟");
+            Console.WriteLine("句柄  后半段斜率   ：" + FormatSlope(handleSlope) + " 个/分钟");
             Console.WriteLine("GDI   起→末       ：" + first.GdiObjects + " → " + last.GdiObjects + "（Δ " + (last.GdiObjects - first.GdiObjects) + "）");
-            Console.WriteLine("GDI   后半段斜率   ：" + Format(gdiSlope) + " 个/分钟");
+            Console.WriteLine("GDI   后半段斜率   ：" + FormatSlope(gdiSlope) + " 个/分钟");
             Console.WriteLine("USER  起→末       ：" + first.UserObjects + " → " + last.UserObjects + "（Δ " + (last.UserObjects - first.UserObjects) + "）");
-            Console.WriteLine("USER  后半段斜率   ：" + Format(userSlope) + " 个/分钟");
-            Console.WriteLine("私存  起→末       ：" + (first.PrivateBytes / 1024 / 1024) + "MB → " + (last.PrivateBytes / 1024 / 1024) + "MB");
-            Console.WriteLine("私存  后半段斜率   ：" + Format(privSlope / 1024 / 1024) + " MB/分钟");
+            Console.WriteLine("USER  后半段斜率   ：" + FormatSlope(userSlope) + " 个/分钟");
+            Console.WriteLine("私存  起→末       ：" + (first.PrivateBytes / 1024 / 1024) + "MB → " + (last.PrivateBytes / 1024 / 1024) + "MB（Δ " +
+                              ((last.PrivateBytes - first.PrivateBytes) / 1024 / 1024) + "MB）");
+            Console.WriteLine("私存  后半段斜率   ：" + FormatSlope(privSlope.HasValue ? privSlope.Value / 1024 / 1024 : (double?)null) + " MB/分钟");
 
             Console.WriteLine();
-            if (handleSlope > 5.0)
-                Console.WriteLine("⚠ 句柄后半段仍在增长（" + Format(handleSlope) + " 个/分钟）—— 判「句柄持续增长」，A17 该项不通过。");
-            if (gdiSlope > 5.0)
-                Console.WriteLine("⚠ GDI 对象后半段仍在增长（" + Format(gdiSlope) + " 个/分钟）—— 判「GDI 持续增长」，A17 该项不通过。");
-            if (userSlope > 5.0)
-                Console.WriteLine("⚠ USER 对象后半段仍在增长（" + Format(userSlope) + " 个/分钟）—— 判「USER 持续增长」，A17 该项不通过。");
-            if (handleSlope <= 5.0 && gdiSlope <= 5.0 && userSlope <= 5.0)
-                Console.WriteLine("✓ 句柄/GDI/USER 的后半段斜率都在阈值内（≤ 5 个/分钟）。");
+            Console.WriteLine("── 判定 ──");
+            Console.WriteLine("门槛：句柄/GDI/USER 后半段最小二乘斜率 ≤ " + Format(SlopeThresholdPerMinute) +
+                              " 个/分钟；私存单场景增量 ≤ " + (PrivateDeltaThresholdBytes / 1024 / 1024) + "MB。");
+
+            foreach (var f in verdict.Failures) Console.WriteLine("✗ " + f);
+            foreach (var u in verdict.Undetermined) Console.WriteLine("⚠ " + u);
+            foreach (var n in verdict.Notes) Console.WriteLine("· " + n);
+
+            if (verdict.Judgable && verdict.Passed)
+            {
+                Console.WriteLine("✓ 全部门槛通过（斜率均在门槛内，私存单场景增量在 " +
+                                  (PrivateDeltaThresholdBytes / 1024 / 1024) + "MB 内）。");
+            }
+            else if (!verdict.Judgable)
+            {
+                Console.WriteLine("⚠ 样本不足 / 读数不可信 —— **无法判定**，不作通过结论（退出码 3）。");
+            }
+            else
+            {
+                Console.WriteLine("✗ 有门槛未通过 —— A17「无句柄/内存持续增长」该项不通过（退出码 3）。");
+            }
         }
 
         private static string Format(double v) => v.ToString("F2", CultureInfo.InvariantCulture);
 
-        private static void WriteEvidence(string outDir, string label, int pid, List<Sample> samples)
+        /// <summary>斜率格式化；不可判定时明确写「不可判定」而不是 0.00（避免读成「不增长」）。</summary>
+        private static string FormatSlope(double? v) => v.HasValue ? Format(v.Value) : "不可判定";
+
+        private static void WriteEvidence(string outDir, string label, int pid, List<Sample> samples, Verdict verdict, bool idleBaseline)
         {
             Directory.CreateDirectory(outDir);
 
             var csv = new StringBuilder();
-            csv.AppendLine("index,elapsed_ms,handle_count,gdi_objects,user_objects,private_bytes,working_set_bytes");
+            csv.AppendLine("index,elapsed_ms,handle_count,gdi_objects,user_objects,private_bytes,working_set_bytes,read_failed");
             foreach (var s in samples)
             {
                 csv.AppendLine(string.Join(",",
-                    s.Index, s.ElapsedMs, s.HandleCount, s.GdiObjects, s.UserObjects, s.PrivateBytes, s.WorkingSetBytes));
+                    s.Index, s.ElapsedMs, s.HandleCount, s.GdiObjects, s.UserObjects, s.PrivateBytes, s.WorkingSetBytes,
+                    s.ReadFailed ? 1 : 0));
             }
             File.WriteAllText(Path.Combine(outDir, "resource-samples.csv"), csv.ToString(), new UTF8Encoding(false));
 
@@ -314,8 +509,15 @@ namespace LiteMonitor.AppearanceResourceProbe
                     ["userObjects"] = s.UserObjects,
                     ["privateBytes"] = s.PrivateBytes,
                     ["workingSetBytes"] = s.WorkingSetBytes,
+                    ["readFailed"] = s.ReadFailed,
                 });
             }
+
+            double? handleSlope = SlopePerMinute(samples, s => s.HandleCount);
+            double? gdiSlope = SlopePerMinute(samples, s => s.GdiObjects);
+            double? userSlope = SlopePerMinute(samples, s => s.UserObjects);
+            double? privSlope = SlopePerMinute(samples, s => s.PrivateBytes);
+            var shape = SecondHalfShape(samples);
 
             var root = new JsonObject
             {
@@ -323,32 +525,62 @@ namespace LiteMonitor.AppearanceResourceProbe
                 ["purpose"] = "A17 释放压力：句柄 / GDI / USER / 内存的时间序列与增长斜率",
                 ["label"] = label,
                 ["pid"] = pid,
+                ["idleBaseline"] = idleBaseline,
                 ["sampleCount"] = samples.Count,
+                ["secondHalf"] = new JsonObject
+                {
+                    ["sampleCount"] = shape.Count,
+                    ["spanMs"] = shape.SpanMs,
+                },
                 ["handles"] = new JsonObject
                 {
                     ["first"] = samples.Count > 0 ? samples[0].HandleCount : 0,
                     ["last"] = samples.Count > 0 ? samples[samples.Count - 1].HandleCount : 0,
-                    ["slopePerMinute"] = SlopePerMinute(samples, s => s.HandleCount),
+                    ["delta"] = samples.Count > 0 ? samples[samples.Count - 1].HandleCount - samples[0].HandleCount : 0,
+                    ["slopePerMinute"] = NullableNode(handleSlope),
+                    ["slopeJudgable"] = handleSlope.HasValue,
                 },
                 ["gdiObjects"] = new JsonObject
                 {
                     ["first"] = samples.Count > 0 ? samples[0].GdiObjects : 0,
                     ["last"] = samples.Count > 0 ? samples[samples.Count - 1].GdiObjects : 0,
-                    ["slopePerMinute"] = SlopePerMinute(samples, s => s.GdiObjects),
+                    ["delta"] = samples.Count > 0 ? samples[samples.Count - 1].GdiObjects - samples[0].GdiObjects : 0,
+                    ["slopePerMinute"] = NullableNode(gdiSlope),
+                    ["slopeJudgable"] = gdiSlope.HasValue,
                 },
                 ["userObjects"] = new JsonObject
                 {
                     ["first"] = samples.Count > 0 ? samples[0].UserObjects : 0,
                     ["last"] = samples.Count > 0 ? samples[samples.Count - 1].UserObjects : 0,
-                    ["slopePerMinute"] = SlopePerMinute(samples, s => s.UserObjects),
+                    ["delta"] = samples.Count > 0 ? samples[samples.Count - 1].UserObjects - samples[0].UserObjects : 0,
+                    ["slopePerMinute"] = NullableNode(userSlope),
+                    ["slopeJudgable"] = userSlope.HasValue,
                 },
                 ["privateBytes"] = new JsonObject
                 {
                     ["first"] = samples.Count > 0 ? samples[0].PrivateBytes : 0,
                     ["last"] = samples.Count > 0 ? samples[samples.Count - 1].PrivateBytes : 0,
-                    ["slopePerMinute"] = SlopePerMinute(samples, s => s.PrivateBytes),
+                    ["delta"] = samples.Count > 0 ? samples[samples.Count - 1].PrivateBytes - samples[0].PrivateBytes : 0,
+                    ["slopePerMinute"] = NullableNode(privSlope),
+                    ["slopeJudgable"] = privSlope.HasValue,
                 },
-                ["thresholdNote"] = "后半段斜率 > 5 个/分钟 即判『持续增长』；阈值见 A17 释放压力清单",
+                ["judgement"] = new JsonObject
+                {
+                    ["judgable"] = verdict.Judgable,
+                    ["passed"] = verdict.Passed,
+                    ["exitCode"] = verdict.ExitCode,
+                    ["failures"] = ToJsonArray(verdict.Failures),
+                    ["undetermined"] = ToJsonArray(verdict.Undetermined),
+                    ["notes"] = ToJsonArray(verdict.Notes),
+                    ["thresholds"] = new JsonObject
+                    {
+                        ["slopePerMinute"] = SlopeThresholdPerMinute,
+                        ["privateDeltaBytes"] = PrivateDeltaThresholdBytes,
+                        ["minSecondHalfSamples"] = MinSecondHalfSamples,
+                        ["minSecondHalfSpanMs"] = MinSecondHalfSpanMs,
+                    },
+                },
+                ["thresholdNote"] = "统一门槛：后半段最小二乘斜率 ≤ 5 个/分钟（句柄/GDI/USER）；私存单场景增量 ≤ 30MB；样本不足 ⇒ 不可判定（退出码 3）。阈值见 A17 释放压力清单 §2.4",
                 ["samples"] = arr,
             };
 
@@ -357,10 +589,20 @@ namespace LiteMonitor.AppearanceResourceProbe
             Console.WriteLine("证据：" + path);
         }
 
+        private static JsonNode? NullableNode(double? v) => v.HasValue ? JsonValue.Create(v.Value) : null;
+
+        private static JsonArray ToJsonArray(IEnumerable<string> items)
+        {
+            var arr = new JsonArray();
+            foreach (var item in items) arr.Add(JsonValue.Create(item));
+            return arr;
+        }
+
         private static void PrintUsage()
         {
             Console.WriteLine("用法：AppearanceResourceProbe (--pid <pid> | --name <进程名>)");
             Console.WriteLine("      [--label <场景名>] [--interval-ms <n>] [--duration-sec <n>] [--out <证据目录>]");
+            Console.WriteLine("      [--idle-baseline]");
             Console.WriteLine();
             Console.WriteLine("  --pid            目标进程 id");
             Console.WriteLine("  --name           目标进程名（取内存占用最大的那个实例）");
@@ -368,6 +610,10 @@ namespace LiteMonitor.AppearanceResourceProbe
             Console.WriteLine("  --interval-ms    采样间隔，默认 1000");
             Console.WriteLine("  --duration-sec   采样时长，默认 60");
             Console.WriteLine("  --out            证据目录，默认 <可执行文件目录>\\evidence");
+            Console.WriteLine("  --idle-baseline  标记本轮为「空闲基线」：额外报告绝对增量 Δ，供人工确认");
+            Console.WriteLine();
+            Console.WriteLine("退出码：0 = 全部门槛通过；1 = 参数/环境错误；2 = 采样出错；");
+            Console.WriteLine("        3 = 有门槛未通过**或样本不足无法判定**。");
             Console.WriteLine();
             Console.WriteLine("★ 目标进程以管理员身份运行时，采样器也需要**以管理员身份运行**才能读到 GDI/USER 计数。");
         }

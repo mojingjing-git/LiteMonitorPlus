@@ -16,17 +16,19 @@
 | USER 对象数 | `GetGuiResources(hProcess, GR_USEROBJECTS)` |
 | 私有内存 / 工作集 | `Process.PrivateMemorySize64` / `WorkingSet64` |
 
-输出：时间序列（CSV + JSON）+ **后半段斜率**（个/分钟）。
+输出：时间序列（CSV + JSON）+ **后半段斜率**（个/分钟）+ **判定结论与退出码**。
 
 > ★ 斜率只看**后半段**，避开启动/预热瞬态 ——
 > 这与 A15 探针「CPU 按处理器时间、p95 按经过时间」是同一个思路：**只看稳定态**。
+> ★ 斜率用**最小二乘直线拟合**，不是两端点差分 —— 单次 GC 或一次 UI 拖动
+> 在两端点差分里能被放大成 ±几十，30 分钟长时场景尤易误判。
 
 ## 用法
 
 ```powershell
 # 采样一个正在运行的 LiteMonitor（60 秒，间隔 1 秒）
 tests/AppearanceResourceProbe/output/AppearanceResourceProbe.exe `
-    --name LiteMonitor --label "空闲基线" --duration-sec 60 `
+    --name LiteMonitor --label "空闲基线" --idle-baseline --duration-sec 60 `
     --out docs/reviews/evidence/a17-release/idle
 
 # 或按 pid
@@ -41,25 +43,49 @@ tests/AppearanceResourceProbe/output/AppearanceResourceProbe.exe --pid 12345 --l
 | `--interval-ms` | 采样间隔，默认 1000 |
 | `--duration-sec` | 采样时长，默认 60 |
 | `--out` | 证据目录，默认 `<可执行文件目录>\evidence` |
+| `--idle-baseline` | 标记本轮为「空闲基线」：额外报告绝对增量 Δ，供人工确认 |
 
-退出码：`0` = 采样完成；`1` = 参数/环境错误；`2` = 采样过程中出错。
+退出码：
+
+| 码 | 含义 |
+|---|---|
+| `0` | 全部门槛通过 |
+| `1` | 参数/环境错误 |
+| `2` | 采样过程中出错 |
+| `3` | **有门槛未通过**或**样本不足无法判定** |
+
+> ★ `3` 是刻意设计的：**「测不出来」不等于「没问题」**。
+> 样本不足时工具只报「⚠ 无法判定」，**不会**给出 ✓ 通过结论。
 
 证据：
 
-- `resource-samples.csv` —— 时间序列（index / elapsed_ms / handle_count / gdi_objects / user_objects / private_bytes / working_set_bytes）
-- `resource-samples.json` —— 样本 + 起末值 + 各指标的斜率 + 阈值说明
+- `resource-samples.csv` —— 时间序列（index / elapsed_ms / handle_count / gdi_objects / user_objects / private_bytes / working_set_bytes / read_failed）
+- `resource-samples.json` —— 样本 + 起末值 + Δ + 各指标的斜率 + 判定结论（failures / undetermined / notes）+ 门槛常量
 
-## 判读阈值
+## 判读阈值（统一门槛）
 
-| 指标 | 阈值 | 含义 |
+| 指标 | 门槛 | 含义 |
 |---|---|---|
-| 句柄后半段斜率 | **≤ 5 个/分钟** | 超过即判「句柄持续增长」 |
-| GDI 后半段斜率 | **≤ 5 个/分钟** | 超过即判「GDI 持续增长」 |
-| USER 后半段斜率 | **≤ 5 个/分钟** | 超过即判「USER 持续增长」 |
-| 单场景私存增量 | **≤ 30 MB** | 超过即判「内存持续增长」 |
-| **空闲基线**斜率 | **必须为 0** | 空闲时任何持续增长都是 bug |
+| 句柄 后半段最小二乘斜率 | **≤ 5 个/分钟** | 超过即判「句柄持续增长」 |
+| GDI 后半段最小二乘斜率 | **≤ 5 个/分钟** | 超过即判「GDI 持续增长」 |
+| USER 后半段最小二乘斜率 | **≤ 5 个/分钟** | 超过即判「USER 持续增长」 |
+| 私存 单场景增量（末 − 首） | **≤ 30 MB** | 超过即判「内存持续增长」 |
+| 后半段样本数 | **≥ 4 个** | 少于 ⇒ 不可判定（退出码 3） |
+| 后半段时间跨度 | **≥ 5 秒** | 少于 ⇒ 不可判定（退出码 3） |
 
-> 空闲基线是**最灵敏**的一项：什么都不做时如果计数还在涨，不用再分场景排查，直接判不通过。
+**只有一套硬门槛**：句柄/GDI/USER 一律用「后半段最小二乘斜率 ≤ 5 个/分钟」。
+
+> ★ 空闲基线**用同一个门槛**，另外把绝对增量 Δ 单独报告出来、供人工确认
+> （工具加 `--idle-baseline` 时会明确提示这一点）。
+> 早先写的「空闲基线斜率必须为 0」已废弃 —— 同一个 PID 的 USER 对象数
+> 本身就有几个的噪声，硬要求 0 会误判。
+
+### 不可判定的两种情形
+
+1. **样本不足** —— 后半段不足 4 个样本或跨度不足 5 秒；
+2. **读数不可信** —— 有样本读不到目标进程（进程中途退出）。
+   此时句柄/GDI/USER 会掉到 0，看起来像「不增长」⇒ **假通过**，所以必须单独拦下。
+
 
 ## 两个必须知道的限制
 

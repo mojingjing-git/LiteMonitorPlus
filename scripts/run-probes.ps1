@@ -20,7 +20,7 @@
       | AppearanceDecorProbe           | 装饰资源                           | 跑 |
       | AppearanceDecorRendererProbe   | 装饰渲染                           | 跑 |
       | AppearanceWindowShapeProbe     | 窗口轮廓                           | 跑 |
-      | AppearanceSettingsProbe        | W3 设置页「意外回写」防回退（33 项）| 跑 |
+      | AppearanceSettingsProbe        | W3 设置页「意外回写」防回退（39 项）| 跑 |
       | AppearanceBackdropProbe        | 实时玻璃后端（**实机屏幕捕获**）    | 需 -IncludeBackdrop |
       | LiteMonitor.Tests              | 单元测试                           | 跑（-SkipUnitTests 可跳过） |
 
