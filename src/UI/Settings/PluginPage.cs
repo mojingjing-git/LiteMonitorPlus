@@ -339,7 +339,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                     }
 
                     var headerItem = new LiteSettingsItem(LanguageManager.T("Menu.PluginTargetTitle") + " " + (index + 1), linkRem);
-                    headerItem.Label.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
+                    headerItem.Label.Font = UIFonts.Bold(9F);
                     headerItem.Label.ForeColor = UIColors.Primary;
                     
                     group.AddFullItem(headerItem);

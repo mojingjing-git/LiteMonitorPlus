@@ -135,7 +135,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                     Dock = DockStyle.Fill,
                     TextAlign = ContentAlignment.MiddleLeft,
                     ForeColor = UIColors.TextWarn,
-                    Font = new Font("Microsoft YaHei UI", 9F),
+                    Font = UIFonts.Regular(9F),
                     Text = LanguageManager.T("Menu.ConfigWriteBlocked"),
                 };
                 _configBlockedBanner.Controls.Add(_configBlockedLabel);

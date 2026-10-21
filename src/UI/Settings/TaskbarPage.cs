@@ -63,7 +63,12 @@ namespace LiteMonitor.src.UI.SettingsPage
             if (_cbFont == null || _cbFont.Inner.Items.Count > 5) return; 
 
             var fonts = await _taskFonts;
-            
+
+            // ★ 页面可能在 await 期间被释放（设置窗体关闭 ⇒ DisposeCachedPages 释放全部页面）。
+            //   此时继续操作控件没有意义；而且 async void 的未捕获异常会经
+            //   SynchronizationContext 重新抛出 ⇒ 直接崩进程。
+            if (IsDisposed) return;
+
             // ★★★ 锁定布局 ★★★
             this.SuspendLayout();
             try
@@ -75,16 +80,27 @@ namespace LiteMonitor.src.UI.SettingsPage
                 _cbFont.Inner.Items.Clear();
                 // 优化：使用 AddRange (如果你的 Inner 是标准 ComboBox)
                 _cbFont.Inner.Items.AddRange(fonts.ToArray());
-                
+
                 if (fonts.Contains(current)) _cbFont.Inner.SelectedItem = current;
                 else if (_cbFont.Inner.Items.Count > 0) _cbFont.Inner.SelectedIndex = 0;
                 _cbFont.Inner.EndUpdate();
             }
+            catch (Exception ex)
+            {
+                // ★ 字体加载失败不该让设置页崩掉。
+                //   async void 的未捕获异常会经 SynchronizationContext 重新抛出 ⇒ 直接崩进程，
+                //   所以这里必须兜住（与 SystemHardwarPage.PopulateAsyncData 同一口径）。
+                Console.WriteLine("字体列表加载失败: " + ex.Message);
+            }
             finally
             {
-                this.ResumeLayout(true);
-                // 强制刷新一次布局，解决异步加载字体导致底部留白未被正确计算的问题
-                _container.PerformLayout();
+                // ★ 页面可能已释放 —— 此时不要碰控件。
+                if (!IsDisposed)
+                {
+                    this.ResumeLayout(true);
+                    // 强制刷新一次布局，解决异步加载字体导致底部留白未被正确计算的问题
+                    _container.PerformLayout();
+                }
             }
         }
 

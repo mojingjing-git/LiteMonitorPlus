@@ -73,6 +73,11 @@ namespace LiteMonitor.src.UI.SettingsPage
 
                 await Task.WhenAll(taskDisks, taskNets, taskGpus, taskFans, taskMobo);
 
+                // ★ 页面可能在 await 期间被释放（设置窗体关闭 ⇒ DisposeCachedPages 释放全部页面）。
+                //   此时继续操作控件没有意义；而且 async void 的未捕获异常会经
+                //   SynchronizationContext 重新抛出 ⇒ 直接崩进程。
+                if (IsDisposed) return;
+
                 // ★ 实际检测到的显卡数量 (用于「监控显卡数量」下拉的上限) ★
                 //   用局部变量承接: 直接写 `taskGpus.Result?.Count` 会把 Result 的可空状态
                 //   污染到下面的 FillGpuSync(_cbGpu, taskGpus.Result, ...) 调用上 (CS8604)。
@@ -172,7 +177,10 @@ namespace LiteMonitor.src.UI.SettingsPage
             finally
             {
                 // 4. 恢复布局 (此时所有控件已就绪，一次性渲染)
-                this.ResumeLayout(true);
+                // ★ 页面可能已释放 —— 此时不要碰控件。
+                //   （上面 await 之后已提前 return，SuspendLayout 也没执行过，
+                //     所以这里跳过 ResumeLayout 才是对称的。）
+                if (!IsDisposed) this.ResumeLayout(true);
             }
         }
 

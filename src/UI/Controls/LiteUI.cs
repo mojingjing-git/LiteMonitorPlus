@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Drawing;
 using System.Windows.Forms;
 using LiteMonitor.src.Core; // 确保引用了 UIUtils
@@ -160,10 +161,39 @@ namespace LiteMonitor.src.UI.Controls
         }
     }
 
-    public static class UIFonts 
+    /// <summary>
+    /// 进程内共享的字体。
+    ///
+    /// ★ 为什么不每次 <c>new Font</c>：
+    ///   <see cref="Control.Font"/> 是**借用**关系 —— <c>Control.Dispose()</c> 只把属性置空，
+    ///   **不会**释放 Font 实例。于是每次 new 都是一个只靠终结器回收的 GDI 资源：
+    ///   打开一次设置页就多出十几个字体对象（每个设置组一个标题字体、每个页面若干标签），
+    ///   反复开关就持续累积 —— 这正是 A17「句柄/内存持续增长」要抓的。
+    ///
+    /// ★ 为什么不手动 Dispose 字体：
+    ///   控件可能正在用它绘制；提前释放会画出错字或抛异常。
+    ///
+    /// ★ 正确做法：同类字体**进程内复用同一实例**（与 <c>MenuManager.GetBoldFont</c> 同一思路）。
+    ///   实例只在进程存活期间存在，不随页面释放而减少 —— 但也**不再增长**。
+    /// </summary>
+    public static class UIFonts
     {
-        public static Font Regular(float size) => new Font("Microsoft YaHei UI", size, FontStyle.Regular);
-        public static Font Bold(float size) => new Font("Microsoft YaHei UI", size, FontStyle.Bold);
+        private static readonly ConcurrentDictionary<(float Size, FontStyle Style), Font> _cache =
+            new ConcurrentDictionary<(float, FontStyle), Font>();
+
+        public static Font Regular(float size) => Get(size, FontStyle.Regular);
+
+        public static Font Bold(float size) => Get(size, FontStyle.Bold);
+
+        private static Font Get(float size, FontStyle style)
+        {
+            return _cache.GetOrAdd(
+                (size, style),
+                key => new Font("Microsoft YaHei UI", key.Item1, key.Item2));
+        }
+
+        /// <summary>缓存中的字体实例总数（自检用：应远小于「打开设置页的次数 × 每页新建数」）。</summary>
+        public static int CachedCount => _cache.Count;
     }
 
     // =======================================================================
@@ -192,7 +222,7 @@ namespace LiteMonitor.src.UI.Controls
             // ★★★ 修改：Location 缩放
             var lbl = new Label { 
                 Text = title, Location = new Point(UIUtils.S(15), UIUtils.S(10)), AutoSize = true, 
-                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold), ForeColor = UIColors.TextMain 
+                Font = UIFonts.Bold(9F), ForeColor = UIColors.TextMain
             };
             _header.Controls.Add(lbl);
             // ★★★ 修改：绘图线坐标动态化 (header.Height - 1)
