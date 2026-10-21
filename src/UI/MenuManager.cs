@@ -17,6 +17,35 @@ namespace LiteMonitor
     public static class MenuManager
     {
         /// <summary>
+        /// 加粗菜单字体的复用缓存。
+        ///
+        /// 基线字体取自菜单项的继承字体（通常是 <c>SystemFonts.MenuFont</c>），
+        /// 每次 <c>new Font(baseFont, FontStyle.Bold)</c> 都会新建一份 GDI 字体资源，
+        /// 而给 <c>ToolStripItem.Font</c> 赋值并不转移所有权 —— WinForms 不会替你释放它。
+        /// 菜单是反复重建的，于是每重建一次就泄漏一个 Font。这里缓存复用，
+        /// 仅当字族或字号变化时才重建。
+        ///
+        /// 注意成立范围是「**构造菜单时**」，不是每帧绘制路径。
+        /// </summary>
+        private static Font? _boldMenuFont;
+
+        /// <summary>
+        /// 取与 <paramref name="baseFont"/> 同族同号的加粗字体（进程内复用同一实例）。
+        /// </summary>
+        private static Font GetBoldFont(Font baseFont)
+        {
+            if (_boldMenuFont is null
+                || !string.Equals(_boldMenuFont.FontFamily.Name, baseFont.FontFamily.Name, StringComparison.Ordinal)
+                || Math.Abs(_boldMenuFont.Size - baseFont.Size) > 0.1f)
+            {
+                _boldMenuFont?.Dispose();
+                _boldMenuFont = new Font(baseFont, FontStyle.Bold);
+            }
+
+            return _boldMenuFont;
+        }
+
+        /// <summary>
         /// 构建 LiteMonitor++ 主菜单（右键菜单 + 托盘菜单）
         /// </summary>
         public static ContextMenuStrip Build(MainForm form, Settings cfg, UIController? ui, string targetPage = null)
@@ -444,7 +473,7 @@ namespace LiteMonitor
             
             // 临时写死中文，等面板做完善了再换成 LanguageManager.T("Menu.Settings")
             
-            itemSettings.Font = new Font(itemSettings.Font, FontStyle.Bold); 
+            itemSettings.Font = GetBoldFont(itemSettings.Font); 
 
             itemSettings.Click += (_, __) =>
             {
@@ -637,7 +666,7 @@ namespace LiteMonitor
                 if (logSummary.Length > 45) logSummary = string.Concat(logSummary.AsSpan(0, 45), "...");
                 updateItem.ToolTipText = $"{UpdateChecker.LatestVersionInfo?.releaseDate}: {logSummary}";
                 updateItem.ForeColor = Color.RoyalBlue;
-                updateItem.Font = new Font(updateItem.Font, FontStyle.Bold);
+                updateItem.Font = GetBoldFont(updateItem.Font);
                 
                 updateItem.Click += async (_, __) => await UpdateChecker.CheckAsync(true);
                 menu.Items.Add(updateItem);
