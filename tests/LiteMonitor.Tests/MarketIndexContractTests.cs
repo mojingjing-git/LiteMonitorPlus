@@ -39,13 +39,13 @@ namespace LiteMonitor.Tests
             return index != null;
         }
 
-        [Fact]
+        [PluginRepoFact]
         public void 索引能被客户端模型完整解析()
         {
             if (!TryLoadIndex(out var index, out string repoRoot))
             {
-                Console.WriteLine("[跳过] 未设置 LITEMONITOR_PLUGIN_REPO 或找不到 index.json");
-                return;
+                // 门控已由 [PluginRepoFact] 在特性层处理；走到这里说明环境在特性检查之后被改动过。
+                Assert.Fail("index.json 加载失败（特性已确认为可用环境，环境可能在执行期间被改动）");
             }
 
             Assert.Equal(1, index.Schema);
@@ -71,13 +71,13 @@ namespace LiteMonitor.Tests
             }
         }
 
-        [Fact]
+        [PluginRepoFact]
         public void 索引里的sha256与size_与仓库文件原始字节一致()
         {
             if (!TryLoadIndex(out var index, out string repoRoot))
             {
-                Console.WriteLine("[跳过] 未设置 LITEMONITOR_PLUGIN_REPO 或找不到 index.json");
-                return;
+                // 门控已由 [PluginRepoFact] 在特性层处理；走到这里说明环境在特性检查之后被改动过。
+                Assert.Fail("index.json 加载失败（特性已确认为可用环境，环境可能在执行期间被改动）");
             }
 
             foreach (var e in index.Plugins)
@@ -95,13 +95,13 @@ namespace LiteMonitor.Tests
             }
         }
 
-        [Fact]
+        [PluginRepoFact]
         public void 索引里的下载地址_都落在允许的源范围内()
         {
             if (!TryLoadIndex(out var index, out _))
             {
-                Console.WriteLine("[跳过] 未设置 LITEMONITOR_PLUGIN_REPO 或找不到 index.json");
-                return;
+                // 门控已由 [PluginRepoFact] 在特性层处理；走到这里说明环境在特性检查之后被改动过。
+                Assert.Fail("index.json 加载失败（特性已确认为可用环境，环境可能在执行期间被改动）");
             }
 
             foreach (var e in index.Plugins)
@@ -111,13 +111,13 @@ namespace LiteMonitor.Tests
             }
         }
 
-        [Fact]
+        [PluginRepoFact]
         public void 索引里的插件id_都能通过客户端的安装校验()
         {
             if (!TryLoadIndex(out var index, out _))
             {
-                Console.WriteLine("[跳过] 未设置 LITEMONITOR_PLUGIN_REPO 或找不到 index.json");
-                return;
+                // 门控已由 [PluginRepoFact] 在特性层处理；走到这里说明环境在特性检查之后被改动过。
+                Assert.Fail("index.json 加载失败（特性已确认为可用环境，环境可能在执行期间被改动）");
             }
 
             foreach (var e in index.Plugins)
@@ -127,13 +127,13 @@ namespace LiteMonitor.Tests
             }
         }
 
-        [Fact]
+        [PluginRepoFact]
         public void 索引里的插件id_不与内置插件重名()
         {
             if (!TryLoadIndex(out var index, out _))
             {
-                Console.WriteLine("[跳过] 未设置 LITEMONITOR_PLUGIN_REPO 或找不到 index.json");
-                return;
+                // 门控已由 [PluginRepoFact] 在特性层处理；走到这里说明环境在特性检查之后被改动过。
+                Assert.Fail("index.json 加载失败（特性已确认为可用环境，环境可能在执行期间被改动）");
             }
 
             foreach (var e in index.Plugins)
@@ -143,13 +143,13 @@ namespace LiteMonitor.Tests
             }
         }
 
-        [Fact]
+        [PluginRepoFact]
         public void 仓库里每个插件目录下的plugin_json_内容id_与目录名一致()
         {
             if (!TryLoadIndex(out var index, out string repoRoot))
             {
-                Console.WriteLine("[跳过] 未设置 LITEMONITOR_PLUGIN_REPO 或找不到 index.json");
-                return;
+                // 门控已由 [PluginRepoFact] 在特性层处理；走到这里说明环境在特性检查之后被改动过。
+                Assert.Fail("index.json 加载失败（特性已确认为可用环境，环境可能在执行期间被改动）");
             }
 
             foreach (var e in index.Plugins)

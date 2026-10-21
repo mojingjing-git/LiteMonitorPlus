@@ -20,14 +20,9 @@ namespace LiteMonitor.Tests
     /// </summary>
     public class MarketE2ETests
     {
-        [Fact]
+        [E2EFact]
         public async Task 端到端_拉索引_安装_校验_卸载()
         {
-            if (Environment.GetEnvironmentVariable("LITEMONITOR_E2E") != "1")
-            {
-                Console.WriteLine("[跳过] 未设置 LITEMONITOR_E2E=1");
-                return;
-            }
 
             string pluginsDir = PluginMarket.PluginsDir;
             string builtin = Path.Combine(pluginsDir, "PublicIP.json");
