@@ -327,7 +327,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                 Text = LanguageManager.T("Menu.MonitorItemTip"), 
                 AutoSize = true, 
                 ForeColor = UIColors.TextSub, 
-                Font = new Font("Microsoft YaHei UI", 8.5F),
+                Font = UIFonts.Regular(8.5F),
                 Dock = DockStyle.Bottom,
                 Padding = new Padding(0, 25, 20, 10)
             };

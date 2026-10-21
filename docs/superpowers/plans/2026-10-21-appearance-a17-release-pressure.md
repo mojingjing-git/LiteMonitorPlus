@@ -119,6 +119,7 @@ tests/AppearanceResourceProbe/output/AppearanceResourceProbe.exe --pid 12345 --l
 | L1 | （**已排除**）曾怀疑非模态入口不触发 `Dispose` | 见 §7：对方以可复现探针证明 5 个入口全部覆盖 | **不成立，无需修** |
 | L2 | `_pages` 里 6 个从未挂载的页面不被释放 | `DisposeCachedPages()` 显式释放 | 已修 |
 | L3 | `pnlBottom.Paint` 每次重绘 `new Pen` 从不释放 | `using var pen` | 已修 |
+| L4 | **设置页字体每次 `new Font`、从不释放** | `UIFonts` 改为进程内缓存 | 已修（见 §4.3） |
 
 > L1 的核查过程与**被推翻的推断**见 §7 —— 那是一条「看起来很对、但没验证就下了结论」的推断，
 > 留档是为了不让后人再推一遍同一个错。
@@ -136,6 +137,41 @@ tests/AppearanceResourceProbe/output/AppearanceResourceProbe.exe --pid 12345 --l
 | C4 | 窗口轮廓的 `GraphicsPath` / `Region` | `src/UI/Helpers/WindowAppearanceController.cs` | A09 已定死所有权：路径构造完 Region 后**立即**释放，Region 交 `Control`（`Control` 会释放自己持有的旧 Region）⇒ 设计上无泄漏，实测确认 |
 | C5 | 实时玻璃的显示亲和性 / 捕获 DC / 位图 / 模糊中间缓冲 | `src/System/Backdrop/**` | 每次换肤（S2）、改尺寸（S4）、隐藏恢复（S3）都走一遍重新分配 ⇒ **S2/S3/S4 的主要靶子** |
 | C6 | 诊断日志缓冲 | `src/UI/LiveGlassController.cs` → `LiveGlassLog` | 只在状态变化时写，但长时间运行若不轮转会持续增长 ⇒ S5 观察私存 |
+
+### 4.3 L4：设置页字体从未释放（已修）
+
+`Control.Font` 是**借用**关系 —— `Control.Dispose()` 只把属性置空，**不会**释放 Font 实例。
+所以 `new Font(...)` 赋给控件的每个字体，都是一个只靠终结器回收的 GDI 资源。
+
+**泄漏面比预估大得多**：`src/UI/Controls/LiteUI.cs` 里的 `UIFonts.Regular(size)` / `UIFonts.Bold(size)`
+**每次调用都 `new Font`**，而它被大量调用：
+
+| 调用点 | 每处新建 |
+|---|---|
+| `src/UI/Controls/MonitorControls.cs` → 监控项控件 | 3 个（8F ×2、9F Bold ×2）**每个监控项** |
+| `src/UI/Controls/LiteUI.cs` → `LiteSettingsGroup` 标题 | 1 个**每个设置组** |
+| `src/UI/Settings/PluginMarketPage.cs` | 4 个**每次进页面**（`RebuildUI` 每次重建） |
+| `src/UI/Settings/MonitorPage.cs` | 4 个 |
+| `src/UI/Settings/PluginPage.cs`、`MainPanelPage.cs`、`SettingsBase.cs` | 各 1 个 |
+
+⇒ 打开一次设置页、监控项多一点，就能新建**几十个**字体对象；反复开关设置页就持续累积。
+
+**修法**（不改成在页面 Dispose 里 Dispose 字体 —— 控件可能正在用它绘制，提前释放会画出错字）：
+
+把 `UIFonts` 本身改成**进程内缓存**（与 `MenuManager.GetBoldFont` 同一思路）：
+
+```csharp
+private static readonly ConcurrentDictionary<(float Size, FontStyle Style), Font> _cache = ...;
+public static Font Regular(float size) => Get(size, FontStyle.Regular);
+public static Font Bold(float size) => Get(size, FontStyle.Bold);
+```
+
+⇒ 进程内**每种字号/样式只存在一个实例**（当前设置页用到 5 种），不再随操作次数增长。
+安全性已核：所有调用点都只是 `Font = UIFonts.xxx(...)` 赋值，**没有任何地方修改返回的 Font 对象属性**；
+且 `Control.Dispose` 不会释放借用的 Font ⇒ 共享实例不会被误释放。
+
+> ★ 这条是「静态审计 → 实测」之间的一个例子：光看 `new Font(...)` 那一处（8 处）
+> 只能看出 8 个；把 `UIFonts` 的调用链一起看，才知道实际是**几十个**。
 
 ---
 

@@ -144,7 +144,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                 Height = UIUtils.S(22),
                 TextAlign = ContentAlignment.MiddleLeft,
                 ForeColor = UIColors.TextSub,
-                Font = new Font("Microsoft YaHei UI", 8F),
+                Font = UIFonts.Regular(8F),
                 Text = UI?.LiveGlassStatusText ?? "实时玻璃未启用。",
             };
             group.AddItem(new LiteSettingsItem(LanguageManager.T("Menu.LiveGlassStatus"), _liveGlassStatusLabel));

@@ -108,7 +108,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                     Text = _statusText,
                     AutoSize = true,
                     ForeColor = _statusIsError ? UIColors.TextCrit : UIColors.TextSub,
-                    Font = new Font("Microsoft YaHei UI", 9F),
+                    Font = UIFonts.Regular(9F),
                     Padding = new Padding(0, 4, 0, 4)
                 };
                 lblStatus.Dock = DockStyle.Top;
@@ -124,7 +124,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                     Text = string.Format(LanguageManager.T("Menu.PluginMarketSelfCheck"), names),
                     AutoSize = true,
                     ForeColor = UIColors.TextWarn,
-                    Font = new Font("Microsoft YaHei UI", 9F),
+                    Font = UIFonts.Regular(9F),
                     Padding = new Padding(0, 4, 0, 4)
                 };
                 lblWarn.Dock = DockStyle.Top;
@@ -247,7 +247,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                 Text = entry.StatusLabel + "　·　" + GetStateLabel(state),
                 AutoSize = true,
                 ForeColor = entry.Status == "ok" ? UIColors.TextSub : UIColors.TextWarn,
-                Font = new Font("Microsoft YaHei UI", 9F),
+                Font = UIFonts.Regular(9F),
                 Padding = new Padding(0, 2, 0, 6)
             };
             group.AddFullItem(badge);
@@ -261,7 +261,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                            LanguageManager.T("Menu.PluginMarketUnverifiedHint"),
                     AutoSize = true,
                     ForeColor = UIColors.TextWarn,
-                    Font = new Font("Microsoft YaHei UI", 9F),
+                    Font = UIFonts.Regular(9F),
                     Padding = new Padding(0, 0, 0, 6)
                 };
                 group.AddFullItem(unverified);
