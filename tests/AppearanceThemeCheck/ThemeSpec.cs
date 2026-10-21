@@ -189,7 +189,45 @@ namespace LiteMonitor.AppearanceThemeCheck
             ("BarMid", "#FFC24B"),
             ("BarHigh", "#FF6B85"));
 
+        /// <summary>
+        /// 液态玻璃主题（A16 产出）：请求**实时玻璃**背景。
+        /// <para>
+        /// ★ 与其它两个夹具不同，它是**随程序发布**的正式主题（不是夹具），
+        ///   因此要接受与主主题同等的全部校验：参数、归一化、背景规则、
+        ///   Load→Save→Load 往返、可读性判据。
+        /// </para>
+        /// <para>
+        /// ★ 背景模式是 <c>glass</c>：真实帧不可用时按 glass → gradient → solid 降级，
+        ///   降级后的渐变两端固定 ⇒ 画面不会突然变成另一种配色。
+        /// </para>
+        /// </summary>
+        public static readonly ThemeSpec LiquidGlass = ThemeSpec.Create(
+            name: "LiquidGlass",
+            relativePath: "resources/themes/LiquidGlass.json",
+            version: 4,
+            frameStyle: 1, frameWidth: 3, frameLength: 14,
+            scanline: 30, glow: 55, grid: 20, barStyle: 1,
+            backdropMode: "glass", backdropOpacity: 0.72,
+            tint: "rgba(226,238,255,0.9)",
+            gradientStart: "#9BB6D5", gradientEnd: "#5B85B3", gradientAngle: 90,
+            noise: 0, edgeGlow: 0,
+            ("Background", "#DCE6F2"),
+            ("GroupBackground", "rgba(255,255,255,0.72)"),
+            ("Border", "#2F5F8F"),
+            ("Shadow", "rgba(14,34,60,0.32)"),
+            ("TextTitle", "#0B2E52"),
+            ("TextGroup", "#33475B"),
+            ("TextPrimary", "#16202C"),
+            ("TextSecondary", "#4C6178"),
+            ("ValueSafe", "#0B6E3F"),
+            ("ValueWarn", "#8A5200"),
+            ("ValueCrit", "#B2223A"),
+            ("BarBackground", "#BCCBDB"),
+            ("BarLow", "#0B6E3F"),
+            ("BarMid", "#8A5200"),
+            ("BarHigh", "#B2223A"));
+
         /// <summary>全部待校验主题。</summary>
-        public static ThemeSpec[] All() => new[] { Main, Light, Complex };
+        public static ThemeSpec[] All() => new[] { Main, Light, Complex, LiquidGlass };
     }
 }

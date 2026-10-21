@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace LiteMonitor.AppearanceM2Probe
@@ -347,11 +348,145 @@ namespace LiteMonitor.AppearanceM2Probe
         /// <summary>执行全部用例。</summary>
         public List<ProbeCase> Cases { get; } = new();
 
-        /// <summary>跑完全部两条门槛。</summary>
+        /// <summary>跑完全部源码级门槛。</summary>
         public void RunAll()
         {
             Cases.Add(RunCapturePrimitiveGate());
             Cases.Add(RunNoNewPackageGate());
+            Cases.Add(RunSingleCaptureLoopGate());
+        }
+
+        // ------------------------------------------------- A16：唯一捕获服务 / 唯一挂载点
+
+        /// <summary>
+        /// A16 门槛：整个 <c>src/</c> 里**只有一个**后台捕获循环、**一个**帧来源挂载点。
+        /// <para>
+        /// ★ 依据：M2 合同 §13.2（服务是唯一的循环，引擎只能作单次抓屏原语）
+        ///   与 §13.5（同一服务实例内也不得有两个捕获循环）。
+        ///   A16 验收要求"无额外捕获/重复服务"—— 这条门槛把它变成**可自动复核**的断言，
+        ///   而不是靠人读代码。
+        /// </para>
+        /// <para>断言三条：</para>
+        /// <list type="number">
+        /// <item><c>new BackdropCaptureService(</c> 在 <c>src/</c> 中**恰好 1 处**
+        ///   （帧来源服务只有一个实现点）。</item>
+        /// <item>类型为 <c>ScreenCaptureFrameSource</c> 的变量**不得**被调用 <c>.Start(</c>
+        ///   （引擎自带的捕获循环绝不能启动，否则会与服务循环重复抓屏）。</item>
+        /// <item>带 <c>frameSource</c> 的 <c>new AppearanceRuntime(</c> **恰好 1 处**
+        ///   （实时帧来源的挂载点唯一；编辑器预览的 <c>previewSource</c> 不算）。</item>
+        /// </list>
+        /// </summary>
+        private ProbeCase RunSingleCaptureLoopGate()
+        {
+            ProbeCase c = new ProbeCase { Name = "A16 门槛 唯一捕获服务与唯一帧来源挂载点" };
+
+            string srcDir = Path.Combine(_repoRoot, "src");
+            if (!Directory.Exists(srcDir))
+            {
+                c.Fail("未找到 src 目录：" + srcDir);
+                c.Detail("scannedFileCount", 0);
+                return c;
+            }
+
+            List<string> files = Directory.EnumerateFiles(srcDir, "*.cs", SearchOption.AllDirectories)
+                .Where(p => !IsBuildOutput(p))
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .ToList();
+
+            // 引擎变量的标识符集合（用于判定"是否调用了引擎的 Start"）
+            HashSet<string> engineVars = new(StringComparer.Ordinal);
+            List<string> serviceCreations = new();
+            List<string> engineStartCalls = new();
+            List<string> frameSourceMounts = new();
+
+            foreach (string file in files)
+            {
+                string code;
+                try
+                {
+                    // ★ 剔除注释与字符串字面量：注释里提到"Start"不算调用。
+                    code = SourceScanner.StripCommentsAndLiterals(File.ReadAllText(file));
+                }
+                catch (Exception ex)
+                {
+                    c.Fail(Relative(file) + " 读取失败：" + ex.Message);
+                    continue;
+                }
+
+                string rel = Relative(file);
+
+                // ① 帧来源服务的实例化点
+                foreach (Match m in Regex.Matches(code, @"new\s+BackdropCaptureService\s*\("))
+                {
+                    serviceCreations.Add(rel + " @" + LineOf(code, m.Index));
+                }
+
+                // ② 引擎变量声明（类型名 → 变量名）
+                foreach (Match m in Regex.Matches(code, @"ScreenCaptureFrameSource\??\s+(\w+)\s*[=;,)]"))
+                {
+                    engineVars.Add(m.Groups[1].Value);
+                }
+
+                // ③ 带 frameSource 的外观运行时挂载点
+                foreach (Match m in Regex.Matches(code, @"new\s+AppearanceRuntime\s*\([^)]*frameSource"))
+                {
+                    frameSourceMounts.Add(rel + " @" + LineOf(code, m.Index));
+                }
+            }
+
+            // 引擎 Start 调用（需要跨文件，所以放在收集完变量名之后再扫一遍）
+            foreach (string file in files)
+            {
+                string code;
+                try
+                {
+                    code = SourceScanner.StripCommentsAndLiterals(File.ReadAllText(file));
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (string v in engineVars)
+                {
+                    foreach (Match m in Regex.Matches(code, @"(?<![\w.])" + Regex.Escape(v) + @"\s*\.\s*Start\s*\("))
+                    {
+                        engineStartCalls.Add(Relative(file) + " @" + LineOf(code, m.Index) + " → " + v + ".Start(");
+                    }
+                }
+            }
+
+            c.Detail("scannedFileCount", files.Count);
+            c.Detail("backdropCaptureServiceCreations", serviceCreations.Count);
+            c.Detail("backdropCaptureServiceSites", string.Join("; ", serviceCreations));
+            c.Detail("engineVariableNames", string.Join(", ", engineVars.OrderBy(x => x, StringComparer.Ordinal)));
+            c.Detail("engineStartCalls", engineStartCalls.Count);
+            c.Detail("engineStartCallSites", string.Join("; ", engineStartCalls));
+            c.Detail("frameSourceMounts", frameSourceMounts.Count);
+            c.Detail("frameSourceMountSites", string.Join("; ", frameSourceMounts));
+
+            c.Require(serviceCreations.Count == 1,
+                "src/ 中 new BackdropCaptureService( 应恰好 1 处，实际 " + serviceCreations.Count + " 处：" +
+                string.Join("; ", serviceCreations));
+            c.Require(engineStartCalls.Count == 0,
+                "引擎 ScreenCaptureFrameSource 的 Start( 被调用了（会启动引擎自带的捕获循环 ⇒ 两个循环并存）：" +
+                string.Join("; ", engineStartCalls));
+            c.Require(frameSourceMounts.Count == 1,
+                "src/ 中带 frameSource 的 new AppearanceRuntime( 应恰好 1 处，实际 " + frameSourceMounts.Count + " 处：" +
+                string.Join("; ", frameSourceMounts));
+
+            return c;
+        }
+
+        /// <summary>取某个字符偏移所在行的行号（1 起）。</summary>
+        private static int LineOf(string code, int index)
+        {
+            int line = 1;
+            for (int i = 0; i < index && i < code.Length; i++)
+            {
+                if (code[i] == '\n') line++;
+            }
+            return line;
         }
 
         // ---------------------------------------------------------------- 门槛 #7

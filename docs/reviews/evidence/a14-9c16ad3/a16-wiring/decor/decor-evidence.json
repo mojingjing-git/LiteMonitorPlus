@@ -1,0 +1,449 @@
+{
+  "kind": "appearance_decor_probe_result",
+  "probeVersion": 1,
+  "startedAt": "2026-10-21T15:37:15.6560600\u002B08:00",
+  "assembly": "1.0.0.0",
+  "baseDirectory": "G:\\TOOL\\LiteMonitor-fork\\tests\\AppearanceDecorProbe\\output\\",
+  "elapsedMs": 6349,
+  "cases": [
+    {
+      "name": "disabled_features_no_side_effect",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "frameEnabled": false,
+        "glowEnabled": false,
+        "barStyleEnabled": false,
+        "cacheEntries": 0,
+        "createdResources": 0,
+        "totalBytes": 0
+      }
+    },
+    {
+      "name": "bounds_edge_cases",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "cases": [
+          {
+            "label": "1x1",
+            "width": 1,
+            "height": 1,
+            "frameStyle": 1,
+            "frameWidthPx": 0,
+            "frameLengthPx": 0,
+            "hasValidBounds": true,
+            "clampedCornerPx": 0,
+            "clampedFrameWidthPx": 0,
+            "ok": true
+          },
+          {
+            "label": "zero-size",
+            "width": 0,
+            "height": 0,
+            "frameStyle": 1,
+            "frameWidthPx": 8,
+            "frameLengthPx": 64,
+            "hasValidBounds": false,
+            "clampedCornerPx": 0,
+            "clampedFrameWidthPx": 0,
+            "ok": true
+          },
+          {
+            "label": "zero-width",
+            "width": 0,
+            "height": 120,
+            "frameStyle": 1,
+            "frameWidthPx": 8,
+            "frameLengthPx": 60,
+            "hasValidBounds": false,
+            "clampedCornerPx": 0,
+            "clampedFrameWidthPx": 0,
+            "ok": true
+          },
+          {
+            "label": "zero-height",
+            "width": 240,
+            "height": 0,
+            "frameStyle": 1,
+            "frameWidthPx": 8,
+            "frameLengthPx": 64,
+            "hasValidBounds": false,
+            "clampedCornerPx": 0,
+            "clampedFrameWidthPx": 0,
+            "ok": true
+          },
+          {
+            "label": "narrow-160",
+            "width": 160,
+            "height": 40,
+            "frameStyle": 1,
+            "frameWidthPx": 4,
+            "frameLengthPx": 16,
+            "hasValidBounds": true,
+            "clampedCornerPx": 16,
+            "clampedFrameWidthPx": 4,
+            "ok": true
+          },
+          {
+            "label": "extreme-radius",
+            "width": 240,
+            "height": 400,
+            "frameStyle": 2,
+            "frameWidthPx": 8,
+            "frameLengthPx": 64,
+            "hasValidBounds": true,
+            "clampedCornerPx": 64,
+            "clampedFrameWidthPx": 8,
+            "ok": true
+          },
+          {
+            "label": "chamfer-over-half",
+            "width": 60,
+            "height": 40,
+            "frameStyle": 1,
+            "frameWidthPx": 8,
+            "frameLengthPx": 20,
+            "hasValidBounds": true,
+            "clampedCornerPx": 19,
+            "clampedFrameWidthPx": 8,
+            "ok": true
+          },
+          {
+            "label": "tiny-2x2",
+            "width": 2,
+            "height": 2,
+            "frameStyle": 1,
+            "frameWidthPx": 1,
+            "frameLengthPx": 1,
+            "hasValidBounds": true,
+            "clampedCornerPx": 0,
+            "clampedFrameWidthPx": 1,
+            "ok": true
+          },
+          {
+            "label": "holographic-1x1",
+            "width": 1,
+            "height": 1,
+            "frameStyle": 3,
+            "frameWidthPx": 0,
+            "frameLengthPx": 0,
+            "hasValidBounds": true,
+            "clampedCornerPx": 0,
+            "clampedFrameWidthPx": 0,
+            "ok": true
+          }
+        ],
+        "clampCornerLengthPx(64, 60x40)": 19
+      }
+    },
+    {
+      "name": "no_paint_outside_client",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "clientBounds": "(24,24,240,120)",
+        "results": [
+          {
+            "frameStyle": 1,
+            "outsidePixels": 0,
+            "outsideRange": ""
+          },
+          {
+            "frameStyle": 2,
+            "outsidePixels": 0,
+            "outsideRange": ""
+          },
+          {
+            "frameStyle": 3,
+            "outsidePixels": 0,
+            "outsideRange": ""
+          }
+        ]
+      }
+    },
+    {
+      "name": "progress_10000_cache_and_memory_stable",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "iterations": 30000,
+        "blockSize": 10000,
+        "blockCount": 3,
+        "samples": [
+          {
+            "iteration": 1,
+            "progress": 0,
+            "cacheEntries": 4,
+            "cacheBytes": 9792,
+            "createdResources": 4,
+            "hits": 4,
+            "misses": 4,
+            "managedBytes": 981264,
+            "workingSet": 37109760
+          },
+          {
+            "iteration": 10,
+            "progress": 0.122115,
+            "cacheEntries": 4,
+            "cacheBytes": 9792,
+            "createdResources": 4,
+            "hits": 40,
+            "misses": 4,
+            "managedBytes": 989488,
+            "workingSet": 37146624
+          },
+          {
+            "iteration": 100,
+            "progress": 0.34326,
+            "cacheEntries": 4,
+            "cacheBytes": 9792,
+            "createdResources": 4,
+            "hits": 400,
+            "misses": 4,
+            "managedBytes": 1091696,
+            "workingSet": 37249024
+          },
+          {
+            "iteration": 1000,
+            "progress": 0.554712,
+            "cacheEntries": 4,
+            "cacheBytes": 9792,
+            "createdResources": 4,
+            "hits": 4000,
+            "misses": 4,
+            "managedBytes": 2074736,
+            "workingSet": 40120320
+          },
+          {
+            "iteration": 10000,
+            "progress": 0.669232,
+            "cacheEntries": 4,
+            "cacheBytes": 9792,
+            "createdResources": 4,
+            "hits": 40000,
+            "misses": 4,
+            "managedBytes": 11806744,
+            "workingSet": 53325824
+          },
+          {
+            "iteration": 20000,
+            "progress": 0.129809,
+            "cacheEntries": 4,
+            "cacheBytes": 9792,
+            "createdResources": 4,
+            "hits": 80000,
+            "misses": 4,
+            "managedBytes": 5849240,
+            "workingSet": 59813888
+          },
+          {
+            "iteration": 30000,
+            "progress": 0.590387,
+            "cacheEntries": 4,
+            "cacheBytes": 9792,
+            "createdResources": 4,
+            "hits": 120000,
+            "misses": 4,
+            "managedBytes": 16663712,
+            "workingSet": 60022784
+          }
+        ],
+        "blocks": [
+          {
+            "block": 1,
+            "upToIteration": 10000,
+            "cacheEntries": 4,
+            "cacheBytes": 9792,
+            "createdResources": 4,
+            "workingSet": 53325824,
+            "workingSetDeltaInBlock": 13205504,
+            "managedDeltaInBlock": 846256
+          },
+          {
+            "block": 2,
+            "upToIteration": 20000,
+            "cacheEntries": 4,
+            "cacheBytes": 9792,
+            "createdResources": 4,
+            "workingSet": 59813888,
+            "workingSetDeltaInBlock": 6488064,
+            "managedDeltaInBlock": 1152
+          },
+          {
+            "block": 3,
+            "upToIteration": 30000,
+            "cacheEntries": 4,
+            "cacheBytes": 9792,
+            "createdResources": 4,
+            "workingSet": 60022784,
+            "workingSetDeltaInBlock": 208896,
+            "managedDeltaInBlock": 1088
+          }
+        ],
+        "finalCacheEntries": 4,
+        "maxCacheEntriesObserved": 4,
+        "createdResources": 4,
+        "cacheHits": 120000,
+        "cacheMisses": 4,
+        "cacheEvictions": 0,
+        "cacheBytes": 9792,
+        "managedBytesBefore": 116496,
+        "managedBytesAfter": 963856,
+        "managedBytesDelta": 847360,
+        "workingSetBefore": 36999168,
+        "workingSetAfter": 60096512,
+        "workingSetDelta": 23097344,
+        "workingSetDeltaFirst1000": 3121152,
+        "avgPaintMs": 0.1342,
+        "avgPaintMsFirstBlock": 0.0994,
+        "p95PaintMs": 0.204,
+        "maxPaintMs": 1.0332
+      }
+    },
+    {
+      "name": "cache_limits",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "entriesAfter300Inserts": 128,
+        "bytesAfter300Inserts": 1717760,
+        "evictionsAfter300Inserts": 172,
+        "entriesAfter64LargeInserts": 4,
+        "bytesAfter64LargeInserts": 16777216,
+        "evictionsAfter64LargeInserts": 60,
+        "maxEntries": 128,
+        "maxBitmapBytes": 16777216
+      }
+    },
+    {
+      "name": "invalidation_entry_points",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "themeGenerationInvalidated": true,
+        "dpiInvalidated": true,
+        "userScaleInvalidated": true,
+        "sizeInvalidated": true
+      }
+    },
+    {
+      "name": "gradient_orientation_evidence",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "angle0_left": "A128 R255 G0 B0",
+        "angle0_right": "A255 R4 G0 B251",
+        "angle90_top": "A128 R255 G0 B0",
+        "angle90_bottom": "A255 R32 G0 B223",
+        "convention": "\u89D2\u5EA6\u6309\u5C4F\u5E55\u5750\u6807\u987A\u65F6\u9488\u4E3A\u6B63\uFF1A0\u00B0=\u5DE6\u2192\u53F3\uFF0C90\u00B0=\u4E0A\u2192\u4E0B\uFF0C180\u00B0=\u53F3\u2192\u5DE6\uFF0C270\u00B0=\u4E0B\u2192\u4E0A"
+      }
+    },
+    {
+      "name": "bar_texture_tile_diagonal_continuity",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "tiles": [
+          {
+            "tile": 12,
+            "thickness": 2,
+            "period": 6,
+            "paintedPixels": 120,
+            "interiorPaintedPixels": 52,
+            "phaseWindow": 4,
+            "tiledPaintedPixels": 648,
+            "brokenDiagonalLinks": 0
+          },
+          {
+            "tile": 16,
+            "thickness": 2,
+            "period": 8,
+            "paintedPixels": 160,
+            "interiorPaintedPixels": 86,
+            "phaseWindow": 4,
+            "tiledPaintedPixels": 864,
+            "brokenDiagonalLinks": 0
+          },
+          {
+            "tile": 20,
+            "thickness": 2,
+            "period": 10,
+            "paintedPixels": 200,
+            "interiorPaintedPixels": 122,
+            "phaseWindow": 4,
+            "tiledPaintedPixels": 1080,
+            "brokenDiagonalLinks": 0
+          },
+          {
+            "tile": 24,
+            "thickness": 3,
+            "period": 12,
+            "paintedPixels": 336,
+            "interiorPaintedPixels": 226,
+            "phaseWindow": 6,
+            "tiledPaintedPixels": 2160,
+            "brokenDiagonalLinks": 0
+          },
+          {
+            "tile": 32,
+            "thickness": 4,
+            "period": 16,
+            "paintedPixels": 448,
+            "interiorPaintedPixels": 336,
+            "phaseWindow": 6,
+            "tiledPaintedPixels": 4032,
+            "brokenDiagonalLinks": 0
+          }
+        ],
+        "convention": "\u659C\u7EBF\u65CF x\u002By = phase \u002B k\u00D7gcd(\u5BBD,\u9AD8)\uFF1B\u5185\u90E8\u975E\u7A7A \u002B \u5355\u4E00\u76F8\u4F4D \u002B \u8DE8\u63A5\u7F1D\u4E0D\u65AD = \u8D2F\u7A7F\u5185\u90E8\u4E14\u5E73\u94FA\u8FDE\u7EED\u3002"
+      }
+    },
+    {
+      "name": "texture_resource_ownership",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "paintedFromCacheBrush": 160,
+        "cacheEntries": 0,
+        "cacheBytes": 0,
+        "createdResources": 8,
+        "releasedResources": 8,
+        "evictions": 0,
+        "note": "\u6E90\u4F4D\u56FE\u4E0E\u753B\u5237\u90FD\u7531\u7F13\u5B58\u6301\u6709\u3001\u4E00\u8D77\u91CA\u653E\uFF1B\u5B57\u8282\u6309\u663E\u5F0F\u5C3A\u5BF8\u6838\u7B97\uFF0C\u4E0D\u518D\u53D6\u753B\u5237\u7684 Image\u3002"
+      }
+    },
+    {
+      "name": "texture_brush_failure_containment",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "case10_1_failure": "System.InvalidOperationException",
+        "case10_1_bitmapReleased": true,
+        "case10_1_bitmapEvidence": "\u8BBF\u95EE Width \u629B ArgumentException\uFF08\u4F4D\u56FE\u5DF2\u91CA\u653E\uFF09",
+        "case10_1_retrySucceeded": true,
+        "case10_2_failure": "System.InvalidOperationException",
+        "case10_2_brushReleased": true,
+        "case10_2_brushEvidence": "\u7528\u753B\u5237\u586B\u5145\u65F6\u629B\u5F02\u5E38\uFF08\u753B\u5237\u5DF2\u91CA\u653E\uFF09",
+        "case10_2_bitmapReleased": true,
+        "case10_2_bitmapEvidence": "\u8BBF\u95EE Width \u629B ArgumentException\uFF08\u4F4D\u56FE\u5DF2\u91CA\u653E\uFF09",
+        "case10_2_retrySucceeded": true,
+        "case10_3_entries": 4,
+        "case10_3_bytes": 4096,
+        "case10_3_evictions": 4,
+        "note": "\u753B\u5237\u521B\u5EFA\u5165\u53E3\u4E0E\u5165\u8868\u524D\u94A9\u5B50\u90FD\u662F internal \u63A5\u7F1D\uFF08\u63A2\u9488\u7528\u53CD\u5C04\u5B89\u88C5\uFF09\uFF1B\u5931\u8D25\u8DEF\u5F84\u4E0D\u6F0F\u4F4D\u56FE / \u753B\u5237\uFF0C\u8BA1\u6570\u56DE\u5230\u8C03\u7528\u524D\uFF0C\u91CD\u8BD5\u53EF\u6210\u529F\u3002"
+      }
+    }
+  ],
+  "timeline": [
+    {
+      "iteration": 30000,
+      "cacheEntries": 4,
+      "cacheBytes": 9792,
+      "createdResources": 4,
+      "managedDelta": 847360,
+      "workingSetDelta": 23097344
+    }
+  ],
+  "allPassed": true
+}

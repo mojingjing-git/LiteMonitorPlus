@@ -135,11 +135,14 @@ namespace LiteMonitor.AppearanceThemeCheck
 
             List<string> expectedFiles = LegacyBaseline.Select(x => x.Name)
                 .Append(ThemeSpecs.Main.Name)
+                // ★ A16：新增的液态玻璃主题（A16「主题 owner 产出 LiquidGlass.json」）。
+                //   它是**有意新增**的，不是越界文件，所以要进期望集合。
+                .Append(ThemeSpecs.LiquidGlass.Name)
                 .OrderBy(x => x, StringComparer.Ordinal)
                 .ToList();
 
             Check(actualFiles.SequenceEqual(expectedFiles),
-                "主题目录文件集合（10 个旧主题 + A12 主主题）",
+                "主题目录文件集合（10 个旧主题 + A12 主主题 + A16 玻璃主题）",
                 $"期望 {string.Join(", ", expectedFiles)}；实际 {string.Join(", ", actualFiles)}");
         }
 
