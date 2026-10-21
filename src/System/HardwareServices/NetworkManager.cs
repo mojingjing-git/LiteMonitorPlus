@@ -6,6 +6,7 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using LibreHardwareMonitor.Hardware;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.SystemServices.NetworkTraffic;
 using Debug = System.Diagnostics.Debug;
 
 namespace LiteMonitor.src.SystemServices
@@ -53,6 +54,17 @@ namespace LiteMonitor.src.SystemServices
         // ★★★ 依赖注入：性能计数器 (用于获取 SMB 流量) ★★★
         private readonly PerformanceCounterManager _perfManager;
 
+        // ★ [#610] IP 流量排除后端（可选注入）。由 HardwareMonitor 创建并接线。
+        private NetworkTrafficExclusionService? _exclusion;
+
+        // ★ [#610] 本地地址 → 网卡映射（ETW 载荷里没有网卡 ID，只能靠本地地址识别）。
+        private NetworkAdapterResolver? _adapterResolver;
+        private long _lastResolverRebuild;
+        private bool _hasResolverRebuild;
+
+        /// <summary>归属映射的最短重建间隔（秒）：地址热变更的刷新代价与及时性的折中。</summary>
+        private const double ResolverRebuildIntervalSeconds = 30.0;
+
         // ★★★ [限频] 单调时钟：流量间隔必须来自两次真实采集之间的经过时间 ★★★
         private readonly TimeProvider _time;
 
@@ -82,6 +94,90 @@ namespace LiteMonitor.src.SystemServices
         {
             _netStates.Clear();
             _cachedNetHw = null;
+        }
+
+        // ===========================================================
+        // ★ [#610] IP 流量排除后端接线
+        // ===========================================================
+
+        /// <summary>接入 IP 流量排除后端（由 HardwareMonitor 在构造后调用）。</summary>
+        public void AttachTrafficExclusion(NetworkTrafficExclusionService service)
+        {
+            _exclusion = service;
+        }
+
+        /// <summary>
+        /// 把「当前选中的网卡」告诉排除后端。
+        /// <para>★ C1：ETW 载荷里没有网卡 ID，只能靠本地地址映射；目标网卡上的本地地址如果
+        /// 同时出现在别的网卡上（归属歧义），必须**拒绝**，绝不能猜。</para>
+        /// </summary>
+        private void UpdateExclusionTarget(NetworkInterface nic)
+        {
+            var service = _exclusion;
+            if (service == null) { return; }
+
+            int? ifIndex = ResolveIfIndex(nic);
+            if (ifIndex == null)
+            {
+                service.SetTargetAdapter(null, null);
+                return;
+            }
+
+            NetworkAdapterResolver resolver = EnsureResolver();
+            string? rejection = null;
+            var ambiguous = resolver.AmbiguousAddressesOf(ifIndex.Value);
+            if (ambiguous.Count > 0)
+            {
+                rejection = string.Join(", ", ambiguous.Select(a => a.ToString()));
+            }
+            else if (resolver.TryGetAdapter(ifIndex.Value, out var info) && info != null &&
+                     info.Type == NetworkInterfaceType.Tunnel)
+            {
+                // ★ C1：VPN / 隧道网卡的归属未经验证 → 明确拒绝，不猜。
+                rejection = "VPN/tunnel adapters are not supported for IP exclusion.";
+            }
+            service.SetTargetAdapter(ifIndex, rejection);
+        }
+
+        /// <summary>取网卡的接口索引；IPv6-only 网卡没有 IPv4 属性，退回按描述名匹配。</summary>
+        private int? ResolveIfIndex(NetworkInterface nic)
+        {
+            try
+            {
+                int index = nic.GetIPProperties().GetIPv4Properties().Index;
+                if (index > 0) { return index; }
+            }
+            catch { /* IPv6-only 网卡 */ }
+
+            NetworkAdapterResolver? resolver = _adapterResolver;
+            if (resolver == null) { return null; }
+            foreach (NetworkAdapterInfo info in resolver.Adapters)
+            {
+                if (string.Equals(info.Description, nic.Description, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(info.FriendlyName, nic.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return info.IfIndex;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>按需重建归属映射（最多每 30 秒一次）。</summary>
+        private NetworkAdapterResolver EnsureResolver()
+        {
+            long now = _time.GetTimestamp();
+            if (_adapterResolver != null && _hasResolverRebuild &&
+                _time.GetElapsedTime(_lastResolverRebuild, now).TotalSeconds < ResolverRebuildIntervalSeconds)
+            {
+                return _adapterResolver;
+            }
+
+            var rebuilt = NetworkAdapterResolver.Build();
+            _adapterResolver = rebuilt;
+            _lastResolverRebuild = now;
+            _hasResolverRebuild = true;
+            _exclusion?.SetAttributor(rebuilt);
+            return rebuilt;
         }
 
         // ===========================================================
@@ -429,6 +525,10 @@ namespace LiteMonitor.src.SystemServices
                     nativeDown = stats.BytesReceived;
                 }
                 catch { state.NativeAdapter = null; }
+
+                // ★ [#610] 把选中的网卡告诉排除后端（归属靠本地地址映射）。
+                //   注意：这**不改写**累计口径，累计仍然走原有的原生字节 + SMB 估算路径。
+                UpdateExclusionTarget(state.NativeAdapter);
             }
 
             // C. 累计：真实采样间隔 + 原生字节计数优先 + SMB 扣除 + 安全阀

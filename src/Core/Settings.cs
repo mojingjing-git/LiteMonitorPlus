@@ -48,6 +48,19 @@ namespace LiteMonitor
         public string PreferredCpuPump { get; set; } = ""; // 保存用户选的水冷接口
         public string PreferredCaseFan { get; set; } = "";
         public string PreferredMoboTemp { get; set; } = "";
+
+        // ★ [#166] 首选 CPU 电压来源（保存 LHM 的**稳定传感器标识**，形如 "/amdcpu/0/voltage/0"）
+        //   "" = 自动（按来源可信度自动挑选）。
+        //   ★ 旧配置没有这个字段时反序列化为 ""（System.Text.Json 的缺省行为）⇒ 视为自动，不报错。
+        public string PreferredCpuVoltageSensor { get; set; } = "";
+
+        // ====== [#610] 按指定 IP 排除实时网速 ======
+        // ★ 默认关闭。关闭或没有有效规则时**不启动任何额外事件采集**（零新增会话/逐包处理）。
+        public bool IpTrafficExclusionEnabled { get; set; } = false;
+
+        // ★ 逐行填写**精确** IPv4/IPv6（首版不支持 CIDR / 域名 / 通配符 / 端口）。
+        //   错误行会在设置页逐条标出原因，绝不静默忽略；上限 256 条。
+        public List<string> ExcludedTrafficIps { get; set; } = new List<string>();
         
         // 主窗体所在的屏幕设备名 (用于记忆上次位置)
         public string ScreenDevice { get; set; } = "";
@@ -277,8 +290,10 @@ namespace LiteMonitor
                 CachedPropShortLabelKey = UIUtils.Intern("PROP.ShortLabel." + _key);
                 CachedItemsKey = UIUtils.Intern("Items." + _key);
 
-                if (_key == "MEM.Load" || _key == "MOBO.Temp" || _key == "DISK.Temp" || _key == "CASE.Fan"|| _key == "FPS") 
-                    CachedUIGroup = "HOST"; 
+                // ★ "MEM.Commit.Load"（内存已提交）与 "MEM.Load"（物理内存）同属 HOST，
+                //   两条路径必须同步，否则新项会掉进一个标题为 "MEM" 的独立分组。
+                if (_key == "MEM.Load" || _key == "MEM.Commit.Load" || _key == "MOBO.Temp" || _key == "DISK.Temp" || _key == "CASE.Fan"|| _key == "FPS")
+                    CachedUIGroup = "HOST";
                 else if (_key.StartsWith("DASH."))
                 {
                     CachedUIGroup = "DASH";
@@ -347,7 +362,9 @@ namespace LiteMonitor
                 if (!string.IsNullOrEmpty(CachedUIGroup)) return CachedUIGroup;
 
                 // Fallback for uninitialized state (should be rare)
-                if (Key == "MEM.Load" || 
+                // ★ 与上面 CachedUIGroup 的判断保持一致（"MEM.Commit.Load" 同属 HOST）。
+                if (Key == "MEM.Load" ||
+                    Key == "MEM.Commit.Load" ||
                     Key == "MOBO.Temp" || 
                     Key == "DISK.Temp" || 
                     Key == "CASE.Fan"|| 

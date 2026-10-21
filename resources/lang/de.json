@@ -33,6 +33,7 @@
     "GPU.Power": "GPU Watt",
     "GPU.Fan": "GPU Lüfter",
     "MEM.Load": "RAM Last",
+    "MEM.Commit.Load": "Commit-Speicher",
     "FPS": "FPS",
     "MOBO.Temp": "MOBO Temp",
     "CASE.Fan": "Gehäuse",
@@ -67,6 +68,7 @@
     "GPU.Power": "GPWR",
     "GPU.Fan": "GFAN",
     "MEM.Load": "RAM",
+    "MEM.Commit.Load": "Commit",
     "FPS": "FPS",
     "MOBO.Temp": "MOBO",
     "CASE.Fan": "Geh",
@@ -79,6 +81,27 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "IpTrafficExclusion": "Datenverkehr nach IP ausschließen",
+    "IpTrafficExclusionEnabled": "IP-basierten Verkehrsausschluss aktivieren",
+    "ExcludedTrafficIps": "Auszuschließende entfernte IPs (eine pro Zeile, nur exakte IPv4/IPv6)",
+    "IpExclusionValid": "Regeln geprüft, {0} Regel(n) aktiv",
+    "IpExclusionNoRule": "Noch keine IP-Regel eingegeben",
+    "IpExclusionInvalid": "Diese Regelzeilen können nicht wirksam werden:",
+    "IpExclusionStatus": "Aktueller Status",
+    "IpExclusionStateDisabled": "Deaktiviert",
+    "IpExclusionStateIdle": "Bereit (keine gültige Regel oder keine Abfrage der Live-Geschwindigkeit)",
+    "IpExclusionStatePreparing": "Wird vorbereitet (Sitzung wird gestartet und vorgewärmt)",
+    "IpExclusionStateRunning": "Läuft (Ausschluss ist wirksam)",
+    "IpExclusionStateDegraded": "Eingeschränkt (Teile der Daten fehlen)",
+    "IpExclusionStateFailed": "Fehlgeschlagen",
+    "IpExclusionStateBadRules": "Ungültige Konfiguration (Regelzeilen abgelehnt, IP-Ausschluss ist NICHT wirksam)",
+    "IpExclusionStateNoRules": "Keine gültige Regel (IP-Ausschluss ist NICHT wirksam)",
+    "IpExclusionStateAmbiguousAdapter": "Mehrdeutige Adapterzuordnung (IP-Ausschluss ist NICHT wirksam)",
+    "IpExclusionStateBackendFailed": "Backend konnte nicht gestartet werden (IP-Ausschluss ist NICHT wirksam)",
+    "IpExclusionStateWarmingUp": "Aufwärmphase (das erste Fenster wird verworfen)",
+    "IpExclusionStateNoEvents": "Keine Ereignisse empfangen (IP-Ausschluss ist NICHT wirksam)",
+    "IpExclusionCaliberHint": "Hinweis zur Messgröße: Bei Aktivierung stammt die Live-Geschwindigkeit aus TCP/UDP-Ereignissen (Transportschicht) und weicht damit von der Rohrate der Netzwerkkarte ab. Sitzungs- und Tageswerte behalten die bisherige Messgröße und werden nie doppelt abgezogen.",
+    "IpExclusionAdminHint": "Für die Ereignissammlung sind Administratorrechte erforderlich. Ohne Rechte oder bei Backend-Fehlern zeigt die Oberfläche „IP-Ausschluss ist NICHT wirksam“; die gefilterte Geschwindigkeit wird nie als 0 dargestellt.",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "Optionen",
     "About": "Über",
@@ -244,6 +267,7 @@
     "RefreshTip": "Legt nur fest, wie oft die Oberfläche neu gezeichnet wird. Normale Hardwaredaten werden höchstens einmal pro Sekunde abgetastet – ein kleinerer Wert tastet nicht häufiger ab.",
     "IgnoreSMBTraffic": "SMB ignorieren",
     "MemoryDisplayMode": "RAM Anzeige",
+    "MemoryCommitHint": "Commit-Speicher: zeigt zugesagten Speicher / aktuelles Commit-Limit (Commit-Limit = RAM + Commit-Kontingent der Auslagerungsdatei; eine eigene Größe, getrennt von der RAM-Auslastung)",
 
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",
@@ -296,5 +320,18 @@
     "PluginMarketReinstallAction": "Neu installieren",
     "PluginMarketPageLink": "Plugin-Seite",
     "PluginMarketSelfCheck": "Dateien erkannt, die integrierte Plugins überschrieben haben könnten: {0}. Bitte löschen und das Programm neu installieren."
+,
+    "CpuVoltageSource": "CPU-Spannungsquelle",
+    "CpuVoltageSourceTip": "Auto: bevorzugt wird die vom Prozessor gemeldete Kernversorgungsspannung; gibt es nur eine angeforderte Spannung (VID), wird sie klar als Referenzwert gekennzeichnet. Verschwindet eine manuell gewählte Quelle, zeigt die App «Quelle nicht verfügbar» und wechselt nicht ungefragt auf eine andere Spannung."
+  },
+  "CpuVoltage": {
+    "Auto": "Auto",
+    "Measured": "Kernversorgungsspannung (vom Prozessor gemeldet)",
+    "MotherboardVcore": "Kernversorgungsspannung (Mainboard-Vcore, gemessen, ~3 s)",
+    "ReferenceOnly": "CPU VID (Referenzwert, keine gemessene Versorgungsspannung)",
+    "Ambiguous": "CPU-Spannung (Quelle unbestätigt)",
+    "Excluded": "Keine CPU-Kernspannung",
+    "Unavailable": "Quelle nicht verfügbar",
+    "MarkerReferenceOnly": " (CPU VID)"
   }
 }

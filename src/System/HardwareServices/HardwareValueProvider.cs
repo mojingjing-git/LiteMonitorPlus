@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using LibreHardwareMonitor.Hardware;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.SystemServices.NetworkTraffic;
 using Debug = System.Diagnostics.Debug;
 
 namespace LiteMonitor.src.SystemServices
@@ -67,9 +69,67 @@ namespace LiteMonitor.src.SystemServices
         public void SetValue(string key, float? value) => _values[key] = value;
     }
 
-    public class HardwareValueProvider : IDisposable
+    /// <summary>
+    /// CPU 电压解析结果的**单一发布点**（#166）。
+    ///
+    /// ★ 契约（与 <see cref="CommittedMemoryPublisher"/> 同形）：
+    ///   1) 只有采集层（HardwareMonitor.CollectOnce）会**写**这里；
+    ///   2) 取值层 / 格式化层 / 网页**只读**这里；
+    ///   3) 任何消费者都**不允许**自己去读 LHM 传感器 ——
+    ///      否则面板（100ms）、任务栏、网页会各读各的，出现口径不一致，
+    ///      甚至出现"旧值配新来源标签"的组合。
+    ///
+    /// ★ 为什么需要"发布态"这一层：
+    ///   CPU 电压的**数值**与**来源类型**必须同代次、同来源。
+    ///   数值走 float 通道、来源走字符串通道，两者分开取就可能跨代次错配。
+    ///   把它们打包进同一个不可变对象（<see cref="CpuVoltageResolution"/>）并原子发布，
+    ///   消费者读一次就同时拿到"值 + 来源 + 缺失原因"。
+    /// </summary>
+    public static class CpuVoltageSourcePublisher
     {
-        private readonly Computer _computer;
+        private static CpuVoltageResolution? _current;
+
+        /// <summary>
+        /// 当前已发布的 CPU 电压解析结果；从未发布过（还没采到第一轮）时为 null。
+        /// ★ 只读：调用方**不会**因此触发任何硬件访问。
+        /// </summary>
+        public static CpuVoltageResolution? Current => Volatile.Read(ref _current);
+
+        /// <summary>
+        /// 发布一次解析结果（采集层专用）。整体替换，读者要么看到旧的、要么看到新的，
+        /// 不会看到"半截"状态。
+        /// </summary>
+        public static CpuVoltageResolution Publish(CpuVoltageResolution resolution)
+        {
+            Volatile.Write(ref _current, resolution);
+            return resolution;
+        }
+
+        /// <summary>
+        /// 清空已发布状态（硬件重载 / 释放时调用）。
+        /// ★ 必须清：否则硬件树已经换了一台机器，界面还在显示上一台机器的电压与来源。
+        /// </summary>
+        public static void Clear() => Volatile.Write(ref _current, null);
+
+        /// <summary>
+        /// 取当前已发布的电压值（V）。
+        /// ★ 缺失时返回 **null**（而不是 0）："没有数据"和"真的是 0 V"必须能区分。
+        /// </summary>
+        public static float? TryGetValue()
+        {
+            CpuVoltageResolution? resolution = Current;
+            if (resolution == null) return null;
+            if (!resolution.IsAvailable || !resolution.IsValid) return null;
+            if (!resolution.Value.HasValue) return null;
+
+            double v = resolution.Value.Value;
+            if (double.IsNaN(v) || double.IsInfinity(v)) return null;
+            return (float)v;
+        }
+    }
+
+    public class HardwareValueProvider : IDisposable
+    {        private readonly Computer _computer;
         private readonly Settings _cfg;
         private readonly SensorMap _sensorMap;
         private readonly NetworkManager _networkManager;
@@ -112,6 +172,20 @@ namespace LiteMonitor.src.SystemServices
         // 对象级缓存：(Sensor对象)
         private Dictionary<string, ISensor> _manualSensorCache = new();
 
+        // ★ [#610] IP 流量排除后端（可为 null = 功能不存在）。
+        //   NET.Up/NET.Down 在它**生效**时优先消费过滤快照，覆盖手动网卡传感器直读路径。
+        private NetworkTrafficExclusionService? _networkExclusion;
+
+        /// <summary>接入 IP 流量排除后端。由 HardwareMonitor 在构造后调用。</summary>
+        public void AttachTrafficExclusion(NetworkTrafficExclusionService service)
+        {
+            _networkExclusion = service;
+        }
+
+        /// <summary>IP 排除功能是否被用户打开（配置为唯一事实来源）。</summary>
+        private bool IpExclusionRequested =>
+            _networkExclusion?.IsEnabled ?? (_cfg?.IpTrafficExclusionEnabled ?? false);
+
         private const float AutoMoboTempHardMax = 95f;
         private const float ManualMoboTempHardMax = 125f;
 
@@ -127,6 +201,9 @@ namespace LiteMonitor.src.SystemServices
         private string _lastPrefNet = "";
         private string _lastPrefGpu = "";
         private int _lastGpuCount = 1;
+
+        // ★ [#166] 上一次生效的 CPU 电压来源标识（用于检测"用户换了来源"并作废旧结果）
+        private string _lastPrefCpuVoltageSensor = "";
         
         public HardwareValueProvider(Computer c, Settings s, SensorMap map, NetworkManager net, DiskManager disk, FpsCounter? fpsCounter, PerformanceCounterManager perfManager, object syncLock, Dictionary<string, float> lastValid, HardwareSamplingStatistics? statistics = null, TimeProvider? timeProvider = null, Action? onDeviceSelectionChanged = null)
         {
@@ -142,6 +219,9 @@ namespace LiteMonitor.src.SystemServices
             _statistics = statistics;
             _time = timeProvider ?? TimeProvider.System;
             _onDeviceSelectionChanged = onDeviceSelectionChanged;
+
+            // ★ [#166] 记录初始的 CPU 电压来源（构造时还没有"切换"，不需要作废任何东西）
+            _lastPrefCpuVoltageSensor = s?.PreferredCpuVoltageSensor ?? "";
 
             // 初始化子服务
             _componentProcessor = new ComponentProcessor(c, s, map);
@@ -297,6 +377,20 @@ namespace LiteMonitor.src.SystemServices
 
                 bool gpuChanged = _lastPrefGpu != (_cfg.PreferredGpu ?? "");
                 bool gpuCountChanged = _lastGpuCount != _cfg.MonitoredGpuCount;
+
+                // ★ [#166] CPU 电压来源切换：立即作废已发布的解析结果。
+                //   旧值与旧来源都**不能**残留 —— 否则用户换来源后, 面板上会出现
+                //   "新标签 + 旧数值"这种自相矛盾的读数 (或者干脆显示旧来源的值)。
+                //   ★ 手动来源消失时同样走这条路: 显示"来源不可用", 绝不悄悄换成另一种电压。
+                bool cpuVoltageSourceChanged = !string.Equals(
+                    _lastPrefCpuVoltageSensor, _cfg.PreferredCpuVoltageSensor ?? "", StringComparison.Ordinal);
+                if (cpuVoltageSourceChanged)
+                {
+                    _lastPrefCpuVoltageSensor = _cfg.PreferredCpuVoltageSensor ?? "";
+                    CpuVoltageSourcePublisher.Clear();
+                    // ★ "最后有效值"也不允许留: CPU.Voltage 走的是发布态, 这里只是兜底清理。
+                    _lastValidMap.Remove(MetricUtils.CpuVoltageKey);
+                }
                 if (gpuChanged || gpuCountChanged)
                 {
                     // ★★★ [多显卡] 显卡数量变了, 重建映射 ★★★
@@ -446,6 +540,14 @@ namespace LiteMonitor.src.SystemServices
         {
             // 启动期的取值也要计数：用来证明"早期取值没有绕过采集门限"
             _statistics?.RecordValueComputation();
+
+            // ★ [Fix #137] 提交内存：**独立**于性能计数器。
+            //   它只读"已发布"的提交快照（不会触发任何系统调用），
+            //   因此即使 "优先使用系统计数器" 关闭、或计数器尚未初始化，本项依然可用。
+            if (MetricUtils.IsCommittedMemoryKey(key))
+            {
+                return CommittedMemoryPublisher.TryGetLoadPercent();
+            }
 
             if (_lastValidMap.TryGetValue(key, out float lastVal)) return lastVal;
 
@@ -631,6 +733,15 @@ namespace LiteMonitor.src.SystemServices
                         result = GetGpuVramPercent(key);
                         break;
 
+                    // ★ [Fix #137] 提交内存（#137）
+                    //   只读**已发布**的提交快照：绝不触发系统调用，也绝不回退成物理内存率。
+                    //   缺失（快照未就绪 / API 失败 / 上限为 0 / 溢出）返回 null —— 界面显示 "--"，
+                    //   而不是把"没有数据"伪报成 0。
+                    case "MEM.Commit.Load":
+                        skipGenericFallback = true;
+                        result = CommittedMemoryPublisher.TryGetLoadPercent();
+                        break;
+
                     // 8. 风扇/泵 (带 Max 记录)
                     case "CPU.Fan":
                     case "CPU.Pump":
@@ -646,6 +757,17 @@ namespace LiteMonitor.src.SystemServices
                         {
                             result = ReadMoboTemperature(sMobo);
                         }
+                        break;
+
+                    // ★ [#166] CPU 电压
+                    //   ★ 取值**只认已发布的解析结果** (CpuVoltageSourcePublisher):
+                    //     数值、来源类型、聚合说明来自**同一份** resolution, 面板/任务栏/网页
+                    //     三处读到的口径必然一致, 不会出现"旧值 + 新来源标签"的组合。
+                    //   ★ skipGenericFallback = true: 绝不允许用"最后有效值"兜底 ——
+                    //     手动来源消失 / 热重载后标识改变时, 必须显示缺失, 而不是继续显示旧电压。
+                    case "CPU.Voltage":
+                        skipGenericFallback = true;
+                        result = CpuVoltageSourcePublisher.TryGetValue();
                         break;
 
                     case "FPS":
@@ -665,14 +787,42 @@ namespace LiteMonitor.src.SystemServices
                     default:
                         if (key.StartsWith("NET"))
                         {
-                            if (_manualSensorCache.TryGetValue(key, out var sNet))
+                            // ★ [#610] IP 排除开启时：**先**消费过滤快照。
+                            //   - 有有效快照 → 用过滤后的速率（口径：TCP/UDP 事件源，见界面说明）；
+                            //   - 没有有效快照（准备中/失败/降级）→ 显示**缺失**，
+                            //     绝不显示 0，也绝不回退到未过滤的旧值（那等于假装排除已生效）。
+                            //   ★ 这一段必须在 _manualSensorCache 直读**之前**：
+                            //     手动选择网卡 + NET 传感器缓存存在时也不允许绕过过滤快照。
+                            if (IpExclusionRequested)
                             {
-                                result = sNet.Value;
+                                _networkExclusion?.NotifyRealtimeDemand();
+
+                                // 仍然让 NetworkManager 解析出目标网卡（只读传感器值，不触发额外 Update），
+                                // 否则自动选网卡永远选不出来，排除后端拿不到归属。
+                                _networkManager.GetBestValue(key, _computer, _cfg, _lastValidMap, _lock);
+
+                                skipGenericFallback = true;
+                                if (_networkExclusion != null &&
+                                    _networkExclusion.TryGetFilteredRate(key, out double filteredRate))
+                                {
+                                    result = (float)filteredRate;
+                                }
+                                else
+                                {
+                                    result = null;
+                                }
                             }
-                            
-                            if (result == null)
+                            else
                             {
-                                result = _networkManager.GetBestValue(key, _computer, _cfg, _lastValidMap, _lock);
+                                if (_manualSensorCache.TryGetValue(key, out var sNet))
+                                {
+                                    result = sNet.Value;
+                                }
+
+                                if (result == null)
+                                {
+                                    result = _networkManager.GetBestValue(key, _computer, _cfg, _lastValidMap, _lock);
+                                }
                             }
                         }
                         else if (key.StartsWith("DISK"))

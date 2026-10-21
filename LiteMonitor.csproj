@@ -47,7 +47,9 @@
 
 	<ItemGroup>
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
-    <PackageReference Include="System.Text.Json" Version="9.0.10" />
+    <!-- TraceEvent 4.0.0 requires System.Text.Json >= 10.0.3. -->
+    <PackageReference Include="System.Text.Json" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="4.0.0" />
   </ItemGroup>
 
     <!-- 自动复制 themes 与 lang 目录下的所有文件 -->

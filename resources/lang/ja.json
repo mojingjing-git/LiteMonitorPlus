@@ -34,6 +34,7 @@
     "GPU.Power": "GPU電力",
     "GPU.Fan": "GPUファン",
     "MEM.Load": "メモリ使用",
+    "MEM.Commit.Load": "コミットメモリ",
     "FPS": "FPS",
     "MOBO.Temp": "マザボ温度",
     "CASE.Fan": "ケースファン",
@@ -68,6 +69,7 @@
     "GPU.Power": "GPWR",
     "GPU.Fan": "GFAN",
     "MEM.Load": "MEM",
+    "MEM.Commit.Load": "コミット",
     "FPS": "FPS",
     "MOBO.Temp": "マザボ",
     "CASE.Fan": "ケース",
@@ -80,6 +82,27 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "IpTrafficExclusion": "IP 単位でリアルタイム通信速度から除外",
+    "IpTrafficExclusionEnabled": "IP ベースの通信除外を有効化",
+    "ExcludedTrafficIps": "除外する宛先 IP（1 行に 1 つ、IPv4/IPv6 の完全一致のみ）",
+    "IpExclusionValid": "ルールは正常です。{0} 件が有効です",
+    "IpExclusionNoRule": "IP ルールがまだありません",
+    "IpExclusionInvalid": "次のルール行は有効になりません:",
+    "IpExclusionStatus": "現在の状態",
+    "IpExclusionStateDisabled": "無効",
+    "IpExclusionStateIdle": "待機中（有効なルールなし、またはリアルタイム速度の需要なし）",
+    "IpExclusionStatePreparing": "準備中（収集セッションの開始とウォームアップ中）",
+    "IpExclusionStateRunning": "実行中（除外は有効）",
+    "IpExclusionStateDegraded": "低下（一部のデータが利用できません）",
+    "IpExclusionStateFailed": "失敗",
+    "IpExclusionStateBadRules": "設定にエラーがあります（ルール行は拒否されました。IP 除外は有効になりません）",
+    "IpExclusionStateNoRules": "有効なルールがありません（IP 除外は有効になりません）",
+    "IpExclusionStateAmbiguousAdapter": "NIC の帰属が曖昧です（IP 除外は有効になりません）",
+    "IpExclusionStateBackendFailed": "バックエンドの起動に失敗しました（IP 排除は有効になりません）",
+    "IpExclusionStateWarmingUp": "ウォームアップ中（最初のウィンドウは破棄されます）",
+    "IpExclusionStateNoEvents": "イベントを受信できません（IP 除外は有効になりません）",
+    "IpExclusionCaliberHint": "測定基準について: 有効にするとリアルタイム速度は TCP/UDP イベント（トランスポート層のペイロード）からの集計となり、NIC の原始速率とは基準が異なります。セッション/日次集計は従来どおりで、二重に差し引かれることはありません。",
+    "IpExclusionAdminHint": "イベント収集には管理者権限が必要です。権限がない場合やバックエンドが失敗した場合は「IP 除外は有効になりません」と表示され、除外後の速度が 0 と表示されることはありません。",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "設定パネル",
     "About": "アプリについて",
@@ -245,6 +268,7 @@
     "RefreshTip": "更新頻度は画面の再描画の間隔だけです。通常のハードウェアデータは最大1秒に1回しか収集されないため、値を小さくしても収集頻度は上がりません。",
     "IgnoreSMBTraffic": "SMB通信を無視",
     "MemoryDisplayMode": "メモリ表示",
+    "MemoryCommitHint": "コミットメモリ：コミット量 / 現在のコミット上限を表示（コミット上限 = 物理メモリ + ページファイルのコミット枠。物理メモリ使用率とは別の指標です）",
 
     "__Comment_Page6__": "--- 6. プラグイン (PluginPage) ---",
     "Plugins": "プラグイン管理",
@@ -297,5 +321,18 @@
     "PluginMarketReinstallAction": "再インストール",
     "PluginMarketPageLink": "プラグインのページ",
     "PluginMarketSelfCheck": "組み込みプラグインを上書きした可能性のあるファイルを検出しました：{0}。これらのファイルを削除してから本プログラムを再インストールしてください。"
+,
+    "CpuVoltageSource": "CPU 電圧ソース",
+    "CpuVoltageSourceTip": "自動: プロセッサが報告するコア供給電圧を優先します。要求電圧 (VID) のみの場合は参考値として明示します。手動指定したソースが消失した場合は「ソースを利用できません」と表示し、別の電圧に勝手に切り替えません。"
+  },
+  "CpuVoltage": {
+    "Auto": "自動",
+    "Measured": "コア供給電圧 (プロセッサ報告値)",
+    "MotherboardVcore": "コア供給電圧 (主板 Vcore 実測, 約 3 秒更新)",
+    "ReferenceOnly": "CPU VID (参考値, 実測の供給電圧ではありません)",
+    "Ambiguous": "CPU 電圧 (ソース未確認)",
+    "Excluded": "CPU コア電圧ではありません",
+    "Unavailable": "ソースを利用できません",
+    "MarkerReferenceOnly": " (CPU VID)"
   }
 }

@@ -29,6 +29,7 @@
     "GPU.Power": "GPU功耗",
     "GPU.Fan": "GPU风扇",
     "MEM.Load": "内存占用",
+    "MEM.Commit.Load": "内存已提交",
     "FPS": "实时帧率",
     "MOBO.Temp": "主板温度",
     "CASE.Fan": "机箱风扇",
@@ -63,6 +64,7 @@
     "GPU.Power": "GPWR",
     "GPU.Fan": "GFAN",
     "MEM.Load": "内存",
+    "MEM.Commit.Load": "提交",
     "FPS": "FPS",
     "MOBO.Temp": "主板",
     "CASE.Fan": "机箱",
@@ -79,6 +81,27 @@
     "BAT.Current": "电流"
   },
   "Menu": {
+    "IpTrafficExclusion": "按 IP 排除实时网速",
+    "IpTrafficExclusionEnabled": "启用按 IP 排除流量",
+    "ExcludedTrafficIps": "要排除的远端 IP（每行一个，仅支持精确 IPv4/IPv6）",
+    "IpExclusionValid": "规则校验通过，共 {0} 条生效",
+    "IpExclusionNoRule": "尚未填写任何 IP 规则",
+    "IpExclusionInvalid": "以下规则行无法生效：",
+    "IpExclusionStatus": "当前状态",
+    "IpExclusionStateDisabled": "未启用",
+    "IpExclusionStateIdle": "待命（无有效规则，或暂无实时网速需求）",
+    "IpExclusionStatePreparing": "准备中（正在启动采集会话并预热）",
+    "IpExclusionStateRunning": "运行中（排除已生效）",
+    "IpExclusionStateDegraded": "降级（部分数据不可用）",
+    "IpExclusionStateFailed": "失败",
+    "IpExclusionStateBadRules": "配置有误（规则行被拒绝，IP 排除未生效）",
+    "IpExclusionStateNoRules": "没有有效规则（IP 排除未生效）",
+    "IpExclusionStateAmbiguousAdapter": "网卡归属歧义（IP 排除未生效）",
+    "IpExclusionStateBackendFailed": "后端启动失败（IP 排除未生效）",
+    "IpExclusionStateWarmingUp": "预热中（首个窗口会被丢弃）",
+    "IpExclusionStateNoEvents": "收不到事件（IP 排除未生效）",
+    "IpExclusionCaliberHint": "口径说明：开启后实时网速来自 TCP/UDP 事件源统计（传输层负载），与网卡原始速率口径不同；会话/日累计流量沿用原有口径，不会被二次扣减。",
+    "IpExclusionAdminHint": "采集这些事件需要管理员权限。权限不足或后端失败时会显示「IP 排除未生效」，绝不会把过滤后的速度显示成 0。",
     "__Comment_Global__": "--- 全局/按钮/右键菜单 ---",
     "SettingsPanel": "设置面板",
     "About": "关于 LiteMonitor++",
@@ -244,6 +267,7 @@
     "RefreshTip": "刷新频率只决定界面重绘的快慢；普通硬件数据最高每秒采集一次，调小刷新率不会提高硬件采集频率",
     "IgnoreSMBTraffic": "不统计局域网SMB流量",
     "MemoryDisplayMode": "内存/显存显示",
+    "MemoryCommitHint": "内存已提交：显示已提交量 / 当前提交上限（提交上限 = 物理内存 + 分页文件的提交额度，与物理内存占用率是两个独立口径）",
     
     "__Comment_Page6__": "--- 6. 插件管理 (PluginPage) ---",
     "Plugins": "插件管理",
@@ -296,5 +320,18 @@
     "PluginMarketReinstallAction": "重新安装",
     "PluginMarketPageLink": "插件介绍页",
     "PluginMarketSelfCheck": "检测到疑似覆盖内置插件的文件：{0}。请删除这些文件后重新安装本程序。"
+,
+    "CpuVoltageSource": "CPU 电压来源",
+    "CpuVoltageSourceTip": "自动: 优先使用处理器上报的核心供电电压; 只有请求电压(VID)时会明确标注为参考值。手动指定后若该来源消失, 会显示「来源不可用」, 不会改用其它电压。"
+  },
+  "CpuVoltage": {
+    "Auto": "自动",
+    "Measured": "核心供电电压 (处理器上报)",
+    "MotherboardVcore": "核心供电电压 (主板 Vcore 实测, 约 3 秒刷新)",
+    "ReferenceOnly": "CPU VID (参考值, 非实测供电电压)",
+    "Ambiguous": "CPU 电压 (来源待确认)",
+    "Excluded": "非 CPU 核心电压",
+    "Unavailable": "来源不可用",
+    "MarkerReferenceOnly": " (CPU VID)"
   }
 }

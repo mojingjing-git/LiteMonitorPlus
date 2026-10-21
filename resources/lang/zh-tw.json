@@ -33,6 +33,7 @@
     "GPU.Power": "GPU功耗",
     "GPU.Fan": "GPU風扇",
     "MEM.Load": "記憶體佔用",
+    "MEM.Commit.Load": "記憶體已提交",
     "FPS": "FPS",
     "MOBO.Temp": "主機板溫度",
     "CASE.Fan": "機箱風扇",
@@ -64,6 +65,7 @@
     "GPU.Power": "GPWR",
     "GPU.Fan": "GFAN",
     "MEM.Load": "記憶",
+    "MEM.Commit.Load": "提交",
     "FPS": "FPS",
     "MOBO.Temp": "主機板",
     "CASE.Fan": "機箱",
@@ -76,6 +78,27 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+        "IpTrafficExclusion": "依 IP 排除即時網速",
+        "IpTrafficExclusionEnabled": "啟用依 IP 排除流量",
+        "ExcludedTrafficIps": "要排除的遠端 IP（每行一個，僅支援精確 IPv4/IPv6）",
+        "IpExclusionValid": "規則驗證通過，共 {0} 條生效",
+        "IpExclusionNoRule": "尚未填寫任何 IP 規則",
+        "IpExclusionInvalid": "以下規則行無法生效：",
+        "IpExclusionStatus": "目前狀態",
+        "IpExclusionStateDisabled": "未啟用",
+        "IpExclusionStateIdle": "待命（無有效規則，或暫無即時網速需求）",
+        "IpExclusionStatePreparing": "準備中（正在啟動採集工作階段並預熱）",
+        "IpExclusionStateRunning": "執行中（排除已生效）",
+        "IpExclusionStateDegraded": "降級（部分資料無法使用）",
+        "IpExclusionStateFailed": "失敗",
+        "IpExclusionStateBadRules": "設定有誤（規則行被拒絕，IP 排除未生效）",
+        "IpExclusionStateNoRules": "沒有有效規則（IP 排除未生效）",
+        "IpExclusionStateAmbiguousAdapter": "網路卡歸屬歧義（IP 排除未生效）",
+        "IpExclusionStateBackendFailed": "後端啟動失敗（IP 排除未生效）",
+        "IpExclusionStateWarmingUp": "預熱中（首個視窗會被丟棄）",
+        "IpExclusionStateNoEvents": "收不到事件（IP 排除未生效）",
+        "IpExclusionCaliberHint": "口徑說明：開啟後即時網速來自 TCP/UDP 事件源統計（傳輸層負載），與網路卡原始速率口徑不同；工作階段/日累計流量沿用原有口徑，不會被二次扣減。",
+        "IpExclusionAdminHint": "採集這些事件需要系統管理員權限。權限不足或後端失敗時會顯示「IP 排除未生效」，絕不會把過濾後的速度顯示成 0。",
         "__Comment_Global__": "--- 全域/按鈕/右鍵選單 ---",
         "SettingsPanel": "設定面板",
         "About": "關於 LiteMonitor++",
@@ -242,6 +265,7 @@
     "RefreshTip": "重新整理頻率只決定介面重繪的快慢；一般硬體資料最高每秒採集一次，調小重新整理頻率不會提高硬體採集頻率",
     "IgnoreSMBTraffic": "不統計局域網SMB流量",
     "MemoryDisplayMode": "記憶體/顯示記憶體顯示",
+    "MemoryCommitHint": "記憶體已提交：顯示已提交量 / 目前提交上限（提交上限 = 實體記憶體 + 分頁檔的提交額度，與實體記憶體使用率是兩個獨立口徑）",
 
     "__Comment_Page6__": "--- 6. 插件管理 (PluginPage) ---",
     "Plugins": "插件管理",
@@ -294,5 +318,18 @@
     "PluginMarketReinstallAction": "重新安裝",
     "PluginMarketPageLink": "插件介紹頁",
     "PluginMarketSelfCheck": "偵測到疑似覆蓋內建插件的檔案：{0}。請刪除這些檔案後重新安裝本程式。"
+,
+    "CpuVoltageSource": "CPU 電壓來源",
+    "CpuVoltageSourceTip": "自動: 優先使用處理器回報的核心供電電壓; 只有請求電壓(VID)時會明確標示為參考值。手動指定後若該來源消失, 會顯示「來源不可用」, 不會改用其它電壓。"
+  },
+  "CpuVoltage": {
+    "Auto": "自動",
+    "Measured": "核心供電電壓 (處理器回報)",
+    "MotherboardVcore": "核心供電電壓 (主機板 Vcore 實測, 約 3 秒更新)",
+    "ReferenceOnly": "CPU VID (參考值, 非實測供電電壓)",
+    "Ambiguous": "CPU 電壓 (來源待確認)",
+    "Excluded": "非 CPU 核心電壓",
+    "Unavailable": "來源不可用",
+    "MarkerReferenceOnly": " (CPU VID)"
   }
 }

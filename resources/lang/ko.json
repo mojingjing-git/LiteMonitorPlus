@@ -33,6 +33,7 @@
     "GPU.Power": "GPU 전력",
     "GPU.Fan": "GPU 팬",
     "MEM.Load": "메모리 사용",
+    "MEM.Commit.Load": "커밋 메모리",
     "FPS": "FPS",
     "MOBO.Temp": "메인보드 온도",
     "CASE.Fan": "케이스 팬",
@@ -67,6 +68,7 @@
     "GPU.Power": "GPWR",
     "GPU.Fan": "GFAN",
     "MEM.Load": "MEM",
+    "MEM.Commit.Load": "커밋",
     "FPS": "FPS",
     "MOBO.Temp": "메인보드",
     "CASE.Fan": "케이스",
@@ -79,6 +81,27 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "IpTrafficExclusion": "IP로 실시간 네트워크 속도 제외",
+    "IpTrafficExclusionEnabled": "IP 기반 트래픽 제외 사용",
+    "ExcludedTrafficIps": "제외할 원격 IP (한 줄에 하나, 정확한 IPv4/IPv6만)",
+    "IpExclusionValid": "규칙 검증 통과, {0}개 규칙이 적용됨",
+    "IpExclusionNoRule": "아직 IP 규칙이 없습니다",
+    "IpExclusionInvalid": "다음 규칙 줄은 적용할 수 없습니다:",
+    "IpExclusionStatus": "현재 상태",
+    "IpExclusionStateDisabled": "사용 안 함",
+    "IpExclusionStateIdle": "대기 중 (유효한 규칙 없음 또는 실시간 속도 요청 없음)",
+    "IpExclusionStatePreparing": "준비 중 (수집 세션 시작 및 예열 중)",
+    "IpExclusionStateRunning": "실행 중 (제외 적용됨)",
+    "IpExclusionStateDegraded": "저하됨 (일부 데이터를 사용할 수 없음)",
+    "IpExclusionStateFailed": "실패",
+    "IpExclusionStateBadRules": "설정 오류 (규칙 줄이 거부됨, IP 제외가 적용되지 않음)",
+    "IpExclusionStateNoRules": "유효한 규칙 없음 (IP 제외가 적용되지 않음)",
+    "IpExclusionStateAmbiguousAdapter": "어댑터 귀속이 모호합니다 (IP 제외가 적용되지 않음)",
+    "IpExclusionStateBackendFailed": "백엔드 시작 실패 (IP 제외가 적용되지 않음)",
+    "IpExclusionStateWarmingUp": "예열 중 (첫 번째 창은 버려짐)",
+    "IpExclusionStateNoEvents": "이벤트를 수신하지 못함 (IP 제외가 적용되지 않음)",
+    "IpExclusionCaliberHint": "측정 기준 안내: 활성화하면 실시간 속도는 TCP/UDP 이벤트 통계(전송 계층 페이로드)에서 나오므로 NIC 원시 속도와 기준이 다릅니다. 세션/일일 누적은 기존 기준을 유지하며 이중 차감되지 않습니다.",
+    "IpExclusionAdminHint": "이벤트 수집에는 관리자 권한이 필요합니다. 권한이 없거나 백엔드가 실패하면 UI에 \"IP 제외가 적용되지 않음\"이 표시되며, 필터링된 속도가 0으로 표시되는 일은 없습니다.",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "설정 패널",
     "About": "정보",
@@ -244,6 +267,7 @@
     "RefreshTip": "갱신 주기는 화면을 다시 그리는 간격만 정합니다. 일반 하드웨어 데이터는 최대 초당 한 번만 수집되므로 값을 낮춰도 수집 횟수는 늘지 않습니다.",
     "IgnoreSMBTraffic": "SMB 트래픽 무시",
     "MemoryDisplayMode": "메모리 표시",
+    "MemoryCommitHint": "커밋 메모리: 커밋 양 / 현재 커밋 한도를 표시합니다 (커밋 한도 = 물리 메모리 + 페이지 파일 커밋 할당량, 물리 메모리 사용률과는 별개 지표입니다)",
 
     "__Comment_Page6__": "--- 6. 플러그인 (PluginPage) ---",
     "Plugins": "플러그인 관리",
@@ -296,5 +320,18 @@
     "PluginMarketReinstallAction": "재설치",
     "PluginMarketPageLink": "플러그인 페이지",
     "PluginMarketSelfCheck": "내장 플러그인을 덮어썼을 수 있는 파일을 발견했습니다: {0}. 이 파일들을 삭제한 뒤 프로그램을 다시 설치하세요."
+,
+    "CpuVoltageSource": "CPU 전압 소스",
+    "CpuVoltageSourceTip": "자동: 프로세서가 보고하는 코어 공급 전압을 우선합니다. 요청 전압(VID)만 있으면 참고값으로 명확히 표시합니다. 수동 지정한 소스가 사라지면 「소스를 사용할 수 없음」을 표시하고 다른 전압으로 바꾸지 않습니다."
+  },
+  "CpuVoltage": {
+    "Auto": "자동",
+    "Measured": "코어 공급 전압 (프로세서 보고값)",
+    "MotherboardVcore": "코어 공급 전압 (메인보드 Vcore 실측, 약 3초 갱신)",
+    "ReferenceOnly": "CPU VID (참고값, 실측 공급 전압 아님)",
+    "Ambiguous": "CPU 전압 (소스 미확인)",
+    "Excluded": "CPU 코어 전압 아님",
+    "Unavailable": "소스를 사용할 수 없음",
+    "MarkerReferenceOnly": " (CPU VID)"
   }
 }

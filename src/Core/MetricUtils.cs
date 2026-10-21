@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using LiteMonitor.src.SystemServices;
 using LiteMonitor.src.SystemServices.InfoService;
 
 namespace LiteMonitor.src.Core
@@ -107,6 +108,28 @@ namespace LiteMonitor.src.Core
             float v = value ?? 0.0f;
             var type = GetType(key);
 
+            // ★★ [#166] CPU 电压：数值与来源必须来自**同一份已发布解析结果** ★★
+            //   - 缺失（来源不可用 / 没有候选 / 读数无效）→ 显示 "--"，**绝不显示 0**；
+            //   - 有效 → 用已发布分辨率里的值格式化，保证面板/任务栏/网页三处数字完全一致。
+            if (IsCpuVoltageKey(key))
+            {
+                CpuVoltageResolution? resolution = CpuVoltageSourcePublisher.Current;
+                if (resolution == null || !resolution.IsAvailable || !resolution.IsValid || !resolution.Value.HasValue)
+                    return MissingValueText;
+
+                return FormatValueAdaptive(resolution.Value.Value, -1);
+            }
+
+            // ★★ [Fix #137] 提交内存 ("MEM.Commit.Load") 走**独立**分支 ★★
+            //   它必须在下面的 Memory 分支**之前**返回：
+            //   既有 Memory 分支会把百分比乘以 Settings.DetectedRamTotalGB（物理内存总量），
+            //   而提交内存的分母必须是**当前提交上限**（分页文件 + 物理内存的提交额度），
+            //   用物理内存当分母会算出 150% 这种"提交额度比物理内存还大"的假象。
+            if (IsCommittedMemoryKey(key))
+            {
+                return GetCommittedMemoryValueStr(v, userFormat);
+            }
+
             // 1. 内存特殊处理 (容量 vs 百分比)
             if (type == MetricType.Memory)
             {
@@ -183,6 +206,24 @@ namespace LiteMonitor.src.Core
         public static string GetUnitStr(string key, float? value, UnitContext context)
         {
             var type = GetType(key);
+
+            // ★★ [#166] CPU 电压：单位恒为 "V"，但**必须带上来源标记** ★★
+            //   处理器只上报"请求电压"(VID) 时，单位后面挂 " (CPU VID)"：
+            //   这是**独立于用户标签**的通道 —— 用户把监控项改名成"我的电压"也抹不掉这条提示。
+            //   缺失时**不带单位**（否则会显示成 "-- V" 这种自相矛盾的读数）。
+            if (IsCpuVoltageKey(key))
+            {
+                CpuVoltageResolution? resolution = CpuVoltageSourcePublisher.Current;
+                if (resolution == null || !resolution.IsAvailable) return "";
+                return "V" + GetCpuVoltageSourceMarker(resolution);
+            }
+
+            // ★★ [Fix #137] 提交内存走独立分支（与 GetValueStr 的分支一一对应）★★
+            //   单位是**常量**（容量模式固定 GB），因此数值与单位**跨代次也不会错配**。
+            if (IsCommittedMemoryKey(key))
+            {
+                return GetCommittedMemoryUnitStr(context);
+            }
             
             // 1. 内存 (GB vs %)
             if (type == MetricType.Memory) 
@@ -289,16 +330,170 @@ namespace LiteMonitor.src.Core
                    userFormat.Contains("%", StringComparison.Ordinal);
         }
 
+        // =========================================================
+        // ★ [Fix #137] 提交内存 ("MEM.Commit.Load") 的独立格式分支
+        // =========================================================
+
+        /// <summary>提交内存监控项的 Key（#137）。</summary>
+        public const string CommittedMemoryKey = "MEM.Commit.Load";
+
+        /// <summary>提交内存容量模式使用的**固定**单位。</summary>
+        /// <remarks>
+        /// ★ 为什么固定成 GB，而不是像既有内存项那样按数值自动换算（KB/MB/GB/TB）：
+        ///   容量模式要同时显示"分子（提交量）+ 分母（当前提交上限）"两个量，
+        ///   而 formatter 的签名（GetValueStr / GetUnitStr）只带一个 float，
+        ///   数值与单位是**两次独立调用**。
+        ///   若单位跟着快照里的分母自动换算，两次调用之间恰好发布了新一代次时，
+        ///   就会出现「数值按 GB 算、单位却变成 TB」这种倍率不一致的读数。
+        ///   单位固定成 GB 之后：
+        ///     - 分子与分母必然同倍率（都是 GB），不会出现 "76 GB / 98304 MB"；
+        ///     - 单位与数值**跨代次也不会错配**（单位是常量）；
+        ///     - 提交量与提交上限本来就必然是 GB 量级，与任务管理器的口径一致。
+        /// </remarks>
+        public const string CommittedMemoryCapacityUnit = "GB";
+
+        /// <summary>缺失读数的占位文本（★ 缺失不是 0）。</summary>
+        private const string MissingValueText = "--";
+
+        /// <summary>是否是"内存已提交"监控项。</summary>
+        public static bool IsCommittedMemoryKey(string? key)
+            => string.Equals(key, CommittedMemoryKey, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 取当前**已发布**的提交内存状态。
+        /// ★ 只读发布点，**绝不触发任何系统调用**（绘制频率再高也不会变成系统调用频率）。
+        /// </summary>
+        private static CommittedMemoryDisplay? GetCommittedDisplay()
+            => CommittedMemoryPublisher.Current;
+
+        /// <summary>
+        /// 提交内存的数值文本。
+        /// </summary>
+        /// <param name="value">调用方拿到的百分比（百分比口径下使用）。</param>
+        /// <param name="userFormat">该监控项自己的单位格式（用于识别 "%" 覆盖）。</param>
+        private static string GetCommittedMemoryValueStr(float value, string? userFormat)
+        {
+            CommittedMemoryDisplay? display = GetCommittedDisplay();
+
+            // ★ 缺失不是 0：快照未就绪 / API 失败 / 上限为 0 / 溢出 一律显示 "--"，
+            //   既不显示 0，也绝不回退成物理内存率。
+            if (display == null || display.IsMissing) return MissingValueText;
+
+            var cfg = Settings.Load();
+
+            // 百分比口径（或用户显式要求 %）：直接用百分比，与其它百分比指标同规则。
+            if (cfg.MemoryDisplayMode != 1 || IsPercentUnitOverride(userFormat))
+            {
+                return FormatValueAdaptive(value, -1);
+            }
+
+            // ★ 容量口径：分子 / 分母取自**同一个不可变状态对象**，
+            //   因此必然同代次、同倍率（不会出现 "76 GB / 98304 MB" 这种倍率不一致）。
+            //   分母是**当前提交上限**，不是物理内存总量。
+            double committedGb = display.CommittedBytes / 1073741824.0;
+            double limitGb = display.LimitBytes / 1073741824.0;
+            string num = FormatValueAdaptive(committedGb, -1);
+            string den = FormatValueAdaptive(limitGb, -1);
+            return $"{num} / {den}";
+        }
+
+        /// <summary>
+        /// 提交内存的单位文本。
+        /// </summary>
+        private static string GetCommittedMemoryUnitStr(UnitContext context)
+        {
+            var cfg = Settings.Load();
+            bool settingsContext = context == UnitContext.SettingsPanel || context == UnitContext.SettingsTaskbar;
+
+            if (!settingsContext)
+            {
+                // 缺失读数不带单位（否则会显示成 "--GB" / "--%" 这种自相矛盾的读数）
+                CommittedMemoryDisplay? display = GetCommittedDisplay();
+                if (display == null || display.IsMissing) return "";
+            }
+
+            if (cfg.MemoryDisplayMode != 1) return "%";
+
+            // 设置界面的单位输入框展示的是"默认单位格式"，与实时读数无关。
+            if (settingsContext) return "{u}";
+
+            return CommittedMemoryCapacityUnit;
+        }
+
         public static string GetDisplayUnit(string key, string calculatedUnit, string userFormat)
         {
-           if (string.IsNullOrEmpty(userFormat))
+            string result;
+            if (string.IsNullOrEmpty(userFormat))
             {
-                if (string.IsNullOrEmpty(userFormat) && userFormat != null) return ""; // Empty = Hide
-                // [Optimization] GetUnitStr already returns the correct unit (e.g., "MB" or "MB/s") based on context.
-                // We don't need to append "/s" here anymore.
-                return calculatedUnit;
+                result = (userFormat != null) ? "" : calculatedUnit;   // Empty = Hide; null = 用默认单位
             }
-            return userFormat.Contains("{u}") ? userFormat.Replace("{u}", calculatedUnit) : userFormat;
+            else
+            {
+                result = userFormat.Contains("{u}") ? userFormat.Replace("{u}", calculatedUnit) : userFormat;
+            }
+
+            // ★ [#166] 来源标记必须拼在**用户单位格式之后**：
+            //   用户自定义单位（甚至把单位整个隐藏）不能把"这是 VID 参考值"这条信息抹掉。
+            //   默认单位里已经带标记时不重复追加。
+            if (IsCpuVoltageKey(key))
+            {
+                string marker = GetCpuVoltageSourceMarker();
+                if (marker.Length > 0 && !result.Contains(marker, StringComparison.Ordinal)) result += marker;
+            }
+
+            return result;
+        }
+
+        // =========================================================
+        // ★ [#166] CPU 电压：来源说明（独立于用户标签的通道）
+        // =========================================================
+
+        /// <summary>CPU 电压监控项的 Key。</summary>
+        public const string CpuVoltageKey = "CPU.Voltage";
+
+        /// <summary>是否是 CPU 电压监控项。</summary>
+        public static bool IsCpuVoltageKey(string? key)
+            => string.Equals(key, CpuVoltageKey, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 取来源类型对应的**短标记**（挂在单位后面）。
+        /// ★ 只有"请求电压(VID)"需要标记：其它来源本来就是实测值，不需要额外提醒。
+        /// ★ 空字符串 = 不加标记。
+        /// </summary>
+        public static string GetCpuVoltageSourceMarker(CpuVoltageResolution? resolution = null)
+        {
+            CpuVoltageResolution? r = resolution ?? CpuVoltageSourcePublisher.Current;
+            if (r == null || !r.IsAvailable) return "";
+            if (r.SourceKind != CpuVoltageSourceKind.RequestedVid) return "";
+            return LanguageManager.T("CpuVoltage.MarkerReferenceOnly");
+        }
+
+        /// <summary>
+        /// 取来源类型的**完整说明文案**（设置页 / 提示用）。
+        /// ★ 走独立通道：用户自定义监控项名称、隐藏单位都覆盖不掉它。
+        /// </summary>
+        public static string GetCpuVoltageSourceKindLabel(CpuVoltageSourceKind kind)
+        {
+            switch (kind)
+            {
+                case CpuVoltageSourceKind.MeasuredCoreRail: return LanguageManager.T("CpuVoltage.Measured");
+                case CpuVoltageSourceKind.MotherboardVcore: return LanguageManager.T("CpuVoltage.MotherboardVcore");
+                case CpuVoltageSourceKind.RequestedVid: return LanguageManager.T("CpuVoltage.ReferenceOnly");
+                case CpuVoltageSourceKind.Ambiguous: return LanguageManager.T("CpuVoltage.Ambiguous");
+                case CpuVoltageSourceKind.Excluded: return LanguageManager.T("CpuVoltage.Excluded");
+                default: return LanguageManager.T("CpuVoltage.Unavailable");
+            }
+        }
+
+        /// <summary>
+        /// 当前 CPU 电压的来源说明（完整文案）。
+        /// ★ 没有数据时返回"来源不可用" —— 绝不返回空串, 免得界面上什么都不显示。
+        /// </summary>
+        public static string GetCpuVoltageSourceHint()
+        {
+            CpuVoltageResolution? r = CpuVoltageSourcePublisher.Current;
+            if (r == null || !r.IsAvailable) return LanguageManager.T("CpuVoltage.Unavailable");
+            return GetCpuVoltageSourceKindLabel(r.SourceKind);
         }
         // [Refactor] 统一数据大小格式化逻辑
         

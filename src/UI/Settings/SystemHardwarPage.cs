@@ -4,9 +4,11 @@ using System.Windows.Forms;
 using System.Linq;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Threading.Tasks;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices;
+using LiteMonitor.src.SystemServices.NetworkTraffic;
 using LiteMonitor.src.UI.Controls;
 
 namespace LiteMonitor.src.UI.SettingsPage
@@ -18,6 +20,9 @@ namespace LiteMonitor.src.UI.SettingsPage
         // ★★★ 修复：类型更正为 LiteComboBox ★★★
         private LiteComboBox _cbDisk, _cbNet, _cbGpu, _cbMobo;
         private LiteComboBox _cbFanCpu, _cbFanPump, _cbFanCase;
+
+        // ★ [#166] CPU 电压来源下拉（枚举**已发布**的候选，保存稳定传感器标识）
+        private LiteComboBox _cbCpuVoltage;
 
         // ★ 实际检测到的显卡数量, 决定「监控显卡数量」下拉的可选上限 ★
         private int _detectedGpuCount = 0;
@@ -46,8 +51,177 @@ namespace LiteMonitor.src.UI.SettingsPage
         private void InitializeUI()
         {
             CreateSourceCard();
+            CreateIpExclusionCard();
             CreateCalibrationCard();
             CreateSystemCard();
+        }
+
+        // ===========================================================
+        // ★ [#610] 按指定 IP 排除实时网速
+        // ===========================================================
+
+        private TextBox? _ipListBox;
+        private Label? _ipValidationLabel;
+        private Label? _ipStatusLabel;
+
+        /// <summary>
+        /// IP 排除设置卡片：开关 + 多行 IP 列表 + 逐条校验结果 + 当前后端状态 + 权限提示。
+        /// <para>★ 本页**不触发**任何硬件采集、不重开硬件树、不启用额外控制器。</para>
+        /// </summary>
+        private void CreateIpExclusionCard()
+        {
+            var group = new LiteSettingsGroup(LanguageManager.T("Menu.IpTrafficExclusion"));
+
+            var toggle = group.AddToggle(this, "Menu.IpTrafficExclusionEnabled",
+                () => Config?.IpTrafficExclusionEnabled ?? false,
+                v => { if (Config != null) Config.IpTrafficExclusionEnabled = v; });
+            toggle.CheckedChanged += (s, e) => RefreshIpExclusionStatus();
+
+            // ---- 多行 IP 列表 ----
+            var ipPanel = new Panel { Dock = DockStyle.Fill, AutoSize = true, BackColor = Color.White };
+            var ipCaption = new Label
+            {
+                Text = LanguageManager.T("Menu.ExcludedTrafficIps"),
+                AutoSize = true,
+                Dock = DockStyle.Top,
+                Font = UIFonts.Regular(9F),
+                ForeColor = UIColors.TextMain,
+            };
+            _ipListBox = new TextBox
+            {
+                Multiline = true,
+                ScrollBars = ScrollBars.Vertical,
+                BorderStyle = BorderStyle.FixedSingle,
+                Dock = DockStyle.Fill,
+                Height = UIUtils.S(86),
+                Font = UIFonts.Regular(9F),
+                BackColor = Color.White,
+                ForeColor = UIColors.TextSub,
+            };
+            _ipListBox.TextChanged += (s, e) =>
+            {
+                if (IsWriteBackSuppressed || Config == null) { return; }
+                Config.ExcludedTrafficIps = SplitIpLines(_ipListBox.Text);
+                RefreshIpExclusionValidation();
+            };
+            ipPanel.Controls.Add(_ipListBox);
+            ipPanel.Controls.Add(ipCaption);
+            group.AddFullItem(ipPanel);
+
+            // ---- 校验结果 ----
+            _ipValidationLabel = new Label
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                Font = UIFonts.Regular(8F),
+                ForeColor = UIColors.TextSub,
+                Padding = new Padding(0, 4, 0, 4),
+            };
+            group.AddFullItem(_ipValidationLabel);
+
+            // ---- 当前状态 ----
+            _ipStatusLabel = new Label
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                Font = UIFonts.Regular(8F),
+                ForeColor = UIColors.TextSub,
+                Padding = new Padding(0, 4, 0, 4),
+            };
+            group.AddFullItem(_ipStatusLabel);
+
+            // ---- 提示：口径 + 权限 ----
+            group.AddHint(LanguageManager.T("Menu.IpExclusionCaliberHint"));
+            group.AddHint(LanguageManager.T("Menu.IpExclusionAdminHint"));
+
+            RegisterRefresh(() =>
+            {
+                if (_ipListBox == null) { return; }
+                using (BeginSuppressWriteBack())
+                {
+                    _ipListBox.Text = string.Join("\r\n", Config?.ExcludedTrafficIps ?? new List<string>());
+                }
+                RefreshIpExclusionValidation();
+                RefreshIpExclusionStatus();
+            });
+
+            AddGroupToPage(group);
+        }
+
+        /// <summary>把多行文本拆成规则行（去空行、去首尾空白）。</summary>
+        internal static List<string> SplitIpLines(string text)
+        {
+            var result = new List<string>();
+            if (string.IsNullOrEmpty(text)) { return result; }
+            string normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
+            foreach (string line in normalized.Split('\n'))
+            {
+                string trimmed = line.Trim();
+                if (trimmed.Length > 0) { result.Add(trimmed); }
+            }
+            return result;
+        }
+
+        /// <summary>逐条标出被拒绝的规则行（不静默忽略）。</summary>
+        private void RefreshIpExclusionValidation()
+        {
+            if (_ipValidationLabel == null) { return; }
+
+            var lines = Config?.ExcludedTrafficIps ?? new List<string>();
+            IpRuleCompilationResult result = IpExclusionRules.CompileWithResult(lines);
+
+            if (result.Errors.Count > 0)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine(LanguageManager.T("Menu.IpExclusionInvalid"));
+                foreach (IpRuleError err in result.Errors.Take(8))
+                {
+                    sb.AppendLine("#" + (err.LineNumber + 1) + " " + err.Text + " — " + err.Reason);
+                }
+                _ipValidationLabel.Text = sb.ToString().TrimEnd();
+                _ipValidationLabel.ForeColor = UIColors.TextWarn;
+                return;
+            }
+
+            if (result.Rules.IsEmpty)
+            {
+                _ipValidationLabel.Text = LanguageManager.T("Menu.IpExclusionNoRule");
+                _ipValidationLabel.ForeColor = UIColors.TextWarn;
+                return;
+            }
+
+            _ipValidationLabel.Text = string.Format(LanguageManager.T("Menu.IpExclusionValid"), result.Rules.RuleCount);
+            _ipValidationLabel.ForeColor = UIColors.TextSub;
+        }
+
+        /// <summary>显示后端当前状态（准备中/运行/降级/失败 + 权限提示）。</summary>
+        private void RefreshIpExclusionStatus()
+        {
+            if (_ipStatusLabel == null) { return; }
+
+            NetworkTrafficExclusionStatus? status = HardwareMonitor.Instance?.GetTrafficExclusionStatus();
+            if (status == null)
+            {
+                _ipStatusLabel.Text = LanguageManager.T("Menu.IpExclusionStatus") + ": " +
+                                      LanguageManager.T("Menu.IpExclusionStateDisabled");
+                _ipStatusLabel.ForeColor = UIColors.TextSub;
+                return;
+            }
+
+            string stateKey = status.State switch
+            {
+                NetworkTrafficExclusionState.Disabled => "Menu.IpExclusionStateDisabled",
+                NetworkTrafficExclusionState.Idle => "Menu.IpExclusionStateIdle",
+                NetworkTrafficExclusionState.Preparing => "Menu.IpExclusionStatePreparing",
+                NetworkTrafficExclusionState.Running => "Menu.IpExclusionStateRunning",
+                NetworkTrafficExclusionState.Degraded => "Menu.IpExclusionStateDegraded",
+                _ => "Menu.IpExclusionStateFailed",
+            };
+
+            string text = LanguageManager.T("Menu.IpExclusionStatus") + ": " + LanguageManager.T(stateKey);
+            if (!string.IsNullOrEmpty(status.Detail)) { text += " (" + status.Detail + ")"; }
+            _ipStatusLabel.Text = text;
+            _ipStatusLabel.ForeColor = status.Effective ? UIColors.TextSub : UIColors.TextWarn;
         }
 
         public override void OnShow()
@@ -70,8 +244,10 @@ namespace LiteMonitor.src.UI.SettingsPage
                 var taskGpus  = Task.Run(() => HardwareMonitor.ListAllGpuOptions());
                 var taskFans  = Task.Run(() => HardwareScanner.ListAllFans(HardwareMonitor.Instance.ComputerInstance, HardwareMonitor.Instance.SyncLock));
                 var taskMobo  = Task.Run(() => HardwareScanner.ListAllMoboTemps(HardwareMonitor.Instance.ComputerInstance, HardwareMonitor.Instance.SyncLock));
+                // ★ [#166] CPU 电压候选：只读**已发布**的快照（不扫硬件树、不触发采集）
+                var taskCpuVoltage = Task.Run(() => HardwareMonitor.ListCpuVoltageCandidates());
 
-                await Task.WhenAll(taskDisks, taskNets, taskGpus, taskFans, taskMobo);
+                await Task.WhenAll(taskDisks, taskNets, taskGpus, taskFans, taskMobo, taskCpuVoltage);
 
                 // ★ 页面可能在 await 期间被释放（设置窗体关闭 ⇒ DisposeCachedPages 释放全部页面）。
                 //   此时继续操作控件没有意义；而且 async void 的未捕获异常会经
@@ -158,6 +334,45 @@ namespace LiteMonitor.src.UI.SettingsPage
                     }
                 }
 
+                // ★ [#166] CPU 电压来源下拉
+                //   ★ 只列**已发布**的候选；明确不是核心电压的轨（SoC / GT / DIMM / 输入供电…）不列。
+                //   ★ 手动指定后来源消失（换机器 / 热重载后标识变了）→ 保留原值 + 只读提示项，
+                //     绝不悄悄落到"自动"（那等于换了另一种含义的电压）。
+                void FillCpuVoltageSync(LiteComboBox combo, List<CpuVoltageCandidate> data, string currentVal)
+                {
+                    if (combo == null || combo.Inner.Items.Count > 2) return;
+
+                    using (BeginSuppressWriteBack())
+                    {
+                        combo.Inner.BeginUpdate();
+                        combo.Inner.Items.Clear();
+                        combo.AddItem(strAuto, "");
+
+                        foreach (var c in data)
+                        {
+                            if (c == null) continue;
+                            CpuVoltageSourceKind kind = CpuVoltageResolver.Classify(c.HardwareLevel, c.SensorName, out _);
+                            if (kind == CpuVoltageSourceKind.Excluded) continue;
+
+                            string label = string.Format("{0} [{1}] - {2}",
+                                c.SensorName, c.HardwareName, MetricUtils.GetCpuVoltageSourceKindLabel(kind));
+                            combo.AddItem(label, c.SensorIdentifier);
+                        }
+
+                        bool currentExists = data.Any(x => x != null &&
+                            string.Equals(x.SensorIdentifier, currentVal, StringComparison.OrdinalIgnoreCase));
+                        if (!string.IsNullOrEmpty(currentVal) && !currentExists)
+                        {
+                            combo.AddItem(string.Format(LanguageManager.T("Menu.PreferenceUnavailable"), currentVal), currentVal);
+                        }
+
+                        combo.Inner.EndUpdate();
+
+                        if (!string.IsNullOrEmpty(currentVal)) combo.SelectValue(currentVal);
+                        else combo.SelectedIndex = 0;
+                    }
+                }
+
                 // 3. 瞬间填入所有数据 (因为布局被挂起，用户看不见中间过程)
                 FillSync(_cbDisk, taskDisks.Result, Config.PreferredDisk);
                 FillSync(_cbNet, taskNets.Result, Config.PreferredNetwork);
@@ -168,6 +383,9 @@ namespace LiteMonitor.src.UI.SettingsPage
                 FillSync(_cbFanCpu, taskFans.Result, Config.PreferredCpuFan);
                 FillSync(_cbFanPump, taskFans.Result, Config.PreferredCpuPump);
                 FillSync(_cbFanCase, taskFans.Result, Config.PreferredCaseFan);
+
+                // ★ [#166] CPU 电压来源
+                FillCpuVoltageSync(_cbCpuVoltage, taskCpuVoltage.Result, Config.PreferredCpuVoltageSensor);
             }
             catch (Exception ex)
             {
@@ -318,6 +536,16 @@ namespace LiteMonitor.src.UI.SettingsPage
                 new[] { new { Label = strAuto, Value = "" } },
                 () => Config?.PreferredCaseFan ?? "",
                 v => { if (Config != null) Config.PreferredCaseFan = v ?? ""; });
+
+            // ★ [#166] CPU 电压来源 ★
+            //   保存的是 LHM 的**稳定传感器标识**（形如 "/amdcpu/0/voltage/0"），
+            //   空串 = 自动。选项**只来自已发布的候选**（见 PopulateAsyncData），
+            //   这里不扫描硬件树、不调用 hw.Update()、也不启用任何额外控制器。
+            _cbCpuVoltage = (LiteComboBox)group.AddComboPair(this, LanguageManager.T("Menu.CpuVoltageSource"),
+                new[] { new { Label = strAuto, Value = "" } },
+                () => Config?.PreferredCpuVoltageSensor ?? "",
+                v => { if (Config != null) Config.PreferredCpuVoltageSensor = v ?? ""; });
+            group.AddHint(LanguageManager.T("Menu.CpuVoltageSourceTip"));
 
             AddGroupToPage(group);
         }

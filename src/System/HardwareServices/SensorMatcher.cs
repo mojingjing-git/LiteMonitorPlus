@@ -59,13 +59,15 @@ namespace LiteMonitor.src.SystemServices
                     }
                 }
                 if (s.SensorType == SensorType.Power && (Has(name, "package") || Has(name, "cores"))) return "CPU.Power";
-                // [New] CPU Voltage
-                if (s.SensorType == SensorType.Voltage && (Has(name, "core") || Has(name, "cpu") || Has(name, "vcore") || Has(name, "vid"))) 
-                {
-                    // Exclude distractions
-                    if (!Has(name, "soc") && !Has(name, "gt") && !Has(name, "sa") && !Has(name, "aux")) 
-                        return "CPU.Voltage";
-                }
+
+                // ★★ [#166] CPU 电压**不再**在这里映射成 "CPU.Voltage" ★★
+                //   旧实现把 core / cpu / vcore / vid 一律映射到同一个键, 谁先枚举到谁赢
+                //   —— 结果取决于 LHM 的传感器枚举顺序。
+                //   实机证据 (AMD Ryzen 7 5800X / LHM 0.9.6): 实际选中的是 "Core #1 VID",
+                //   那是处理器**请求**的电压, 不是核心供电电压, 口径是错的。
+                //   现在电压的**选择**由 CpuVoltageResolver 负责 (按来源可信度 + 稳定标识排序),
+                //   候选由 SensorMap 收集, 这里不再产出 "CPU.Voltage" 键 ——
+                //   否则"先到先得"的旧路径会以兜底形式复活, 把错误口径重新引回来。
             }
 
             // --- GPU ---
@@ -123,6 +125,34 @@ namespace LiteMonitor.src.SystemServices
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// [#166] CPU 电压候选的硬件层级翻译。
+        /// LHM 的 SuperIO 是 Motherboard 的子硬件, 因此主板轨会走 SuperIO / Motherboard 两条分支。
+        /// </summary>
+        public static CpuVoltageHardwareLevel GetCpuVoltageLevel(HardwareType type)
+        {
+            switch (type)
+            {
+                case HardwareType.Cpu: return CpuVoltageHardwareLevel.Cpu;
+                case HardwareType.SuperIO: return CpuVoltageHardwareLevel.SuperIO;
+                case HardwareType.Motherboard: return CpuVoltageHardwareLevel.Motherboard;
+                default: return CpuVoltageHardwareLevel.Other;
+            }
+        }
+
+        /// <summary>
+        /// 该传感器是否**可能**是 CPU 电压候选。
+        ///
+        /// ★ 这里只按**类型**过滤 (电压 + CPU/主板/SuperIO 层级);
+        ///   名字语义 (VID / SVI / Vcore / SoC ...) 一律交给
+        ///   <see cref="CpuVoltageResolver.Classify"/> 判定, 避免两处各写一套规则。
+        /// </summary>
+        public static bool IsCpuVoltageCandidate(HardwareType type, SensorType sensorType)
+        {
+            if (sensorType != SensorType.Voltage) return false;
+            return GetCpuVoltageLevel(type) != CpuVoltageHardwareLevel.Other;
         }
 
         /// <summary>

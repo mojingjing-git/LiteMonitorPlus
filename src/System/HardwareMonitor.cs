@@ -5,6 +5,7 @@ using System.Runtime.InteropServices; // ★★★ 新增：引用用于内存�
 using System.Reflection; // ★★★ 新增：用于反射关闭历史记录
 using LibreHardwareMonitor.Hardware;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.SystemServices.NetworkTraffic; // ★ [#610] IP 流量排除后端
 using LiteMonitor.src.WebServer; // ★ FPS 需求规则的**单一来源**（WebFpsDemand）
 using System.Linq;
 using System.Threading;
@@ -38,12 +39,20 @@ namespace LiteMonitor.src.SystemServices
         private readonly SensorMap _sensorMap;
         private readonly NetworkManager _networkManager;
         private readonly DiskManager _diskManager;
+
+        // ★ [#610] IP 流量排除后端（按需创建：功能关闭时不创建任何会话/后台线程）。
+        private NetworkTrafficExclusionService? _trafficExclusion;
         private readonly FpsCounter _fpsCounter;
         private readonly DriverInstaller _driverInstaller;
         private readonly HardwareValueProvider _valueProvider;
 
         // 性能计数器管理器
         private readonly PerformanceCounterManager _perfCounterManager;
+
+        // ★ [Fix #137] 提交内存读取器。
+        //   独立于 PerformanceCounterManager（开关关闭/计数器未初始化时依然可用），
+        //   也不依赖 LHM 的内存传感器；它只在真实采集入口被调用一次。
+        private readonly CommittedMemoryReader _committedMemoryReader;
 
         private readonly Dictionary<string, float> _lastValidMap = new();
         
@@ -83,6 +92,14 @@ namespace LiteMonitor.src.SystemServices
         private readonly TimeProvider _time = TimeProvider.System;
         private long _lastTrafficTimestamp;
         private bool _hasTrafficTimestamp;
+
+        // ★ [#166] CPU 电压：候选由 SensorMap 收集，选择由 CpuVoltageResolver 决定，
+        //   结果通过 CpuVoltageSourcePublisher 原子发布给面板 / 任务栏 / 网页。
+        //   ★ 本类**不持有第二个定时器**：真实采集仍然只有协调器这一条入口。
+        private readonly CpuVoltageResolver _cpuVoltageResolver = new();
+
+        // 上一次生效的电压来源设置（用于检测"用户换了来源"并作废旧解析结果）。
+        private string _lastPrefCpuVoltageSensor = "";
         #endregion
 
         #region Public Properties
@@ -150,6 +167,9 @@ namespace LiteMonitor.src.SystemServices
 
             // ★★★ [新增] 1. 初始化计数器管理器 (必须在 ValueProvider 之前) ★★★
             _perfCounterManager = new PerformanceCounterManager();
+
+            // ★ [Fix #137] 提交内存读取器：独立于性能计数器与 LHM 内存传感器。
+            _committedMemoryReader = new CommittedMemoryReader();
 
             // 2. 初始化服务
             _sensorMap = new SensorMap();
@@ -222,6 +242,12 @@ namespace LiteMonitor.src.SystemServices
         }
 
         public string GetNetworkIP() => _networkManager.GetCurrentIP();
+
+        /// <summary>
+        /// ★ [#610] IP 流量排除后端的当前状态（供设置页显示）。
+        /// <para>后端尚未创建（功能从未开启）时返回 null。</para>
+        /// </summary>
+        public NetworkTrafficExclusionStatus? GetTrafficExclusionStatus() => _trafficExclusion?.GetStatus();
 
         // ★★★ 新增：允许主程序手动触发驱动检查 (用于解决启动弹窗冲突) ★★★
         public Task SmartCheckDriver() => _driverInstaller.SmartCheckDriver();
@@ -503,7 +529,23 @@ namespace LiteMonitor.src.SystemServices
                              continue;
                         }
                     }
+
+                    // ★ [#166] CPU 电压候选：每代次**只准备一次**，且必须在所有 hw.Update() 之后读
+                    //   （否则读到的还是上一代的旧值）。候选 → 解析 → 发布都在这里完成，
+                    //   UI / Web 只读已发布的结果，绝不旁路采集。
+                    PublishCpuVoltageResolution();
                 }
+
+                // ★ [#610] IP 流量排除后端：按需创建 / 应用配置 / 推进窗口。
+                //   放在硬件锁**之外**：会话启动是慢操作，占着锁会让 UI 取值（只等 10ms）频繁失败。
+                UpdateTrafficExclusion();
+
+                // ★ [Fix #137] 提交内存：每轮**真实采集**读一次并发布到单一发布点。
+                //   - 读不到就发布"缺失"状态（显示 --），绝不显示 0、也绝不回退成物理内存率；
+                //   - 提交上限每轮重读（分页文件会动态变化），不缓存成启动时的物理内存大小；
+                //   - 同一采集代次内只会真正发生一次原生读取（reader 内部按代次去重），
+                //     UI / 任务栏 / Web 只读"已发布"状态，绘制频率不会变成系统调用频率。
+                PublishCommittedMemory(_committedMemoryReader, _coordinator.Generation);
 
                 // 任务错峰执行 (维护任务)
                 // ★ 维护调度由**本实例持有的** MaintenanceScheduler 驱动（单调截止时间：
@@ -558,6 +600,155 @@ namespace LiteMonitor.src.SystemServices
         }
 
         /// <summary>
+        /// [#166] CPU 电压：刷新候选 → 解析 → 原子发布（每个采集代次一次）。
+        ///
+        /// ★ 为什么放在采集层而不是取值层：
+        ///   候选的**读数**只有在 hw.Update() 之后才有意义；
+        ///   而"值 + 来源 + 缺失原因"必须**同代次**，
+        ///   所以解析结果必须由采集层产出并发布，取值层/UI/网页只读发布态。
+        ///
+        /// ★ 来源切换 / 热重载：立即作废上一代的解析结果，
+        ///   避免出现"旧值 + 新来源标签"的组合。
+        /// </summary>
+        private void PublishCpuVoltageResolution()
+        {
+            try
+            {
+                string preferred = _cfg.PreferredCpuVoltageSensor ?? "";
+                if (!string.Equals(preferred, _lastPrefCpuVoltageSensor, StringComparison.Ordinal))
+                {
+                    // ★ 用户换了来源（或首次生效）：旧解析结果立即作废。
+                    _lastPrefCpuVoltageSensor = preferred;
+                    _cpuVoltageResolver.Reset();
+                    CpuVoltageSourcePublisher.Clear();
+                }
+
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+
+                // 1) 刷新候选读数（每代次一次）
+                _sensorMap.RefreshCpuVoltageCandidates(now);
+
+                // 2) 解析（resolver 内部按"代次 + 来源标识 + 候选指纹"复用同代次结果）
+                CpuVoltageResolution resolution = ResolveCpuVoltage(
+                    _cpuVoltageResolver,
+                    _sensorMap.CpuVoltageCandidates,
+                    preferred,
+                    _coordinator.Generation,
+                    now);
+
+                // 3) 原子发布（面板 / 任务栏 / 网页读的是同一份）
+                CpuVoltageSourcePublisher.Publish(resolution);
+            }
+            catch (Exception ex)
+            {
+                // ★ 电压解析失败绝不能影响其它指标的采集（口径错误不该拖垮整个采集层）。
+                System.Diagnostics.Debug.WriteLine($"[CPU Voltage] 解析失败: {ex.Message}");
+                CpuVoltageSourcePublisher.Clear();
+            }
+        }
+
+        /// <summary>
+        /// [#166] 候选 → 解析结果的**可测试接缝**。
+        ///
+        /// ★ 生产路径与测试路径走的是**同一段代码**（不存在"测试专用实现"）：
+        ///   采集层调用它产出结果并发布，单元测试也调用它验证"同优先级候选乱序 → 结果稳定"。
+        /// ★ 选择规则完全交给 <see cref="CpuVoltageResolver"/>：
+        ///   按"来源可信度 → CPU 归属 → 粒度 → 稳定标识"排序，**与传感器枚举顺序无关**。
+        /// </summary>
+        /// <param name="resolver">解析器实例（生产路径复用同一个实例, 以便同代次复用）。</param>
+        /// <param name="candidates">候选快照。</param>
+        /// <param name="preferredSensorIdentifier">用户手动指定的来源标识（空 = 自动）。</param>
+        /// <param name="generation">当前采集代次。</param>
+        /// <param name="now">当前时刻（用于判断候选新鲜度）。</param>
+        public static CpuVoltageResolution ResolveCpuVoltage(
+            CpuVoltageResolver resolver,
+            IReadOnlyList<CpuVoltageCandidate>? candidates,
+            string? preferredSensorIdentifier,
+            int generation,
+            DateTimeOffset now)
+        {
+            if (resolver == null) throw new ArgumentNullException(nameof(resolver));
+
+            var query = new CpuVoltageQuery
+            {
+                Candidates = candidates ?? Array.Empty<CpuVoltageCandidate>(),
+                PreferredSensorIdentifier = string.IsNullOrWhiteSpace(preferredSensorIdentifier)
+                    ? null
+                    : preferredSensorIdentifier,
+                Generation = generation,
+                Now = now,
+                // ★ 自动模式允许退回到 VID 参考值，但结果会被明确标注为"参考值"。
+                AllowReferenceOnly = true,
+            };
+
+            return resolver.Resolve(query);
+        }
+
+        /// <summary>
+        /// [#166] CPU 电压是否需要**主板慢扫描**（3 秒节奏）。
+        ///
+        /// ★ 规则：
+        ///   - 用户手动指定了来源 → 看那个来源在不在主板/SuperIO 上；
+        ///   - 自动模式 → 看"分类最可信"的候选是不是主板 Vcore
+        ///     （与 resolver 同一套来源可信度排序：实测核心遥测 &gt; 主板 Vcore &gt; VID &gt; 待确认）。
+        ///
+        /// ★ 只看**分类**、不看有没有值：主板来源在第一轮采集之前必然还没有值
+        ///   （值要等主板慢扫描才会刷新），如果"有没有值"才决定要不要扫描，
+        ///   就会陷入"没有值 → 不扫描 → 永远没有值"的死循环。
+        /// </summary>
+        /// <param name="candidates">已发布的候选快照。</param>
+        /// <param name="preferredIdentifier">用户手动指定的来源标识（空 = 自动）。</param>
+        public static bool CpuVoltageNeedsMotherboardScan(
+            IReadOnlyList<CpuVoltageCandidate>? candidates, string? preferredIdentifier)
+        {
+            if (candidates == null || candidates.Count == 0) return false;
+
+            if (!string.IsNullOrWhiteSpace(preferredIdentifier))
+            {
+                foreach (var c in candidates)
+                {
+                    if (c == null) continue;
+                    if (!string.Equals(c.SensorIdentifier, preferredIdentifier, StringComparison.OrdinalIgnoreCase)) continue;
+                    return c.HardwareLevel == CpuVoltageHardwareLevel.SuperIO
+                        || c.HardwareLevel == CpuVoltageHardwareLevel.Motherboard;
+                }
+                // 手动来源已经消失 → 显示"来源不可用"，不需要为它扫描主板。
+                return false;
+            }
+
+            CpuVoltageSourceKind? best = null;
+            foreach (var c in candidates)
+            {
+                if (c == null) continue;
+                CpuVoltageSourceKind kind = CpuVoltageResolver.Classify(c.HardwareLevel, c.SensorName, out _);
+                if (kind == CpuVoltageSourceKind.Excluded || kind == CpuVoltageSourceKind.Unknown) continue;
+                if (best == null || (int)kind < (int)best.Value) best = kind;
+            }
+
+            return best == CpuVoltageSourceKind.MotherboardVcore;
+        }
+
+        /// <summary>
+        /// 提交内存的采集接缝：采一次并发布到**单一发布点**。
+        ///
+        /// ★ 抽成静态接缝的理由（与 <see cref="RecordCollectionFailure"/> 完全同形）：
+        ///   <see cref="HardwareMonitor"/> 的构造函数会打开真实硬件树，单元测试无法实例化它；
+        ///   而"每代次只读一次 + 面板/任务栏/Web 读到的必须是同一份快照"
+        ///   正是本需求最关键的不变量，必须可断言。
+        ///
+        /// ★ 这里**只**做两件事：采一次（reader 内部按代次去重）、发布一次。
+        ///   任何消费者都不得绕过它自己去调用系统 API。
+        /// </summary>
+        /// <param name="reader">提交内存读取器（测试可注入替身）。</param>
+        /// <param name="generation">当前采集代次。</param>
+        /// <returns>发布出去的状态对象。</returns>
+        public static CommittedMemoryDisplay PublishCommittedMemory(CommittedMemoryReader reader, int generation)
+        {
+            CommittedMemorySnapshot snapshot = reader.Capture(generation);
+            return CommittedMemoryPublisher.Publish(generation, snapshot);
+        }
+
+        /// <summary>
         /// 记录一次设备更新次数（Key 形如 "GPU.0" / "Cpu:xxx"）。
         ///
         /// ★ 网卡（Network）与磁盘（Storage）**不在这里计数**：
@@ -590,10 +781,82 @@ namespace LiteMonitor.src.SystemServices
 
         public void CleanMemory(Action<int>? onProgress = null) => SystemOptimizer.CleanMemory(onProgress);
 
+        // ===========================================================
+        // ★ [#610] IP 流量排除（按指定 IP 排除实时网速）
+        // ===========================================================
+
+        /// <summary>
+        /// 推进 IP 排除后端：按需创建 → 应用配置 → 推进测量窗口。
+        /// <para>★ 每轮真实采集最多一次（采集协调器限频 ≤ 1 次/秒），不额外增加任何轮询。</para>
+        /// </summary>
+        private void UpdateTrafficExclusion()
+        {
+            bool enabled;
+            string[] lines;
+
+            // 配置快照：在锁内拷贝，避免与设置页并发写列表。
+            bool lockTaken = false;
+            try
+            {
+                Monitor.TryEnter(_lock, 50, ref lockTaken);
+                if (!lockTaken) { return; }
+                enabled = _cfg.IpTrafficExclusionEnabled;
+                lines = _cfg.ExcludedTrafficIps?.ToArray() ?? Array.Empty<string>();
+            }
+            finally
+            {
+                if (lockTaken) { Monitor.Exit(_lock); }
+            }
+
+            if (enabled)
+            {
+                EnsureTrafficExclusion();
+            }
+
+            var service = _trafficExclusion;
+            if (service == null) { return; }
+
+            service.ApplyConfiguration(enabled, lines);
+            service.Tick();
+        }
+
+        /// <summary>
+        /// 按需创建 IP 排除后端。
+        /// <para>★ 创建时清理本程序**遗留**的 ETW 会话（N0 缺陷 B：进程异常退出会话会残留）。</para>
+        /// </summary>
+        private void EnsureTrafficExclusion()
+        {
+            if (_trafficExclusion != null) { return; }
+            try
+            {
+                // 只清理本程序前缀的会话，绝不碰 NT Kernel Logger / PresentMon 的会话。
+                EtwNetworkTrafficEventSource.CleanupStaleSessions(
+                    m => System.Diagnostics.Debug.WriteLine("[NetExclusion] " + m));
+
+                var resolver = NetworkAdapterResolver.Build();
+                var source = new EtwNetworkTrafficEventSource(
+                    m => System.Diagnostics.Debug.WriteLine("[NetExclusion] " + m));
+                var service = new NetworkTrafficExclusionService(source, resolver, TimeProvider.System);
+
+                _trafficExclusion = service;
+                _networkManager.AttachTrafficExclusion(service);
+                _valueProvider.AttachTrafficExclusion(service);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("[NetExclusion] init failed: " + ex.Message);
+            }
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
+
+            // ★ [#610] 先停掉排除后端（它持有自己的 ETW 会话），再释放硬件。
+            try { _trafficExclusion?.Dispose(); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[NetExclusion] dispose failed: " + ex.Message); }
+            _trafficExclusion = null;
 
             // ★★★ 关闭顺序：先停止接受新的采集请求，再等在途采集结束，最后关闭硬件 ★★★
             //   否则可能在对已关闭的 Computer 上执行 hw.Update()。
@@ -620,6 +883,13 @@ namespace LiteMonitor.src.SystemServices
             _fpsCounter.Dispose(); // <--- 新增
             _networkManager.ClearCache();
             _diskManager.ClearCache(); // 漏掉的，补上
+
+            // ★ [Fix #137] 释放后作废已发布的提交内存状态：
+            //   旧代次的结果不允许在硬件层释放后"复活"（界面必须回到缺失状态）。
+            CommittedMemoryPublisher.Clear();
+
+            // ★ [#166] 同理：作废已发布的 CPU 电压状态（释放后不允许旧电压复活）。
+            CpuVoltageSourcePublisher.Clear();
         }
         #endregion
 
@@ -800,7 +1070,13 @@ namespace LiteMonitor.src.SystemServices
             // 1. 获取计数器状态
             bool useCounter = _cfg.UseWinPerCounters && _perfCounterManager.IsInitialized;
 
-            return HardwareUpdateRequirements.Compute(_cfg, _webDataDemand, useCounter);
+            // ★ [#166] 选中的 CPU 电压来源落在主板/SuperIO 上时，把它纳入**既有的**主板慢扫描需求
+            //   （3 秒节奏，与 CpuVoltageResolver.MotherboardSlowScanIntervalMs 一致）。
+            //   ★ 不新增第二个定时器，也不新增控制器。
+            bool cpuVoltageNeedsMobo = CpuVoltageNeedsMotherboardScan(
+                _sensorMap.CpuVoltageCandidates, _cfg.PreferredCpuVoltageSensor);
+
+            return HardwareUpdateRequirements.Compute(_cfg, _webDataDemand, useCounter, cpuVoltageNeedsMobo);
         }
 
         /// <summary>
@@ -893,8 +1169,7 @@ namespace LiteMonitor.src.SystemServices
                         if (_computer != null)
                         {
                             _computer.Accept(new HardwareVisitor(h => { }));
-                            _computer.Close();
-                            // 手动清空硬件列表。
+                            _computer.Close();                            // 手动清空硬件列表。
                             // 【已核实的实现事实】LHM 0.9.6 的 Computer.Hardware 属性**每次返回副本**
                             // （主控实测：两次 get_Hardware 返回**不同引用**，返回类型为 List<IHardware>），
                             // 因此这里 Clear() 清到的是**临时副本**，**对 LHM 内部列表不生效**。
@@ -953,6 +1228,13 @@ namespace LiteMonitor.src.SystemServices
                     _sensorMap.Rebuild(_computer, _cfg);
                     _valueProvider.PreCacheAllSensors(_sensorMap);
 
+                    // ★ [#166] 热重载后：作废上一代硬件树的 CPU 电压解析结果。
+                    //   传感器标识在重载后可能改变（甚至换了机器），旧值 + 旧来源必须立刻消失，
+                    //   否则会出现"旧电压配新标签"，或手动来源已消失却仍在显示旧值。
+                    _cpuVoltageResolver.Reset();
+                    CpuVoltageSourcePublisher.Clear();
+                    _lastPrefCpuVoltageSensor = _cfg.PreferredCpuVoltageSensor ?? "";
+
                     // [Fix] 硬件层已经恢复正常，清掉上一次失败的残留错误。
                     // 否则 UI 侧会拿到一条「过期」的失败原因并弹出误导性的错误气泡。
                     LastHardwareError = null;
@@ -1001,6 +1283,10 @@ namespace LiteMonitor.src.SystemServices
                     _sensorMap.Clear();
                     _valueProvider.ClearCache();
                     HardwareScanner.ClearCache();
+
+                    // ★ [#166] 硬件树被释放：CPU 电压的解析结果一并作废（候选已随 SensorMap 清空）。
+                    _cpuVoltageResolver.Reset();
+                    CpuVoltageSourcePublisher.Clear();
 
                     try
                     {
@@ -1131,6 +1417,20 @@ namespace LiteMonitor.src.SystemServices
         public static List<string> ListAllFans() => HardwareScanner.ListAllFans(Instance!._computer, Instance!._lock);
 
         public static List<string> ListAllMoboTemps() => HardwareScanner.ListAllMoboTemps(Instance!._computer, Instance!._lock);
+
+        /// <summary>
+        /// [#166] 列出**已发布**的 CPU 电压候选（设置页的来源下拉用）。
+        ///
+        /// ★ 只返回已发布的候选快照：设置页**不得**自己去扫硬件树、也不得触发 hw.Update()
+        ///   （那会让"打开设置页"变成一次额外的真实采集）。
+        /// ★ 返回的是副本：调用方改不动内部状态。
+        /// </summary>
+        public static List<CpuVoltageCandidate> ListCpuVoltageCandidates()
+        {
+            var inst = Instance;
+            if (inst == null) return new List<CpuVoltageCandidate>();
+            return new List<CpuVoltageCandidate>(inst._sensorMap.CpuVoltageCandidates);
+        }
         #endregion
 
         #region Inner Visitors
@@ -1353,7 +1653,8 @@ namespace LiteMonitor.src.SystemServices
         public static HardwareUpdateRequirements Compute(
             Settings cfg,
             bool hasWebDataDemand,
-            bool usePerformanceCounters)
+            bool usePerformanceCounters,
+            bool cpuVoltageNeedsMotherboard = false)
         {
             if (cfg == null) throw new ArgumentNullException(nameof(cfg));
 
@@ -1368,7 +1669,12 @@ namespace LiteMonitor.src.SystemServices
             bool needGpu = forceAll || cfg.IsAnyEnabled("GPU");
 
             // 内存: 如果走了计数器，就不需要 LHM 轮询了
-            bool needMem = forceAll || (cfg.IsAnyEnabled("MEM") && !usePerformanceCounters);
+            // ★ [Fix #137] 这里必须用 IsAnyPhysicalMemoryEnabled() 而不是 IsAnyEnabled("MEM")：
+            //   "MEM.Commit.Load"（提交内存）也是 "MEM" 前缀，前缀匹配会把它算进来，
+            //   于是"只开提交内存"也会把 LHM 内存传感器拉起来（多余的轮询），
+            //   甚至把提交内存的可用性绑死在 LHM 内存上。
+            //   提交内存走独立的 GetPerformanceInfo 通路，与物理内存的采集需求彻底解耦。
+            bool needMem = forceAll || (cfg.IsAnyPhysicalMemoryEnabled() && !usePerformanceCounters);
 
             // 网络
             bool needNet = forceAll || cfg.IsAnyEnabled("NET") || cfg.IsAnyEnabled("DATA");
@@ -1384,11 +1690,14 @@ namespace LiteMonitor.src.SystemServices
             bool needDisk = forceAll || needDiskSpeed || needDiskTemp;
 
             // 主板
+            // ★ [#166] 选中的 CPU 电压来源来自主板/SuperIO 时，主板也必须被扫描 ——
+            //   否则这个电压会长期停在旧值上（它只能随 3 秒一次的主板慢扫描刷新）。
             bool needMobo = forceAll ||
                 cfg.IsAnyEnabled("MOBO") ||
                 cfg.IsAnyEnabled("CPU.Fan") ||
                 cfg.IsAnyEnabled("CPU.Pump") ||
-                cfg.IsAnyEnabled("CASE.Fan");
+                cfg.IsAnyEnabled("CASE.Fan") ||
+                cpuVoltageNeedsMotherboard;
 
             return new HardwareUpdateRequirements(
                 forceAll, needCpu, needGpu, needMem, needNet, needDisk, needBat, needMobo);

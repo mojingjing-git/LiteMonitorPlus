@@ -33,6 +33,7 @@
     "GPU.Power": "GPU Pwr",
     "GPU.Fan": "GPU Fan",
     "MEM.Load": "RAM Usage",
+    "MEM.Commit.Load": "Committed Memory",
     "FPS": "FPS",
     "MOBO.Temp": "MOBO Temp",
     "CASE.Fan": "Case Fan",
@@ -63,6 +64,7 @@
     "GPU.Power": "GPWR",
     "GPU.Fan": "GFAN",
     "MEM.Load": "RAM",
+    "MEM.Commit.Load": "Commit",
     "FPS": "FPS",
     "MOBO.Temp": "MOBO",
     "CASE.Fan": "Case",
@@ -79,6 +81,27 @@
     "BAT.Current": "BCUR"
   },
   "Menu": {
+    "IpTrafficExclusion": "Exclude traffic by IP",
+    "IpTrafficExclusionEnabled": "Enable IP-based traffic exclusion",
+    "ExcludedTrafficIps": "Remote IPs to exclude (one per line, exact IPv4/IPv6 only)",
+    "IpExclusionValid": "Rules validated, {0} rule(s) active",
+    "IpExclusionNoRule": "No IP rule entered yet",
+    "IpExclusionInvalid": "These rule lines cannot take effect:",
+    "IpExclusionStatus": "Current status",
+    "IpExclusionStateDisabled": "Disabled",
+    "IpExclusionStateIdle": "Idle (no valid rule, or no live-speed demand)",
+    "IpExclusionStatePreparing": "Preparing (starting the collection session and warming up)",
+    "IpExclusionStateRunning": "Running (exclusion is active)",
+    "IpExclusionStateDegraded": "Degraded (some data is unavailable)",
+    "IpExclusionStateFailed": "Failed",
+    "IpExclusionStateBadRules": "Invalid configuration (rule lines rejected, IP exclusion is NOT active)",
+    "IpExclusionStateNoRules": "No valid rule (IP exclusion is NOT active)",
+    "IpExclusionStateAmbiguousAdapter": "Ambiguous adapter attribution (IP exclusion is NOT active)",
+    "IpExclusionStateBackendFailed": "Backend failed to start (IP exclusion is NOT active)",
+    "IpExclusionStateWarmingUp": "Warming up (the first window is discarded)",
+    "IpExclusionStateNoEvents": "No events received (IP exclusion is NOT active)",
+    "IpExclusionCaliberHint": "Caliber note: once enabled, the live speed comes from TCP/UDP event statistics (transport-layer payload) and therefore differs from the raw NIC rate. Session/daily totals keep the original caliber and are never deducted twice.",
+    "IpExclusionAdminHint": "Administrator rights are required to collect these events. Without permission, or if the backend fails, the UI shows \"IP exclusion is NOT active\"; the filtered speed is never shown as 0.",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "Settings",
     "About": "About",
@@ -244,6 +267,7 @@
     "RefreshTip": "This only sets how often the interface redraws. Normal hardware data is sampled at most once per second, so a smaller value does not sample more often.",
     "IgnoreSMBTraffic": "Ignore SMB Traffic",
     "MemoryDisplayMode": "RAM Display",
+    "MemoryCommitHint": "Committed memory: shows the committed amount / the current commit limit (commit limit = RAM + page file commit quota; it is a separate metric from physical RAM usage)",
 
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",
@@ -296,5 +320,18 @@
     "PluginMarketReinstallAction": "Reinstall",
     "PluginMarketPageLink": "Plugin page",
     "PluginMarketSelfCheck": "Detected files that may have overwritten built-in plugins: {0}. Please delete them and reinstall."
+,
+    "CpuVoltageSource": "CPU voltage source",
+    "CpuVoltageSourceTip": "Auto: prefers the core supply voltage reported by the processor; when only a requested voltage (VID) exists it is clearly marked as a reference value. If a manually selected source disappears, the app shows «Source unavailable» and never silently switches to another voltage."
+  },
+  "CpuVoltage": {
+    "Auto": "Auto",
+    "Measured": "Core supply voltage (reported by the processor)",
+    "MotherboardVcore": "Core supply voltage (motherboard Vcore, measured, ~3s refresh)",
+    "ReferenceOnly": "CPU VID (reference value, not a measured supply voltage)",
+    "Ambiguous": "CPU voltage (source unconfirmed)",
+    "Excluded": "Not a CPU core voltage",
+    "Unavailable": "Source unavailable",
+    "MarkerReferenceOnly": " (CPU VID)"
   }
 }

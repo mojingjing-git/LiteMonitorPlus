@@ -378,10 +378,14 @@ namespace LiteMonitor
 
                 // [4xx] HOST (MEM, FPS, MOBO, DISK Temp, CASE Fan)
                 new MonitorItemConfig { Key = "MEM.Load",  SortIndex = 401, VisibleInPanel = true, VisibleInTaskbar = true },
-                new MonitorItemConfig { Key = "FPS",       SortIndex = 402, VisibleInPanel = false },
-                new MonitorItemConfig { Key = "MOBO.Temp", SortIndex = 403, VisibleInPanel = false },
-                new MonitorItemConfig { Key = "DISK.Temp", SortIndex = 404, VisibleInPanel = false },
-                new MonitorItemConfig { Key = "CASE.Fan",  SortIndex = 405, VisibleInPanel = false },
+                // ★ [Fix #137] 提交内存（#137）：默认**隐藏**（面板与任务栏都不显示），用户可自行开启。
+                //   它是**独立**监控项，不替换 MEM.Load（后者仍然是物理内存占用率，语义完全不变）。
+                //   排序紧挨 MEM.Load，与既有内存项相邻（同 HOST 分组）。
+                new MonitorItemConfig { Key = MetricUtils.CommittedMemoryKey, SortIndex = 402, VisibleInPanel = false, VisibleInTaskbar = false },
+                new MonitorItemConfig { Key = "FPS",       SortIndex = 403, VisibleInPanel = false },
+                new MonitorItemConfig { Key = "MOBO.Temp", SortIndex = 404, VisibleInPanel = false },
+                new MonitorItemConfig { Key = "DISK.Temp", SortIndex = 405, VisibleInPanel = false },
+                new MonitorItemConfig { Key = "CASE.Fan",  SortIndex = 406, VisibleInPanel = false },
                 
                 // [5xx] BATTERY (New Group)
                 new MonitorItemConfig { Key = "BAT.Percent", SortIndex = 501, VisibleInPanel = false, VisibleInTaskbar = false },
@@ -670,6 +674,29 @@ namespace LiteMonitor
         {
             return settings.MonitorItems.Any(x => x.Key.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase) && (x.VisibleInPanel || x.VisibleInTaskbar));
         }
+
+        /// <summary>
+        /// 是否启用了**物理内存**相关的监控项。
+        ///
+        /// ★ 为什么要和 <see cref="IsAnyEnabled"/> 分开（#137）：
+        ///   <see cref="IsAnyEnabled"/> 是**前缀匹配**，而 "MEM.Commit.Load"（提交内存）
+        ///   也以 "MEM" 开头。只开启提交内存、关闭物理内存时，前缀匹配仍然返回 true，
+        ///   于是提交内存会被**误绑**到物理内存的采集链路上：
+        ///     - 开关性能计数器时会把 LHM 内存传感器也一起拉起来（多余的轮询）；
+        ///     - 计数器关闭时又会把提交内存的可用性绑死在 LHM 内存是否可读上。
+        ///   提交内存走的是**独立的** GetPerformanceInfo 通路（不依赖性能计数器、不依赖 LHM），
+        ///   因此这里必须把它排除掉，两者的采集需求彻底解耦。
+        /// </summary>
+        public static bool IsAnyPhysicalMemoryEnabled(this Settings settings)
+        {
+            return settings.MonitorItems.Any(x =>
+                !x.Key.StartsWith(CommittedMemoryKeyPrefix, StringComparison.OrdinalIgnoreCase) &&
+                x.Key.StartsWith("MEM", StringComparison.OrdinalIgnoreCase) &&
+                (x.VisibleInPanel || x.VisibleInTaskbar));
+        }
+
+        /// <summary>提交内存相关 Key 的公共前缀（"MEM.Commit."）。</summary>
+        public const string CommittedMemoryKeyPrefix = "MEM.Commit.";
 
         public static void UpdateMaxRecord(this Settings settings, string key, float val)
         {

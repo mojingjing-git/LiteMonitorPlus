@@ -33,6 +33,7 @@
     "GPU.Power": "W GPU",
     "GPU.Fan": "Vent GPU",
     "MEM.Load": "Uso RAM",
+    "MEM.Commit.Load": "Memoria confirmada",
     "FPS": "FPS",
     "MOBO.Temp": "Temp MOBO",
     "CASE.Fan": "Vent Case",
@@ -67,6 +68,7 @@
     "GPU.Power": "GPWR",
     "GPU.Fan": "GFAN",
     "MEM.Load": "RAM",
+    "MEM.Commit.Load": "Commit",
     "FPS": "FPS",
     "MOBO.Temp": "MOBO",
     "CASE.Fan": "Case",
@@ -79,6 +81,27 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "IpTrafficExclusion": "Excluir tráfico por IP",
+    "IpTrafficExclusionEnabled": "Activar la exclusión de tráfico por IP",
+    "ExcludedTrafficIps": "IP remotas que se excluirán (una por línea, solo IPv4/IPv6 exactos)",
+    "IpExclusionValid": "Reglas validadas, {0} regla(s) activas",
+    "IpExclusionNoRule": "Todavía no hay ninguna regla de IP",
+    "IpExclusionInvalid": "Estas líneas de regla no pueden aplicarse:",
+    "IpExclusionStatus": "Estado actual",
+    "IpExclusionStateDisabled": "Desactivado",
+    "IpExclusionStateIdle": "En espera (sin regla válida o sin demanda de velocidad en vivo)",
+    "IpExclusionStatePreparing": "Preparando (iniciando la sesión de captura y calentando)",
+    "IpExclusionStateRunning": "En ejecución (la exclusión está activa)",
+    "IpExclusionStateDegraded": "Degradado (parte de los datos no está disponible)",
+    "IpExclusionStateFailed": "Error",
+    "IpExclusionStateBadRules": "Configuración no válida (las líneas de regla se rechazaron, la exclusión por IP NO está activa)",
+    "IpExclusionStateNoRules": "Sin regla válida (la exclusión por IP NO está activa)",
+    "IpExclusionStateAmbiguousAdapter": "Atribución de adaptador ambigua (la exclusión por IP NO está activa)",
+    "IpExclusionStateBackendFailed": "El backend no se pudo iniciar (la exclusión por IP NO está activa)",
+    "IpExclusionStateWarmingUp": "Calentando (la primera ventana se descarta)",
+    "IpExclusionStateNoEvents": "No se reciben eventos (la exclusión por IP NO está activa)",
+    "IpExclusionCaliberHint": "Nota de medición: al activarlo, la velocidad en vivo proviene de eventos TCP/UDP (carga de capa de transporte) y difiere de la velocidad bruta de la tarjeta. Los totales de sesión y diarios mantienen la medición anterior y nunca se descuentan dos veces.",
+    "IpExclusionAdminHint": "Se requieren permisos de administrador para(events). Sin permisos o si el backend falla, la interfaz muestra «la exclusión por IP NO está activa»; la velocidad filtrada nunca se muestra como 0.",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "Ajustes",
     "About": "Acerca de",
@@ -244,6 +267,7 @@
     "RefreshTip": "Solo define cada cuánto se redibuja la interfaz. Los datos normales del hardware se muestrean como máximo una vez por segundo, así que un valor menor no muestrea más a menudo.",
     "IgnoreSMBTraffic": "Ignorar SMB",
     "MemoryDisplayMode": "Vis. RAM",
+    "MemoryCommitHint": "Memoria confirmada: muestra la cantidad confirmada / el límite de confirmación actual (el límite es RAM + la cuota de confirmación del archivo de paginación; es una medida distinta del uso de RAM físico)",
 
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",
@@ -296,5 +320,18 @@
     "PluginMarketReinstallAction": "Reinstalar",
     "PluginMarketPageLink": "Página del plugin",
     "PluginMarketSelfCheck": "Se detectaron archivos que podrían haber sobrescrito plugins integrados: {0}. Elimínalos y reinstala el programa."
+,
+    "CpuVoltageSource": "Fuente de tensión de CPU",
+    "CpuVoltageSourceTip": "Automático: se prefiere la tensión de alimentación del núcleo informada por el procesador; si solo existe una tensión solicitada (VID), se indica claramente como valor de referencia. Si una fuente elegida manualmente desaparece, la aplicación muestra «Fuente no disponible» y no cambia de tensión en silencio."
+  },
+  "CpuVoltage": {
+    "Auto": "Automático",
+    "Measured": "Tensión de alimentación del núcleo (informada por el procesador)",
+    "MotherboardVcore": "Tensión de alimentación del núcleo (Vcore de la placa base, medida, ~3 s)",
+    "ReferenceOnly": "CPU VID (valor de referencia, no es una tensión de alimentación medida)",
+    "Ambiguous": "Tensión de CPU (fuente sin confirmar)",
+    "Excluded": "No es la tensión del núcleo de la CPU",
+    "Unavailable": "Fuente no disponible",
+    "MarkerReferenceOnly": " (CPU VID)"
   }
 }

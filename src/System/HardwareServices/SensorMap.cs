@@ -48,6 +48,27 @@ namespace LiteMonitor.src.SystemServices
         
         // ★★★ [优化 1] 移除了全系统传感器指纹相关字段 ★★★
         private readonly object _lock = new object();
+
+        // ★★★ [#166] CPU 电压候选 ★★★
+        //   候选的**元数据** (名字 / 稳定标识 / 硬件层级) 在 Rebuild 时确定 (标识不随枚举顺序变化),
+        //   **读数**在每个采集代次刷新一次 (见 RefreshCpuVoltageCandidates)。
+        //   ★ 这里存的是候选, 不是"已经选好的那个传感器" ——
+        //     选谁由 CpuVoltageResolver 决定 (来源可信度 + 稳定标识排序), 与枚举顺序无关。
+        private readonly List<CpuVoltageSensorRef> _cpuVoltageRefs = new();
+
+        // 最近一次发布的 CPU 电压候选快照 (不可变列表)。
+        private IReadOnlyList<CpuVoltageCandidate> _cpuVoltageCandidates = Array.Empty<CpuVoltageCandidate>();
+
+        /// <summary>
+        /// 最近一次发布的 CPU 电压候选快照。
+        ///
+        /// ★ 只读: 调用方 (取值层 / 设置页) 只能看, 不能改 ——
+        ///   候选的准备与刷新只发生在采集代次里 (见 <see cref="RefreshCpuVoltageCandidates"/>)。
+        /// </summary>
+        public IReadOnlyList<CpuVoltageCandidate> CpuVoltageCandidates
+        {
+            get { lock (_lock) { return _cpuVoltageCandidates; } }
+        }
         
         // ★★★ [新增] 配置引用 ★★★
         private Settings _cfg;
@@ -79,6 +100,10 @@ namespace LiteMonitor.src.SystemServices
                 CachedGpus = new List<IHardware>();
                 CpuBusSpeedSensor = null;
                 GpuRegistry.Clear();
+                // ★ [#166] 硬件树被清掉时, CPU 电压候选必须一起作废 ——
+                //   否则旧机器/旧硬件树的候选会继续被选中, 显示已经不存在的来源。
+                _cpuVoltageRefs.Clear();
+                _cpuVoltageCandidates = Array.Empty<CpuVoltageCandidate>();
                 // _lastSensorFingerprint = 0; // 已移除
             }
         }
@@ -164,6 +189,9 @@ namespace LiteMonitor.src.SystemServices
             // 注意：这里不再在递归中直接处理风扇匹配，而是收集起来统一交给 ScanAndMapFans 处理
             // 但为了保持原代码结构，我们依然用candidates收集主板相关数据
             var candidatesMoboTemps = new List<ISensor>(capacity: 10); // 预设容量，减少扩容开销
+
+            // ★ [#166] CPU 电压候选 (元数据) —— 重建时整体替换, 避免与旧硬件树混用
+            var newCpuVoltageRefs = new List<CpuVoltageSensorRef>();
 
             // ★★★ [多显卡] 选出被监控的显卡集合 (序号即 Key 中的序号) ★★★
             var monitoredGpus = SelectMonitoredGpus(computer, cfg);
@@ -253,6 +281,10 @@ namespace LiteMonitor.src.SystemServices
                     }
                 }
 
+                // ★ [#166] 收集 CPU 电压候选 (CPU / 主板 / SuperIO 上的电压传感器)
+                //   ★ 这里**只登记候选**, 不做选择: 选择由 CpuVoltageResolver 负责。
+                //   登记的顺序不影响结果 (resolver 内部按稳定标识排序)。
+                CollectCpuVoltageCandidates(hw, newCpuVoltageRefs);
                 // --- 普通传感器映射 ---
                 foreach (var s in hw.Sensors)
                 {
@@ -390,12 +422,151 @@ namespace LiteMonitor.src.SystemServices
                 CachedGpus = new List<IHardware>(monitoredGpus); // ★★★ [多显卡] ★★★
                 CpuBusSpeedSensor = newBusSensor; // ★ 更新 Bus Sensor 缓存
 
+                // ★ [#166] CPU 电压候选整体替换。
+                //   重建后立刻发布一份"只有元数据、还没有读数"的快照:
+                //   这样设置页立刻能列出候选, 采集层也能立刻判断"是否需要主板慢扫描",
+                //   不必等第一轮采集结束 (否则主板来源会陷入"没有值 -> 不扫描 -> 永远没有值"的死循环)。
+                _cpuVoltageRefs.Clear();
+                _cpuVoltageRefs.AddRange(newCpuVoltageRefs);
+                _cpuVoltageCandidates = BuildCpuVoltageCandidates(newCpuVoltageRefs, null);
+
                 // ★★★ [多显卡] 显卡简称注册表整体替换 (原子) ★★★
                 GpuRegistry.ReplaceAll(gpuInfoBuffer);
                 
                 _lastMapBuild = DateTime.Now;
                 // ★★★ [优化 3] 指纹记录已移除 ★★★
             }
+        }
+
+        // =======================================================================
+        // [#166] CPU 电压候选的收集 / 刷新 / 发布
+        // =======================================================================
+
+        /// <summary>
+        /// 登记某个硬件节点上的 CPU 电压候选 (只登记, 不选择)。
+        ///
+        /// ★ 过滤规则只有一条: 传感器类型必须是 Voltage, 且硬件层级属于
+        ///   CPU / 主板 / SuperIO。名字语义 (VID / SVI / Vcore / SoC ...) 交给
+        ///   <see cref="CpuVoltageResolver.Classify"/> 判定 —— **单一规则来源**。
+        /// </summary>
+        /// <param name="hw">当前硬件节点 (可能是主板的 SuperIO 子硬件)。</param>
+        /// <param name="target">本次重建的候选容器。</param>
+        public static void CollectCpuVoltageCandidates(IHardware hw, List<CpuVoltageSensorRef> target)
+        {
+            if (hw == null || target == null) return;
+
+            CpuVoltageHardwareLevel level = SensorMatcher.GetCpuVoltageLevel(hw.HardwareType);
+            if (level == CpuVoltageHardwareLevel.Other) return;
+
+            foreach (var s in hw.Sensors)
+            {
+                if (!SensorMatcher.IsCpuVoltageCandidate(hw.HardwareType, s.SensorType)) continue;
+
+                target.Add(new CpuVoltageSensorRef
+                {
+                    Sensor = s,
+                    SensorName = s.Name ?? "",
+                    // ★ 用 LHM 的稳定标识 (形如 "/amdcpu/0/voltage/0"), 不随枚举顺序变化。
+                    //   手动来源选择与热重载后的重新定位都靠它。
+                    SensorIdentifier = s.Identifier?.ToString() ?? "",
+                    HardwareIdentifier = hw.Identifier?.ToString() ?? "",
+                    HardwareName = hw.Name ?? "",
+                    HardwareLevel = level,
+                });
+            }
+        }
+
+        /// <summary>
+        /// 把某个硬件节点上的 CPU 电压候选**追加**到本映射表, 并立刻重新发布快照。
+        ///
+        /// ★ 重建走的是同一段过滤逻辑 (见 <see cref="CollectCpuVoltageCandidates(IHardware, List{CpuVoltageSensorRef})"/>)，
+        ///   这里只是把结果并入本表 —— 增量登记与整体重建不会漂移。
+        /// </summary>
+        public void AddCpuVoltageCandidates(IHardware hw)
+        {
+            var added = new List<CpuVoltageSensorRef>();
+            CollectCpuVoltageCandidates(hw, added);
+            if (added.Count == 0) return;
+
+            lock (_lock)
+            {
+                _cpuVoltageRefs.AddRange(added);
+                _cpuVoltageCandidates = BuildCpuVoltageCandidates(_cpuVoltageRefs, null);
+            }
+        }
+
+        /// <summary>
+        /// 刷新 CPU 电压候选的**读数** (每个采集代次只调用一次)。
+        ///
+        /// ★ 必须在所有 hw.Update() 之后调用, 否则读到的还是上一代的旧值。
+        /// ★ 读不到值时 Value 为 null —— **缺失就是缺失**, 绝不用 0 顶替。
+        /// </summary>
+        /// <param name="now">本次采集的时刻 (作为读数时间戳)。</param>
+        public void RefreshCpuVoltageCandidates(DateTimeOffset now)
+        {
+            List<CpuVoltageSensorRef> refs;
+            lock (_lock) { refs = new List<CpuVoltageSensorRef>(_cpuVoltageRefs); }
+
+            IReadOnlyList<CpuVoltageCandidate> snapshot = BuildCpuVoltageCandidates(refs, now);
+
+            lock (_lock) { _cpuVoltageCandidates = snapshot; }
+        }
+
+        /// <summary>
+        /// 把候选引用转成纯数据快照 (可注入读数, 便于测试)。
+        /// </summary>
+        /// <param name="refs">候选引用列表。</param>
+        /// <param name="now">读数时刻; 为 null 时表示"还没有采集过" (只有元数据, 没有读数)。</param>
+        private static IReadOnlyList<CpuVoltageCandidate> BuildCpuVoltageCandidates(
+            List<CpuVoltageSensorRef> refs, DateTimeOffset? now)
+        {
+            if (refs == null || refs.Count == 0) return Array.Empty<CpuVoltageCandidate>();
+
+            var list = new List<CpuVoltageCandidate>(refs.Count);
+            foreach (var r in refs)
+            {
+                float? value = null;
+                try { value = r.Sensor?.Value; }
+                catch { /* 单个传感器读失败不能影响其它候选 */ }
+
+                list.Add(new CpuVoltageCandidate
+                {
+                    SensorName = r.SensorName,
+                    SensorIdentifier = r.SensorIdentifier,
+                    HardwareIdentifier = r.HardwareIdentifier,
+                    HardwareName = r.HardwareName,
+                    HardwareLevel = r.HardwareLevel,
+                    Value = value,
+                    // ★ 没有值就没有时间戳: 无法证明新鲜度时不应该假装它是新数据。
+                    Timestamp = value.HasValue ? now : null,
+                });
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// CPU 电压候选引用 (元数据 + 传感器句柄)。
+        /// ★ 只在采集层内部使用, 不对外暴露 LHM 对象。
+        /// </summary>
+        public sealed class CpuVoltageSensorRef
+        {
+            /// <summary>对应的 LHM 传感器 (读数来源)。</summary>
+            public ISensor? Sensor { get; set; }
+
+            /// <summary>传感器名。</summary>
+            public string SensorName { get; set; } = "";
+
+            /// <summary>传感器稳定标识 (手动来源选择的取值)。</summary>
+            public string SensorIdentifier { get; set; } = "";
+
+            /// <summary>所属硬件的稳定标识。</summary>
+            public string HardwareIdentifier { get; set; } = "";
+
+            /// <summary>所属硬件名 (仅用于显示)。</summary>
+            public string HardwareName { get; set; } = "";
+
+            /// <summary>硬件层级。</summary>
+            public CpuVoltageHardwareLevel HardwareLevel { get; set; } = CpuVoltageHardwareLevel.Unknown;
         }
 
         // 复用 HardwareRules 的字符串匹配，避免重复造轮子

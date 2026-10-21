@@ -34,6 +34,7 @@
     "GPU.Power": "Watts GPU",
     "GPU.Fan": "Vent GPU",
     "MEM.Load": "Usage RAM",
+    "MEM.Commit.Load": "Mémoire validée",
     "FPS": "FPS",
     "MOBO.Temp": "Temp MOBO",
     "CASE.Fan": "Vent Case",
@@ -68,6 +69,7 @@
     "GPU.Power": "GPWR",
     "GPU.Fan": "GFAN",
     "MEM.Load": "RAM",
+    "MEM.Commit.Load": "Commit",
     "FPS": "FPS",
     "MOBO.Temp": "MOBO",
     "CASE.Fan": "Case",
@@ -80,6 +82,27 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "IpTrafficExclusion": "Exclure le trafic par IP",
+    "IpTrafficExclusionEnabled": "Activer l’exclusion du trafic par IP",
+    "ExcludedTrafficIps": "IP distantes à exclure (une par ligne, IPv4/IPv6 exactes uniquement)",
+    "IpExclusionValid": "Règles validées, {0} règle(s) active(s)",
+    "IpExclusionNoRule": "Aucune règle d’IP saisie pour l’instant",
+    "IpExclusionInvalid": "Ces lignes de règle ne peuvent pas prendre effet :",
+    "IpExclusionStatus": "État actuel",
+    "IpExclusionStateDisabled": "Désactivé",
+    "IpExclusionStateIdle": "En attente (aucune règle valide ou aucune demande de débit en direct)",
+    "IpExclusionStatePreparing": "Préparation (démarrage de la session de collecte et préchauffage)",
+    "IpExclusionStateRunning": "En cours (l’exclusion est active)",
+    "IpExclusionStateDegraded": "Dégradé (certaines données sont indisponibles)",
+    "IpExclusionStateFailed": "Échec",
+    "IpExclusionStateBadRules": "Configuration invalide (lignes de règle rejetées, l’exclusion par IP n’est PAS active)",
+    "IpExclusionStateNoRules": "Aucune règle valide (l’exclusion par IP n’est PAS active)",
+    "IpExclusionStateAmbiguousAdapter": "Attribution d’adaptateur ambiguë (l’exclusion par IP n’est PAS active)",
+    "IpExclusionStateBackendFailed": "Échec du démarrage du moteur (l’exclusion par IP n’est PAS active)",
+    "IpExclusionStateWarmingUp": "Préchauffage (la première fenêtre est ignorée)",
+    "IpExclusionStateNoEvents": "Aucun événement reçu (l’exclusion par IP n’est PAS active)",
+    "IpExclusionCaliberHint": "Note de mesure : une fois activé, le débit en direct provient des événements TCP/UDP (charge de couche transport) et diffère du débit brut de la carte. Les totaux de session et quotidiens conservent la mesure d’origine et ne sont jamais déduits deux fois.",
+    "IpExclusionAdminHint": "Des droits d’administrateur sont nécessaires pour collecter ces événements. Sans droits, ou si le moteur échoue, l’interface affiche « l’exclusion par IP n’est PAS active » ; le débit filtré n’est jamais affiché comme 0.",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "Options",
     "About": "À propos",
@@ -245,6 +268,7 @@
     "RefreshTip": "Ne règle que la fréquence de redessin de l'interface. Les données matérielles normales sont prélevées au plus une fois par seconde : une valeur plus faible n'augmente pas la fréquence de collecte.",
     "IgnoreSMBTraffic": "Ignorer SMB",
     "MemoryDisplayMode": "Aff. RAM",
+    "MemoryCommitHint": "Mémoire validée : affiche la quantité validée / la limite de validation actuelle (limite = RAM + quota de validation du fichier d'échange ; c'est une mesure distincte de l'utilisation de la RAM physique)",
 
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",
@@ -297,5 +321,18 @@
     "PluginMarketReinstallAction": "Réinstaller",
     "PluginMarketPageLink": "Page du plugin",
     "PluginMarketSelfCheck": "Fichiers détectés ayant pu écraser des plugins intégrés : {0}. Supprimez-les puis réinstallez le programme."
+,
+    "CpuVoltageSource": "Source de tension CPU",
+    "CpuVoltageSourceTip": "Automatique : la tension d'alimentation du cœur rapportée par le processeur est préférée ; si seule une tension demandée (VID) existe, elle est clairement signalée comme valeur de référence. Si une source choisie manuellement disparaît, l'application affiche «Source indisponible» et ne bascule pas silencieusement vers une autre tension."
+  },
+  "CpuVoltage": {
+    "Auto": "Automatique",
+    "Measured": "Tension d'alimentation du cœur (rapportée par le processeur)",
+    "MotherboardVcore": "Tension d'alimentation du cœur (Vcore de la carte mère, mesurée, ~3 s)",
+    "ReferenceOnly": "CPU VID (valeur de référence, pas une tension d'alimentation mesurée)",
+    "Ambiguous": "Tension CPU (source non confirmée)",
+    "Excluded": "Pas la tension du cœur du CPU",
+    "Unavailable": "Source indisponible",
+    "MarkerReferenceOnly": " (CPU VID)"
   }
 }
