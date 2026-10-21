@@ -200,32 +200,40 @@ namespace LiteMonitor.AppearanceThemeCheck
         /// ★ 背景模式是 <c>glass</c>：真实帧不可用时按 glass → gradient → solid 降级，
         ///   降级后的渐变两端固定 ⇒ 画面不会突然变成另一种配色。
         /// </para>
+        /// <para>
+        /// ★ 第二轮实机反馈后改为**深色磨砂玻璃**：浅色玻璃 + 厚纱罩在物理上
+        ///   等于"磨砂亚克力"，且把真实背景洗到只剩 35%。深底 + 亮字 + 低 alpha
+        ///   深色纱罩才是经典 Mica/Acrylic 形态。
+        /// <para>
+        /// ★ <c>frameStyle = 2</c>（圆角描边）：液态玻璃的轮廓特征是**圆角**，
+        ///   切角（1）是赛博朋克语言，不是玻璃语言。
+        /// </para>
         /// </summary>
         public static readonly ThemeSpec LiquidGlass = ThemeSpec.Create(
             name: "LiquidGlass",
             relativePath: "resources/themes/LiquidGlass.json",
             version: 4,
-            frameStyle: 1, frameWidth: 3, frameLength: 14,
-            scanline: 30, glow: 55, grid: 20, barStyle: 1,
+            frameStyle: 2, frameWidth: 3, frameLength: 14,
+            scanline: 18, glow: 55, grid: 10, barStyle: 1,
             backdropMode: "glass", backdropOpacity: 0.72,
-            tint: "rgba(226,238,255,0.9)",
-            gradientStart: "#9BB6D5", gradientEnd: "#5B85B3", gradientAngle: 90,
+            tint: "rgba(9,17,30,1.0)",
+            gradientStart: "#1B2C44", gradientEnd: "#0A1220", gradientAngle: 90,
             noise: 0, edgeGlow: 0,
-            ("Background", "#DCE6F2"),
-            ("GroupBackground", "rgba(255,255,255,0.72)"),
-            ("Border", "#2F5F8F"),
-            ("Shadow", "rgba(14,34,60,0.32)"),
-            ("TextTitle", "#0B2E52"),
-            ("TextGroup", "#33475B"),
-            ("TextPrimary", "#16202C"),
-            ("TextSecondary", "#4C6178"),
-            ("ValueSafe", "#0B6E3F"),
-            ("ValueWarn", "#8A5200"),
-            ("ValueCrit", "#B2223A"),
-            ("BarBackground", "#BCCBDB"),
-            ("BarLow", "#0B6E3F"),
-            ("BarMid", "#8A5200"),
-            ("BarHigh", "#B2223A"));
+            ("Background", "#0A1220"),
+            ("GroupBackground", "rgba(22,42,66,0.86)"),
+            ("Border", "#7FD4FF"),
+            ("Shadow", "rgba(0,0,0,0.45)"),
+            ("TextTitle", "#C7ECFF"),
+            ("TextGroup", "#A6C8E0"),
+            ("TextPrimary", "#EAF4FC"),
+            ("TextSecondary", "#9FB9CE"),
+            ("ValueSafe", "#4ADE80"),
+            ("ValueWarn", "#FBBF24"),
+            ("ValueCrit", "#F87171"),
+            ("BarBackground", "#16283C"),
+            ("BarLow", "#4ADE80"),
+            ("BarMid", "#FBBF24"),
+            ("BarHigh", "#F87171"));
 
         /// <summary>全部待校验主题。</summary>
         public static ThemeSpec[] All() => new[] { Main, Light, Complex, LiquidGlass };
