@@ -36,6 +36,17 @@ namespace LiteMonitor.src.UI.Helpers
         public bool IsHidden => _isHidden;
         public bool IsDragging { get; set; } = false;
 
+        public void ReconcileDisplayChange()
+        {
+            // A display notification must not replay an old saved location
+            // over a drag that has moved the panel to another monitor.
+            if (IsDragging) return;
+            if (Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(_form.Bounds)))
+                ClampToScreen();
+            else
+                RestorePos();
+        }
+
         public MainFormBizHelper(Form form, Settings cfg, UIController ui, MainFormWinHelper winHelper)
         {
             _form = form;
@@ -259,7 +270,8 @@ namespace LiteMonitor.src.UI.Helpers
             {
                 var screen = Screen.FromControl(_form);
                 var area = screen.WorkingArea;
-                if (_cfg.Position.X >= 0) _form.Location = _cfg.Position;
+                if (Screen.AllScreens.Any(s => s.Bounds.Contains(_cfg.Position)))
+                    _form.Location = _cfg.Position;
                 else
                 {
                     int x = area.Right - _form.Width - 50; 

@@ -23,6 +23,7 @@ namespace LiteMonitor
 
         // DPI
         private readonly float _dpiScale;
+        private readonly Control? _measurementControl;
 
         public int PanelWidth { get; private set; }
 
@@ -37,21 +38,25 @@ namespace LiteMonitor
         /// </summary>
         public int MinPanelHeight => Math.Max(_rowH + _padding, 24);
 
-        public HorizontalLayout(Theme t, int initialWidth, LayoutMode mode, Settings? settings = null)
+        public HorizontalLayout(Theme t, int initialWidth, LayoutMode mode, Settings? settings = null, Control? measurementControl = null)
         {
             _t = t;
             _mode = mode;
             _settings = settings ?? Settings.Load();
-
-            using (var g = Graphics.FromHwnd(IntPtr.Zero))
-            {
-                _dpiScale = g.DpiX / 96f;
-            }
+            _measurementControl = measurementControl;
+            using var measurementGraphics = measurementControl?.CreateGraphics() ?? Graphics.FromHwnd(IntPtr.Zero);
+            _dpiScale = measurementControl is not null ? measurementControl.DeviceDpi / 96f : measurementGraphics.DpiX / 96f;
 
             _padding = t.Layout.Padding;
 
             if (mode == LayoutMode.Horizontal)
+            {
                 _rowH = Math.Max(t.FontItem.Height, t.FontValue.Height);
+                if (measurementControl is not null)
+                {
+                    _rowH = (int)Math.Ceiling(Math.Max(t.FontItem.GetHeight(measurementGraphics), t.FontValue.GetHeight(measurementGraphics)));
+                }
+            }
             else
                 _rowH = 0; // 任务栏模式稍后根据 taskbarHeight 决定
 
@@ -83,7 +88,7 @@ namespace LiteMonitor
             int totalWidth = pad * 2;
             float dpi = _dpiScale;
 
-            using (var g = Graphics.FromHwnd(IntPtr.Zero))
+            using (var g = _measurementControl?.CreateGraphics() ?? Graphics.FromHwnd(IntPtr.Zero))
             {
                 foreach (var col in cols)
                 {

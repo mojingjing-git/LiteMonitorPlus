@@ -14,6 +14,11 @@ namespace LiteMonitor.src.UI.SettingsPage
         private Panel _container;
         private bool _isLoaded = false;
 
+        public bool GpuStartupRetryRequested { get; private set; }
+
+        public void AcknowledgeGpuStartupRetryRequest() =>
+            GpuStartupRetryRequested = false;
+
         public MainPanelPage()
         {
             this.BackColor = UIColors.MainBg;
@@ -33,6 +38,7 @@ namespace LiteMonitor.src.UI.SettingsPage
 
             CreateBehaviorCard();
             CreateAppearanceCard();
+            CreateGpuMaterialCard();
             CreateHorizontalModeGroup();
             CreateWebCard();
 
@@ -155,6 +161,123 @@ namespace LiteMonitor.src.UI.SettingsPage
 
         /// <summary>实时玻璃的实际状态标签（设置页用；null = 页面尚未创建）。</summary>
         private Label? _liveGlassStatusLabel;
+
+        private void CreateGpuMaterialCard()
+        {
+            string language = Config.Language ?? string.Empty;
+            bool chinese = language.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+            string Text(string zh, string en) => chinese ? zh : en;
+
+            var group = new LiteSettingsGroup(Text("GPU 材质渲染", "GPU material rendering"));
+            group.AddToggle(
+                this,
+                Text("GPU 材质渲染", "GPU material rendering"),
+                () => Config.GpuThemeEffectsEnabled,
+                value =>
+                {
+                    Config.GpuThemeEffectsEnabled = value;
+                    if (value)
+                    {
+                        GpuStartupRetryRequested = true;
+                    }
+                });
+            group.AddHint(Text(
+                "只对带有 rendering.backend=gpu 的新主题生效；旧主题继续使用原 GDI+ 路径。",
+                "Only new themes with rendering.backend=gpu are affected; legacy themes keep the original GDI+ path."));
+
+            var liveBackground = new LiteCheck(
+                Config.GpuLiveBackgroundEnabled,
+                Text("启用", "Enable"));
+            liveBackground.CheckedChanged += (_, _) =>
+            {
+                if (IsWriteBackSuppressed)
+                {
+                    return;
+                }
+
+                bool want = liveBackground.Checked;
+                if (want && !Config.GpuWdaCapturePolicyAccepted)
+                {
+                    DialogResult accepted = MessageBox.Show(
+                        FindForm(),
+                        Text(
+                            "实时玻璃需要使用 Desktop Duplication，并通过 WDA_EXCLUDEFROMCAPTURE 排除整个顶层窗口。\n\n开启后，受支持的系统截图和录屏会看不到 LiteMonitor++。旧主题和固定输入模式不受影响。\n\n是否接受并开启实时背景？",
+                            "Live glass uses Desktop Duplication and excludes the entire top-level window with WDA_EXCLUDEFROMCAPTURE.\n\nWhile active, supported screenshots and recordings will not show LiteMonitor++. Legacy themes and fixed-input mode are unaffected.\n\nAccept and enable live background?"),
+                        Text("实时玻璃捕获说明", "Live glass capture policy"),
+                        MessageBoxButtons.OKCancel,
+                        MessageBoxIcon.Warning);
+                    if (accepted != DialogResult.OK)
+                    {
+                        using (BeginSuppressWriteBack())
+                        {
+                            liveBackground.Checked = false;
+                        }
+                        return;
+                    }
+
+                    Config.GpuWdaCapturePolicyAccepted = true;
+                }
+
+                Config.GpuLiveBackgroundEnabled = want;
+                if (want)
+                {
+                    GpuStartupRetryRequested = true;
+                }
+            };
+            group.AddItem(new LiteSettingsItem(
+                Text("实时桌面背景", "Live desktop background"),
+                liveBackground));
+            RegisterRefresh(() => liveBackground.Checked =
+                Config.GpuLiveBackgroundEnabled);
+            group.AddHint(Text(
+                "实时背景与旧 LiveGlassEnabled 完全独立；赛博朋克主题始终为零抓屏。",
+                "Live background is independent from legacy LiveGlassEnabled; cyberpunk always performs zero desktop capture."));
+
+            Label status = new()
+            {
+                AutoSize = false,
+                Width = UIUtils.S(320),
+                Height = UIUtils.S(34),
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = UIColors.TextSub,
+                Font = UIFonts.Regular(8F),
+                Text = GpuStatusText(chinese)
+            };
+            group.AddItem(new LiteSettingsItem(
+                Text("实际状态", "Actual state"),
+                status));
+            RegisterRefresh(() => status.Text = GpuStatusText(chinese));
+
+            AddGroupToPage(group);
+        }
+
+        private string GpuStatusText(bool chinese)
+        {
+            if (UI?.IsGpuPresentationActive == true)
+            {
+                if (UI.IsGpuLiveBackgroundActive)
+                    return chinese ? "实时玻璃运行中（系统截图/录屏会排除整个窗口）。" :
+                        "Live glass is active; supported screenshots/recordings exclude the entire window.";
+                if (UI.IsGpuLiveBackgroundRequested)
+                    return chinese ? "正在显示固定背景，实时捕获暂不可用：" + UI.GpuRuntimeFailure :
+                        "Fixed background; live capture is unavailable: " + UI.GpuRuntimeFailure;
+                return chinese
+                    ? "GPU 材质运行中，使用固定背景（未捕获桌面）。"
+                    : "GPU material is active with a fixed background; desktop capture is off.";
+            }
+
+            string? fallback = UI?.GpuFallbackCode;
+            if (!string.IsNullOrWhiteSpace(fallback))
+            {
+                return chinese
+                    ? "当前未运行 GPU 呈现：" + fallback
+                    : "GPU presentation is inactive: " + fallback;
+            }
+
+            return chinese
+                ? "当前主题未请求 GPU 呈现。"
+                : "The current theme does not request GPU presentation.";
+        }
 
         /// <summary>
         /// 首次开启实时玻璃时的副作用提示。

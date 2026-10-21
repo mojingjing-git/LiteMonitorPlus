@@ -36,6 +36,12 @@ namespace LiteMonitor
         // ★ 是否已经就"实时玻璃的副作用"提示过用户（首次开启时弹一次，之后不再打扰）。
         public bool LiveGlassHintShown { get; set; } = false;
 
+        // ====== GPU 材质主题（独立于旧 LiveGlassEnabled）======
+        // 旧配置没有这些字段时保持 false：启动仍走原 GDI+，不创建 GPU 设备或捕获会话。
+        public bool GpuThemeEffectsEnabled { get; set; } = false;
+        public bool GpuLiveBackgroundEnabled { get; set; } = false;
+        public bool GpuWdaCapturePolicyAccepted { get; set; } = false;
+
         // ====== 硬件相关 ======
         public string PreferredNetwork { get; set; } = "";
         public string LastAutoNetwork { get; set; } = "";

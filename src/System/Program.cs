@@ -9,6 +9,12 @@ namespace LiteMonitor
 {
     internal static class Program
     {
+        internal static bool SafeMode { get; } =
+            Environment.GetCommandLineArgs().Any(argument =>
+                string.Equals(argument, "--safe", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(argument, "--safe-mode", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(argument, "--disable-gpu", StringComparison.OrdinalIgnoreCase));
+
         // 保持 Mutex 引用，防止被 GC 回收
         private static Mutex? _mutex = null;
 

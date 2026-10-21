@@ -1,0 +1,85 @@
+{
+  "version": 5,
+  "name": "Liquid Glass GPU",
+  "rendering": {
+    "version": 1,
+    "backend": "gpu",
+    "material": "liquid_glass",
+    "parameters": {
+      "liveBackground": false,
+      "cornerRadius": 26,
+      "thickness": 1,
+      "refraction": 1.6,
+      "blurRadius": 8,
+      "clearCenterRatio": 0,
+      "surfaceOpacity": 0.055,
+      "highlight": 1,
+      "counterHighlight": 1,
+      "shadow": 0.34
+    },
+    "motion": {
+      "targetFps": 30,
+      "stateTransitionMs": 180,
+      "motionEnabled": true
+    },
+    "fallback": {
+      "backend": "legacy",
+      "material": "legacy"
+    }
+  },
+  "layout": {
+    "rowHeight": 40,
+    "padding": 10,
+    "cornerRadius": 16,
+    "groupRadius": 10,
+    "groupPadding": 8,
+    "groupSpacing": 28,
+    "groupBottom": 0,
+    "groupTitleOffset": 6,
+    "itemGap": 6,
+    "frameStyle": 0,
+    "frameWidth": 0,
+    "frameLength": 0,
+    "scanline": 0,
+    "glow": 0,
+    "grid": 0,
+    "barStyle": 1
+  },
+  "font": {
+    "family": "Segoe UI Variable",
+    "valueFamily": "Cascadia Mono",
+    "title": 11.5,
+    "group": 10.5,
+    "item": 10.0,
+    "value": 14.0,
+    "bold": true,
+    "scale": 1.0
+  },
+  "color": {
+    "background": "#0A1220",
+    "groupBackground": "rgba(22,42,66,0.08)",
+    "border": "#D8F2FF",
+    "shadow": "rgba(7,17,28,0.38)",
+    "textTitle": "#F7FBFF",
+    "textGroup": "#B9C8D7",
+    "textPrimary": "#F7FBFF",
+    "textSecondary": "#B9C8D7",
+    "valueSafe": "#58E5C2",
+    "valueWarn": "#FFC857",
+    "valueCrit": "#FF6B73",
+    "barBackground": "#203547",
+    "barLow": "#58E5C2",
+    "barMid": "#FFC857",
+    "barHigh": "#FF6B73"
+  },
+  "backdrop": {
+    "mode": "gradient",
+    "opacity": 0.08,
+    "blur": 0,
+    "tint": "rgba(184,217,245,0.08)",
+    "gradientStart": "#1B2C44",
+    "gradientEnd": "#0A1220",
+    "gradientAngle": 90,
+    "fps": 2
+  }
+}

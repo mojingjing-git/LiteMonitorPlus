@@ -1,0 +1,89 @@
+{
+  "version": 5,
+  "name": "浮动轻雾玻璃 GPU",
+  "rendering": {
+    "version": 1,
+    "backend": "gpu",
+    "material": "liquid_glass",
+    "parameters": {
+      "liveBackground": false,
+      "cornerRadius": 30,
+      "thickness": 8,
+      "refraction": 8,
+      "blurRadius": 8,
+      "clearCenterRatio": 0,
+      "surfaceOpacity": 0.055,
+      "highlight": 0.72,
+      "counterHighlight": 1,
+      "shadow": 0.115,
+      "glassStyle": "floatingToolbar",
+      "fogStrength": 0.16,
+      "tintStrength": 0.038,
+      "shadowRadius": 30
+    },
+    "motion": {
+      "targetFps": 30,
+      "stateTransitionMs": 180,
+      "motionEnabled": true
+    },
+    "fallback": {
+      "backend": "legacy",
+      "material": "legacy"
+    }
+  },
+  "layout": {
+    "rowHeight": 40,
+    "padding": 10,
+    "cornerRadius": 30,
+    "groupRadius": 10,
+    "groupPadding": 8,
+    "groupSpacing": 20,
+    "groupBottom": 0,
+    "groupTitleOffset": 6,
+    "itemGap": 6,
+    "frameStyle": 0,
+    "frameWidth": 0,
+    "frameLength": 0,
+    "scanline": 0,
+    "glow": 0,
+    "grid": 0,
+    "barStyle": 1
+  },
+  "font": {
+    "family": "Segoe UI Variable",
+    "valueFamily": "Segoe UI Variable",
+    "title": 16,
+    "group": 11.5,
+    "item": 10.5,
+    "value": 18,
+    "bold": true,
+    "scale": 1.0
+  },
+  "color": {
+    "background": "#D9E0E7",
+    "groupBackground": "rgba(0,0,0,0)",
+    "border": "rgba(120,140,160,0.25)",
+    "shadow": "rgba(255,255,255,0.65)",
+    "textTitle": "#1B2732",
+    "textGroup": "#52616D",
+    "textPrimary": "#1B2732",
+    "textSecondary": "#52616D",
+    "valueSafe": "#1B2732",
+    "valueWarn": "#A24C00",
+    "valueCrit": "#AD2335",
+    "barBackground": "rgba(77,97,115,0.12)",
+    "barLow": "#287E86",
+    "barMid": "#B76818",
+    "barHigh": "#BA3045"
+  },
+  "backdrop": {
+    "mode": "gradient",
+    "opacity": 0.08,
+    "blur": 0,
+    "tint": "rgba(184,217,245,0.08)",
+    "gradientStart": "#D9E0E7",
+    "gradientEnd": "#D5E3E5",
+    "gradientAngle": 90,
+    "fps": 2
+  }
+}

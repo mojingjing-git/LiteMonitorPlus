@@ -47,9 +47,12 @@
 
 	<ItemGroup>
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
-    <!-- TraceEvent 4.0.0 requires System.Text.Json >= 10.0.3. -->
+    <!-- System.Text.Json 10.0.3：被强制的 Microsoft.Diagnostics.Tracing.TraceEvent 4.0.0 依赖（>= 10.0.3）拉高，
+         否则还原期 NU1605（包降级）直接失败。产品侧用法（Serialize/Deserialize/JsonDocument）不受影响。 -->
     <PackageReference Include="System.Text.Json" Version="10.0.3" />
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="4.0.0" />
+    <PackageReference Include="Vortice.Direct2D1" Version="3.8.3" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
   </ItemGroup>
 
     <!-- 自动复制 themes 与 lang 目录下的所有文件 -->
@@ -67,6 +70,11 @@
         <Content Include="resources\plugins\*.json">
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
             <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+        </Content>
+
+        <Content Include="resources\shaders\*.cso">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         </Content>
 
         <!-- 离线城市库（随包分发，避免运行时依赖远程服务） -->
@@ -91,12 +99,18 @@
   <Compile Remove="LiteMonitor.Updater\**" />
   <Compile Remove="LiteMonitor.Wpf\**" />
   <Compile Remove="tests\**" />
+  <Compile Remove="tools\**" />
+  <Compile Remove="docs\**" />
   <EmbeddedResource Remove="LiteMonitor.Updater\**" />
   <EmbeddedResource Remove="LiteMonitor.Wpf\**" />
   <EmbeddedResource Remove="tests\**" />
+  <EmbeddedResource Remove="tools\**" />
+  <EmbeddedResource Remove="docs\**" />
   <None Remove="LiteMonitor.Updater\**" />
   <None Remove="LiteMonitor.Wpf\**" />
   <None Remove="tests\**" />
+  <None Remove="tools\**" />
+  <None Remove="docs\**" />
 </ItemGroup>
 	
 <!-- 引入文件资源管理 -->

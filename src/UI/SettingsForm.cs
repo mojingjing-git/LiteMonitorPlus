@@ -314,6 +314,13 @@ namespace LiteMonitor.src.UI
             _cfg.Save();
             
             // 4. 应用副作用 (刷新界面)
+            if (_pages.TryGetValue("MainPanel", out SettingsPageBase? mainPage) &&
+                mainPage is MainPanelPage gpuPage &&
+                gpuPage.GpuStartupRetryRequested)
+            {
+                _ui.AllowGpuStartupRetryAfterExplicitSettingsApply();
+                gpuPage.AcknowledgeGpuStartupRetryRequest();
+            }
             AppActions.ApplyAllSettings(_cfg, _mainForm, _ui, autoStartChanged);
 
             // 5. [Fix] Rebase Draft to match Live

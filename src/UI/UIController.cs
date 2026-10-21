@@ -2,6 +2,10 @@ using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices.InfoService;
 using LiteMonitor.src.SystemServices;
 using LiteMonitor.src.WebServer;
+using LiteMonitor.Rendering.Configuration;
+using LiteMonitor.Rendering.Contracts;
+using LiteMonitor.Rendering.Presentation;
+using LiteMonitor.Rendering.Scene;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -44,6 +48,14 @@ namespace LiteMonitor
         //   它**不是**第二个捕获循环 —— 真正的循环只有服务内部那一个（合同 §13.2 / §13.5）。
         private LiveGlassController? _liveGlass;
 
+        // ===== GPU 材质路由（R19）=====
+        // 只有主题显式声明 rendering.backend=gpu 且用户独立开启后才创建。
+        // 旧主题与旧 GDI+ 路径在此字段为 null 时保持原有行为。
+        private GpuPresentationHostController? _gpuPresentation;
+        private RenderingRouteDecision? _gpuRoute;
+        private string? _gpuFallbackCode;
+        private bool _updatingGpuScene;
+
         /// <summary>
         /// 外观上下文变化事件（换肤 / DPI 变化 / 布局重建后触发）。
         /// <para>
@@ -68,6 +80,14 @@ namespace LiteMonitor
 
         public List<Column> GetTaskbarColumns() => _hxColsTaskbar;
         public List<GroupLayoutInfo> GetMainGroups() => _groups;
+
+        public bool IsGpuPresentationActive =>
+            _gpuPresentation?.IsActive == true;
+
+        public string? GpuFallbackCode => _gpuFallbackCode;
+        public bool IsGpuLiveBackgroundActive => _gpuPresentation?.IsLiveCaptureStarted == true;
+        public bool IsGpuLiveBackgroundRequested => _gpuRoute?.CaptureRequested == true;
+        public string? GpuRuntimeFailure => _gpuPresentation?.LastErrorCode ?? _gpuFallbackCode;
 
         public UIController(Settings cfg, Form form)
         {
@@ -192,6 +212,7 @@ namespace LiteMonitor
             // 换肤后客户区尺寸可能已变（竖屏会改 ClientSize）→ 同步一次外观上下文，
             // 保证订阅方拿到的快照里 ClientBounds 是最新的（装饰层与窗口轮廓都按它定位）。
             SyncAppearanceContext();
+            ApplyGpuRenderingRoute(t);
             AppearanceChanged?.Invoke();
         }
 
@@ -200,6 +221,7 @@ namespace LiteMonitor
             BuildMetrics();
             BuildHorizontalColumns(); 
             _layoutDirty = true;
+            UpdateGpuScene();
             _form.Invalidate();
             _form.Update();
         }
@@ -247,8 +269,124 @@ namespace LiteMonitor
         /// <summary>停止实时玻璃（窗口退出 / 句柄销毁时调用）。</summary>
         public void StopLiveGlass() => _liveGlass?.SetEnabled(false);
 
+        public void NotifyGpuHandleChanged()
+        {
+            if (_gpuRoute?.IsGpu != true)
+            {
+                return;
+            }
+
+            StopGpuPresentation();
+            if (_gpuPresentation is not null) return;
+            if (_form.IsHandleCreated && _gpuRoute?.IsGpu == true)
+            {
+                _gpuPresentation = new GpuPresentationHostController(
+                    _form,
+                    _gpuRoute.EffectiveMaterial,
+                    _gpuRoute.CaptureRequested,
+                    _cfg.HorizontalMode,
+                    ThemeManager.Current.Rendering,
+                    (float)_cfg.UIScale, theme: ThemeManager.Current);
+                StartGpuPresentation();
+            }
+        }
+
+        /// <summary>
+        /// 确保 GPU 宿主存在并已启动（窗口可见后补建）。
+        /// <para>
+        /// 窗口句柄可能在 <c>MainForm.BindEvents()</c> 注册 <c>HandleCreated</c>
+        /// 处理器**之前**就已经创建：主题应用里的 <c>GetCurrentDpiScale()</c> 会用
+        /// <c>Control.CreateGraphics()</c> 强制创建句柄，而这个过程发生在
+        /// <c>MainForm</c> 构造体内。等到真正显示窗口时句柄早已存在，
+        /// <c>HandleCreated</c> 不再触发，<see cref="NotifyGpuHandleChanged"/>
+        /// 于是永远不会被调用，GPU 宿主也就永远不会启动。
+        /// </para>
+        /// <para>
+        /// 这里只在宿主**缺席**时创建，不触碰已经存在的会话，
+        /// 因此不会产生多余的设备 / 捕获拆除重建。
+        /// </para>
+        /// </summary>
+        public void EnsureGpuPresentationStarted()
+        {
+            if (_gpuRoute?.IsGpu != true) return;
+            if (_gpuPresentation is not null) return;
+            if (!_form.IsHandleCreated) return;
+            _gpuPresentation = new GpuPresentationHostController(
+                _form,
+                _gpuRoute.EffectiveMaterial,
+                _gpuRoute.CaptureRequested,
+                _cfg.HorizontalMode,
+                ThemeManager.Current.Rendering,
+                (float)_cfg.UIScale, theme: ThemeManager.Current);
+            StartGpuPresentation();
+        }
+
+        public void NotifyGpuVisibility(bool visible)
+        {
+            if (_gpuPresentation is null)
+            {
+                return;
+            }
+
+            if (visible)
+            {
+                _gpuPresentation.Resume();
+                _gpuPresentation.NotifySizeChanged();
+                UpdateGpuScene();
+            }
+            else
+            {
+                _gpuPresentation.Suspend();
+            }
+        }
+
+        public void NotifyGpuSizeChanged()
+        {
+            if (_updatingGpuScene)
+            {
+                return;
+            }
+
+            _gpuPresentation?.NotifySizeChanged();
+            UpdateGpuScene();
+        }
+
+        public void NotifyGpuDisplayChanged()
+        {
+            _gpuPresentation?.NotifyOutputChanged(force: true);
+            NotifyGpuSizeChanged();
+        }
+
+        public void StopGpuPresentation()
+        {
+            _gpuPresentation?.Dispose();
+            if (_gpuPresentation?.WindowCapturePolicyRestored == false)
+            {
+                _gpuFallbackCode = _gpuPresentation.LastErrorCode;
+                return;
+            }
+            _gpuPresentation = null;
+        }
+
+        /// <summary>
+        /// Allows one new native GPU attempt only after the user explicitly
+        /// applies settings. An unclean previous process otherwise remains in
+        /// the conservative GDI+ route.
+        /// </summary>
+        public bool AllowGpuStartupRetryAfterExplicitSettingsApply()
+        {
+            return GpuStartupGuard.Shared.AllowExplicitManualRetry(
+                out _,
+                out _);
+        }
+
         public void Render(Graphics g)
         {
+            if (IsGpuPresentationActive)
+            {
+                return;
+            }
+
             var t = ThemeManager.Current;
             _layout ??= new UILayout(t);
 
@@ -493,6 +631,13 @@ namespace LiteMonitor
 
             try
             {
+                if (_gpuRoute?.IsGpu == true &&
+                    _gpuPresentation?.NeedsRestart == true &&
+                    _form.IsHandleCreated)
+                {
+                    StartGpuPresentation();
+                }
+
                 // ★ 只请求"到期才采"的一次硬件采集：
                 //   未到期时这里立即返回，不会创建任何硬件任务，
                 //   但下面的取值 / 平滑 / 绘制仍然按界面频率执行。
@@ -594,6 +739,7 @@ namespace LiteMonitor
                     }
                 }
 
+                UpdateGpuScene();
                 _form.Invalidate();   
             }
             finally
@@ -787,6 +933,190 @@ namespace LiteMonitor
             {
                 // 落盘: 让迁移结果持久化, 下次启动不用再迁
                 _cfg.Save();
+            }
+        }
+
+        private void ApplyGpuRenderingRoute(Theme theme)
+        {
+            RenderingRouteDecision decision = RenderingRoutePolicy.Decide(new(
+                theme.Rendering,
+                GpuEffectsEnabled: _cfg.GpuThemeEffectsEnabled,
+                LiveBackgroundEnabled: _cfg.GpuLiveBackgroundEnabled,
+                WdaCapturePolicyAccepted: _cfg.GpuWdaCapturePolicyAccepted,
+                SafeMode: Program.SafeMode));
+
+            // ApplyTheme may synchronously paint the old GDI route before
+            // reaching this decision. Do not let that desktop-DC layout leak
+            // into the GPU route (or retain its window-DC layout on fallback).
+            if (decision.IsGpu || _gpuRoute?.IsGpu == true)
+                _hxLayout = null;
+
+            if (!decision.IsGpu)
+            {
+                StopGpuPresentation();
+                _gpuRoute = decision;
+                if (_gpuPresentation is null) _gpuFallbackCode = decision.FallbackCode;
+                return;
+            }
+
+            bool canReconfigure =
+                _gpuPresentation is not null &&
+                (_gpuPresentation.IsActive || _gpuPresentation.IsSuspended);
+            if (canReconfigure &&
+                _gpuPresentation!.TryReconfigure(
+                    decision.EffectiveMaterial,
+                    decision.CaptureRequested,
+                    _cfg.HorizontalMode,
+                    theme.Rendering,
+                    (float)_cfg.UIScale,
+                    out _,
+                    out _, theme))
+            {
+                _gpuRoute = decision;
+                _gpuFallbackCode =
+                    decision.CaptureRequested &&
+                    !_gpuPresentation.IsLiveCaptureStarted
+                        ? _gpuPresentation.LastErrorCode
+                        : decision.FallbackCode;
+                _gpuPresentation.ResetPerformanceWindows();
+                UpdateGpuScene();
+                return;
+            }
+
+            // A suspended host can be reconfigured without replacing its device
+            // or swap chain. Any other state, including a failed in-place
+            // update, is rebuilt through the normal guarded startup path.
+            StopGpuPresentation();
+            if (_gpuPresentation is not null) return;
+            _gpuRoute = decision;
+            _gpuFallbackCode = decision.FallbackCode;
+            _gpuPresentation = new GpuPresentationHostController(
+                _form,
+                decision.EffectiveMaterial,
+                decision.CaptureRequested,
+                _cfg.HorizontalMode,
+                theme.Rendering,
+                (float)_cfg.UIScale, theme: ThemeManager.Current);
+            if (_form.IsHandleCreated)
+            {
+                StartGpuPresentation();
+            }
+        }
+
+        private void StartGpuPresentation()
+        {
+            if (_gpuPresentation is null || _gpuRoute?.IsGpu != true)
+            {
+                return;
+            }
+
+            WindowCapturePolicy policy = _gpuRoute.CaptureRequested
+                ? WindowCapturePolicy.WdaExcludeFromCapture
+                : WindowCapturePolicy.None;
+            if (_gpuPresentation.Start(
+                    policy,
+                    out string? errorCode,
+                    out string? errorMessage))
+            {
+                _gpuFallbackCode = _gpuPresentation.RequestsLiveBackground &&
+                    !_gpuPresentation.IsLiveCaptureStarted
+                    ? _gpuPresentation.LastErrorCode
+                    : _gpuRoute.FallbackCode;
+                UpdateGpuScene();
+                if (!_form.Visible || _form.WindowState == FormWindowState.Minimized)
+                    _gpuPresentation.Suspend();
+                return;
+            }
+
+            _gpuFallbackCode = errorCode;
+            StopGpuPresentation();
+            _form.Invalidate();
+        }
+
+        private void UpdateGpuScene()
+        {
+            if (_gpuPresentation?.IsActive != true)
+            {
+                return;
+            }
+
+            _updatingGpuScene = true;
+            try
+            {
+                var notices = new List<SceneNotice>(2);
+                if (SettingsHelper.GlobalBlockSave)
+                {
+                    notices.Add(new SceneNotice(
+                        "config-write-blocked",
+                        LanguageManager.T("Menu.ConfigWriteBlockedShort"),
+                        MetricStatus.Warning));
+                }
+
+                if (_groups.Count == 0 && !_cfg.HorizontalMode)
+                {
+                    notices.Add(new SceneNotice(
+                        "empty-state",
+                        LanguageManager.T("Menu.NoVisibleItems"),
+                        MetricStatus.Missing));
+                }
+
+                SceneSnapshot scene;
+                if (_cfg.HorizontalMode)
+                {
+                    _hxLayout ??= new HorizontalLayout(
+                        ThemeManager.Current,
+                        _form.Width,
+                        LayoutMode.Horizontal, _cfg, measurementControl: _form);
+                    int height = _hxLayout.Build(_hxColsHorizontal);
+                    Size target = new(
+                        _hxLayout.PanelWidth,
+                        Math.Max(height, _hxLayout.MinPanelHeight));
+                    if (_form.ClientSize != target)
+                    {
+                        _form.ClientSize = target;
+                    }
+
+                    scene = UiSceneSnapshotAdapter.BuildHorizontal(
+                        _hxColsHorizontal,
+                        _gpuPresentation.Generations,
+                        _form.ClientRectangle,
+                        _form.DeviceDpi,
+                        notices);
+                }
+                else
+                {
+                    if (_layoutDirty)
+                    {
+                        int height = _layout.Build(_groups);
+                        height = Math.Max(height, MinEmptyPanelHeight(ThemeManager.Current));
+                        Size target = new(_form.ClientSize.Width, height);
+                        if (_form.ClientSize != target)
+                        {
+                            _form.ClientSize = target;
+                        }
+                        _layoutDirty = false;
+                    }
+
+                    scene = UiSceneSnapshotAdapter.Build(
+                        _groups,
+                        _gpuPresentation.Generations,
+                        _form.ClientRectangle,
+                        _form.DeviceDpi,
+                        isHorizontal: false,
+                        notices);
+                }
+
+                // ClientSize changes above synchronously raise Resize. Its
+                // reentrant notification is suppressed, so synchronize the
+                // final size here before publishing the scene generation.
+                _gpuPresentation.NotifySizeChanged();
+                if (!_gpuPresentation.IsActive) return;
+                scene = scene with { Generations = _gpuPresentation.Generations };
+                _gpuPresentation.UpdateScene(scene);
+            }
+            finally
+            {
+                _updatingGpuScene = false;
             }
         }
 
@@ -984,6 +1314,9 @@ namespace LiteMonitor
             //   代理还指向服务，顺序反了会漏掉最后一次亲和性恢复）。
             _liveGlass?.Dispose();
             _liveGlass = null;
+
+            _gpuPresentation?.Dispose();
+            _gpuPresentation = null;
 
             // 降级提示的画刷
             _noticeBrush?.Dispose();

@@ -251,6 +251,7 @@ namespace LiteMonitor
                 // ★ A16：尺寸代次 +1 并更新捕获请求
                 //   （窗口大小变了，客户区的**物理**矩形也跟着变，坐标不变就会抓错区域）。
                 _ui?.NotifyLiveGlassSizeChanged();
+                _ui?.NotifyGpuSizeChanged();
             };
             this.LocationChanged += (_, __) => _ui?.NotifyLiveGlassLocationChanged();
             this.VisibleChanged += (_, __) =>
@@ -258,6 +259,9 @@ namespace LiteMonitor
                 if (Visible) _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert: true);
                 // ★ A16：隐藏 / 最小化 ⇒ 暂停捕获；重新显示 ⇒ 继续（合同 §5.1）。
                 _ui?.NotifyLiveGlassVisibility(Visible);
+                _ui?.NotifyGpuVisibility(Visible);
+                if (Visible && _ui?.IsGpuPresentationActive == true)
+                    ApplyWindowAppearance();
             };
             this.HandleCreated += (_, __) =>
             {
@@ -266,6 +270,7 @@ namespace LiteMonitor
                 _windowAppearance?.OnHandleCreated();
                 // ★ A16：句柄代次 +1（句柄变了，旧请求里的句柄已失效，必须换新的）。
                 _ui?.NotifyLiveGlassHandleChanged();
+                _ui?.NotifyGpuHandleChanged();
             };
 
             // 换肤 / DPI 变化 → 重新应用窗口轮廓（外框样式可能在切角与圆角之间切换）
@@ -292,7 +297,7 @@ namespace LiteMonitor
             ThemeAppearanceOptions? options = snapshot.Value.Options;
             if (options == null) return;
 
-            _windowAppearance?.Apply(options, snapshot.Value.CornerRadiusPx);
+            _windowAppearance?.Apply(options, snapshot.Value.CornerRadiusPx, useMaterialOutline: snapshot.Value.UseMaterialOutline);
         }
 
         /// <summary>
@@ -307,6 +312,21 @@ namespace LiteMonitor
         {
             ThemeAppearanceOptions? options = _ui?.SyncAppearanceContext();
             if (options == null) return null;
+            var rendering = ThemeManager.Current.Rendering;
+            if (_ui?.IsGpuPresentationActive == true &&
+                rendering?.Material == LiteMonitor.Rendering.Configuration.ThemeRenderingConfig.LiquidGlassMaterial)
+            {
+                var settings = LiteMonitor.Rendering.Configuration.MaterialRuntimeSettings.Create(
+                    rendering, LiteMonitor.Rendering.Contracts.MaterialKind.LiquidGlass);
+                if (settings.GlassStyle == LiteMonitor.Rendering.Contracts.GlassSurfaceStyle.FloatingToolbar)
+                {
+                    int radius = LiteMonitor.Rendering.Materials.SceneMaterialLayoutBuilder.ToolbarCornerRadius(
+                        settings.CornerRadius, DeviceDpi, (float)_cfg.UIScale, ClientSize.Width, ClientSize.Height);
+                    return new WindowAppearanceSnapshot(options, radius, useMaterialOutline: true);
+                }
+                int standardRadius = (int)Math.Min(settings.CornerRadius, Math.Min(ClientSize.Width, ClientSize.Height) / 2f);
+                return new WindowAppearanceSnapshot(options, standardRadius, useMaterialOutline: true);
+            }
             return new WindowAppearanceSnapshot(options, ThemeManager.Current.Layout.CornerRadius);
         }
 
@@ -365,7 +385,13 @@ namespace LiteMonitor
                 {
                     if (!t.IsCanceled)
                     {
-                        this.BeginInvoke(new Action(() => _bizHelper?.RestorePos()));
+                        if (IsDisposed || Disposing || !IsHandleCreated) return;
+                        this.BeginInvoke(new Action(() =>
+                        {
+                            if (IsDisposed || Disposing) return;
+                            _bizHelper?.ReconcileDisplayChange();
+                            _ui?.NotifyGpuDisplayChanged();
+                        }));
                     }
                 });
             }
@@ -389,6 +415,7 @@ namespace LiteMonitor
             // ★ A16：句柄没了 ⇒ 捕获必须停（否则会对着已失效的句柄抓屏）。
             //   句柄重建后由 HandleCreated 事件重新接上。
             _ui?.StopLiveGlass();
+            _ui?.StopGpuPresentation();
             base.OnHandleDestroyed(e);
         }
 
@@ -399,6 +426,7 @@ namespace LiteMonitor
             _ui?.ApplyTheme(_cfg.Skin);
             // ★ A16：DPI 变了 ⇒ 客户区的物理尺寸与坐标都变了 ⇒ 尺寸代次 +1。
             _ui?.NotifyLiveGlassSizeChanged();
+            _ui?.NotifyGpuSizeChanged();
             ApplyWindowAppearance();
             this.Invalidate();
         }
@@ -406,7 +434,16 @@ namespace LiteMonitor
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
-            
+            // HandleCreated owns GPU-host creation. Rebuilding the host here
+            // would replace the session that VisibleChanged just resumed and
+            // turn every show into an unnecessary device/capture teardown.
+            _ui?.NotifyGpuSizeChanged();
+
+            // ★ 句柄可能早于 BindEvents() 就已存在（主题应用里的 CreateGraphics()
+            //   会创建句柄），HandleCreated 不再触发，GPU 宿主就永远不会被启动。
+            //   这里只在宿主缺席时补建，不触碰已存在的会话。
+            _ui?.EnsureGpuPresentationStarted();
+
             // 恢复可见性
             if (_cfg.HideMainForm) this.Hide();
             

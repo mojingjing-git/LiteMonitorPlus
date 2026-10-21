@@ -1,0 +1,83 @@
+{
+  "version": 5,
+  "name": "Cyberpunk GPU",
+  "rendering": {
+    "version": 1,
+    "backend": "gpu",
+    "material": "cyber_punk",
+    "parameters": {
+      "liveBackground": false,
+      "primaryCut": 14,
+      "secondaryCut": 9,
+      "outlineWidth": 1,
+      "glow": 12,
+      "ambientRatio": 0.12,
+      "panelOpacity": 0.965
+    },
+    "motion": {
+      "targetFps": 30,
+      "stateTransitionMs": 140,
+      "scannerPeriodMs": 2800,
+      "motionEnabled": true
+    },
+    "fallback": {
+      "backend": "legacy",
+      "material": "legacy"
+    }
+  },
+  "layout": {
+    "rowHeight": 40,
+    "padding": 10,
+    "cornerRadius": 0,
+    "groupRadius": 4,
+    "groupPadding": 8,
+    "groupSpacing": 28,
+    "groupBottom": 0,
+    "groupTitleOffset": 6,
+    "itemGap": 6,
+    "frameStyle": 0,
+    "frameWidth": 0,
+    "frameLength": 0,
+    "scanline": 0,
+    "glow": 0,
+    "grid": 0,
+    "barStyle": 1
+  },
+  "font": {
+    "family": "Segoe UI Variable",
+    "valueFamily": "Cascadia Mono",
+    "title": 11.5,
+    "group": 10.5,
+    "item": 10.0,
+    "value": 14.0,
+    "bold": true,
+    "scale": 1.0
+  },
+  "color": {
+    "background": "#0A1017",
+    "groupBackground": "#121B24",
+    "border": "#345064",
+    "shadow": "rgba(0,0,0,0.35)",
+    "textTitle": "#48E6F2",
+    "textGroup": "#91A7B2",
+    "textPrimary": "#E8F7FA",
+    "textSecondary": "#91A7B2",
+    "valueSafe": "#48E6F2",
+    "valueWarn": "#FFB84D",
+    "valueCrit": "#FF4967",
+    "barBackground": "#0E1520",
+    "barLow": "#48E6F2",
+    "barMid": "#FFB84D",
+    "barHigh": "#FF4967"
+  },
+  "backdrop": {
+    "mode": "gradient",
+    "opacity": 0,
+    "blur": 0,
+    "tint": "rgba(72,230,242,0.12)",
+    "gradientStart": "#0A1017",
+    "gradientEnd": "#121B24",
+    "gradientAngle": 135,
+    "fps": 2
+  }
+}

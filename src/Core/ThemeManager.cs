@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LiteMonitor.Rendering.Configuration;
 
 namespace LiteMonitor.src.Core
 {
@@ -354,6 +355,13 @@ namespace LiteMonitor.src.Core
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public BackdropConfig? Backdrop { get; set; }
 
+        /// <summary>
+        /// Optional versioned GPU rendering route. Missing means the legacy
+        /// renderer and preserves compatibility with every existing theme.
+        /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public ThemeRenderingConfig? Rendering { get; set; }
+
         /// <summary>本层未知键扩展槽。</summary>
         [JsonExtensionData]
         public Dictionary<string, JsonElement> ExtensionData { get; set; } = new();
@@ -552,6 +560,7 @@ namespace LiteMonitor.src.Core
                 PruneNode(theme.Thresholds.NetKBps, typeof(ThresholdSet));
             }
             PruneNode(theme.Backdrop, typeof(BackdropConfig));
+            PruneNode(theme.Rendering, typeof(ThemeRenderingConfig));
         }
 
         private static void PruneNode(object? node, Type type)

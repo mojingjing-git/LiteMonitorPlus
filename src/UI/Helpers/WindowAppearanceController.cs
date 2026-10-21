@@ -108,10 +108,11 @@ namespace LiteMonitor.src.UI.Helpers
     /// </summary>
     public readonly struct WindowAppearanceSnapshot
     {
-        public WindowAppearanceSnapshot(ThemeAppearanceOptions? options, int cornerRadiusPx)
+        public WindowAppearanceSnapshot(ThemeAppearanceOptions? options, int cornerRadiusPx, bool useMaterialOutline = false)
         {
             Options = options;
             CornerRadiusPx = cornerRadiusPx;
+            UseMaterialOutline = useMaterialOutline;
         }
 
         /// <summary>当前外观快照（与绘制层同一份；为 null 表示这一刻拿不到快照）。</summary>
@@ -119,6 +120,8 @@ namespace LiteMonitor.src.UI.Helpers
 
         /// <summary>圆角半径（物理像素，与绘制层外框用同一个值）。</summary>
         public int CornerRadiusPx { get; }
+
+        public bool UseMaterialOutline { get; }
     }
 
     /// <summary>
@@ -230,6 +233,7 @@ namespace LiteMonitor.src.UI.Helpers
         private bool _disposed;
 
         private ThemeAppearanceOptions? _lastOptions;
+        private bool _lastUseMaterialOutline;
         private int _lastFrameStyle = ThemeAppearanceOptions.FrameStyleNone;
         private int _lastCornerLengthPx;
         private int _lastRadiusPx;
@@ -347,13 +351,14 @@ namespace LiteMonitor.src.UI.Helpers
         /// 外轮廓相对客户区向内缩进（物理像素，默认 0）。
         /// ★ 建议保持 0：Region 会**裁掉**客户区，超出部分的内容会被切掉。
         /// </param>
-        public WindowShapeResult Apply(ThemeAppearanceOptions options, int cornerRadiusPx = -1, int frameOuterInsetPx = 0)
+        public WindowShapeResult Apply(ThemeAppearanceOptions options, int cornerRadiusPx = -1, int frameOuterInsetPx = 0, bool useMaterialOutline = false)
         {
             EnsureUiThread(nameof(Apply));
             ThrowIfDisposed();
             if (options == null) throw new ArgumentNullException(nameof(options));
 
             _lastOptions = options;
+            _lastUseMaterialOutline = useMaterialOutline;
             _lastFrameStyle = options.FrameStyle;
 
             // ★ 物理像素只用一次：options.FrameLengthPx 已经是物理像素，这里直接用，绝不乘缩放。
@@ -367,7 +372,7 @@ namespace LiteMonitor.src.UI.Helpers
                 _lastCornerLengthPx,
                 _lastRadiusPx,
                 _lastInsetPx,
-                options.DeviceDpi);
+                options.DeviceDpi, useMaterialOutline);
         }
 
         /// <summary>
@@ -393,7 +398,7 @@ namespace LiteMonitor.src.UI.Helpers
             if (current.HasValue)
             {
                 ThemeAppearanceOptions? options = current.Value.Options;
-                if (options != null) return Apply(options, current.Value.CornerRadiusPx);
+                if (options != null) return Apply(options, current.Value.CornerRadiusPx, useMaterialOutline: current.Value.UseMaterialOutline);
             }
 
             if (_lastOptions == null)
@@ -403,7 +408,7 @@ namespace LiteMonitor.src.UI.Helpers
             }
 
             Rectangle bounds = NormalizeToClientOrigin(_form.ClientRectangle);
-            return ApplyShape(_lastFrameStyle, bounds, _lastCornerLengthPx, _lastRadiusPx, _lastInsetPx, _lastOptions.DeviceDpi);
+            return ApplyShape(_lastFrameStyle, bounds, _lastCornerLengthPx, _lastRadiusPx, _lastInsetPx, _lastOptions.DeviceDpi, _lastUseMaterialOutline);
         }
 
         /// <summary>
@@ -522,13 +527,13 @@ namespace LiteMonitor.src.UI.Helpers
         // 核心：把样式翻译成窗口形状
         // ============================================================
 
-        private WindowShapeResult ApplyShape(int frameStyle, Rectangle bounds, int cornerLengthPx, int radiusPx, int insetPx, int deviceDpi)
+        private WindowShapeResult ApplyShape(int frameStyle, Rectangle bounds, int cornerLengthPx, int radiusPx, int insetPx, int deviceDpi, bool useMaterialOutline = false)
         {
             Diagnostics.ApplyCount++;
 
             bool dwmSupported = DwmCornerSupport;
-            WindowShapeStrategy strategy = ResolveStrategy(frameStyle, dwmSupported);
-            int preference = ResolveCornerPreference(strategy);
+            WindowShapeStrategy strategy = useMaterialOutline ? WindowShapeStrategy.Rounded : ResolveStrategy(frameStyle, dwmSupported);
+            int preference = useMaterialOutline ? DwmcpDoNotRound : ResolveCornerPreference(strategy);
 
             LastStrategy = strategy;
             LastCornerPreference = -1;
@@ -564,7 +569,12 @@ namespace LiteMonitor.src.UI.Helpers
                     break;
 
                 case WindowShapeStrategy.Rounded:
-                    if (frameStyle == ThemeAppearanceOptions.FrameStyleNone)
+                    if (useMaterialOutline)
+                    {
+                        regionApplied = ApplyRegionPath(bounds, ThemeAppearanceOptions.FrameStyleRoundedStroke, cornerLengthPx, radiusPx, insetPx);
+                        note = "GPU material outline: matching Region; system rounding disabled";
+                    }
+                    else if (frameStyle == ThemeAppearanceOptions.FrameStyleNone)
                     {
                         // 旧路径（无 DWM 圆角能力的系统）：沿用既有 helper 的圆角区域
                         regionApplied = ApplyLegacyRoundedRegion(bounds);
