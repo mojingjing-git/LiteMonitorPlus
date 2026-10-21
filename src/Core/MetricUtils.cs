@@ -102,7 +102,7 @@ namespace LiteMonitor.src.Core
         /// <summary>
         /// 获取纯数值字符串 (已处理缩放、舍入、紧凑模式)
         /// </summary>
-        public static string GetValueStr(string key, float? value, bool compact = false)
+        public static string GetValueStr(string key, float? value, bool compact = false, string? userFormat = null)
         {
             float v = value ?? 0.0f;
             var type = GetType(key);
@@ -111,7 +111,10 @@ namespace LiteMonitor.src.Core
             if (type == MetricType.Memory)
             {
                  var cfg = Settings.Load();
-                 if (cfg.MemoryDisplayMode == 1) // 容量模式
+                 // ★ 该监控项自己的单位格式如果明确要求百分比，就**不能**走容量换算：
+                 //   否则数值被换算成 GB 数、单位却按用户格式显示 %，两者对不上
+                 //   （实测 50% × 32GB 会显示成 "16.0%"）。全局 MemoryDisplayMode 只是默认口径，单项格式优先。
+                 if (cfg.MemoryDisplayMode == 1 && !IsPercentUnitOverride(userFormat)) // 容量模式
                  {
                      double totalGB = (key.IndexOf("MEM", StringComparison.OrdinalIgnoreCase) >= 0) 
                         ? Settings.DetectedRamTotalGB 
@@ -268,6 +271,22 @@ namespace LiteMonitor.src.Core
                 MetricType.DataSize => "9.9.",// MB
                 _ => "99.9"
             };
+        }
+
+        /// <summary>
+        /// 该监控项的单位格式是否**显式要求百分比**。
+        ///
+        /// 判据是「含 % 且不含 {u}」：
+        ///   - 含 <c>{u}</c> 说明用户要的是「在自动单位后面拼点东西」，仍按全局显示模式走；
+        ///   - 不含 <c>{u}</c> 又写了 % —— 那就是「我就要按百分比看」，容量换算必须让位。
+        /// 空格式表示隐藏单位（不是要百分比），返回 false。
+        /// </summary>
+        private static bool IsPercentUnitOverride(string? userFormat)
+        {
+            if (string.IsNullOrWhiteSpace(userFormat)) return false;
+
+            return !userFormat.Contains("{u}", StringComparison.OrdinalIgnoreCase) &&
+                   userFormat.Contains("%", StringComparison.Ordinal);
         }
 
         public static string GetDisplayUnit(string key, string calculatedUnit, string userFormat)
