@@ -28,6 +28,14 @@ namespace LiteMonitor
         public int PanelWidth { get; set; } = 240;
         public double UIScale { get; set; } = 1.0;
 
+        // ====== 实时玻璃（M2 / A16）======
+        // ★ 实时玻璃**默认关闭**（M2 合同 §8.1）：开启需要用户显式操作，
+        //   并且首次开启时必须提示"捕获瞬间面板可能从录屏/截图中短暂消失或闪动"。
+        //   旧版 settings.json 没有这个字段时反序列化为 false（System.Text.Json 的缺省行为）⇒ 保持关闭。
+        public bool LiveGlassEnabled { get; set; } = false;
+        // ★ 是否已经就"实时玻璃的副作用"提示过用户（首次开启时弹一次，之后不再打扰）。
+        public bool LiveGlassHintShown { get; set; } = false;
+
         // ====== 硬件相关 ======
         public string PreferredNetwork { get; set; } = "";
         public string LastAutoNetwork { get; set; } = "";

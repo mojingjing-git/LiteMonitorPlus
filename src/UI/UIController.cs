@@ -39,6 +39,11 @@ namespace LiteMonitor
         private float _appearanceDpiScale = 1f;
         private float _appearanceUserScale = 1f;
 
+        // ===== 实时玻璃（M2 / A16）=====
+        // ★ 唯一的接线宿主：负责后台捕获服务的生命周期 + 每帧租约交接。
+        //   它**不是**第二个捕获循环 —— 真正的循环只有服务内部那一个（合同 §13.2 / §13.5）。
+        private LiveGlassController? _liveGlass;
+
         /// <summary>
         /// 外观上下文变化事件（换肤 / DPI 变化 / 布局重建后触发）。
         /// <para>
@@ -76,7 +81,20 @@ namespace LiteMonitor
             _timer.Tick += (_, __) => Tick();
             _timer.Start();
 
+            // ★ A16：实时玻璃接线控制器。
+            //   必须在 ApplyTheme **之前**建好 —— ApplyTheme 会创建外观运行时，
+            //   而外观运行时需要拿到实时玻璃的帧来源代理。
+            //   代理用的是闭包而不是直接引用本对象：构造期间 _appearance 还不存在。
+            _liveGlass = new LiveGlassController(form, () => _appearance?.Options);
+
             ApplyTheme(_cfg.Skin);
+
+            // ★ 配置里的开关在启动时就生效（用户上次是开着的 ⇒ 这次直接开）。
+            //   默认值是 false，所以绝大多数用户不会走到这里。
+            if (_cfg.LiveGlassEnabled)
+            {
+                _liveGlass.SetEnabled(true);
+            }
         }
 
         public float GetCurrentDpiScale()
@@ -131,9 +149,15 @@ namespace LiteMonitor
             _appearanceDpiScale = dpiScale;
             _appearanceUserScale = userScale;
 
-            _appearance ??= new AppearanceRuntime();
+            // ★ A16：帧来源用**实时玻璃代理**。代理是终身唯一的中转对象，
+            //   开关只切换它背后的服务 —— 外观运行时不必重建，装饰/纹理缓存得以保留。
+            _appearance ??= new AppearanceRuntime(frameSource: _liveGlass?.FrameSource);
             // 换肤 → 主题代次自增，各层缓存按代次失效
             _appearance.OnThemeChanged(t, dpiScale, userScale, _form.ClientRectangle);
+
+            // ★ A16：主题代次变了 ⇒ 捕获请求里的主题代次要跟着更新，
+            //   否则后台会一直用旧代次的请求抓屏（帧会被当作代次不匹配丢弃）。
+            _liveGlass?.OnAppearanceChanged();
 
             // Web 端颜色快照：启动时与每次换肤各发布一次
             // （网页端刻意不推送、不轮询 —— 浏览器刷新后取到新配色）
@@ -182,10 +206,53 @@ namespace LiteMonitor
 
         public void SetDragging(bool dragging) => _dragging = dragging;
 
+        // ================================================================
+        // 实时玻璃（M2 / A16）—— 供主窗体事件与设置页调用
+        // ================================================================
+
+        /// <summary>实时玻璃是否已开启（配置值）。</summary>
+        public bool LiveGlassEnabled => _cfg.LiveGlassEnabled;
+
+        /// <summary>实时玻璃的**实际**状态说明（人类可读）—— 设置页展示用。</summary>
+        public string LiveGlassStatusText =>
+            _liveGlass?.StatusText ?? "实时玻璃未启用。";
+
+        /// <summary>
+        /// 打开 / 关闭实时玻璃。
+        /// <para>★ 配置与服务状态**必须同步**：配置说"开"而服务没起来时，
+        ///   状态说明会显示真实原因（合同 §7「降级不静默」、A16「配置和实际降级状态一致」）。</para>
+        /// </summary>
+        public void SetLiveGlassEnabled(bool enabled)
+        {
+            _cfg.LiveGlassEnabled = enabled;
+            _liveGlass?.SetEnabled(enabled);
+        }
+
+        /// <summary>窗口可见性变化（隐藏 / 最小化 ⇒ 暂停捕获）。</summary>
+        public void NotifyLiveGlassVisibility(bool visible) =>
+            _liveGlass?.OnVisibilityChanged(visible);
+
+        /// <summary>窗口句柄重建（句柄代次 +1）。</summary>
+        public void NotifyLiveGlassHandleChanged() => _liveGlass?.OnHandleChanged();
+
+        /// <summary>窗口尺寸变化（尺寸代次 +1）。</summary>
+        public void NotifyLiveGlassSizeChanged() => _liveGlass?.OnSizeChanged();
+
+        /// <summary>主题 / DPI 变化（主题代次随外观运行时自增）。</summary>
+        public void NotifyLiveGlassAppearanceChanged() => _liveGlass?.OnAppearanceChanged();
+
+        /// <summary>停止实时玻璃（窗口退出 / 句柄销毁时调用）。</summary>
+        public void StopLiveGlass() => _liveGlass?.SetEnabled(false);
+
         public void Render(Graphics g)
         {
             var t = ThemeManager.Current;
             _layout ??= new UILayout(t);
+
+            // ★ A16：绘制**开始前**完成帧的租约交接 ——
+            //   先释放**上一帧**的租约（那一帧已经画完了），再接管本帧的租约。
+            //   接管不到帧时背景层按降级链回退 ⇒ 首帧一定有底色，不会出现空洞。
+            _liveGlass?.BeginPaint();
 
             // === 横屏模式 ===
             if (_cfg.HorizontalMode)
@@ -762,6 +829,11 @@ namespace LiteMonitor
             // 背景帧与预览源是借用引用，AppearanceRuntime 不会释放它们。
             _appearance?.Dispose();
             _appearance = null;
+
+            // ★ A16：停掉后台捕获服务并释放租约（必须在外观运行时之后 ——
+            //   代理还指向服务，顺序反了会漏掉最后一次亲和性恢复）。
+            _liveGlass?.Dispose();
+            _liveGlass = null;
         }
     }
 }
