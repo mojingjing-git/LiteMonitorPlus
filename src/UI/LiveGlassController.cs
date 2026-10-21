@@ -1,11 +1,50 @@
 using System;
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices.Backdrop;
 
 namespace LiteMonitor
 {
+    /// <summary>
+    /// 实时玻璃诊断日志 —— 极简、只写不读、失败静默。
+    /// <para>
+    /// ★ 为什么需要它：玻璃"不生效"时，屏幕上**看不出任何异常**（背景层会静默降级，
+    ///   画出来只是一块浅色板）。没有日志就只能靠猜。本文件把服务的真实状态
+    ///   （状态 / 生效模式 / 降级原因 / 后端原因 / 已发布帧数）落盘，
+    ///   让"为什么没出帧"变成可复核的事实而不是推测。
+    /// </para>
+    /// <para>★ 日志写在 exe 同目录，文件名 <c>liveglass.log</c>；只在**状态变化**时写。</para>
+    /// </summary>
+    internal static class LiveGlassLog
+    {
+        private static readonly object Sync = new();
+        private static string? _path;
+
+        /// <summary>日志文件路径（exe 同目录）。</summary>
+        public static string LogPath =>
+            _path ??= Path.Combine(AppContext.BaseDirectory, "liveglass.log");
+
+        /// <summary>追加一行日志（任何失败都静默 —— 诊断设施不该影响主流程）。</summary>
+        public static void Write(string message)
+        {
+            try
+            {
+                lock (Sync)
+                {
+                    File.AppendAllText(
+                        LogPath,
+                        "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "] " + message + Environment.NewLine);
+                }
+            }
+            catch
+            {
+                // 日志失败不影响主流程
+            }
+        }
+    }
+
     /// <summary>
     /// 实时玻璃（M2）的主面板接线控制器 —— A16。
     /// <para>
@@ -49,6 +88,7 @@ namespace LiteMonitor
         private bool _suspended;
         private bool _disposed;
         private string _lastError = string.Empty;
+        private string _lastLoggedKey = string.Empty;
 
         internal LiveGlassController(Form form, Func<ThemeAppearanceOptions?> optionsProvider)
         {
@@ -93,6 +133,28 @@ namespace LiteMonitor
 
         /// <summary>首次启用时触发一次（由 UI 层负责弹副作用提示）。</summary>
         internal event Action? FirstEnabled;
+
+        /// <summary>
+        /// 最近的**降级原因**（可读中文）；没有降级时为空串。
+        /// <para>★ 主面板用它显示"玻璃为什么没生效"（合同 §7「降级不静默」）。</para>
+        /// </summary>
+        internal string LastDegradeReason
+        {
+            get
+            {
+                BackdropCaptureService? svc = _service;
+                if (svc is null) return string.Empty;
+
+                BackdropCaptureStatus st = svc.Status;
+                if (!string.IsNullOrEmpty(st.DegradeReasonText)) return st.DegradeReasonText!;
+                if (!string.IsNullOrEmpty(st.BackendUnavailableReason)) return st.BackendUnavailableReason!;
+                return string.Empty;
+            }
+        }
+
+        /// <summary>已发布到 UI 的帧数（诊断用；0 = 一帧都没出）。</summary>
+        internal long PublishedFrames =>
+            _service?.Metrics.FramesPublished ?? 0L;
 
         // ================================================================
         // 开关
@@ -143,22 +205,31 @@ namespace LiteMonitor
                 if (request is null)
                 {
                     _lastError = "实时玻璃已开启，等待窗口句柄就绪后开始捕获。";
+                    LiveGlassLog.Write("StartService：" + _lastError + "（稍后由 RefreshRequest 补启动）");
                     return;
                 }
 
                 _service.Start(request);
                 ApplySuspension();
+                LiveGlassLog.Write("StartService：已启动。句柄=" + request.WindowHandle
+                    + " 客户区(物理)=" + request.PhysicalClientBounds
+                    + " 主题代次=" + request.ThemeGeneration
+                    + " 句柄代次=" + request.HandleGeneration
+                    + " 尺寸代次=" + request.SizeGeneration
+                    + " Blur=" + request.BlurPx + " Fps=" + request.TargetFps);
             }
             catch (InvalidOperationException ex)
             {
                 // ★ 合同 §13.5：上一轮的后台任务还没退出 ⇒ 拒绝重启。
                 //   这是**预期内**的失败，不是致命错误；如实显示原因，让用户稍后重试。
                 _lastError = ex.Message;
+                LiveGlassLog.Write("StartService：被拒（上一轮任务尚未退出）：" + ex.Message);
                 StopService(keepEnabled: true);
             }
             catch (Exception ex)
             {
                 _lastError = "实时玻璃启动失败：" + ex.Message;
+                LiveGlassLog.Write("StartService：失败：" + ex);
                 StopService(keepEnabled: true);
             }
         }
@@ -234,8 +305,32 @@ namespace LiteMonitor
             BackdropServiceRequest? request = BuildRequest();
             if (request is null) return;
 
-            try { svc.UpdateRequest(request); }
-            catch (Exception) { /* 更新失败由服务自己的失败路径报告 */ }
+            try
+            {
+                // ★ 关键修正（A16 复核）：服务**可能还没启动过**。
+                //   构造期句柄/客户区未就绪时 StartService() 会跳过 Start，
+                //   而 UpdateRequest 只能更新**已启动**服务的请求 —— 它不会启动服务。
+                //   结果：服务永远不抓屏，玻璃永远不生效，且没有任何报错。
+                //   ⇒ 这里必须判断"是否已在运行"：没运行就 Start，运行了才 Update。
+                if (svc.IsRunning)
+                {
+                    svc.UpdateRequest(request);
+                }
+                else
+                {
+                    svc.Start(request);
+                    LiveGlassLog.Write("RefreshRequest：服务此前未运行，已在此启动（句柄/客户区此刻就绪）。");
+                }
+            }
+            catch (InvalidOperationException ex)
+            {
+                // ★ 合同 §13.5：上一轮的后台任务还没退出 ⇒ 拒绝重启。如实记录，不吞。
+                LiveGlassLog.Write("RefreshRequest：启动被拒（上一轮任务尚未退出）：" + ex.Message);
+            }
+            catch (Exception ex)
+            {
+                LiveGlassLog.Write("RefreshRequest：失败：" + ex.Message);
+            }
         }
 
         /// <summary>
@@ -294,6 +389,31 @@ namespace LiteMonitor
             {
                 _lease = lease;
             }
+
+            LogStatusIfChanged(svc);
+        }
+
+        /// <summary>把服务的真实状态落盘（**只在变化时**写，避免每帧刷屏）。</summary>
+        private void LogStatusIfChanged(BackdropCaptureService svc)
+        {
+            BackdropCaptureStatus st = svc.Status;
+            string key = st.State + "|" + st.EffectiveMode + "|" + (st.DegradeReasonText ?? "") + "|"
+                       + (st.BackendUnavailableReason ?? "") + "|" + (st.StateText ?? "")
+                       + "|" + svc.Metrics.FramesPublished;
+
+            if (key == _lastLoggedKey) return;
+            _lastLoggedKey = key;
+
+            LiveGlassLog.Write(
+                "状态=" + st.State
+                + " 生效模式=" + st.EffectiveMode
+                + " 后端就绪=" + st.BackendReady
+                + " 已发布帧=" + svc.Metrics.FramesPublished
+                + " 连续失败=" + st.ConsecutiveFailures
+                + " | 状态说明=" + st.StateText
+                + " | 降级原因=" + st.DegradeReasonText
+                + " | 后端原因=" + st.BackendUnavailableReason
+                + " | 最后失败=" + st.LastFailureReason);
         }
 
         // ================================================================
