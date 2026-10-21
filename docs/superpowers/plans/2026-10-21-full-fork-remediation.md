@@ -1,6 +1,6 @@
 # 分叉全量审查复审与修复计划（2026-10-21）
 
-状态：F1—F6 已实施并通过自动验收；下文保留原计划供对照，实际提交、测试及交付边界见[修复验收报告](../../reviews/2026-10-21-remediation-validation.md)。
+状态：F1—F6 已实施并通过自动验收，公开仓库 `mojingjing-git/LiteMonitorPlus` 已创建并推送；下文保留原计划供对照，实际提交、测试及交付边界见[修复验收报告](../../reviews/2026-10-21-remediation-validation.md)。
 
 复审提交：`d6946dddbe7b831da139ba96bcd3a3e1bc191c13`。原始分叉基线为 `169e90a2ccaa68ca29d0b549d10c6c59634c1b49`，全量范围及原始结果见[审查报告](../../reviews/2026-10-21-full-fork-review.md)和[证据目录](../../reviews/evidence/full-fork-20261021/README.md)。
 

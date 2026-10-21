@@ -279,7 +279,7 @@ pwsh -File scripts/make-icon.ps1
 | # | 阻塞项 | 影响 | 谁来解决 |
 |---|---|---|---|
 | 1 | **上游 LICENSE 文件仍缺失** | 上游仓库根目录没有 LICENSE 文件（GitHub API `"license": null`），其 MIT 授权意图仅见于 README | **只能由用户去提**：在 `github.com/Diorser/LiteMonitor/issues` 开 issue 或邮件 `tueur2010@gmail.com` 索取。当前 `NOTICE` 已如实写明「上游仓库根目录尚未提交 LICENSE 文件，授权意图以其 README 声明为准」 |
-| 2 | **自有仓库 `mojingjing-git/LiteMonitorPlus` 尚未创建** | `UpdateChecker` / 驱动源 / FPS 源 / 城市库的下载 URL 全部指向不存在的仓库 → **更新功能与驱动自动下载会失败** | **只能由用户创建仓库并推送**。好消息：发布包已自带 `driver.zip` / `LiteMonitorPlusFPS.exe` / `CityCode.json`，**驱动安装与 FPS 统计在仓库上线前就能离线工作** |
+| 2 | **已解除：自有仓库 `mojingjing-git/LiteMonitorPlus` 已创建** | 2026-10-21 已按用户授权创建公开 GitHub 仓库并推送源码、资源和修复后的更新器；默认分支为 `master`，匹配现有资源 URL | 交付验收见 `docs/reviews/2026-10-21-remediation-validation.md`；正式 Release 仍见下一项，Gitee 镜像未在本次创建 |
 | 3 | **自有发布源尚未就绪** | `https://github.com/mojingjing-git/LiteMonitorPlus/releases/download/v{0}/LiteMonitorPlus_v{0}-win-x64.zip` | 仓库建好后创建 Release，资产名用脚本输出的同名 |
 | 4 | 无官网 | `{{SITE}}` 为空，所有原「官网」位改为「上游项目」致谢链接 | 可选，后续有域名再加 |
 

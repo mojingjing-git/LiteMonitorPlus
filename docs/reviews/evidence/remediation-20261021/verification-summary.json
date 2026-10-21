@@ -63,5 +63,16 @@
     "Cross-monitor mixed-DPI visual acceptance not performed",
     "No live task-scheduler migration or physical disk fault test",
     "Release metadata signature and GitHub Release not published"
-  ]
+  ],
+  "Remote": {
+    "Repository": "mojingjing-git/LiteMonitorPlus",
+    "Url": "https://github.com/mojingjing-git/LiteMonitorPlus",
+    "Visibility": "PUBLIC",
+    "DefaultBranch": "master",
+    "Created": true,
+    "Pushed": true,
+    "VerifiedInitialPushCommit": "78325de4656196a9fd7dea240f5e0f5d04914a72",
+    "LocalAndGitHubHeadsMatched": true,
+    "OriginalRemotePreservedAs": "fork-source"
+  }
 }

@@ -50,6 +50,8 @@ F1—F6 均已修复，自动验收通过。原始发现和触发条件见[修�
 
 未执行真实桌面捕获、跨屏混合 DPI 视觉验收、真实系统任务迁移、物理磁盘故障或断电实验。更新恢复保证本进程捕获到的失败有恢复结果；进程突然结束后的整个多文件安装仍明确显示状态待确认。
 
-创建并上传源代码仓库使用文档确定的 `mojingjing-git/LiteMonitorPlus`。按项目开源定位使用公开可见性，默认分支保留 `master`，与现有原始资源 URL 一致。原 `origin` 将保留为 `fork-source`，上游 `upstream` 保持可用。
+已创建并上传公开仓库 [mojingjing-git/LiteMonitorPlus](https://github.com/mojingjing-git/LiteMonitorPlus)，默认分支为 `master`，与现有原始资源 URL 一致。首次上传的本地与 GitHub 提交均为 `78325de4656196a9fd7dea240f5e0f5d04914a72`，已核验一致；本次补记交付状态的提交随后同步推送。
+
+新仓库使用 `origin`；原 `origin` 已保留为 `fork-source`，上游 `upstream` 保持可用。主分支跟踪新仓库的 `origin/master`。
 
 本次不发布 GitHub Release、不生成发布签名；`resources/version.json` 的发布哈希和签名仍需在正式发布时填写。因此源码仓库上线不代表自动更新发布源已经就绪。
