@@ -39,7 +39,7 @@ namespace LiteMonitor.src.UI.Controls
             Label = new Label { 
                 Text = title, 
                 AutoSize = true, 
-                Font = new Font("Microsoft YaHei UI", 9F), 
+                Font = UIFonts.Regular(9F), 
                 ForeColor = UIColors.TextSub, // Slightly gray for descriptions/tips
                 TextAlign = ContentAlignment.MiddleLeft 
             };
@@ -73,7 +73,7 @@ namespace LiteMonitor.src.UI.Controls
             // Title
             var lblTitle = new Label {
                 Text = title, AutoSize = true, 
-                Font = new Font("Microsoft YaHei UI", 9F), ForeColor = UIColors.TextMain,
+                Font = UIFonts.Regular(9F), ForeColor = UIColors.TextMain,
                 TextAlign = ContentAlignment.MiddleLeft
             };
             this.Controls.Add(lblTitle);
@@ -89,7 +89,7 @@ namespace LiteMonitor.src.UI.Controls
             var inputWarn = new LiteNumberInput(range.Warn.ToString(), unit, LanguageManager.T("Menu.ValueWarnColor"), 140, UIColors.TextWarn);
             inputWarn.Padding = UIUtils.S(new Padding(0, 5, 0, 1));
             
-            var arrow = new Label { Text = ">", AutoSize = true, ForeColor = Color.LightGray, Font = new Font("Microsoft YaHei UI", 9F), Margin = UIUtils.S(new Padding(5, 4, 5, 0)) };
+            var arrow = new Label { Text = ">", AutoSize = true, ForeColor = Color.LightGray, Font = UIFonts.Regular(9F), Margin = UIUtils.S(new Padding(5, 4, 5, 0)) };
             
             var inputCrit = new LiteNumberInput(range.Crit.ToString(), unit, LanguageManager.T("Menu.ValueCritColor"), 140, UIColors.TextCrit);
             inputCrit.Padding = UIUtils.S(new Padding(0, 5, 0, 1));
@@ -99,13 +99,28 @@ namespace LiteMonitor.src.UI.Controls
             //   ① 抑制作用域内（程序化改控件）不回写；
             //   ② 解析失败时**不写**（ValueDouble 解析失败返回 0，
             //      粘贴进来的非法文本会把用户的阈值静默改成 0）。
+            // ★ 另：解析用**严格**的 NumberStyles（见 TryParseThreshold）——
+            //   粘贴能绕过 KeyPress，若用默认样式，"1e5" / "1,000" / " 8 "
+            //   这些界面上手打不出来的形式也会被写进配置。
             inputWarn.Inner.TextChanged += (s, e) => {
                 if (page.IsWriteBackSuppressed) return;
-                if (double.TryParse(inputWarn.Inner.Text, out double w)) range.Warn = w;
+                if (TryParseThreshold(inputWarn.Inner.Text, out double w)) range.Warn = w;
             };
             inputCrit.Inner.TextChanged += (s, e) => {
                 if (page.IsWriteBackSuppressed) return;
-                if (double.TryParse(inputCrit.Inner.Text, out double c)) range.Crit = c;
+                if (TryParseThreshold(inputCrit.Inner.Text, out double c)) range.Crit = c;
+            };
+
+            // ★ 粘进非法文本时，控件仍显示非法文本、配置却保持旧值 ——
+            //   显示与配置不一致且无提示。离场时把文本回填成配置里的旧值。
+            //   （回填用 "0.####" 格式：与界面其它数字同文化，但不带千分位 ⇒ 严格样式可解析。）
+            inputWarn.Inner.Leave += (s, e) => {
+                if (!TryParseThreshold(inputWarn.Inner.Text, out _))
+                    inputWarn.Inner.Text = range.Warn.ToString("0.####", System.Globalization.CultureInfo.CurrentCulture);
+            };
+            inputCrit.Inner.Leave += (s, e) => {
+                if (!TryParseThreshold(inputCrit.Inner.Text, out _))
+                    inputCrit.Inner.Text = range.Crit.ToString("0.####", System.Globalization.CultureInfo.CurrentCulture);
             };
 
             page.RegisterRefresh(() => {
@@ -133,6 +148,32 @@ namespace LiteMonitor.src.UI.Controls
                 using(var p = new Pen(Color.FromArgb(240, 240, 240))) e.Graphics.DrawLine(p, 0, Height-1, Width, Height-1);
             };
         }
+
+        /// <summary>
+        /// 解析阈值输入。
+        ///
+        /// ★ NumberStyles **严格限定**为「LiteNumberInput 的 KeyPress 放行的形式」：
+        ///   数字 / 前导负号 / 小数点。
+        ///   刻意**不**用 <c>NumberStyles.Float</c>（它含 AllowExponent ⇒ "1e5" 会被接受），
+        ///   也**不**用 AllowThousands（⇒ "1,000" 会被接受），也不放行首尾空白（⇒ " 8 " 会被接受）——
+        ///   这几种形式界面上**手打都打不出来**，却能靠**粘贴**写进配置。
+        /// ★ 拒绝 NaN / Infinity：<c>double.TryParse</c> 会接受 "NaN" / "Infinity"。
+        /// ★ 上下限钳制不在这里做：各阈值类型的合理范围由页面（ThresholdPage）掌握，
+        ///   在通用控件层猜一个范围只会误伤用户的合法配置。
+        /// </summary>
+        private static bool TryParseThreshold(string text, out double value)
+        {
+            const System.Globalization.NumberStyles styles =
+                System.Globalization.NumberStyles.AllowLeadingSign |
+                System.Globalization.NumberStyles.AllowDecimalPoint;
+
+            if (!double.TryParse(text, styles, System.Globalization.CultureInfo.CurrentCulture, out value))
+                return false;
+
+            if (!double.IsFinite(value)) return false;
+
+            return true;
+        }
     }
 
     public class LiteHintRow : Panel
@@ -148,7 +189,7 @@ namespace LiteMonitor.src.UI.Controls
                 Text = text, 
                 AutoSize = true, 
                 MaximumSize = new Size(UIUtils.S(500), 0), // Limit width to trigger wrap? Actual width set in Layout
-                Font = new Font("Microsoft YaHei UI", 8F), 
+                Font = UIFonts.Regular(8F), 
                 ForeColor = Color.Gray,
                 Dock = DockStyle.Fill
             };
@@ -184,6 +225,10 @@ namespace LiteMonitor.src.UI.Controls
         public static Font Regular(float size) => Get(size, FontStyle.Regular);
 
         public static Font Bold(float size) => Get(size, FontStyle.Bold);
+
+        public static Font Underline(float size) => Get(size, FontStyle.Underline);
+
+        public static Font BoldUnderline(float size) => Get(size, FontStyle.Bold | FontStyle.Underline);
 
         private static Font Get(float size, FontStyle style)
         {
@@ -297,7 +342,7 @@ namespace LiteMonitor.src.UI.Controls
             this.Margin = UIUtils.S(new Padding(0, 2, 40, 2)); 
             Label = new Label { 
                 Text = text, AutoSize = true, 
-                Font = new Font("Microsoft YaHei UI", 9F), ForeColor = UIColors.TextMain,
+                Font = UIFonts.Regular(9F), ForeColor = UIColors.TextMain,
                 TextAlign = ContentAlignment.MiddleLeft 
             };
             // ★★★ 修改：Height 缩放
@@ -363,7 +408,7 @@ namespace LiteMonitor.src.UI.Controls
                 BorderStyle = BorderStyle.None,
                 Dock = DockStyle.Fill,
                 BackColor = Color.White,
-                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Regular),
+                Font = UIFonts.Regular(9F),
                 ForeColor = fontColor ?? UIColors.TextSub,
                 TextAlign = align 
             };
@@ -376,7 +421,7 @@ namespace LiteMonitor.src.UI.Controls
                     Text = unit,
                     AutoSize = true, 
                     Dock = DockStyle.Right,
-                    Font = new Font("Microsoft YaHei UI", 8F), 
+                    Font = UIFonts.Regular(8F), 
                     ForeColor = Color.Gray, 
                     TextAlign = ContentAlignment.BottomRight, 
                     Padding = new Padding(0, 0, 0, 4) 
@@ -392,7 +437,7 @@ namespace LiteMonitor.src.UI.Controls
                     Text = labelPrefix, 
                     AutoSize = true, 
                     Dock = DockStyle.Left,
-                    Font = new Font("Microsoft YaHei UI", 9F), 
+                    Font = UIFonts.Regular(9F), 
                     ForeColor = fontColor ?? UIColors.TextSub,
                     TextAlign = ContentAlignment.BottomLeft, 
                     Padding = new Padding(0, 0, 4, 3) 
@@ -505,7 +550,7 @@ namespace LiteMonitor.src.UI.Controls
     }
 
     // 其他原有组件
-    public class LiteNote : Panel { public LiteNote(string text, int indent = 0) { this.Dock = DockStyle.Top; this.Height = UIUtils.S(32); this.Margin = new Padding(0); var lbl = new Label { Text = text, AutoSize = true, Font = new Font("Microsoft YaHei UI", 8F), ForeColor = Color.Gray, Location = new Point(UIUtils.S(indent), UIUtils.S(10)) }; this.Controls.Add(lbl); } }
+    public class LiteNote : Panel { public LiteNote(string text, int indent = 0) { this.Dock = DockStyle.Top; this.Height = UIUtils.S(32); this.Margin = new Padding(0); var lbl = new Label { Text = text, AutoSize = true, Font = UIFonts.Regular(8F), ForeColor = Color.Gray, Location = new Point(UIUtils.S(indent), UIUtils.S(10)) }; this.Controls.Add(lbl); } }
     public class LiteComboItem 
     { 
         public string Text { get; set; } 
@@ -538,7 +583,7 @@ namespace LiteMonitor.src.UI.Controls
                 DropDownStyle = ComboBoxStyle.DropDownList, 
                 FlatStyle = FlatStyle.Flat, 
                 ForeColor = UIColors.TextSub, 
-                Font = new Font("Microsoft YaHei UI", 9F), 
+                Font = UIFonts.Regular(9F), 
                 // ★★★ 核心修复：移除 Dock.Fill，改为 None，以便我们可以手动居中它
                 Dock = DockStyle.None, 
                 BackColor = Color.White, 
@@ -610,7 +655,7 @@ namespace LiteMonitor.src.UI.Controls
             this.AutoSize = true;
             this.Cursor = Cursors.Hand;
             this.ForeColor = _normalColor;
-            this.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Underline);
+            this.Font = UIFonts.Underline(9F);
             
             if (onClick != null)
                 this.Click += (s, e) => { if (this.Enabled) onClick(); };
@@ -643,7 +688,7 @@ namespace LiteMonitor.src.UI.Controls
     // =======================================================================
 
 
-    public class LiteCheck : CheckBox { public LiteCheck(bool val, string text = "") { Checked = val; AutoSize = true; Cursor = Cursors.Hand; Text = text; Padding = UIUtils.S(new Padding(2)); ForeColor = UIColors.TextSub; Font = new Font("Microsoft YaHei UI", 9F); } }
+    public class LiteCheck : CheckBox { public LiteCheck(bool val, string text = "") { Checked = val; AutoSize = true; Cursor = Cursors.Hand; Text = text; Padding = UIUtils.S(new Padding(2)); ForeColor = UIColors.TextSub; Font = UIFonts.Regular(9F); } }
     
     public class LiteButton : Button 
     { 
@@ -656,7 +701,7 @@ namespace LiteMonitor.src.UI.Controls
             Size = new Size(UIUtils.S(80), UIUtils.S(32)); 
             FlatStyle = FlatStyle.Flat; 
             Cursor = Cursors.Hand; 
-            Font = new Font("Microsoft YaHei UI", 9F); 
+            Font = UIFonts.Regular(9F); 
             
             if (p) 
             { 
@@ -690,8 +735,8 @@ namespace LiteMonitor.src.UI.Controls
             }
         }
     }
-    public class LiteNavBtn : Button { private bool _isActive; public bool IsActive { get => _isActive; set { _isActive = value; Invalidate(); } } public LiteNavBtn(string text) { Text = "  " + text; Size = new Size(UIUtils.S(150), UIUtils.S(40)); FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; TextAlign = ContentAlignment.MiddleLeft; Font = new Font("Microsoft YaHei UI", 10F); Cursor = Cursors.Hand; Margin = UIUtils.S(new Padding(5, 2, 5, 2)); BackColor = UIColors.SidebarBg; ForeColor = UIColors.TextMain; } protected override void OnPaint(PaintEventArgs e) { Color bg = _isActive ? UIColors.NavSelected : (ClientRectangle.Contains(PointToClient(Cursor.Position)) ? UIColors.NavHover : UIColors.SidebarBg); using (var b = new SolidBrush(bg)) e.Graphics.FillRectangle(b, ClientRectangle); if (_isActive) { using (var b = new SolidBrush(UIColors.Primary)) e.Graphics.FillRectangle(b, 0, UIUtils.S(8), UIUtils.S(3), Height - UIUtils.S(16)); Font = new Font(Font, FontStyle.Bold); } else { Font = new Font(Font, FontStyle.Regular); } TextRenderer.DrawText(e.Graphics, Text, Font, new Point(UIUtils.S(12), UIUtils.S(9)), UIColors.TextMain); } protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Invalidate(); } protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); Invalidate(); } }
-    public class LiteSortBtn : Button { public LiteSortBtn(string txt) { Text = txt; Size = new Size(UIUtils.S(24), UIUtils.S(24)); FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; BackColor = Color.FromArgb(245, 245, 245); ForeColor = Color.DimGray; Cursor = Cursors.Hand; Font = new Font("Microsoft YaHei UI", 7F, FontStyle.Bold); Margin = new Padding(0); } }
+    public class LiteNavBtn : Button { private bool _isActive; public bool IsActive { get => _isActive; set { _isActive = value; Invalidate(); } } public LiteNavBtn(string text) { Text = "  " + text; Size = new Size(UIUtils.S(150), UIUtils.S(40)); FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; TextAlign = ContentAlignment.MiddleLeft; Font = UIFonts.Regular(10F); Cursor = Cursors.Hand; Margin = UIUtils.S(new Padding(5, 2, 5, 2)); BackColor = UIColors.SidebarBg; ForeColor = UIColors.TextMain; } protected override void OnPaint(PaintEventArgs e) { Color bg = _isActive ? UIColors.NavSelected : (ClientRectangle.Contains(PointToClient(Cursor.Position)) ? UIColors.NavHover : UIColors.SidebarBg); using (var b = new SolidBrush(bg)) e.Graphics.FillRectangle(b, ClientRectangle); if (_isActive) { using (var b = new SolidBrush(UIColors.Primary)) e.Graphics.FillRectangle(b, 0, UIUtils.S(8), UIUtils.S(3), Height - UIUtils.S(16)); } Font = _isActive ? UIFonts.Bold(10F) : UIFonts.Regular(10F); TextRenderer.DrawText(e.Graphics, Text, Font, new Point(UIUtils.S(12), UIUtils.S(9)), UIColors.TextMain); } protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Invalidate(); } protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); Invalidate(); } }
+    public class LiteSortBtn : Button { public LiteSortBtn(string txt) { Text = txt; Size = new Size(UIUtils.S(24), UIUtils.S(24)); FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; BackColor = Color.FromArgb(245, 245, 245); ForeColor = Color.DimGray; Cursor = Cursors.Hand; Font = UIFonts.Bold(7F); Margin = new Padding(0); } }
     
     // ★★★ New: Header Button (Variable Width) ★★★
     public class LiteHeaderBtn : Button 
@@ -704,7 +749,7 @@ namespace LiteMonitor.src.UI.Controls
             BackColor = Color.FromArgb(225, 225, 225); 
             ForeColor = Color.DimGray; 
             Cursor = Cursors.Hand; 
-            Font = new Font("Microsoft YaHei UI", 8F, FontStyle.Bold); 
+            Font = UIFonts.Bold(8F); 
             Margin = new Padding(0);
             
             // Auto Width
