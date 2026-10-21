@@ -53,10 +53,10 @@ namespace LiteMonitor
     /// <item>按用户开关创建 / 销毁 <see cref="BackdropCaptureService"/>（**唯一**的后台捕获循环）。
     ///   引擎 <see cref="ScreenCaptureFrameSource"/> 只作为**单次抓屏原语**使用
     ///   （合同 §13.2 第 3 条、§13.5：绝不出现两个捕获循环并存）。</item>
-    /// <item>把窗口的可见性 / 句柄 / 尺寸 / 主题变化翻译成服务的
+    /// <item>把窗口的可见性 / 句柄 / 位置 / 尺寸 / 主题变化翻译成服务的
     ///   <c>SetSuspended</c> / <c>UpdateRequest</c>（合同 §3.4 第 4~5 条）。</item>
-    /// <item>在每帧绘制**开始前**完成帧的租约交接：先释放上一帧的租约，再接管本帧的租约
-    ///   （A15 验收 §9 第 4 条：释放的是**上一个**租约，不是当前这一帧）。</item>
+    /// <item>在每帧绘制**开始前**完成帧的租约交接：有新帧时先接管，再释放被替换的旧帧；
+    ///   没有新帧时继续持有当前有效租约。</item>
     /// <item>把服务的**实际**降级状态暴露给 UI（合同 §7「降级不静默」）。</item>
     /// </list>
     /// </para>
@@ -75,12 +75,13 @@ namespace LiteMonitor
 
         private readonly Form _form;
         private readonly Func<ThemeAppearanceOptions?> _optionsProvider;
+        private readonly Func<BackdropCaptureService>? _serviceFactory;
         private readonly LiveGlassFrameSourceProxy _frameSource = new LiveGlassFrameSourceProxy();
 
         private ScreenCaptureFrameSource? _engine;
         private BackdropCaptureService? _service;
 
-        /// <summary>本帧正在使用的租约（下一帧开始时释放）。</summary>
+        /// <summary>当前绘制租约；只在换成新帧、失效、暂停或停止时释放。</summary>
         private BackdropFrameLease? _lease;
 
         private long _handleGeneration = 1;
@@ -89,11 +90,21 @@ namespace LiteMonitor
         private bool _disposed;
         private string _lastError = string.Empty;
         private string _lastLoggedKey = string.Empty;
+        private BackdropServiceRequest? _lastRequest;
 
         internal LiveGlassController(Form form, Func<ThemeAppearanceOptions?> optionsProvider)
+            : this(form, optionsProvider, null)
+        {
+        }
+
+        internal LiveGlassController(
+            Form form,
+            Func<ThemeAppearanceOptions?> optionsProvider,
+            Func<BackdropCaptureService>? serviceFactory)
         {
             _form = form ?? throw new ArgumentNullException(nameof(form));
             _optionsProvider = optionsProvider ?? throw new ArgumentNullException(nameof(optionsProvider));
+            _serviceFactory = serviceFactory;
         }
 
         /// <summary>给外观运行时使用的帧来源代理（终身唯一，不随开关重建）。</summary>
@@ -156,6 +167,12 @@ namespace LiteMonitor
         internal long PublishedFrames =>
             _service?.Metrics.FramesPublished ?? 0L;
 
+        internal BackdropServiceRequest? CurrentRequest => _lastRequest;
+
+        internal BackdropFrameLease? CurrentFrameLease => _lease;
+
+        internal BackdropCaptureService? CaptureService => _service;
+
         // ================================================================
         // 开关
         // ================================================================
@@ -191,12 +208,21 @@ namespace LiteMonitor
 
             try
             {
-                // ★ 引擎只作单次抓屏原语：**绝不**调用它的 Start()
-                //   （那会启动引擎自带的捕获循环 ⇒ 两个循环并存 ⇒ 击穿 CPU 预算）。
-                _engine = new ScreenCaptureFrameSource();
-                IBackdropCaptureBackend backend = new ScreenCaptureBackendAdapter(_engine);
-                IBackdropFrameProcessor? processor = new BackdropBlurProcessorAdapter();
-                _service = new BackdropCaptureService(backend, processor);
+                if (_serviceFactory is null)
+                {
+                    // 引擎只作单次抓屏原语：绝不调用它的 Start()
+                    // （那会启动引擎自带的捕获循环 ⇒ 两个循环并存 ⇒ 击穿 CPU 预算）。
+                    _engine = new ScreenCaptureFrameSource();
+                    IBackdropCaptureBackend backend = new ScreenCaptureBackendAdapter(_engine);
+                    IBackdropFrameProcessor? processor = new BackdropBlurProcessorAdapter();
+                    _service = new BackdropCaptureService(backend, processor);
+                }
+                else
+                {
+                    _service = _serviceFactory()
+                        ?? throw new InvalidOperationException("注入的实时玻璃捕获服务工厂返回了 null。");
+                }
+
                 _frameSource.Attach(_service);
 
                 // 首帧请求：窗口句柄 / 客户区 / 主题快照此时可能还没就绪，
@@ -243,12 +269,8 @@ namespace LiteMonitor
             _engine = null;
             _frameSource.Detach();
 
-            // 租约必须先释放（位图归租约所有）
-            if (_lease is not null)
-            {
-                svc?.ReleaseFrame(_lease);
-                _lease = null;
-            }
+            ReleaseHeldFrame();
+            _lastRequest = null;
 
             try { svc?.Stop(StopTimeout); } catch { /* 停止失败不阻断关闭流程 */ }
             try { svc?.Dispose(); } catch { /* 同上 */ }
@@ -264,9 +286,9 @@ namespace LiteMonitor
         /// <summary>窗口可见性变化：隐藏 / 最小化 ⇒ 暂停捕获（合同 §5.1）。</summary>
         internal void OnVisibilityChanged(bool visible)
         {
-            if (_service is null) return;
             _suspended = !visible;
             ApplySuspension();
+            ReleaseHeldFrame();
         }
 
         /// <summary>窗口句柄重建：句柄代次 +1 并更新请求。</summary>
@@ -274,6 +296,7 @@ namespace LiteMonitor
         {
             _handleGeneration++;
             RefreshRequest();
+            ReleaseHeldFrame();
         }
 
         /// <summary>窗口尺寸变化：尺寸代次 +1 并更新请求。</summary>
@@ -281,12 +304,22 @@ namespace LiteMonitor
         {
             _sizeGeneration++;
             RefreshRequest();
+            ReleaseHeldFrame();
+        }
+
+        /// <summary>窗口位置变化：推进客户区几何代次并刷新物理屏幕矩形。</summary>
+        internal void OnLocationChanged()
+        {
+            _sizeGeneration++;
+            RefreshRequest();
+            ReleaseHeldFrame();
         }
 
         /// <summary>主题 / DPI 变化：主题代次由外观运行时自增，这里同步请求。</summary>
         internal void OnAppearanceChanged()
         {
             RefreshRequest();
+            ReleaseHeldFrame();
         }
 
         private void ApplySuspension()
@@ -295,6 +328,13 @@ namespace LiteMonitor
             if (svc is null) return;
             try { svc.SetSuspended(_suspended); }
             catch { /* 暂停失败不影响绘制 */ }
+        }
+
+        private void ReleaseHeldFrame()
+        {
+            BackdropFrameLease? lease = _lease;
+            _lease = null;
+            lease?.Dispose();
         }
 
         private void RefreshRequest()
@@ -349,12 +389,13 @@ namespace LiteMonitor
             if (!ScreenCaptureFrameSource.TryGetClientScreenBounds(handle, out Rectangle bounds)) return null;
             if (bounds.Width <= 0 || bounds.Height <= 0) return null;
 
-            return BackdropServiceRequest.FromOptions(
+            _lastRequest = BackdropServiceRequest.FromOptions(
                 options,
                 handle,
                 bounds,
                 _handleGeneration,
                 _sizeGeneration);
+            return _lastRequest;
         }
 
         // ================================================================
@@ -364,10 +405,8 @@ namespace LiteMonitor
         /// <summary>
         /// 绘制**开始前**调用：完成本帧的租约交接。
         /// <para>
-        /// ★ 顺序不可颠倒：先释放**上一帧**的租约（那一帧已经画完了），
-        ///   再接管本帧的租约。接管失败时服务没有 active 租约 ⇒
-        ///   <c>TryGetFrame</c> 返回 false ⇒ 背景层按降级链回退
-        ///   ⇒ **首帧一定有底色**，不会出现空洞或黑屏。
+        /// ★ 优先接管新帧，成功后才释放被替换的旧租约；没有新帧时保留当前有效租约。
+        ///   因此同一次绘制内的多次调用不会把帧释放到脚下。
         /// </para>
         /// </summary>
         internal void BeginPaint()
@@ -375,19 +414,20 @@ namespace LiteMonitor
             BackdropCaptureService? svc = _service;
             if (svc is null)
             {
-                if (_lease is not null) { _lease.Dispose(); _lease = null; }
+                ReleaseHeldFrame();
                 return;
             }
 
-            if (_lease is not null)
+            BackdropFrameLease? nextLease = null;
+            if (svc.TryAcquireFrame(out nextLease) && nextLease is not null)
             {
-                svc.ReleaseFrame(_lease);
-                _lease = null;
+                BackdropFrameLease? previousLease = _lease;
+                _lease = nextLease;
+                previousLease?.Dispose();
             }
-
-            if (svc.TryAcquireFrame(out BackdropFrameLease? lease) && lease is not null)
+            else if (_lease is { IsValid: false })
             {
-                _lease = lease;
+                ReleaseHeldFrame();
             }
 
             LogStatusIfChanged(svc);

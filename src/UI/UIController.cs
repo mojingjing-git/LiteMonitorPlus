@@ -238,6 +238,9 @@ namespace LiteMonitor
         /// <summary>窗口尺寸变化（尺寸代次 +1）。</summary>
         public void NotifyLiveGlassSizeChanged() => _liveGlass?.OnSizeChanged();
 
+        /// <summary>窗口位置变化（客户区几何代次 +1）。</summary>
+        public void NotifyLiveGlassLocationChanged() => _liveGlass?.OnLocationChanged();
+
         /// <summary>主题 / DPI 变化（主题代次随外观运行时自增）。</summary>
         public void NotifyLiveGlassAppearanceChanged() => _liveGlass?.OnAppearanceChanged();
 
@@ -250,8 +253,8 @@ namespace LiteMonitor
             _layout ??= new UILayout(t);
 
             // ★ A16：绘制**开始前**完成帧的租约交接 ——
-            //   先释放**上一帧**的租约（那一帧已经画完了），再接管本帧的租约。
-            //   接管不到帧时背景层按降级链回退 ⇒ 首帧一定有底色，不会出现空洞。
+            //   优先接管新帧，成功后才释放被替换的旧租约；没有新帧时保留当前有效租约。
+            //   因此同一绘制周期内的重复调用不会释放正在使用的帧。
             _liveGlass?.BeginPaint();
 
             // === 横屏模式 ===

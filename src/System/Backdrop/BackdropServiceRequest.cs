@@ -143,7 +143,8 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             if (other is null) return false;
             return ThemeGeneration == other.ThemeGeneration
                 && HandleGeneration == other.HandleGeneration
-                && SizeGeneration == other.SizeGeneration;
+                && SizeGeneration == other.SizeGeneration
+                && PhysicalClientBounds == other.PhysicalClientBounds;
         }
 
         /// <summary>
