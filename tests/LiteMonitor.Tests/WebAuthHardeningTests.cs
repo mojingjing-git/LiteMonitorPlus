@@ -295,6 +295,136 @@ namespace LiteMonitor.Tests
         }
 
         // ================================================================
+        // 参数污染 —— 重复的 pwd
+        // ================================================================
+
+        /// <summary>
+        /// 同一请求行里出现两次 <c>pwd</c> 时必须拒绝 —— **即使两个值都正确**。
+        /// </summary>
+        /// <remarks>
+        /// ★ 原先 <c>PwdQueryRegex.Match</c> 只取第一个命中，第二个被静默忽略。
+        ///   参数污染的风险不在"多写一个参数"，而在于校验环节与使用环节若取了不同的那一个，
+        ///   就会变成"用一个口令过校验、用另一个口令干活"。正确做法是拒绝歧义本身。
+        /// ★ 用例里同时断言"单个 pwd 仍然通过"：否则 401 可能来自别的原因，测不出真实行为。
+        /// </remarks>
+        [Fact]
+        public async Task 重复的pwd参数被拒绝()
+        {
+            _cfg.WebServerPassword = "dup-pwd";
+
+            await WithServerAsync(async (port, _) =>
+            {
+                string single = await SendHttpAsync(port, "/api/snapshot?pwd=dup-pwd");
+                Assert.Contains("200", FirstLine(single));
+
+                string duplicated = await SendHttpAsync(port, "/api/snapshot?pwd=dup-pwd&pwd=dup-pwd");
+                Assert.Contains("401", FirstLine(duplicated));
+
+                // 干扰形态：第二个才是对的
+                string mixed = await SendHttpAsync(port, "/api/snapshot?pwd=wrong&pwd=dup-pwd");
+                Assert.Contains("401", FirstLine(mixed));
+            });
+        }
+
+        // ================================================================
+        // WebSocket 握手 —— Sec-WebSocket-Key 的严格解析
+        // ================================================================
+
+        /// <summary>RFC 6455 §1.3 的示例值：解码后正好 16 字节，对应的 Accept 是公开可验证的常量。</summary>
+        private const string RfcWsKey = "dGhlIHNhbXBsZSBub25jZQ==";
+        private const string RfcWsAccept = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
+
+        /// <summary>
+        /// 合法握手必须照常成功，且 Accept 与 RFC 示例一致 —— 这是"没把功能改坏"的护栏。
+        /// </summary>
+        [Fact]
+        public async Task 合法WebSocket握手返回101且Accept正确()
+        {
+            _cfg.WebServerPassword = "";
+
+            await WithServerAsync(async (port, _) =>
+            {
+                string resp = await SendRawAsync(port,
+                    WsHandshake(port, "Sec-WebSocket-Key: " + RfcWsKey + "\r\n"));
+
+                Assert.Contains("101", FirstLine(resp));
+                Assert.Contains(RfcWsAccept, resp);
+            });
+        }
+
+        /// <summary>
+        /// 头名大小写不敏感：HTTP 规定头名按不区分大小写匹配，小写形态同样是合法请求。
+        /// </summary>
+        [Fact]
+        public async Task WebSocketKey头名大小写不敏感()
+        {
+            _cfg.WebServerPassword = "";
+
+            await WithServerAsync(async (port, _) =>
+            {
+                string resp = await SendRawAsync(port,
+                    WsHandshake(port, "sec-websocket-key: " + RfcWsKey + "\r\n"));
+
+                Assert.Contains("101", FirstLine(resp));
+                Assert.Contains(RfcWsAccept, resp);
+            });
+        }
+
+        /// <summary>
+        /// 重复的 <c>Sec-WebSocket-Key</c> 必须拒绝：取第一个还是最后一个决定 Accept 基于谁计算，
+        /// 属于解析歧义，不猜。
+        /// </summary>
+        [Fact]
+        public async Task 重复的SecWebSocketKey被拒绝()
+        {
+            _cfg.WebServerPassword = "";
+
+            await WithServerAsync(async (port, _) =>
+            {
+                string resp = await SendRawAsync(port,
+                    WsHandshake(port,
+                        "Sec-WebSocket-Key: " + RfcWsKey + "\r\n" +
+                        "Sec-WebSocket-Key: " + RfcWsKey + "\r\n"));
+
+                Assert.DoesNotContain("101", resp);
+            });
+        }
+
+        /// <summary>
+        /// 取值不是「16 字节 Base64」时必须拒绝：回 101 只会把错误推迟到帧解析阶段，
+        /// 还会让它占用一个已登记的有效连接名额。
+        /// </summary>
+        [Theory]
+        [InlineData("")]                                   // 头存在但值为空
+        [InlineData("not-base64-at-all!!")]                 // 不是 Base64
+        [InlineData("AAAA")]                               // 合法 Base64，但只有 3 字节
+        public async Task 非法SecWebSocketKey被拒绝(string value)
+        {
+            _cfg.WebServerPassword = "";
+
+            await WithServerAsync(async (port, _) =>
+            {
+                string resp = await SendRawAsync(port,
+                    WsHandshake(port, "Sec-WebSocket-Key: " + value + "\r\n"));
+
+                Assert.DoesNotContain("101", resp);
+            });
+        }
+
+        /// <summary>头缺失时必须拒绝，而不是算出一个基于空串的 Accept。</summary>
+        [Fact]
+        public async Task 缺失SecWebSocketKey被拒绝()
+        {
+            _cfg.WebServerPassword = "";
+
+            await WithServerAsync(async (port, _) =>
+            {
+                string resp = await SendRawAsync(port, WsHandshake(port, ""));
+                Assert.DoesNotContain("101", resp);
+            });
+        }
+
+        // ================================================================
         // 宿主 / helper
         // ================================================================
 
@@ -455,6 +585,53 @@ namespace LiteMonitor.Tests
             var setter = prop.GetSetMethod(nonPublic: true);
             Assert.True(setter != null, "HeaderReadTimeout 必须可写");
             setter.Invoke(manager, new object[] { timeout });
+        }
+
+        /// <summary>
+        /// 发一段原始请求，读到「响应头结束（空行）」、对端关闭或超时为止。
+        /// </summary>
+        /// <remarks>
+        /// ★ 不能直接复用 <see cref="SendHttpAsync"/>：成功握手后服务端会进入帧循环、
+        ///   连接保持打开，读到连接关闭为止会一直等到超时。这里见空行就收手。
+        /// </remarks>
+        private static async Task<string> SendRawAsync(int port, string raw)
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, port);
+            using var stream = client.GetStream();
+
+            byte[] req = Encoding.ASCII.GetBytes(raw);
+            await stream.WriteAsync(req, 0, req.Length);
+            await stream.FlushAsync();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var sb = new StringBuilder();
+            var buf = new byte[4096];
+            try
+            {
+                while (true)
+                {
+                    int n = await stream.ReadAsync(buf, 0, buf.Length, cts.Token);
+                    if (n == 0) break;
+                    sb.Append(Encoding.ASCII.GetString(buf, 0, n));
+                    if (sb.ToString().Contains("\r\n\r\n")) break;   // 响应头已完整
+                }
+            }
+            catch (IOException) { /* 对端关闭 */ }
+            catch (OperationCanceledException) { /* 超时：把已收到的内容交回去 */ }
+
+            return sb.ToString();
+        }
+
+        /// <summary>拼一段 WebSocket 升级请求；<paramref name="keyHeader"/> 允许为空或写多行。</summary>
+        private static string WsHandshake(int port, string keyHeader)
+        {
+            return "GET / HTTP/1.1\r\n" +
+                   $"Host: 127.0.0.1:{port}\r\n" +
+                   "Upgrade: websocket\r\n" +
+                   "Connection: Upgrade\r\n" +
+                   keyHeader +
+                   "\r\n";
         }
 
         /// <summary>复位静态 <c>LiteWebServer.Instance</c>，避免把已 Dispose 的实例留给后续用例。</summary>

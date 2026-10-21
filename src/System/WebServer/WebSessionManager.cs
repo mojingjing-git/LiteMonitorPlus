@@ -836,6 +836,13 @@ namespace LiteMonitor.src.WebServer
             var match = PwdQueryRegex.Match(firstLine);
             if (!match.Success) return false;
 
+            // ★ 同一请求行里出现多个 pwd 参数时一律拒绝，不猜"取第一个还是最后一个"。
+            //   这是参数污染（parameter pollution）的经典形态：只要校验环节与使用环节
+            //   取了不同的那一个，就会出现"用一个口令通过校验、用另一个口令干活"。
+            //   正常客户端不会发重复参数（前端是单个 encodeURIComponent 拼接），
+            //   而合法口令里的 & 必然被编码成 %26，不会自己拼出第二个 [?&]pwd=。
+            if (match.NextMatch().Success) return false;
+
             string supplied;
             try
             {
@@ -1217,15 +1224,16 @@ namespace LiteMonitor.src.WebServer
                     return false;
                 }
 
-                // 1. 提取 Sec-WebSocket-Key
-                var match = Regex.Match(request, "Sec-WebSocket-Key: (.*)");
-                if (!match.Success) return false;
-
-                string key = match.Groups[1].Value.Trim();
+                // 1. 提取 Sec-WebSocket-Key 并做 RFC 6455 形态校验
+                if (!TryGetWebSocketKey(request, out string key)) return false;
 
                 // 2. 生成 Accept Key (Magic String: 258EAFA5-E914-47DA-95CA-C5AB0DC85B11)
                 string magic = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-                byte[] hash = SHA1.Create().ComputeHash(Encoding.UTF8.GetBytes(magic));
+                byte[] hash;
+                using (var sha1 = SHA1.Create())
+                {
+                    hash = sha1.ComputeHash(Encoding.UTF8.GetBytes(magic));
+                }
                 string acceptKey = Convert.ToBase64String(hash);
 
                 // 3. 发送握手响应
@@ -1241,6 +1249,95 @@ namespace LiteMonitor.src.WebServer
                 return true;
             }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// 从请求头块里取出 <c>Sec-WebSocket-Key</c>，并做 RFC 6455 要求的形态校验。
+        /// </summary>
+        /// <returns>头缺失、重复、或取值不是「16 字节随机数的 Base64」时返回 <c>false</c>。</returns>
+        /// <remarks>
+        /// ★ 原先是一句 <c>Regex.Match(request, "Sec-WebSocket-Key: (.*)")</c>，四点都不对：
+        ///   <list type="number">
+        ///   <item>
+        ///   <b>头名大小写不敏感。</b>固定写法会漏掉 <c>sec-websocket-key:</c>，那是合法请求。
+        ///   </item>
+        ///   <item>
+        ///   <b>正则在整段请求里找第一次出现。</b>它同样会命中别的头的**值**里恰好拼出的字样，
+        ///   取到的根本不是头。
+        ///   </item>
+        ///   <item>
+        ///   <b>重复键无从发现。</b>同一头出现两次时，取第一个还是最后一个决定了 Accept 基于谁计算，
+        ///   这是与请求走私同型的解析歧义 —— 直接拒绝，不猜。
+        ///   </item>
+        ///   <item>
+        ///   <b>不校验取值形态。</b>RFC 6455 规定它是 16 字节随机数的 Base64；
+        ///   形态不对说明对面不是 WebSocket 客户端，此时回 101 只是把错误推迟到帧解析阶段，
+        ///   还会让它占用一个已登记的有效连接名额。
+        ///   </item>
+        ///   </list>
+        /// </remarks>
+        private static bool TryGetWebSocketKey(string request, out string key)
+        {
+            key = "";
+            bool found = false;
+
+            // 只扫请求行 + 头行，遇空行即止（真正的头块边界，比"扫全文"严格）
+            int lineStart = 0;
+            bool isRequestLine = true;
+            while (lineStart < request.Length)
+            {
+                int lineEnd = request.IndexOf('\n', lineStart);
+                if (lineEnd < 0) lineEnd = request.Length;
+
+                string line = request.Substring(lineStart, lineEnd - lineStart).TrimEnd('\r');
+
+                if (isRequestLine)
+                {
+                    isRequestLine = false;      // 请求行没有头名，跳过
+                }
+                else if (line.Length == 0)
+                {
+                    break;                      // 空行 = 头块结束
+                }
+                else
+                {
+                    int colon = line.IndexOf(':');
+                    if (colon > 0)
+                    {
+                        string name = line.Substring(0, colon).Trim();
+                        if (string.Equals(name, "Sec-WebSocket-Key", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (found) return false;        // 重复键：拒绝
+
+                            string value = line.Substring(colon + 1).Trim();
+                            if (!IsWebSocketKeyShapeValid(value)) return false;
+
+                            key = value;
+                            found = true;
+                        }
+                    }
+                }
+
+                lineStart = lineEnd + 1;
+            }
+
+            return found;
+        }
+
+        /// <summary>
+        /// 校验 <c>Sec-WebSocket-Key</c> 取值是否为「16 字节的 Base64」。
+        /// </summary>
+        /// <remarks>
+        /// 16 字节的 Base64 定长 24 字符（末尾带 <c>=</c>），这里不必按长度预筛：
+        /// <see cref="Convert.TryFromBase64String(string, Span{byte}, out int)"/> 已在不合法时返回 false，
+        /// 再用解码后字节数卡住"长度对但内容随便是任意字符串"的情形。
+        /// </remarks>
+        private static bool IsWebSocketKeyShapeValid(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return false;
+
+            Span<byte> decoded = stackalloc byte[32];   // 16 字节 Base64 解码后正好 16，留余量
+            return Convert.TryFromBase64String(value, decoded, out int written) && written == 16;
         }
     }
 }
