@@ -24,6 +24,12 @@ namespace LiteMonitor.src.UI.SettingsPage
         private Button _btnTabBar;
         private LiteCheck _chkLinkHorizontal;
         private LiteCheck _chkOnlyVisible;
+
+        // ★ W3：用户是否**真的**改过「跟随任务栏」。
+        //   加载时的程序化同步不算改动 —— 那个复选框在主标签页上根本不可见，
+        //   它一直停留在构造时的 false；若把它当成用户的选择提交，
+        //   用户原本的 true 会被静默改成 false。
+        private bool _linkHorizontalEdited = false;
         
         private Label _lblCol1; 
         private Label _lblCol2; 
@@ -83,7 +89,11 @@ namespace LiteMonitor.src.UI.SettingsPage
             };
             
             // Immediate binding to avoid conflict with MainPanelPage
+            // ★ W3：抑制作用域内的变化是**程序化同步**，不是用户改动 ——
+            //   不能回写、也不能记成"用户改过"。
             _chkLinkHorizontal.CheckedChanged += (s, e) => {
+                if (IsWriteBackSuppressed) return;
+                _linkHorizontalEdited = true;
                 if (Config != null) Config.HorizontalFollowsTaskbar = _chkLinkHorizontal.Checked;
             };
             
@@ -151,8 +161,10 @@ namespace LiteMonitor.src.UI.SettingsPage
             _chkLinkHorizontal.Visible = _isTaskbarTab;
             _chkOnlyVisible.Visible = _isTaskbarTab;
             
-            if (_isTaskbarTab && Config != null)
-                _chkLinkHorizontal.Checked = Config.HorizontalFollowsTaskbar;
+            // ★ W3：无论当前在哪个标签页，都要把复选框同步成配置里的值。
+            //   它在主标签页上不可见，若不同步，它会一直停留在构造时的 false，
+            //   保存时被当成用户的值提交 ⇒ 用户的 true 被静默改成 false。
+            SyncLinkHorizontalFromConfig();
 
             _tabPanel.Width++; _tabPanel.Width--; 
             
@@ -167,8 +179,9 @@ namespace LiteMonitor.src.UI.SettingsPage
             if (Config == null) return;
 
             // Sync Checkbox if in taskbar tab (in case it was changed in MainPanelPage)
-            if (_isTaskbarTab)
-                _chkLinkHorizontal.Checked = Config.HorizontalFollowsTaskbar;
+            // ★ W3：同步不限于任务栏标签页 —— 主标签页上这个复选框是不可见的，
+            //   不同步就会带着构造时的 false 进入保存流程。
+            SyncLinkHorizontalFromConfig();
 
             // 1. 计算数据指纹 (Data Signature)
             // 只要 Config.MonitorItems 的内容（Keys的组合）没变，我们就不需要重新加载
@@ -525,14 +538,39 @@ namespace LiteMonitor.src.UI.SettingsPage
             }
         }
 
+        /// <summary>
+        /// 把「跟随任务栏」复选框同步成配置里的值。
+        /// <para>★ 同步期间必须**抑制回写**：否则这次程序化赋值会触发
+        ///   <c>CheckedChanged</c>，被当成"用户改了"并写回配置 ——
+        ///   而主标签页上这个复选框是不可见的，用户根本不知道自己动过它。</para>
+        /// <para>★ 用户已经改过它时**不覆盖**：这时控件上的值才是用户的选择。</para>
+        /// </summary>
+        private void SyncLinkHorizontalFromConfig()
+        {
+            if (Config == null) return;
+            if (_linkHorizontalEdited) return;
+
+            using (BeginSuppressWriteBack())
+            {
+                _chkLinkHorizontal.Checked = Config.HorizontalFollowsTaskbar;
+            }
+        }
+
         public override void Save()
         {
             if (!_isLoaded || Config == null || _workingList == null) return;
             
             SaveToWorkingList();
             
+            // ★ W3：只有在用户**真的**改过时才提交复选框的值。
+            //   没改过时提交控件值 = 把那个不可见、停留在 false 的复选框写进配置，
+            //   用户的 true 被静默改成 false。
+            bool linkHorizontal = _linkHorizontalEdited
+                ? _chkLinkHorizontal.Checked
+                : Config.HorizontalFollowsTaskbar;
+
             // Delegate logic to SettingsOperations
-            SettingsChanger.UpdateMonitorList(Config, _workingList, _chkLinkHorizontal.Checked);
+            SettingsChanger.UpdateMonitorList(Config, _workingList, linkHorizontal);
         }
 
         private List<MonitorItemConfig> GetLCS(List<MonitorItemConfig> list1, List<MonitorItemConfig> list2)

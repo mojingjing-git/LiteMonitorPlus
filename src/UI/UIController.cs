@@ -279,6 +279,8 @@ namespace LiteMonitor
                 HorizontalRenderer.Render(g, t, _hxColsHorizontal, _hxLayout.PanelWidth, _appearance);
                 // ★ 降级提示在横屏下同样要出现（否则横屏用户看不到玻璃没生效）。
                 DrawLiveGlassNotice(g, t);
+                // ★ 配置未保存提示在横屏下同样要出现。
+                DrawConfigWriteBlockedNotice(g, t);
                 // ★ D10：没有可见项时说明原因（否则用户只看到一块空板）。
                 DrawEmptyStateNotice(g, t, _hxColsHorizontal.Count == 0);
                 return;
@@ -310,6 +312,38 @@ namespace LiteMonitor
 
             // ★ D10：没有可见分组时说明原因（否则用户只看到一块空板）。
             DrawEmptyStateNotice(g, t, _groups.Count == 0);
+
+            // ★ 配置未保存提示（托盘菜单里的改动在配置读不出来时也存不下去）。
+            DrawConfigWriteBlockedNotice(g, t);
+        }
+
+        /// <summary>
+        /// 在面板**左下角**画一行「配置未保存」提示。
+        /// <para>★ 条件：<c>SettingsHelper.GlobalBlockSave</c> 为真 —— 配置读不出来时，
+        ///   本次会话的任何自动落盘都被阻止（托盘菜单里的改动也存不下去）。
+        ///   不告诉用户的话，他改了半天退出后全没了。</para>
+        /// <para>★ 放在左下角，与右下角的「实时玻璃未生效」提示互不重叠。</para>
+        /// </summary>
+        private void DrawConfigWriteBlockedNotice(Graphics g, Theme t)
+        {
+            if (!SettingsHelper.GlobalBlockSave) return;
+
+            int w = _form.ClientRectangle.Width;
+            int h = _form.ClientRectangle.Height;
+            if (w <= 0 || h <= 18) return;
+
+            string text = LanguageManager.T("Menu.ConfigWriteBlockedShort");
+            if (string.IsNullOrEmpty(text)) return;
+
+            SolidBrush brush = EnsureNoticeBrush(t);
+            using var fmt = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center };
+
+            g.DrawString(
+                text,
+                LiveGlassNoticeFont,
+                brush,
+                new RectangleF(4, h - 16, w - 8, 14),
+                fmt);
         }
 
         /// <summary>
