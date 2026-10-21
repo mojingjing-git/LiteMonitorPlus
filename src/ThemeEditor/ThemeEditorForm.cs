@@ -44,6 +44,24 @@ namespace LiteMonitor.ThemeEditor
         private Theme? _pristineTheme;
 
         private string _currentThemeName = "";
+        private readonly ThemeEditHistory _history = new();
+        private bool _bindingTheme;
+        private bool _restoringSelection;
+        private bool IsGpuTheme => _theme?.Rendering?.IsGpuRequested == true;
+        private bool IsToolbarTheme => _theme?.Rendering?.Parameters?.TryGetValue("glassStyle", out var value) == true &&
+            value.ValueKind == System.Text.Json.JsonValueKind.String &&
+            string.Equals(value.GetString(), "floatingToolbar", StringComparison.OrdinalIgnoreCase);
+
+        private int AddGpuMappingNotice(Panel page, int y, float dpi)
+        {
+            if (!IsGpuTheme) return y;
+            string text = IsToolbarTheme
+                ? "浮动轻雾：组标题、项目/数值字体，主次文字、告警与进度条色即时预览。\n独立窗口标题及传统底纹字段仅用于普通回退。"
+                : "当前 GPU 样式使用已确认的固定前景。字体/颜色页的字段仅影响普通回退；GPU 材质参数请在外观页调整。";
+            page.Controls.Add(new Label { Text = text, Left = (int)(10 * dpi), Top = y,
+                Width = (int)(510 * dpi), Height = (int)(62 * dpi), ForeColor = Color.DimGray });
+            return y + (int)(68 * dpi);
+        }
 
         // 系统字体缓存
         private InstalledFontCollection _fontCollection;
@@ -78,6 +96,11 @@ namespace LiteMonitor.ThemeEditor
 
             BuildUI();
             LoadThemeList();
+            KeyPreview = true;
+            KeyDown += (_, e) =>
+            {
+                if (e.Control && e.KeyCode == Keys.Z) { UndoEdit(); e.Handled = true; }
+            };
         }
 
         // ============================================================
@@ -165,6 +188,13 @@ namespace LiteMonitor.ThemeEditor
             btnNew.Click += (_, __) => CmdNewTheme();
             leftPanel.Controls.Add(btnNew);
 
+            var saveAs = new Button { Text = "另存为 / Save As", Dock = DockStyle.Bottom, Height = (int)(36 * dpiScale) };
+            saveAs.Click += (_, _) => SaveCurrentThemeAs();
+            leftPanel.Controls.Add(saveAs);
+            var undo = new Button { Text = "撤销 / Undo (Ctrl+Z)", Dock = DockStyle.Bottom, Height = (int)(36 * dpiScale) };
+            undo.Click += (_, _) => UndoEdit();
+            leftPanel.Controls.Add(undo);
+
             // 取消：不保存任何东西，内存中的主题恢复原状，磁盘文件一个字节都不动
             btnCancel = new Button { Text = "取消 / Cancel", Dock = DockStyle.Bottom, Height = (int)(40 * dpiScale) };
             btnCancel.Click += (_, __) => CancelEditing();
@@ -175,7 +205,7 @@ namespace LiteMonitor.ThemeEditor
             {
                 appearanceFields.ValueChanged += (_, __) =>
                 {
-                    if (_theme != null) preview?.SetTheme(_theme);
+                    if (_theme != null) RefreshEditedPreview();
                 };
             }
 
@@ -231,9 +261,23 @@ namespace LiteMonitor.ThemeEditor
         // ============================================================
         private void LoadSelectedTheme()
         {
-            if (lstThemes.SelectedItem == null) return;
+            if (_restoringSelection || lstThemes.SelectedItem == null) return;
+            string requested = lstThemes.SelectedItem.ToString()!;
+            if (_theme is not null && _pristineTheme is not null && requested != _currentThemeName &&
+                ThemeEditHistory.Signature(_theme) != ThemeEditHistory.Signature(_pristineTheme))
+            {
+                var choice = MessageBox.Show(this, "当前主题有未保存修改。保存后切换？\nSave changes before switching?",
+                    "未保存的修改 / Unsaved changes", MessageBoxButtons.YesNoCancel);
+                try
+                {
+                    if (choice == DialogResult.Yes) ThemeFileService.SaveTheme(_currentThemeName, _theme);
+                    else if (choice == DialogResult.Cancel) { RestoreSelection(); return; }
+                }
+                catch (Exception ex) { MessageBox.Show(this, ex.Message, "保存失败 / Save failed"); RestoreSelection(); return; }
+            }
 
-            _currentThemeName = lstThemes.SelectedItem.ToString()!;
+            _currentThemeName = requested;
+            _bindingTheme = true;
             try
             {
                 _theme = ThemeFileService.LoadTheme(_currentThemeName);
@@ -241,6 +285,7 @@ namespace LiteMonitor.ThemeEditor
             catch (Exception ex)
             {
                 MessageBox.Show("无法加载主题：\n" + ex.Message);
+                _bindingTheme = false;
                 return;
             }
 
@@ -251,8 +296,58 @@ namespace LiteMonitor.ThemeEditor
             BuildFontPage();
             BuildColorsPage();
             appearanceFields?.Bind(_theme);
+            _history.Reset(_theme);
+            _bindingTheme = false;
+            RefreshEditedPreview();
+        }
 
-            preview.SetTheme(_theme);
+        private void RestoreSelection()
+        {
+            _restoringSelection = true;
+            try { lstThemes!.SelectedItem = _currentThemeName; }
+            finally { _restoringSelection = false; }
+        }
+
+        private void RefreshEditedPreview()
+        {
+            if (_theme is null || _bindingTheme) return;
+            _history.Observe(_theme);
+            preview?.SetTheme(_theme);
+        }
+
+        private void UndoEdit()
+        {
+            if (_theme is null) return;
+            var previous = _history.Undo();
+            if (previous is null) return;
+            _bindingTheme = true;
+            try
+            {
+                AppearanceThemeConfig.RestoreConfig(_theme, previous);
+                BuildLayoutPage(); BuildFontPage(); BuildColorsPage();
+                appearanceFields?.Bind(_theme);
+            }
+            finally { _bindingTheme = false; }
+            preview?.SetTheme(_theme);
+        }
+
+        private void SaveCurrentThemeAs()
+        {
+            if (_theme is null) return;
+            string name = InputBox("另存为（不含扩展名） / Save As", _currentThemeName + "_copy");
+            if (string.IsNullOrWhiteSpace(name)) return;
+            try
+            {
+                ThemeFileService.SaveThemeAs(name, _theme);
+                _pristineTheme = AppearanceThemeConfig.CloneConfig(_theme);
+                _currentThemeName = name;
+                _history.Reset(_theme);
+                _restoringSelection = true;
+                try { LoadThemeList(); lstThemes!.SelectedItem = name; }
+                finally { _restoringSelection = false; }
+                RefreshMainFormThemeMenu();
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "另存为失败 / Save As failed"); }
         }
 
         /// <summary>
@@ -275,7 +370,7 @@ namespace LiteMonitor.ThemeEditor
             AppearanceThemeConfig.RestoreConfig(_theme, _pristineTheme);
 
             appearanceFields?.Bind(_theme);
-            preview?.SetTheme(_theme);
+            RefreshEditedPreview();
         }
 
         /// <summary>
@@ -318,7 +413,7 @@ namespace LiteMonitor.ThemeEditor
                     Maximum = 2000,
                     Value = get()
                 };
-                n.ValueChanged += (_, __) => { set((int)n.Value); preview.SetTheme(_theme!); };
+                n.ValueChanged += (_, __) => { set((int)n.Value); RefreshEditedPreview(); };
                 pageLayout.Controls.Add(n);
 
                 y += (int)(36 * dpiScale);
@@ -362,6 +457,7 @@ namespace LiteMonitor.ThemeEditor
 
             float dpiScale = GetDpiScale();
             int y = (int)(10 * dpiScale);
+            y = AddGpuMappingNotice(pageFont, y, dpiScale);
 
             // 系统字体
             var fonts = _fontCollection.Families.Select(f => f.Name).OrderBy(n => n).ToList();
@@ -389,7 +485,7 @@ namespace LiteMonitor.ThemeEditor
                 {
                     set(combo.SelectedItem.ToString()!);
                     _theme!.BuildFonts(); // 添加这一行来构建新的字体
-                    preview.SetTheme(_theme!);
+                    RefreshEditedPreview();
                 };
 
                 pageFont.Controls.Add(combo);
@@ -420,7 +516,7 @@ namespace LiteMonitor.ThemeEditor
                 {
                     set((int)n.Value);
                     _theme!.BuildFonts();
-                    preview.SetTheme(_theme!);
+                    RefreshEditedPreview();
                 };
                 pageFont.Controls.Add(n);
 
@@ -448,7 +544,7 @@ namespace LiteMonitor.ThemeEditor
             {
                 F.Bold = chkBold.Checked;
                 _theme.BuildFonts();
-                preview.SetTheme(_theme!);
+                RefreshEditedPreview();
             };
             pageFont.Controls.Add(chkBold);
 
@@ -468,6 +564,7 @@ namespace LiteMonitor.ThemeEditor
 
             float dpiScale = GetDpiScale();
             int y = (int)(10 * dpiScale);
+            y = AddGpuMappingNotice(pageColors, y, dpiScale);
 
             // 颜色缺省值（与 ColorConfig 的属性默认值一致）
             var defaults = new ColorConfig();
@@ -536,7 +633,7 @@ namespace LiteMonitor.ThemeEditor
                         string hex = AppearanceColorText.Format(cd.Color.R, cd.Color.G, cd.Color.B, alpha);
                         set(hex);
                         ApplyColorText(hex);
-                        preview.SetTheme(_theme!);
+                        RefreshEditedPreview();
                     }
                 };
 
@@ -552,7 +649,7 @@ namespace LiteMonitor.ThemeEditor
 
                     set(newText);
                     ApplyColorText(newText);
-                    preview.SetTheme(_theme!);
+                    RefreshEditedPreview();
                 };
 
                 // 恢复缺省
@@ -568,7 +665,7 @@ namespace LiteMonitor.ThemeEditor
                     string text = defaultText ?? string.Empty;
                     set(text);
                     ApplyColorText(text);
-                    preview.SetTheme(_theme!);
+                    RefreshEditedPreview();
                 };
 
                 pageColors.Controls.Add(btn);
@@ -643,6 +740,7 @@ namespace LiteMonitor.ThemeEditor
 
                 // 保存成功：快照更新为已保存状态（之后再"取消"就恢复到这份内容）
                 _pristineTheme = AppearanceThemeConfig.CloneConfig(_theme);
+                _history.Reset(_theme);
 
                 // 刷新主界面菜单的主题列表
                 RefreshMainFormThemeMenu();

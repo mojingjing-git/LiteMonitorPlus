@@ -7,6 +7,8 @@ using System.Reflection;
 using System.Text.Json;
 using System.Windows.Forms;
 using LiteMonitor.src.Core;
+using LiteMonitor.Rendering.Configuration;
+using LiteMonitor.Rendering.Contracts;
 
 namespace LiteMonitor.ThemeEditor
 {
@@ -207,6 +209,7 @@ namespace LiteMonitor.ThemeEditor
                 Thresholds = source.Thresholds != null ? (ThresholdConfig)CloneObject(source.Thresholds) : new ThresholdConfig(),
                 Color = source.Color != null ? (ColorConfig)CloneObject(source.Color) : new ColorConfig(),
                 Backdrop = source.Backdrop != null ? (BackdropConfig)CloneObject(source.Backdrop) : null,
+                Rendering = source.Rendering != null ? CloneRendering(source.Rendering) : null,
                 ExtensionData = CloneDictionary(source.ExtensionData)
             };
         }
@@ -243,7 +246,17 @@ namespace LiteMonitor.ThemeEditor
             else if (target.Backdrop == null) target.Backdrop = (BackdropConfig)CloneObject(snapshot.Backdrop);
             else CopyInto(target.Backdrop, snapshot.Backdrop);
 
+            if (snapshot.Rendering == null) target.Rendering = null;
+            else if (target.Rendering == null) target.Rendering = CloneRendering(snapshot.Rendering);
+            else CopyInto(target.Rendering, snapshot.Rendering);
+
             target.ExtensionData = CloneDictionary(snapshot.ExtensionData);
+        }
+
+        public static ThemeRenderingConfig CloneRendering(ThemeRenderingConfig source)
+        {
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            return (ThemeRenderingConfig)CloneObject(source);
         }
 
         /// <summary>深拷贝颜色配置。</summary>
@@ -477,6 +490,8 @@ namespace LiteMonitor.ThemeEditor
     /// </summary>
     public sealed class AppearanceFields : Panel
     {
+        private readonly Dictionary<string, NumericUpDown> _gpuNumbers = new();
+        private readonly ComboBox _gpuStyle = new() { DropDownStyle = ComboBoxStyle.DropDownList };
         // ---- 缺省键名（公开常量，便于测试与外部调用） ----
         public const string KeyFrameStyle = "frameStyle";
         public const string KeyFrameWidth = "frameWidth";
@@ -629,6 +644,7 @@ namespace LiteMonitor.ThemeEditor
             AddColorRow("渐变起始 / GradientStart", KeyGradientStart);
             AddColorRow("渐变结束 / GradientEnd", KeyGradientEnd);
 
+            BuildGpuRows();
             // ---------------- 说明 ----------------
             var note = new Label
             {
@@ -655,6 +671,73 @@ namespace LiteMonitor.ThemeEditor
             };
             _rows.Controls.Add(lbl);
             _y += (int)(28 * _dpi);
+        }
+
+        private void BuildGpuRows()
+        {
+            AddSection("GPU 材质 / Material (固定背景预览)");
+            _gpuStyle.Items.AddRange(["标准玻璃 / Standard", "浮动轻雾 / Floating toolbar"]);
+            AddRow("玻璃样式 / Glass style", _gpuStyle, "gpu.glassStyle", 200);
+            _resetters["gpu.glassStyle"] = () => _theme?.Rendering?.Parameters.Remove("glassStyle");
+            _gpuStyle.SelectedIndexChanged += (_, _) =>
+            {
+                if (_binding || _theme?.Rendering is null || _gpuStyle.SelectedIndex < 0) return;
+                _theme.Rendering.Parameters ??= new();
+                _theme.Rendering.Parameters["glassStyle"] = JsonSerializer.SerializeToElement(
+                    _gpuStyle.SelectedIndex == 1 ? "floatingToolbar" : "standard");
+                Bind(_theme);
+                ValueChanged?.Invoke(this, EventArgs.Empty);
+            };
+            AddGpuNumber("cornerRadius", "圆角 / Corner (DIP)", 64);
+            AddGpuNumber("thickness", "边缘厚度 / Edge (DIP)", 8);
+            AddGpuNumber("refraction", "折射 / Refraction (DIP)", 8);
+            AddGpuNumber("blurRadius", "雾化半径 / Blur (DIP)", 32);
+            AddGpuNumber("fogStrength", "轻雾强度 / Mist (0–1)", 1);
+            AddGpuNumber("tintStrength", "染色强度 / Tint (0–1)", 1);
+            AddGpuNumber("shadowRadius", "柔影范围 / Shadow (DIP)", 64);
+            AddGpuNumber("shadow", "阴影强度 / Shadow (0–1)", 1);
+            AddGpuNumber("highlight", "高光强度 / Highlight (0–1)", 1);
+            AddGpuNumber("surfaceOpacity", "标准玻璃底色 / Surface", 1);
+        }
+
+        private void AddGpuNumber(string key, string label, decimal maximum)
+        {
+            var number = new NumericUpDown { Minimum = 0, Maximum = maximum,
+                DecimalPlaces = 3, Increment = maximum <= 1 ? 0.01m : 0.5m, Name = "gpu." + key };
+            _gpuNumbers[key] = number;
+            AddRow(label, number, "gpu." + key, 120);
+            _resetters["gpu." + key] = () => _theme?.Rendering?.Parameters.Remove(key);
+            number.ValueChanged += (_, _) =>
+            {
+                if (_binding || _theme?.Rendering is null) return;
+                _theme.Rendering.Parameters ??= new();
+                _theme.Rendering.Parameters[key] = JsonSerializer.SerializeToElement((double)number.Value);
+                ValueChanged?.Invoke(this, EventArgs.Empty);
+            };
+        }
+
+        private void BindGpuRows(Theme theme)
+        {
+            bool glass = theme.Rendering?.IsGpuRequested == true &&
+                theme.Rendering.Material == ThemeRenderingConfig.LiquidGlassMaterial;
+            var settings = MaterialRuntimeSettings.Create(theme.Rendering, MaterialKind.LiquidGlass);
+            bool toolbar = settings.GlassStyle == GlassSurfaceStyle.FloatingToolbar;
+            _gpuStyle.Enabled = glass;
+            _gpuStyle.SelectedIndex = toolbar ? 1 : 0;
+            foreach (var pair in _gpuNumbers)
+            {
+                float value = pair.Key switch
+                {
+                    "cornerRadius" => settings.CornerRadius, "thickness" => settings.Thickness,
+                    "refraction" => settings.Refraction, "blurRadius" => settings.BlurRadius,
+                    "fogStrength" => settings.FogStrength, "tintStrength" => settings.TintStrength,
+                    "shadowRadius" => settings.ShadowRadius, "shadow" => settings.Shadow,
+                    "highlight" => settings.Highlight, _ => settings.SurfaceOpacity
+                };
+                pair.Value.Value = Math.Clamp((decimal)value, pair.Value.Minimum, pair.Value.Maximum);
+                pair.Value.Enabled = glass && (pair.Key is "fogStrength" or "tintStrength" or "shadowRadius" ? toolbar :
+                    pair.Key == "surfaceOpacity" ? !toolbar : true);
+            }
         }
 
         private void AddRow(string label, Control editor, string resetKey, int editorWidth)
@@ -732,6 +815,7 @@ namespace LiteMonitor.ThemeEditor
             _binding = true;
             try
             {
+                BindGpuRows(theme);
                 LayoutConfig layout = theme.Layout ?? new LayoutConfig();
                 SelectComboInt(_cmbFrameStyle, layout.FrameStyle);
                 SetNumeric(_numFrameWidth, layout.FrameWidth);

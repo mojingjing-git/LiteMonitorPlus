@@ -430,5 +430,34 @@ namespace LiteMonitor.ThemeEditor
                 // 清理失败不应覆盖真正的失败原因
             }
         }
+        /// <summary>Save the current in-memory configuration under a new ID without overwriting an existing theme.</summary>
+        public static void SaveThemeAs(string name, Theme theme) => SaveThemeAs(Dir, name, theme);
+
+        public static void SaveThemeAs(string dir, string name, Theme theme)
+        {
+            ValidateThemeName(name);
+            Directory.CreateDirectory(dir);
+            string target = Path.Combine(dir, name + ".json");
+            string staging = Path.Combine(dir, "." + Guid.NewGuid().ToString("N") + TempFileSuffix);
+            try
+            {
+                SafeWrite(staging, Utf8NoBom.GetBytes(JsonSerializer.Serialize(theme, ThemeManager.CreateSerializerOptions())));
+                File.Move(staging, target, overwrite: false);
+            }
+            finally { if (File.Exists(staging)) File.Delete(staging); }
+        }
+
+        public static void ValidateThemeName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name) || name != name.Trim() || name.EndsWith('.') ||
+                name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.Contains('/') || name.Contains('\\') ||
+                name is "." or "..")
+                throw new ArgumentException("Invalid theme name.", nameof(name));
+            string stem = name.Split('.')[0].ToUpperInvariant();
+            if (stem is "CON" or "PRN" or "AUX" or "NUL" ||
+                (stem.Length == 4 && (stem.StartsWith("COM") || stem.StartsWith("LPT")) && stem[3] is >= '1' and <= '9'))
+                throw new ArgumentException("Reserved Windows file name.", nameof(name));
+        }
+
     }
 }

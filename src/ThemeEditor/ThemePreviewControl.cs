@@ -71,6 +71,7 @@ namespace LiteMonitor.ThemeEditor
 
         /// <summary>控件是否已释放（释放后不再触碰运行时）。</summary>
         private bool _disposed;
+        private GpuThemePreviewControl? _gpuPreview;
 
         public ThemePreviewControl()
         {
@@ -119,7 +120,46 @@ namespace LiteMonitor.ThemeEditor
             // 换肤：主题代次自增，让各层缓存（纹理 / 渐变槽 / 噪点）失效
             _themeChanged = true;
 
+            UpdateGpuPreview();
             Invalidate();
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            UpdateGpuPreview();
+        }
+
+        private void UpdateGpuPreview()
+        {
+            if (_disposed || _theme?.Rendering is null ||
+                !_theme.Rendering.IsGpuRequested ||
+                !Settings.Load().GpuThemeEffectsEnabled ||
+                Program.SafeMode)
+            {
+                _gpuPreview?.Dispose();
+                _gpuPreview = null;
+                return;
+            }
+
+            if (!IsHandleCreated)
+            {
+                return;
+            }
+
+            _gpuPreview?.Dispose();
+            _gpuPreview = new GpuThemePreviewControl(
+                GetPreviewTheme(GetDpiScale()),
+                _groups)
+            {
+                Bounds = new Rectangle(
+                    Padding.Left,
+                    Padding.Top,
+                    Math.Max(1, Width - Padding.Horizontal),
+                    Math.Max(1, Height - Padding.Vertical))
+            };
+            Controls.Add(_gpuPreview);
+            _gpuPreview.BringToFront();
         }
 
         // ================================================================
@@ -155,6 +195,9 @@ namespace LiteMonitor.ThemeEditor
                 Thresholds = original.Thresholds,
                 Color = original.Color,
                 Backdrop = original.Backdrop,
+                Rendering = original.Rendering != null
+                    ? AppearanceThemeConfig.CloneRendering(original.Rendering)
+                    : null,
 
                 // 字体：只借用，不释放
                 FontTitle = original.FontTitle,
@@ -387,8 +430,19 @@ namespace LiteMonitor.ThemeEditor
         {
             base.OnPaint(e);
 
+            if (_gpuPreview?.Error is not null)
+            {
+                _gpuPreview.Visible = false;
+                AccessibleDescription = "GPU preview unavailable; showing GDI+ fallback preview.";
+            }
+
             if (_theme == null || _layout == null || _disposed)
                 return;
+
+            if (_gpuPreview?.IsActive == true)
+            {
+                return;
+            }
 
             e.Graphics.Clear(Color.FromArgb(245, 245, 245));
 
@@ -540,6 +594,8 @@ namespace LiteMonitor.ThemeEditor
 
                 // 正式外观运行时：纹理缓存、画刷、噪点位图都在这里释放
                 _appearance.Dispose();
+                _gpuPreview?.Dispose();
+                _gpuPreview = null;
             }
             base.Dispose(disposing);
         }
@@ -555,6 +611,15 @@ namespace LiteMonitor.ThemeEditor
                 // 尺寸变化：槽位尺寸不再复用，让各层缓存全量失效
                 if (!_disposed)
                     _appearance.OnSizeChanged();
+
+                if (_gpuPreview is not null)
+                {
+                    _gpuPreview.Bounds = new Rectangle(
+                        Padding.Left,
+                        Padding.Top,
+                        Math.Max(1, Width - Padding.Horizontal),
+                        Math.Max(1, Height - Padding.Vertical));
+                }
 
                 Invalidate();
             }
