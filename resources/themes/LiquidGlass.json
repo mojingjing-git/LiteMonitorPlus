@@ -1,0 +1,59 @@
+{
+  "version": 4,
+  "name": "LiquidGlass",
+  "layout": {
+    "rowHeight": 40,
+    "padding": 10,
+    "cornerRadius": 0,
+    "groupRadius": 4,
+    "groupPadding": 8,
+    "groupSpacing": 28,
+    "groupBottom": 0,
+    "groupTitleOffset": 6,
+    "itemGap": 6,
+    "frameStyle": 1,
+    "frameWidth": 3,
+    "frameLength": 14,
+    "scanline": 30,
+    "glow": 55,
+    "grid": 20,
+    "barStyle": 1
+  },
+  "font": {
+    "family": "Microsoft YaHei UI",
+    "valueFamily": "Consolas",
+    "title": 11.5,
+    "group": 10.5,
+    "item": 10.0,
+    "value": 14.0,
+    "bold": true,
+    "scale": 1.0
+  },
+  "color": {
+    "background": "#DCE6F2",
+    "groupBackground": "rgba(255,255,255,0.72)",
+    "border": "#2F5F8F",
+    "shadow": "rgba(14,34,60,0.32)",
+    "textTitle": "#0B2E52",
+    "textGroup": "#33475B",
+    "textPrimary": "#16202C",
+    "textSecondary": "#4C6178",
+    "valueSafe": "#0B6E3F",
+    "valueWarn": "#8A5200",
+    "valueCrit": "#B2223A",
+    "barBackground": "#BCCBDB",
+    "barLow": "#0B6E3F",
+    "barMid": "#8A5200",
+    "barHigh": "#B2223A"
+  },
+  "backdrop": {
+    "mode": "glass",
+    "opacity": 0.72,
+    "blur": 12,
+    "tint": "rgba(226,238,255,0.9)",
+    "gradientStart": "#9BB6D5",
+    "gradientEnd": "#5B85B3",
+    "gradientAngle": 90,
+    "fps": 2
+  }
+}
