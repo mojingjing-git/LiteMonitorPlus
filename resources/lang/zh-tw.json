@@ -89,6 +89,7 @@
     "LiveGlass": "即時玻璃",
     "LiveGlassHint": "啟用即時玻璃需要即時擷取視窗背後的畫面。\n擷取瞬間，面板可能從錄影或螢幕截圖中短暫消失或閃爍。",
     "LiveGlassStatus": "目前狀態",
+    "NoVisibleItems": "未啟用任何監控項目",
         "HardwareInfo": "檢視硬體詳情",
         "SpeedTest": "網速測試",
         "Traffic": "歷史流量統計",

@@ -93,6 +93,7 @@
     "LiveGlass": "Verre liquide",
     "LiveGlassHint": "Le verre liquide capture l'ecran derriere cette fenetre en temps reel.\nPendant la capture, le panneau peut disparaitre ou scintiller brievement dans les enregistrements d'ecran ou les captures d'ecran.",
     "LiveGlassStatus": "Etat actuel",
+    "NoVisibleItems": "Aucune métrique activée",
     "HardwareInfo": "Info Matériel",
     "SpeedTest": "Test débit",
     "Traffic": "Historique",

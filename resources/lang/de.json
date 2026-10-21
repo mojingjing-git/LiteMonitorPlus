@@ -92,6 +92,7 @@
     "LiveGlass": "Live-Glas",
     "LiveGlassHint": "Live-Glas erfasst den Bildschirm hinter diesem Fenster in Echtzeit.\nWaehrend der Aufnahme kann das Panel in Bildschirmaufnahmen oder Screenshots kurz verschwinden oder flackern.",
     "LiveGlassStatus": "Aktueller Status",
+    "NoVisibleItems": "Keine Metriken aktiviert",
     "HardwareInfo": "Hardwareinfo",
     "SpeedTest": "Speedtest",
     "Traffic": "Verlauf",

@@ -92,6 +92,7 @@
     "LiveGlass": "Cristal en vivo",
     "LiveGlassHint": "Cristal en vivo captura la pantalla detras de esta ventana en tiempo real.\nDurante la captura, el panel puede desaparecer o parpadear brevemente en grabaciones de pantalla o capturas de pantalla.",
     "LiveGlassStatus": "Estado actual",
+    "NoVisibleItems": "No hay métricas activadas",
     "HardwareInfo": "Info. Hardware",
     "SpeedTest": "Velocidad",
     "Traffic": "Tráfico",

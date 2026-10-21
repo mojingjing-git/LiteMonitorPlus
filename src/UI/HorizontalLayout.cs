@@ -26,6 +26,17 @@ namespace LiteMonitor
 
         public int PanelWidth { get; private set; }
 
+        /// <summary>
+        /// 空态下的**最小面板高度**（物理像素）。
+        /// <para>★ 全部可见项关闭时列集合为空，<see cref="Build"/> 过去直接返回 0，
+        ///   调用方据此把客户区高度写成 0 ⇒ 面板整个从屏幕上消失。
+        ///   用户既看不到任何指标，也分不清是"没有勾选任何项"还是"程序崩了"。
+        ///   这里给一个最小高度，让它退化成一块**空面板**而不是凭空消失。</para>
+        /// <para>★ 任务栏模式不使用这个值：任务栏高度由任务栏自己的 Placement 决定，
+        ///   <c>Build</c> 的返回值在任务栏链路上不被消费（TaskbarForm 只取 PanelWidth）。</para>
+        /// </summary>
+        public int MinPanelHeight => Math.Max(_rowH + _padding, 24);
+
         public HorizontalLayout(Theme t, int initialWidth, LayoutMode mode, Settings? settings = null)
         {
             _t = t;
@@ -52,7 +63,10 @@ namespace LiteMonitor
         /// </summary>
         public int Build(List<Column> cols, int taskbarHeight = 32)
         {
-            if (cols == null || cols.Count == 0) return 0;
+            // ★ D10：列集合为空（全部可见项关闭）时**不能返回 0** ——
+            //   调用方会把客户区高度写成 0，面板直接消失，用户无从判断原因。
+            //   改为返回最小高度，配合 UI 层的空态提示说明"没有可见项"。
+            if (cols == null || cols.Count == 0) return MinPanelHeight;
             
             var s = _settings.GetStyle();
             int pad = _padding;
