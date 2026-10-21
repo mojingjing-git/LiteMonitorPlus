@@ -1,8 +1,0 @@
-{
-  "texture_image_ownership": {
-    "retrievedIsSource": false,
-    "successiveImagesAreSame": false,
-    "secondWidthAfterOtherDisposals": 16,
-    "brushDrawsAfterSourceAndRetrievedImageDisposed": true
-  }
-}

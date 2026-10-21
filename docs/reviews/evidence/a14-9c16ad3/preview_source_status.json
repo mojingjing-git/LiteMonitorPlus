@@ -1,8 +1,0 @@
-{
-  "preview_source_status": {
-    "actualEditorAdapterSource": "LiveFrame",
-    "explicitPreviewSource": "PreviewFrame",
-    "expected": "PreviewFrame",
-    "realCaptureBackendRegistered": false
-  }
-}
