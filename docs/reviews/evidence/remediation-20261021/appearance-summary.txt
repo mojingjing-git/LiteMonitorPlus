@@ -1,0 +1,22 @@
+仓库根    : G:\TOOL\LiteMonitor-fork
+dotnet    : C:\Program Files\dotnet\dotnet.exe
+配置      : Release
+证据目录  : .review-scratch\remediation\appearance
+
+── 构建探针（串行）──
+
+── 运行探针（串行）──
+  [PASS] AppearanceThemeCheck — 合计：通过 442 项，失败 0 项。
+  [PASS] AppearanceStaticBackdropProbe — 用例 21 个，通过 21 个，失败 0 个。
+  [PASS] AppearanceM2Probe — 结果: 全部通过
+  [PASS] AppearanceWiringProbe — 结果: 全部通过
+  [PASS] AppearanceDecorProbe — 结果: 全部通过
+  [PASS] AppearanceDecorRendererProbe — 结果: 全部通过
+  [PASS] AppearanceWindowShapeProbe — 结果: 全部通过
+  [PASS] AppearanceSettingsProbe — 合计：56 个用例，通过 56 个，失败 0 个。
+  [SKIP] AppearanceBackdropProbe — 实机捕获，默认跳过（加 -IncludeBackdrop）
+
+  [SKIP] LiteMonitor.Tests — -SkipUnitTests
+── 汇总 ──
+通过 8 / 失败 0 / 跳过 2（共 10）
+证据目录：.review-scratch\remediation\appearance

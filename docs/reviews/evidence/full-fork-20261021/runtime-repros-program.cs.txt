@@ -1,0 +1,116 @@
+using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
+using System.Text.Json;
+using System.Drawing;
+using System.Windows.Forms;
+using LiteMonitor;
+using LiteMonitor.src.Core;
+using LiteMonitor.src.Plugins;
+using LiteMonitor.src.WebServer;
+using LiteMonitor.src.SystemServices.Backdrop;
+
+var results = new List<object>();
+var cfg = Settings.Load();
+cfg.WebServerPassword = "";
+
+// Pause an HTTP request precisely between its generation check and lease grant.
+// The demand lock is reentrant, so Stop can clear it on this controlling thread.
+var reviewClock = new ReviewClock();
+var demand = new WebDemandState(reviewClock);
+var manager = new WebSessionManager(w => { w.WriteStartObject(); w.WriteEndObject(); }, demand, reviewClock);
+bool applied = false;
+var sync = new WebDemandSynchronizer(() => manager.HasWebDataDemand, v => { applied = v; return true; });
+manager.DemandChanged = () => sync.SyncNow();
+manager.Start();
+sync.SyncNow();
+using var listener = new TcpListener(IPAddress.Loopback, 0);
+listener.Start();
+using var peer = new TcpClient();
+var connect = peer.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+using var serverClient = listener.AcceptTcpClient();
+connect.GetAwaiter().GetResult();
+var gate = typeof(WebDemandState).GetField("_gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(demand)!;
+var handle = typeof(WebSessionManager).GetMethod("HandleHttpRequestAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+Exception? requestError = null;
+Thread requestThread;
+int requestGeneration = manager.Generation;
+lock (gate)
+{
+    requestThread = new Thread(() =>
+    {
+        try
+        {
+            ((Task)handle.Invoke(manager, new object[] { serverClient.GetStream(), "GET /api/snapshot HTTP/1.1\r\nHost: localhost\r\n\r\n", requestGeneration, CancellationToken.None })!).GetAwaiter().GetResult();
+        }
+        catch (Exception ex) { requestError = ex; }
+    });
+    requestThread.IsBackground = true;
+    requestThread.Start();
+    if (!SpinWait.SpinUntil(() => (requestThread.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0, 3000))
+        throw new Exception("Request failed to reach lease synchronization point");
+    manager.Stop();
+    sync.SyncNow();
+    sync.Stop();
+}
+if (!requestThread.Join(3000)) throw new Exception("Request failed to complete");
+bool demandAfterStop = manager.HasWebDataDemand;
+bool appliedAfterStop = applied;
+reviewClock.Advance(TimeSpan.FromSeconds(3));
+results.Add(new { scenario = "http-lease-after-stop", requestError = requestError?.ToString(), hasDemandAfterStop = demandAfterStop, hardwareDemandAfterStop = appliedAfterStop,
+    demandAfterLeaseExpiry = manager.HasWebDataDemand, hardwareDemandAfterLeaseExpiry = applied });
+manager.Stop();
+
+// Tampered records must never permit removing files outside the plugin folder.
+// The target is created inside this temporary harness output, never user data.
+string victim = Path.Combine(AppContext.BaseDirectory, "review-victim.json");
+File.WriteAllText(victim, "{\"review\":true}");
+Directory.CreateDirectory(PluginMarket.PluginsDir);
+string id = "../../review-victim";
+cfg.MarketPlugins.Add(new MarketPluginRecord { Id = id, File = id + ".json", Version = "review" });
+bool removed = PluginMarket.Uninstall(new MarketPluginEntry { Id = id }, out var reason);
+results.Add(new { scenario = "plugin-uninstall-path", operationSucceeded = removed, victimDeleted = !File.Exists(victim), reason = reason.ToString() });
+
+// Supply exactly one synthetic frame, then paint twice before a replacement.
+// No form is displayed and no desktop capture is performed.
+using var form = new Form();
+var controllerType = typeof(Settings).Assembly.GetType("LiteMonitor.LiveGlassController")!;
+var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+object controller = Activator.CreateInstance(controllerType, flags, null,
+    new object[] { form, (Func<ThemeAppearanceOptions?>)(() => null) }, null)!;
+using var service = new BackdropCaptureService(new OneFrameBackend());
+controllerType.GetField("_service", flags)!.SetValue(controller, service);
+service.Start(new BackdropServiceRequest(new IntPtr(1), new Rectangle(0, 0, 8, 8), 1, 1, 1, 1, 1, 0, targetFps: 1));
+if (!SpinWait.SpinUntil(() => service.PendingFrameCount > 0, 3000)) throw new Exception("No synthetic frame published");
+var paint = controllerType.GetMethod("BeginPaint", flags)!;
+paint.Invoke(controller, null);
+bool firstReady = service.TryGetFrame(0, out _);
+paint.Invoke(controller, null);
+bool secondReady = service.TryGetFrame(0, out _);
+results.Add(new { scenario = "glass-two-paints-one-frame", firstPaintHasFrame = firstReady, secondPaintHasFrame = secondReady });
+((IDisposable)controller).Dispose();
+string resultJson = JsonSerializer.Serialize(results, new JsonSerializerOptions { WriteIndented = true });
+File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "results.json"), resultJson);
+Console.WriteLine(resultJson);
+
+internal sealed class OneFrameBackend : IBackdropCaptureBackend
+{
+    private int _calls;
+    public bool IsReady => true;
+    public string UnavailableReason => "";
+    public void RestoreDisplayAffinity() { }
+    public bool TryCapture(BackdropServiceRequest request, out Image? frame, out BackdropServiceTiming timing)
+    {
+        timing = default;
+        frame = Interlocked.Increment(ref _calls) == 1 ? new Bitmap(8, 8) : null;
+        return frame != null;
+    }
+}
+
+internal sealed class ReviewClock : TimeProvider
+{
+    private long _timestamp = 1000;
+    public override long TimestampFrequency => 1000;
+    public override long GetTimestamp() => Interlocked.Read(ref _timestamp);
+    public void Advance(TimeSpan elapsed) => Interlocked.Add(ref _timestamp, (long)elapsed.TotalMilliseconds);
+}

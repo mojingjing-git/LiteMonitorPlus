@@ -1,0 +1,11 @@
+{
+  "Package": "dist/LiteMonitorPlus_v1.0.0-win-x64.zip",
+  "Length": 6617309,
+  "Sha256": "8cfa2ce54b29af5d99db9dd11cff4e341d6d7a0a3ab78d2119ea6cf40923d7f3",
+  "Entries": 59,
+  "MissingRequiredEntries": [],
+  "UpdaterSelfCheckExit": 0,
+  "BundledUpdaterSha256": "c3757c9e1586b66c29e7ff904d54124b8c6ba7a113772b7a939d67db7a9f3917",
+  "PackagedUpdaterSha256": "c3757c9e1586b66c29e7ff904d54124b8c6ba7a113772b7a939d67db7a9f3917",
+  "UpdaterBytesMatch": true
+}

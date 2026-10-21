@@ -1,0 +1,151 @@
+81bd1396b6c29541e007d1abacfc6c564961a4d8 docs(gpu): 新增多显卡监控改造实施计划
+d0506597b914e13834ae6785b63366d6e3f6fb0f feat(plugins): 插件市场页面
+e4521784e28c7e08fac99cd7cc615242dc9960b3 docs(gpu): 完善多显卡改造实施计划
+d65155e4770e4dcfa1601b549ab0440cceece45b chore: 建立多显卡改造的工程基线与测试骨架
+2a13c29ca7281529ffdb300eb9c6b11850c52f83 feat(gpu): 新增多显卡 Key 命名规则与运行时显卡注册表
+929c4f8a23fd794db44cc3a49f15220c91498079 feat(gpu): 新增显卡简称提取规则
+e453ede6f28edb3bf6ed7b89d20ff1c1e1d2e4a5 feat(gpu): 新增显卡监控项同步器
+7bb0173a6723e9a4296ec0beed3ba34931bc6220 feat(gpu): 新增多显卡配置项并在配置加载时同步监控项
+1cc00447e0bf68ebd5af21c73888e40125528c9f feat(gpu): 保存设置时同步显卡监控项并按实际卡数夹紧
+5500b5d3370b1ad89ab10b775158ea3fc7c530c4 feat(gpu): SensorMap 支持多显卡映射并修复风扇串卡
+3cdf0d20ba1004e063766cb29a700288110c52e6 feat(gpu): 频率与功耗按显卡序号取对应显卡的传感器
+d1488d91387e091be3f7a6168a37b4bdf2cdc0f3 fix(gpu): 标签兜底按基础 Key 归一化
+8a862f8bdb9a42c45c29b243e7136ea96998cd62 feat(gpu): 显存占用按卡独立计算
+c2cd239bb6a163f609a0f559318d665fd7512efc fix(gpu): 阈值自适应对带序号的 Key 做归一化
+634230ae307e9a4aaabc9f8bfa0879a7710cab28 style(gpu): 调整 SensorMap 方法顺序与空行
+c902ae600892cdfc0fad42c1d362df203f7b0b5e feat(gpu): 多显卡监控标签带上显卡简称
+6ad85cefd9bd877a3a6ad1387d8c34f7fd647d40 feat(gpu): 硬件历史记录支持多显卡 Key
+483bd7f6abb29ffcb2212c25ebc21dd28a6a173a feat(gpu): 历史曲线窗口支持带序号的显卡 Key
+1c3e519ab5439d14eeef2cb7be82541e45d5d3ff feat(gpu): 硬件刷新层支持多张显卡
+6a7ec985ea9a7d84615a266d47eb99dc79915869 feat(gpu): 设置页新增监控显卡数量选项
+c2982b01e658e0eb922b92925879f61c7a176e47 docs(gpu): 补充多显卡改造的使用限制说明
+8903e045cf056525cc4ee03b4f2f88e379c84bf3 fix(gpu): 修复多显卡改造的 4 处 code review 发现
+77d0ae40b9eba6ad8307353441cc5061a21a0b93 docs(license): 补齐 MIT 许可证、NOTICE 致谢与 README 上游声明
+d2f774c6427ff7d071b2b67cab900669c259d0c1 feat(rebrand): 解除对上游基础设施的运行时耦合
+d9ce7229498a174953094495862c55ba0c382839 chore(rebrand): 定案品牌命名 LiteMonitor++ 并统一替换
+2a55caaadf24f3dd6738f5afc77e8a96b222456d feat(rebrand): 用户可见品牌切换为 LiteMonitor++
+41362d541be61a8e04a793a169676b91e7d9ab38 feat(rebrand): 功能性品牌点迁移（程序集 / 计划任务 / Updater / FPS）
+ead718278bd2512f9f40fe47d3d09527c9fb9903 docs(rebrand): 修正文档中的品牌、失实描述与过强安全声明
+55d3edfa391c3d0d148212182531a050a6e0dfe5 fix(rebrand): 修正重命名遗留的驱动包条目名与仓库链接
+a07334af5f38bfd3a9b901bc2abb4a638cf4baba chore(rebrand): 工程卫生、发布打包脚本与自制图标
+ede81405b0be5da4832926562a48be8465ee33b1 docs(rebrand): 补充品牌映射表、替换手册与发布前 checklist
+6e2152eb9919326ef7310ffcc1b81bcd2f2234f7 feat(gpu): 新增按注册表读取每卡真实显存容量的工具
+d3138998a0fae6f68c3702a0fe47ae5581182d90 feat(gpu): 显存匹配拆出 D3D 通道独立 Key
+75bbbf0f386572394bc23c1b12f7e652c98d6bba feat(gpu): 新增显存数据来源判定逻辑与独显判定
+d210b5201c6b19bf459a5088aa51e9ee0f9670d0 fix(gpu): 显存按卡择源，串卡时改用 D3D 通道并用真实容量校正
+e6c945dd6eae09f52e4fa343e1dd463bf7ef15a4 test(gpu): 补充显存通道择源与 D3D Key 拆分的回归测试
+6e84a1ad961e7bc58714ef0eb30138bc1f525046 docs(gpu): 新增多显卡显存串卡修复计划
+0230bef299e2e8bce91418c6c5e3d7e62953270d docs(gpu): 同步显存修复计划的代码块与最终实现
+5957aa07799ba76fef7581bd09b9c49072b51833 docs(gpu): 新增多显卡分组小标题改造计划
+b34eb9e2fe4060ad388ed2fc2a5683b88d03e697 docs(gpu): 回灌试编译发现的 2 处编译问题与真机验证证据
+25d77d4bd1b916189a934b7864191bb9cf079448 feat(ui): 移除软件内所有 emoji
+931e99394283bfc313a1d7e01abf91b484784d7c chore(build): 同步发布包内的 Updater 二进制
+2f8b0142a272a88e3a0ab3389340c67e81021837 feat(gpu): 新增按卡拆组的分组策略与标题解析器
+85d0dca307f20b773eea3df5921ad8974ee52025 feat(gpu): 显卡监控项按卡拆成独立分组
+d48dca8d1a78f0f7bfeb7f53ca757bce32bd33e1 feat(gpu): 统一分组标题解析并去掉项标签的显卡前缀
+cff96c5e03568a30d507a34d1eba2e8c699ab7c2 fix(web): 消毒分组 id 避免非法 CSS 选择器
+0a67bf329b81d3610c926b62ad5a4fffdc4d15c3 feat(gpu): 旧版整组别名迁移到 0 号卡
+eda153733639e2c8bf107b9ebe851834afad1129 test(gpu): 补充按卡拆组的回归测试
+799d13911a0bb103434982806ef15136236831a3 docs(gpu): 同步分组小标题计划的代码块与最终实现
+969d57d2e75873e203c0a2f66bde44fe03e63a3c chore(dev): 新增开发模式启动脚本
+8f88192cd71eeee6128e74a51cba26efb14b759e fix(gpu): 修正设置页固化自动标签的缺陷并迁移旧式显卡标签
+2088211707ac29b1bf850231a00bec20d05db8d9 test(gpu): 补充旧式自动标签识别与迁移的回归测试
+639a073299d0b4757bd08f6b94f76525263a95e5 feat(plugins): 插件市场加固 —— 源锁死、安全校验、双语 i18n
+7db9d7816c448efd45088af8119e0fcceb247062 test(plugins): 新增客户端与插件仓库的契约测试
+6a96ed88956f2e32958512ddf2c2718c004ced45 test(plugins): 新增插件市场端到端验证（需联网，默认跳过）
+f57be98964c8693384186abe37648d24f24ac7da docs(research): 上游 issue/PR 调研速查与 Intel 核显占用率修复计划
+c068d2c84579ee474658a86108eb05209e86a816 fix(hardware): 让硬件层故障可见并修复映射表被永久清空
+1d2ff2369408eba2d36a6b8d50813d1ccdcab51a docs(gpu): 同步按卡拆组计划的验收状态与硬件层根因定案
+a20012b488908464c9d2ebdbf0a86fce2b0e8d7a fix(hardware): 补显卡传感器预热, 修复 Intel 核显占用率恒为 0
+08913ed276959473e7e0570a59ad107d43da5c05 fix(hardware): 10 分钟兜底重建后同步刷新取值缓存
+e9bf91ad129e90e43b71d600d95e32b08e6eadc9 test(hardware): 补核显预热判定与核显传感器命名的回归测试
+4353f5f6550cca22332184694ac0833b79425a2e docs(hardware): 记录核显占用率修复的实机验证结果
+949835f7b0a7f8a2f888dd6965716b4a077b6d3f docs(hardware): 补核显修复的发射版进程实测记录
+5a8bb4c2caab6ee915f239c8a154711057e92fd9 docs(plan): 加入硬件采集限频与调度修复执行计划
+ab80b2c807ba909f3ac808030798801ce273a2f2 test(perf): 新增 LiteMonitor++ 性能探针
+44f76c7e58ee9e21ae12f80a3bee1fb0aee67d2e test(perf): 记录实施前性能基线原始数据
+3c6e8cbe362710352374c394845866f4689e346f docs(perf): 新增性能采样验证记录（实施前基线）
+f2c5fa90665daf2d2b856218e0a3759cffe7fa88 fix(fps): 清理 FPS PID 状态、限速失败查询并区分可恢复停止与最终释放
+450d9eb3d7ee4e279a610d1383626000e3857b31 feat(sampling): 新增硬件采集协调器（单调时钟门限与并发合并）
+efde5616bc0246d67ec1fe8460db3d85fe2c8561 feat(sampling): 采集统一走协调入口，值缓存按采集代次推进
+a25169134f2bd2fa6d8a33f62b2ef4b8b7b9e5a0 test(sampling): 新增采样协调与值缓存代次测试
+c23201faf5319a649e57559372bd2b5691b33e7b feat(web): 增加 Web 有效需求状态、网页版帧率开关与 FPS 占位输出
+5d2ae7c506f29325023117abb6659f5fda864c31 feat(sched): 维护任务/流量/磁盘/主题检查改用单调截止时间
+efeeb694a85646386f915f3f9713cc8d22713a80 fix(sampling): 修复评审问题——任务完成点前置、例外采集计数、合法0接线、值缓存并发安全
+affd533a5a5890229a6a28694deb4f92dd8cf1ac fix(perf): 修复评审意见并适配采集门限与 FPS 状态重构
+50a0057dec24749e07c74bb057f3c2a98220a0ed fix(fps): 恢复管理员守卫、让 Unknown/排除记录可回收并修正封存帧计数
+4c72a6d40010eba5c11e9167af081a369baad878 fix(web): 堵住 Stop 后连接被登记回需求，并补齐发送异常等回收路径测试
+ed75056e3c538ac7d0834facb403e2f8c0bbeeb2 fix(sched): 修复 A2a 评审问题（磁盘空闲基准/残留墙上时间/主题常量/触发器并发/调用方自持调度器）
+985523e7eb563a3473300259cc1483a435cb781a feat(sampling): 硬件采集接线——异常可观测、单调调度、Web 需求语义与设备计数去重
+62a41ebb177516020862cee42237b8ee370115a6 feat(sampling): 硬件侧接入 FPS 需求探针，与网页占位规则共用同一来源
+12dcefcf31611d728a3b980190852f11c588f85a test(perf): 性能探针口径改造——读生产侧真实计数 + 优雅降级 + counterSemantics 声明
+197601c84bb726251535fd4f6724683a929d67ec feat(web): Web 侧接入共享限频采样并补齐需求回收路径
+a8eab198d615ce51336743513d8824557750b4f3 test(web): 补齐 B2 的 16 项必测用例
+b48206bcf2043ecce6424fddbb3f892de8a50d0c fix(fps): 启动失败退避覆盖进程秒退，并去掉并发用例的时序敏感断言
+5df1e5c35fea5b7086d914fb393e899191a5d977 test(hardware): 补齐 A2b 失败计数与设备计数护栏（F1/F2）+ 4 条次要加固
+a4283a13f70e8d064603ef431faed10eaa067820 fix(web): B2 修复轮 2 —— 恢复 1 参 ctor，修需求同步/启动失败/快速重启/广播分配
+b66c4e0891d58a1422b301173bd7d97610754e0f test(web): B2 修复轮 2 —— 补齐生产路径回归护栏（M1/M6）+ 处理 8 条次要
+979dda0f8762b8df12b8e60c2185e61572a4c573 docs(web): B2 修复轮 2 —— 补回广播载荷流"必须可扩容"的原因注释
+a5242a00e8c21f07b4cdc0f09d091adf963237fa test(hardware): 去掉 F4 的并发压力用例，护栏改由确定性结构断言承担
+522313d8608d2ba70216a99b65b8ef7247269ff2 test(web): B2 修复轮 2 —— 补 1 条护栏锁住"1 参 ctor 不得消失"
+89c6d6f9c7f2a85bb8f17e3dccea0430541af230 fix(fps): 退避不随需求跃迁清零，需求抖动不再击穿 30s 窗口
+c8cbbc8c79a21ef347b8dd3bfc55cf1ff04712eb fix(hardware): 关闭期跳过的采集不再误记为失败采集
+5609c4b6712c317dd7430739ab6ed05fd519dc52 test(hardware): 修关闭竞态 flaky —— 用同步点锁定采样动作已开始
+8e452b396314dc7ec5d9abc75365aaf5c933025b docs(verification): 修正 F 组绝对轮数 —— 基线第 2 轮实测为 299 轮/299 次（原写 300/300）
+c4aa7ef6d657098ca70067fe3e22fadb7a588abc test(hardware): A2b 修复轮 3 —— 补 N1「CollectOnce 绝不重抛」IL 护栏 + N2 构造函数纳入扫描 + N3 零未解析断言
+8843ea27f39f23d460021cfe227e6ea8eb1da066 fix(web): B2 修复轮 3 —— 1 参 ctor 显式转发默认实现 + 补齐 F1-F7 覆盖缺口护栏
+f120fb8f294452be86fdecddbc437a5848e66136 fix(hardware): 取消的采集不再被记成失败采集
+b777ec0b26903892308f5be47f6657b22e70c6ad test(fps): 补启动顺序 IL 结构护栏 + 让及时性护栏名副其实（Task 5 修复轮 4）
+dd4bb6b39c581d1272d525dfcf707cb60c869266 docs(verification): Task 6 —— 实施后三轮复测 + 完整程序功能检查 + 交付核对
+3767d947180cf4526ee7955bc4aa5b101e5ecee1 docs(verification): 修正 §9 中位数取值错误（三轮最大值 -> 真中位数）
+54febdc4c0dc3b6ddce4915b067597e53da17f2a docs: 更正公开 API 口径 + 事实化 LHM Clear 注释 + 补三条限制披露
+043a2c365a4febdddf8afb2f6df4a9cefd32df6a fix(hardware): 采集完成信号晚于缓存收尾, 消除同代次重复计算 (复审 R2)
+97a66b29c90d8c47fc5ef8b2faf510916840400a fix(fps): 让 FPS 启动与最终释放形成互斥，消除释放后遗留的外部进程
+271466b277f1fbc84a532b64e2f24f194cc08703 fix(web): 旧代次广播不得跨过 Stop→Start 发给重启后的新连接 (复审 R3)
+15e1fc64f1b5ac740c41c0ab61f0d2d0c1b0c8a9 test(fps): 生命周期回归用例改用同步点，去掉 Thread.Sleep 碰运气
+4b9ed83b1516df986eaf4ef92677649f892811e0 fix(fps): make startup admission atomic with lifecycle changes
+6ca511cca934b4d9a8b95107a912f8920c123cfa docs(perf): archive R1 admission fix, red/green evidence and remaining limits
+ec62fe42342a6fa54853b10dc781e29e065291aa style: clear trailing whitespace flagged by git diff --check
+97f793dccac6d5ab37120602ecab4f6238a855da merge: performance sampling hardening
+5d5201f156b2b5ca58d889dcd070bac6b4569373 ﻿feat(appearance): 外观改造 M0 组件层 —— 模型/保存/探针/装饰/背景/轮廓/编辑器/Web/主题
+954a634f74698e38bc1719ecb332d9522443ec2d feat(appearance): 外观改造 A13 主面板 M1 集成接线 —— 背景/装饰/进度条接入与窗口轮廓生命周期
+2491ff03cd955b33cdc1292a3a2894d1ded4dd26 feat(appearance): 外观改造 A14 收口 —— 底板锚定与边缘漏色修复、8 项 P2 处置、配对测量与验收报告
+9c16ad3cf7a4de02729587ff8e74435876e03eeb docs(appearance): 记录 A14 超预算项的用户拍板结果 —— 接受超预算、画面保持不变
+c314fb26b749cc08ef1a013b5b35d1ede05ffb0f fix(appearance): N2 预览来源误报修正 —— 帧来源两层保险与 6 项单测断言
+3f0e4e04d4b78472a4647f7ecc1346cd1d1caac7 fix(appearance): 加固项 纹理画刷接管失败清理 —— 资源不外泄且不污染缓存
+bb7afb29e0e7e96580aa76260f954d3b7310c48c perf(appearance): N1 配对 CPU 口径计量 —— 区分经过时间与处理器时间
+02bc8233c97473747b95188500f3bc3297c6d65a docs(appearance): 冻结 M2 合同并更正 A14 验收文档的测量口径
+878d2cc6ecb4e586e90223e2d49c5cd8070d6bf5 feat(appearance): A15 M2 实时玻璃 —— 捕获后端、图像处理与后台服务
+215654d7b85605ae6b3d00afc7cb531851b200f3 test(appearance): A15 M2 合同探针 —— 10 条验收门槛全部通过
+ee20d4bb2e2e6bea65470bdeec85814aefa29f7b feat(appearance): 生产进程改 Per-Monitor-V2 + A15 服务层加固 + 实机启动脚本修复
+4693ce34f63b5db675c1c7f79b1e3a7463ce0091 test(appearance): 加固项回归覆盖 + CPU 口径探针可指定主题 + 本轮回归证据
+902f71dec61cb0a0fc397cdd115203908bfe551a docs(appearance): A14 §6.7 CPU 口径实测（CyberPunk_Mech）—— 替换经过时间的假设估算
+33245bcc7b63a7eabe8856a81b0c0031e5b86399 docs(appearance): A14 §6.7.5/§6.7.6 —— 5 轮 CPU 口径复核，并更正 3 轮数据的一条错误推论
+f5640e3d25068df1e0a96c0ca15e1c5bd334ae28 fix(appearance): A15 服务生命周期加固 —— 轮次隔离、借用判定与暂停/恢复边界
+223234c671f323527b2b07df87e23992fd98e7c7 test(appearance): M2 合同探针补 S1–S4 复核断言（14/14）
+cd526f42da572fd8f3746b0e130fea4267fad1b2 docs(appearance): A15 复核修复收口 —— 生命周期裁定、验收文档与口径表述收窄
+f7165c24450217b29792865139b966334fe82830 feat(appearance): A16 主面板 M2 接线 —— 实时玻璃开关、生命周期与首次提示
+93a22d59fe2e6ec9ecd7931e631559fb1bf6f7a2 feat(appearance): A16 液态玻璃主题 LiquidGlass.json
+deacd67cef4b15b28ceb6537ded35b5626146ec8 test(appearance): 主题探针纳入 LiquidGlass + M2 探针新增 A16 唯一性门槛
+e91855824bcd806e7379d03537cf04c7a8f45841 docs(appearance): A16 验收文档 —— 接线映射、开关与提示、可读性修正记录
+a5cd83dc0cdc548213cd601d1e25d19a9de095b1 fix(appearance): 实时玻璃降级可见化 + 诊断日志 + 刷新请求死路径
+42814453595d9a195398fffa3231d9619bb3259c feat(appearance): LiquidGlass 改深色磨砂玻璃 + 圆角窗口轮廓
+b96b1a87760c00c055b4b53bf0b850120a81e49f docs(appearance): 主题说明与 A16 验收文档同步到深色磨砂玻璃改版
+a079eaaaa40ebbca836802812ed3bb8b15066a3d fix(ui): D10 全部可见项关闭时面板高度归 0 —— 最小高度 + 空态提示
+5add165c98cd86e384dc5913e0e1e3bc29b1ae42 fix(settings): W3 设置页意外回写缺陷包 —— 回写抑制作用域 + 配置未保存可见化
+7ea421e2e06cf6b05898ac9a0562c40a392baa68 docs(appearance): W3 设置页回写缺陷包交付说明 + Backdrop 实机测量记录
+a9973ff16b47f450965e69d023c7ae0a80ad5b4f fix(settings): W3 补齐阈值行的回写守卫 + 新增防回退探针
+378d7ef2eee1e5c5cc3280422a469370fd38d02b feat(appearance): A17 释放压力实测工具 + 实测清单
+8069eec8bda10d824080a94d4f79b35827e21d77 docs(appearance): A17 释放压力清单修正 L1 + 资源采样器 README
+97c148b207ca5a9aad74dc904bb3e474e9c8482d fix(settings): 设置页释放加固 —— async void 续体防御 + 字体进程内复用
+7870cc6591c83c1b17501eaa68d7ee3e04f7fce5 fix(appearance): 阈值解析严格化 + 字体泄漏面全量收口 + 探针统一入口
+6c881e4c69d79f5febb37a7634d06a991ed68395 fix(appearance): A17 采样器判据缺口收口 —— 最小二乘斜率 + 不可判定 + 私存门槛
+b003393b5a27a2d23584583b1ce53a79a7680d87 fix(settings): 阈值行离场回填根因修复 + Crit>=Warn 不变量 + 可见钳制
+c34f199507588aef09c3eb90a51da4465eefeb35 fix(security): 恢复 TLS 证书校验 + Web 认证加固
+2821acb84566ec03e39103479a9cf5669fe3dcdf feat(updater): 更新包签名校验 + 覆盖失败回滚 + 自检开关
+d8a8bcf99535388dcd5feaa88a6162200a659258 fix(settings): 配置读写故障三态 + 原子写顺序 + 设置页释放泄漏
+8b07f4483e8acd39b63983a22f88b48dc587acc2 fix(core,ui): 单位回退与电池负值口径 + 单实例摘要 + 字体画刷所有权收口
+f590eff8879210a148f9774acf88316ae0a00b9c test(market): 环境不满足时跳过而不是静默报通过
+37d680e979877d602a9939c43d712237953f982f docs(core): 为 UIUtils 字体缓存补所有权契约
+0b5c801ea04c365d58e47f613071e1bffac68d57 fix(core): 内存容量模式的单项百分比格式不再错配单位
+d6946dddbe7b831da139ba96bcd3a3e1bc191c13 fix(web): 拒绝重复 pwd 参数 + Sec-WebSocket-Key 严格解析

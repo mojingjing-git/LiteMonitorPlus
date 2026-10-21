@@ -1,0 +1,53 @@
+{
+  "date": "2026-10-21",
+  "timezone": "Asia/Shanghai",
+  "baseline": "169e90a2ccaa68ca29d0b549d10c6c59634c1b49",
+  "head": "d6946dddbe7b831da139ba96bcd3a3e1bc191c13",
+  "commits": 151,
+  "changedCommittedFiles": 477,
+  "findings": {
+    "P1": 1,
+    "P2": 5
+  },
+  "build": {
+    "configuration": "Release",
+    "warningLevel": 0,
+    "exitCode": 0,
+    "projects": [
+      "LiteMonitor",
+      "LiteMonitor.Updater",
+      "LiteMonitor.Tests"
+    ]
+  },
+  "unitTests": {
+    "failed": 0,
+    "trx": ".review-scratch/full-review/final-d6946dd.trx",
+    "skipped": 7,
+    "passed": 620,
+    "total": 627
+  },
+  "appearance": {
+    "skippedLiveCapture": "AppearanceBackdropProbe",
+    "unitTestsExecutedSeparately": true,
+    "passedGroups": [
+      "AppearanceThemeCheck",
+      "AppearanceStaticBackdropProbe",
+      "AppearanceM2Probe",
+      "AppearanceWiringProbe",
+      "AppearanceDecorProbe",
+      "AppearanceDecorRendererProbe",
+      "AppearanceWindowShapeProbe",
+      "AppearanceSettingsProbe"
+    ]
+  },
+  "powershellSyntax": {
+    "errors": 0,
+    "scripts": 7
+  },
+  "remote": {
+    "pushed": false,
+    "intendedRepository": "mojingjing-git/LiteMonitorPlus",
+    "created": false,
+    "reason": "Review found unresolved defects"
+  }
+}

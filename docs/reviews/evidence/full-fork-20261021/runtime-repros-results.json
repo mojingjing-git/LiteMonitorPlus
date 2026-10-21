@@ -1,0 +1,21 @@
+[
+  {
+    "scenario": "http-lease-after-stop",
+    "requestError": null,
+    "hasDemandAfterStop": true,
+    "hardwareDemandAfterStop": true,
+    "demandAfterLeaseExpiry": false,
+    "hardwareDemandAfterLeaseExpiry": true
+  },
+  {
+    "scenario": "plugin-uninstall-path",
+    "operationSucceeded": true,
+    "victimDeleted": true,
+    "reason": "Unknown"
+  },
+  {
+    "scenario": "glass-two-paints-one-frame",
+    "firstPaintHasFrame": true,
+    "secondPaintHasFrame": false
+  }
+]

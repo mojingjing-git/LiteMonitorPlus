@@ -1,0 +1,519 @@
+{
+  "kind": "appearance_decor_renderer_probe_result",
+  "probeVersion": 1,
+  "startedAt": "2026-10-21T18:52:40.2729124\u002B08:00",
+  "assembly": "1.0.0.0",
+  "baseDirectory": "G:\\TOOL\\LiteMonitor-fork\\tests\\AppearanceDecorRendererProbe\\output\\",
+  "elapsedMs": 15176,
+  "isolation": {
+    "hardwareMonitorCreated": false,
+    "hardwareOpened": false,
+    "screenCapturePerformed": false,
+    "userSettingsRead": false,
+    "userSettingsWritten": false,
+    "note": "\u63A2\u9488\u4E0D\u521B\u5EFA HardwareMonitor\u3001\u4E0D Open \u786C\u4EF6\u3001\u4E0D\u505A\u4EFB\u4F55\u5C4F\u5E55\u6355\u83B7\uFF1BSettings \u7531\u63A2\u9488\u81EA\u5DF1 new \u51FA\u6765\u5E76\u6CE8\u5165 Settings._instance \u5355\u4F8B\uFF0C\u4E0D\u8BFB\u4E5F\u4E0D\u5199\u7528\u6237\u5E38\u7528\u914D\u7F6E\u76EE\u5F55\u3002"
+  },
+  "cases": [
+    {
+      "name": "closed_state_zero_side_effects",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "cacheEntries": 0,
+        "createdResources": 0,
+        "totalBitmapBytes": 0,
+        "visiblePixelsBeforeBar": 0,
+        "timersCreated": 0,
+        "note": "\u88C5\u9970\u4E09\u5C42\u5728\u5173\u95ED\u6001\u5747\u63D0\u524D\u8FD4\u56DE\uFF1A\u4E0D\u753B\u50CF\u7D20\u3001\u4E0D\u5EFA\u753B\u5237\u3001\u4E0D\u5EFA\u4F4D\u56FE\u3001\u4E0D\u8FDB\u7F13\u5B58\uFF1B\u65E7\u6761\u53EA\u8F6C\u8C03\u65E2\u6709 UIUtils.DrawBar\u3002"
+      }
+    },
+    {
+      "name": "idempotent_100_paints",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "hashWithBaseRepaint": "f9f1399698cb194a2a0ea1eb1e5c81c908bb6d3476a76f0449d6ac92e8f26d08",
+        "hashStackedRepaint": "f9f1399698cb194a2a0ea1eb1e5c81c908bb6d3476a76f0449d6ac92e8f26d08",
+        "iterations": 100,
+        "cacheEntries": 5,
+        "createdResources": 5,
+        "evictions": 0
+      }
+    },
+    {
+      "name": "layer_order_text_not_covered",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "glyphPixels": 11140,
+        "coreGlyphPixels": 3450,
+        "coreGlyphPixelsChangedByTexture": 0,
+        "edgeGlyphPixels": 7690,
+        "edgeGlyphPixelsChangedByTexture": 474,
+        "maxChannelDelta": 80,
+        "textureVisiblePixels": 15221,
+        "scanlineIntensity": 60,
+        "gridIntensity": 40,
+        "method": "\u50CF\u7D20\u91C7\u6837\uFF1A\u6587\u5B57\u7740\u58A8\u50CF\u7D20\u96C6\u5408 = (\u65E0\u5E95\u7EB9\u002B\u6587\u5B57) XOR (\u65E0\u5E95\u7EB9)\uFF1B\u5176\u4E2D\u50CF\u7D20\u503C\u6070\u4E3A\u6587\u5B57\u8272\u7684\u4E3A\u201C\u5B9E\u5FC3\u7B14\u753B\u201D\u50CF\u7D20\uFF08\u5FC5\u987B\u5B8C\u5168\u4E00\u81F4\uFF09\uFF1B\u6297\u952F\u9F7F\u8FB9\u7F18\u50CF\u7D20\u7531 GDI \u4E0E\u5E95\u8272\u6DF7\u5408\uFF0C\u5E95\u7EB9\u4F1A\u6539\u53D8\u5176\u6DF7\u5408\u7ED3\u679C\uFF08\u4EFB\u4F55\u80CC\u666F\u90FD\u4F1A\u5982\u6B64\uFF0C\u4E0D\u662F\u201C\u8986\u76D6\u6587\u5B57\u201D\uFF09\u3002",
+        "layerOrder": "\u5E95\u677F \u2192 \u7A97\u53E3\u5E95\u7EB9 \u2192 \u7EC4\u5757\u586B\u5145 \u2192 \u7EC4\u5E95\u7EB9/\u7EC4\u6846 \u2192 \u6807\u9898/\u6307\u6807/\u6761 \u2192 \u5411\u5185\u7684\u7A97\u53E3\u8FB9\u6846/\u9AD8\u5149"
+      }
+    },
+    {
+      "name": "bounds_edge_cases",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "scenarios": [
+          {
+            "scenario": "1x1",
+            "clientSize": "1x1",
+            "outsidePixels": 0,
+            "exception": ""
+          },
+          {
+            "scenario": "zero_width",
+            "clientSize": "0x120",
+            "outsidePixels": 0,
+            "exception": ""
+          },
+          {
+            "scenario": "zero_height",
+            "clientSize": "240x0",
+            "outsidePixels": 0,
+            "exception": ""
+          },
+          {
+            "scenario": "zero_both",
+            "clientSize": "0x0",
+            "outsidePixels": 0,
+            "exception": ""
+          },
+          {
+            "scenario": "narrow_160",
+            "clientSize": "160x40",
+            "outsidePixels": 0,
+            "exception": ""
+          },
+          {
+            "scenario": "extreme_frame",
+            "clientSize": "240x400",
+            "outsidePixels": 0,
+            "exception": ""
+          },
+          {
+            "scenario": "chamfer_over_half",
+            "clientSize": "60x40",
+            "outsidePixels": 0,
+            "exception": ""
+          },
+          {
+            "scenario": "two_by_two",
+            "clientSize": "2x2",
+            "outsidePixels": 0,
+            "exception": ""
+          }
+        ]
+      }
+    },
+    {
+      "name": "legacy_themes_pixel_identical",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "themes": [
+          {
+            "theme": "AuroraDream_Purple",
+            "legacyHash": "19acc2369cf558f76e4b21125da5b7278d925454649d3df471a03e887cfa74dd",
+            "newPathHash": "19acc2369cf558f76e4b21125da5b7278d925454649d3df471a03e887cfa74dd",
+            "differentPixels": 0,
+            "cacheEntries": 0
+          },
+          {
+            "theme": "CyberBlue_Neon",
+            "legacyHash": "8d2e83fd017f4952975a61e66955e2021dcace0244eae3d4c4c3b6777b513356",
+            "newPathHash": "8d2e83fd017f4952975a61e66955e2021dcace0244eae3d4c4c3b6777b513356",
+            "differentPixels": 0,
+            "cacheEntries": 0
+          },
+          {
+            "theme": "DarkFlat_Classic",
+            "legacyHash": "93362d2b4af3318dae7747bf92231e59613d5cd69d654b4e482d0ead43c71a23",
+            "newPathHash": "93362d2b4af3318dae7747bf92231e59613d5cd69d654b4e482d0ead43c71a23",
+            "differentPixels": 0,
+            "cacheEntries": 0
+          },
+          {
+            "theme": "DarkNeo_Modern",
+            "legacyHash": "dcd8d9a9f6c0b74ce0b937fcbed942875baaf6180db912695fa0d8103922df75",
+            "newPathHash": "dcd8d9a9f6c0b74ce0b937fcbed942875baaf6180db912695fa0d8103922df75",
+            "differentPixels": 0,
+            "cacheEntries": 0
+          },
+          {
+            "theme": "DeepOcean_Blue",
+            "legacyHash": "54d945db6c6b279f4eac0a844e2982aa0e581d932114f01c85ca7712496c8c1d",
+            "newPathHash": "54d945db6c6b279f4eac0a844e2982aa0e581d932114f01c85ca7712496c8c1d",
+            "differentPixels": 0,
+            "cacheEntries": 0
+          },
+          {
+            "theme": "Dracula_Vampire",
+            "legacyHash": "bccfea5a43a677e5b1fafdfce4223b67fe976416cc906f7cb0857f28ca6715af",
+            "newPathHash": "bccfea5a43a677e5b1fafdfce4223b67fe976416cc906f7cb0857f28ca6715af",
+            "differentPixels": 0,
+            "cacheEntries": 0
+          },
+          {
+            "theme": "LightPure_Elegant",
+            "legacyHash": "ad540135e1aa2ddb32fc1bd3469527fda3a7c9412b510df0c7d83afb2cf0a17d",
+            "newPathHash": "ad540135e1aa2ddb32fc1bd3469527fda3a7c9412b510df0c7d83afb2cf0a17d",
+            "differentPixels": 0,
+            "cacheEntries": 0
+          },
+          {
+            "theme": "MatrixGreen_Terminal",
+            "legacyHash": "adb58fb3cc4bdc6be433bcc8dae238bdb3902b665dcde1d8aa7d6bfa5642b841",
+            "newPathHash": "adb58fb3cc4bdc6be433bcc8dae238bdb3902b665dcde1d8aa7d6bfa5642b841",
+            "differentPixels": 0,
+            "cacheEntries": 0
+          },
+          {
+            "theme": "Monokai_Pro",
+            "legacyHash": "a807c32ecc035bd5bac4b3532a8290414832d339fad1da90ddb104b37e1c9a4d",
+            "newPathHash": "a807c32ecc035bd5bac4b3532a8290414832d339fad1da90ddb104b37e1c9a4d",
+            "differentPixels": 0,
+            "cacheEntries": 0
+          },
+          {
+            "theme": "SolarAmber_Warm",
+            "legacyHash": "09e71e055eed7ab0acdb68b1b24002b0a79f026a416f793f884eaca3e20650b9",
+            "newPathHash": "09e71e055eed7ab0acdb68b1b24002b0a79f026a416f793f884eaca3e20650b9",
+            "differentPixels": 0,
+            "cacheEntries": 0
+          }
+        ],
+        "themeCount": 10
+      }
+    },
+    {
+      "name": "horizontal_layout_reuse",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "barsDrawn": 0,
+        "differentPixelsVsLegacy": 10877,
+        "newPathHash": "c7b292a9a19737ee29e80753e5d729da7ee51586e8b483ec78c7015c1a00df7e",
+        "referenceHash": "c7b292a9a19737ee29e80753e5d729da7ee51586e8b483ec78c7015c1a00df7e",
+        "note": "\u6A2A\u5C4F\u590D\u7528\u7A97\u53E3\u5E95\u677F / \u5E95\u7EB9 / \u5916\u6846\uFF1B\u4E0D\u65B0\u589E\u7EC4\u6846\u5206\u7EC4\uFF08\u5217\u6A21\u578B\uFF09\uFF1B\u539F\u672C\u6CA1\u6709\u6761\u7684\u6307\u6807\u4E0D\u51ED\u7A7A\u51FA\u73B0\u6761\u3002"
+      }
+    },
+    {
+      "name": "bar_styles_clipping",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "legacyBarHash": "2b84bc993b708a72e6db03ba495826b0c9aca5ca12e769220c743f681d625c04",
+        "legacyBarDifferentPixels": 0,
+        "clipping": [
+          {
+            "barStyle": 1,
+            "percent": 0,
+            "expectedFillWidth": 0,
+            "actualMinX": -1,
+            "actualMaxX": -1,
+            "changedPixels": 0,
+            "cacheEntries": 0
+          },
+          {
+            "barStyle": 1,
+            "percent": 0.5,
+            "expectedFillWidth": 90,
+            "actualMinX": 20,
+            "actualMaxX": 109,
+            "changedPixels": 702,
+            "cacheEntries": 1
+          },
+          {
+            "barStyle": 1,
+            "percent": 1,
+            "expectedFillWidth": 180,
+            "actualMinX": 20,
+            "actualMaxX": 199,
+            "changedPixels": 1422,
+            "cacheEntries": 1
+          },
+          {
+            "barStyle": 2,
+            "percent": 0,
+            "expectedFillWidth": 0,
+            "actualMinX": -1,
+            "actualMaxX": -1,
+            "changedPixels": 0,
+            "cacheEntries": 0
+          },
+          {
+            "barStyle": 2,
+            "percent": 0.5,
+            "expectedFillWidth": 90,
+            "actualMinX": 20,
+            "actualMaxX": 109,
+            "changedPixels": 702,
+            "cacheEntries": 1
+          },
+          {
+            "barStyle": 2,
+            "percent": 1,
+            "expectedFillWidth": 180,
+            "actualMinX": 20,
+            "actualMaxX": 199,
+            "changedPixels": 1422,
+            "cacheEntries": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "bar_styles_preserve_caller_clip",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "barRect": "(20,40,180,8)",
+        "callerClip": "(37,43,20,20)",
+        "results": [
+          {
+            "barStyle": 1,
+            "changedOutsideCallerClip": 0,
+            "changedInsideCallerClip": 100,
+            "partialVsFullDifferentPixels": 0
+          },
+          {
+            "barStyle": 2,
+            "changedOutsideCallerClip": 0,
+            "changedInsideCallerClip": 100,
+            "partialVsFullDifferentPixels": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "bar_texture_stripes_visible",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "cases": [
+          {
+            "barHeight": 6,
+            "yOffset": 40,
+            "tile": 12,
+            "thickness": 2,
+            "period": 6,
+            "stripePixels": 265,
+            "phaseWindow": 2
+          },
+          {
+            "barHeight": 8,
+            "yOffset": 40,
+            "tile": 16,
+            "thickness": 2,
+            "period": 8,
+            "stripePixels": 262,
+            "phaseWindow": 2
+          },
+          {
+            "barHeight": 8,
+            "yOffset": 43,
+            "tile": 16,
+            "thickness": 2,
+            "period": 8,
+            "stripePixels": 267,
+            "phaseWindow": 2
+          },
+          {
+            "barHeight": 10,
+            "yOffset": 37,
+            "tile": 20,
+            "thickness": 2,
+            "period": 10,
+            "stripePixels": 261,
+            "phaseWindow": 2
+          },
+          {
+            "barHeight": 12,
+            "yOffset": 45,
+            "tile": 24,
+            "thickness": 3,
+            "period": 12,
+            "stripePixels": 436,
+            "phaseWindow": 4
+          },
+          {
+            "barHeight": 16,
+            "yOffset": 41,
+            "tile": 32,
+            "thickness": 4,
+            "period": 16,
+            "stripePixels": 437,
+            "phaseWindow": 4
+          }
+        ]
+      }
+    },
+    {
+      "name": "progress_cache_platform",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "iterations": 10000,
+        "cacheEntries": 3,
+        "totalBytes": 17280,
+        "createdResources": 3,
+        "hits": 9997,
+        "misses": 3,
+        "evictions": 0,
+        "timeline": [
+          {
+            "iteration": 2000,
+            "cacheEntries": 3,
+            "totalBytes": 17280,
+            "createdResources": 3,
+            "hits": 1997,
+            "misses": 3,
+            "evictions": 0
+          },
+          {
+            "iteration": 4000,
+            "cacheEntries": 3,
+            "totalBytes": 17280,
+            "createdResources": 3,
+            "hits": 3997,
+            "misses": 3,
+            "evictions": 0
+          },
+          {
+            "iteration": 6000,
+            "cacheEntries": 3,
+            "totalBytes": 17280,
+            "createdResources": 3,
+            "hits": 5997,
+            "misses": 3,
+            "evictions": 0
+          },
+          {
+            "iteration": 8000,
+            "cacheEntries": 3,
+            "totalBytes": 17280,
+            "createdResources": 3,
+            "hits": 7997,
+            "misses": 3,
+            "evictions": 0
+          },
+          {
+            "iteration": 10000,
+            "cacheEntries": 3,
+            "totalBytes": 17280,
+            "createdResources": 3,
+            "hits": 9997,
+            "misses": 3,
+            "evictions": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "frame_cost_budget",
+      "passed": true,
+      "failures": [],
+      "details": {
+        "tiers": [
+          {
+            "tier": "normal_240x788",
+            "clientSize": "240x788",
+            "groupCount": 6,
+            "itemsPerGroup": 2,
+            "glowIntensity": 50,
+            "frames": 120,
+            "legacyAvgMs": 8.114,
+            "legacyAvgMsSecondPass": 7.9257,
+            "legacyP95Ms": 9.485,
+            "decorDeltaMedianMs": 0.6876,
+            "decorDeltaWorstRoundMs": 0.7422,
+            "newPathFullAvgMs": 7.5745,
+            "newPathFullP95Ms": 10.5175,
+            "decorDeltaAvgMs": 0.6876,
+            "decorDeltaP95Ms": 0.7422,
+            "fullDeltaAvgMs": -0.5395,
+            "budgetMsPerFrame": 1,
+            "withinBudget": true,
+            "overageMs": 0,
+            "budgetNote": "\u5728\u9884\u7B97\u5185\uFF08\u5B9E\u6D4B 0.6876 ms/\u5E27 \u2264 1.00 ms/\u5E27\uFF09\u3002",
+            "layerWindowTextureAvgMs": 0.2278,
+            "layerGroupDecorAvgMs": 0.3311,
+            "layerWindowFrameAvgMs": 0.2214,
+            "layerSumAvgMs": 0.7803,
+            "cpuMsPerFrameAllVariants": 0,
+            "cacheEntries": 6
+          },
+          {
+            "tier": "double_480x1576",
+            "clientSize": "480x1576",
+            "groupCount": 6,
+            "itemsPerGroup": 5,
+            "glowIntensity": 50,
+            "frames": 120,
+            "legacyAvgMs": 46.3323,
+            "legacyAvgMsSecondPass": 49.043,
+            "legacyP95Ms": 54.1701,
+            "decorDeltaMedianMs": 1.8919,
+            "decorDeltaWorstRoundMs": 2.0734,
+            "newPathFullAvgMs": 36.8398,
+            "newPathFullP95Ms": 41.2744,
+            "decorDeltaAvgMs": 1.8919,
+            "decorDeltaP95Ms": 2.0734,
+            "fullDeltaAvgMs": -9.4925,
+            "budgetMsPerFrame": 2,
+            "withinBudget": true,
+            "overageMs": 0,
+            "budgetNote": "\u5728\u9884\u7B97\u5185\uFF08\u5B9E\u6D4B 1.8919 ms/\u5E27 \u2264 2.00 ms/\u5E27\uFF09\u3002",
+            "layerWindowTextureAvgMs": 0.4491,
+            "layerGroupDecorAvgMs": 1.1312,
+            "layerWindowFrameAvgMs": 0.4149,
+            "layerSumAvgMs": 1.9952,
+            "cpuMsPerFrameAllVariants": 0,
+            "cacheEntries": 7
+          },
+          {
+            "tier": "double_480x1576_no_glow",
+            "clientSize": "480x1576",
+            "groupCount": 6,
+            "itemsPerGroup": 5,
+            "glowIntensity": 0,
+            "frames": 120,
+            "legacyAvgMs": 45.6446,
+            "legacyAvgMsSecondPass": 46.8857,
+            "legacyP95Ms": 53.3101,
+            "decorDeltaMedianMs": 1.7887,
+            "decorDeltaWorstRoundMs": 1.913,
+            "newPathFullAvgMs": 34.8083,
+            "newPathFullP95Ms": 37.7327,
+            "decorDeltaAvgMs": 1.7887,
+            "decorDeltaP95Ms": 1.913,
+            "fullDeltaAvgMs": -10.8362,
+            "budgetMsPerFrame": 2,
+            "withinBudget": true,
+            "overageMs": 0,
+            "budgetNote": "\u5728\u9884\u7B97\u5185\uFF08\u5B9E\u6D4B 1.7887 ms/\u5E27 \u2264 2.00 ms/\u5E27\uFF09\u3002",
+            "layerWindowTextureAvgMs": 0.4673,
+            "layerGroupDecorAvgMs": 1.2034,
+            "layerWindowFrameAvgMs": 0.192,
+            "layerSumAvgMs": 1.8627,
+            "cpuMsPerFrameAllVariants": 0,
+            "cacheEntries": 6
+          }
+        ],
+        "method": "\u79BB\u5C4F\u6E32\u67D3\uFF0C\u540C\u673A\u540C\u5939\u5177\u914D\u5BF9\uFF1AV0 = \u751F\u4EA7 UIRenderer.Render\uFF08\u57FA\u7EBF\uFF09\uFF1BV1 = \u91CD\u6392\u5C42\u6B21\u4F46\u4E0D\u5F00\u88C5\u9970\uFF1BV2 = \u91CD\u6392\u5C42\u6B21 \u002B \u88C5\u9970\u5C42\uFF08\u65E7\u6761\uFF09\uFF1BV3 = \u5B8C\u6574\u65B0\u8DEF\u5F84\uFF08\u88C5\u9970\u5C42 \u002B \u6E10\u53D8\u6761\uFF09\u3002\u88C5\u9970\u5C42\u6210\u672C = V2 - V1\uFF1B\u5B8C\u6574\u589E\u91CF = V3 - V0\u3002",
+        "note": "\u7EDD\u5BF9\u8017\u65F6\u91CC\u7684\u5927\u5934\u662F\u65E2\u6709 GDI \u6587\u672C\u7ED8\u5236\uFF08TextRenderer\uFF09\uFF0C\u4E0E A07 \u65E0\u5173\uFF1B\u00A77.4 \u7684\u201C\u989D\u5916 CPU\u201D\u5BF9\u5E94\u7684\u662F V2-V1 / V3-V0 \u7684\u589E\u91CF\u3002"
+      }
+    }
+  ],
+  "allPassed": true
+}

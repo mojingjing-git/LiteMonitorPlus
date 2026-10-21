@@ -1,0 +1,289 @@
+{
+  "probe": "AppearanceSettingsProbe",
+  "purpose": "W3 \u8BBE\u7F6E\u9875\u300C\u610F\u5916\u56DE\u5199\u300D\u7F3A\u9677\u5305\u7684\u9632\u56DE\u9000\u95E8\u69DB",
+  "total": 56,
+  "passed": 56,
+  "failed": 0,
+  "cases": [
+    {
+      "name": "\u4F5C\u7528\u57DF\u5916\u672A\u88AB\u6291\u5236",
+      "result": "PASS",
+      "detail": "IsWriteBackSuppressed \u5E94\u4E3A false"
+    },
+    {
+      "name": "\u4F5C\u7528\u57DF\u5185\u5DF2\u6291\u5236",
+      "result": "PASS",
+      "detail": "\u8FDB\u5165\u4F5C\u7528\u57DF\u540E\u5E94\u4E3A true"
+    },
+    {
+      "name": "\u5D4C\u5957\u4F5C\u7528\u57DF\u5185\u5DF2\u6291\u5236",
+      "result": "PASS",
+      "detail": "\u5D4C\u5957\u540E\u5E94\u4E3A true"
+    },
+    {
+      "name": "\u5185\u5C42\u91CA\u653E\u540E\u4ECD\u5728\u6291\u5236",
+      "result": "PASS",
+      "detail": "\u5916\u5C42\u8FD8\u5728\uFF0C\u5E94\u4FDD\u6301 true"
+    },
+    {
+      "name": "\u6700\u5916\u5C42\u91CA\u653E\u540E\u6062\u590D",
+      "result": "PASS",
+      "detail": "\u5168\u90E8\u91CA\u653E\u540E\u5E94\u56DE\u5230 false"
+    },
+    {
+      "name": "\u4F5C\u7528\u57DF\u91CD\u590D\u91CA\u653E\u5B89\u5168",
+      "result": "PASS",
+      "detail": "\u91CD\u590D Dispose \u540E\u5E94\u4ECD\u4E3A false"
+    },
+    {
+      "name": "AddCombo \u6784\u9020\u672C\u8EAB\u4E0D\u56DE\u5199",
+      "result": "PASS",
+      "detail": "\u6784\u9020\u671F\u7684\u9009\u4E2D\u9879\u8D4B\u503C\u65E9\u4E8E\u7ED1\u5B9A\uFF0C\u4E0D\u5E94\u56DE\u5199\uFF1B\u5B9E\u9645=keep"
+    },
+    {
+      "name": "AddCombo \u6291\u5236\u5185\u6539\u9009\u4E2D\u9879\u4E0D\u56DE\u5199",
+      "result": "PASS",
+      "detail": "\u7A0B\u5E8F\u5316\u6539\u52A8\u4E0D\u5F97\u5199\u56DE\uFF1B\u5B9E\u9645=keep"
+    },
+    {
+      "name": "AddCombo \u4F5C\u7528\u57DF\u5916\u6539\u9009\u4E2D\u9879\u4F1A\u56DE\u5199",
+      "result": "PASS",
+      "detail": "\u56DE\u5199\u901A\u9053\u5FC5\u987B\u4ECD\u7136\u53EF\u7528\uFF1B\u5B9E\u9645=B"
+    },
+    {
+      "name": "AddCombo \u9009\u4E2D\u9879\u4E3A\u7A7A\u65F6\u4E0D\u5199\u7A7A\u4E32",
+      "result": "PASS",
+      "detail": "\u6E05\u7A7A/\u91CD\u586B\u671F\u95F4\u4E0D\u5F97\u628A\u7A7A\u4E32\u5199\u8FDB\u914D\u7F6E\uFF1B\u5B9E\u9645=keep"
+    },
+    {
+      "name": "AddToggle \u6291\u5236\u5185\u6539\u4E0D\u56DE\u5199",
+      "result": "PASS",
+      "detail": "\u7A0B\u5E8F\u5316\u6539\u52A8\u4E0D\u5F97\u5199\u56DE\uFF1B\u5B9E\u9645=False"
+    },
+    {
+      "name": "AddToggle \u4F5C\u7528\u57DF\u5916\u6539\u4F1A\u56DE\u5199",
+      "result": "PASS",
+      "detail": "\u56DE\u5199\u901A\u9053\u5FC5\u987B\u4ECD\u7136\u53EF\u7528\uFF1B\u5B9E\u9645=True"
+    },
+    {
+      "name": "AddComboPair \u6291\u5236\u5185\u6539\u4E0D\u56DE\u5199",
+      "result": "PASS",
+      "detail": "\u7A0B\u5E8F\u5316\u6539\u52A8\u4E0D\u5F97\u5199\u56DE\uFF1B\u5B9E\u9645=orig"
+    },
+    {
+      "name": "AddComboPair \u4F5C\u7528\u57DF\u5916\u6539\u4F1A\u56DE\u5199",
+      "result": "PASS",
+      "detail": "\u56DE\u5199\u901A\u9053\u5FC5\u987B\u4ECD\u7136\u53EF\u7528\uFF1B\u5B9E\u9645=devA"
+    },
+    {
+      "name": "AddInt \u6291\u5236\u5185\u6539\u6587\u672C\u4E0D\u56DE\u5199",
+      "result": "PASS",
+      "detail": "\u7A0B\u5E8F\u5316\u6539\u52A8\u4E0D\u5F97\u5199\u56DE\uFF1B\u5B9E\u9645=5"
+    },
+    {
+      "name": "AddInput \u6291\u5236\u5185\u6539\u6587\u672C\u4E0D\u56DE\u5199",
+      "result": "PASS",
+      "detail": "\u7A0B\u5E8F\u5316\u6539\u52A8\u4E0D\u5F97\u5199\u56DE\uFF1B\u5B9E\u9645=orig"
+    },
+    {
+      "name": "SetContext \u89E6\u53D1\u5237\u65B0\u4F53\u4E0D\u6539\u539F\u503C",
+      "result": "PASS",
+      "detail": "\u5237\u65B0\u65F6\u9009\u4E2D\u9879\u843D\u5230\u7B2C\u4E00\u9879\u662F\u7A0B\u5E8F\u5316\u6539\u52A8\uFF1B\u5B9E\u9645=Z"
+    },
+    {
+      "name": "OnShow \u5237\u65B0\u4E0D\u6539\u539F\u503C",
+      "result": "PASS",
+      "detail": "\u5237\u65B0\u65F6\u9009\u4E2D\u9879\u843D\u5230\u7B2C\u4E00\u9879\u662F\u7A0B\u5E8F\u5316\u6539\u52A8\uFF1B\u5B9E\u9645=Z"
+    },
+    {
+      "name": "\u8D1F\u5411\u5BF9\u7167\uFF1A\u65E0\u5B88\u536B\u7684\u7ED1\u5B9A\u5728\u6291\u5236\u4F5C\u7528\u57DF\u5185\u786E\u5B9E\u4F1A\u56DE\u5199",
+      "result": "PASS",
+      "detail": "\u9274\u522B\u529B\u6210\u7ACB\uFF1A\u53BB\u6389\u5B88\u536B\u5C31\u4F1A\u56DE\u5199\uFF0C\u4E0A\u8FF0\u65AD\u8A00\u80FD\u6293\u4F4F\u56DE\u9000"
+    },
+    {
+      "name": "\u8D1F\u5411\u5BF9\u7167\uFF1A\u975E\u6CD5\u8F93\u5165\u7ECF ValueDouble \u4F1A\u53D8\u6210 0",
+      "result": "PASS",
+      "detail": "\u8FD9\u8BF4\u660E\u9608\u503C\u884C\u4E0D\u80FD\u76F4\u63A5\u7528 ValueDouble \u56DE\u5199\uFF0C\u5FC5\u987B\u81EA\u5DF1 TryParse \u4E14\u5931\u8D25\u4E0D\u5199\uFF1B\u5B9E\u9645=0"
+    },
+    {
+      "name": "\u4E25\u683C\u89E3\u6790\u62D2\u7EDD\u754C\u9762\u6253\u4E0D\u51FA\u6765\u7684\u5F62\u5F0F",
+      "result": "PASS",
+      "detail": "\u542B \u0022\u002B5\u0022 / \u00221e5\u0022 / \u00221,000\u0022 / \u0022 8 \u0022 / NaN / Infinity / \u0022-\u0022 / \u0022.\u0022"
+    },
+    {
+      "name": "\u4E25\u683C\u89E3\u6790\u63A5\u53D7\u6B63\u5E38\u6570\u5B57",
+      "result": "PASS",
+      "detail": "85 / -12.5 / 0 \u90FD\u5FC5\u987B\u80FD\u88AB\u89E3\u6790\uFF1B\u5B9E\u9645=True"
+    },
+    {
+      "name": "\u9608\u503C\u884C\u9047\u975E\u6CD5\u7C98\u8D34\u79BB\u573A\u540E\u914D\u7F6E\u4E0D\u53D8",
+      "result": "PASS",
+      "detail": "\u65E7\u5B9E\u73B0\u4F1A\u628A\u5B83\u6539\u6210 0\uFF08\u7528\u6237\u53EA\u662F\u7C98\u4E86\u4E2A \u0022.\u0022\uFF09\uFF1B\u5B9E\u9645 Warn=75"
+    },
+    {
+      "name": "\u9608\u503C\u884C\u79BB\u573A\u540E\u663E\u793A\u56DE\u5230\u65E7\u503C",
+      "result": "PASS",
+      "detail": "\u663E\u793A\u4E0E\u914D\u7F6E\u5FC5\u987B\u4E00\u81F4\uFF1B\u5B9E\u9645=\u002275\u0022"
+    },
+    {
+      "name": "\u9608\u503C\u884C\u5F3A\u5236 Crit \u003E= Warn",
+      "result": "PASS",
+      "detail": "\u628A\u4E25\u91CD\u503C\u8C03\u5230\u4F4E\u4E8E\u544A\u8B66\u503C\u65F6\uFF0C\u544A\u8B66\u6863\u5FC5\u987B\u4ECD\u7136\u53EF\u8FBE\uFF1B\u5B9E\u9645 Crit=40 Warn=40"
+    },
+    {
+      "name": "\u9608\u503C\u4E0D\u53D8\u91CF\u8C03\u6574\u6709\u53EF\u89C1\u884C\u5185\u63D0\u793A",
+      "result": "PASS",
+      "detail": "\u94B3\u5236/\u4E0D\u53D8\u91CF\u8C03\u6574\u4E0D\u80FD\u9759\u9ED8\u6539\u503C\uFF0C\u5FC5\u987B\u8BA9\u7528\u6237\u770B\u89C1\uFF1B\u63D0\u793A=\u0022ThresholdWarnLowered\u0022"
+    },
+    {
+      "name": "\u9608\u503C\u94B3\u5236\u628A\u8D8A\u754C\u503C\u62C9\u56DE\u8303\u56F4",
+      "result": "PASS",
+      "detail": "150 \u5E94\u88AB\u94B3\u5230 100\uFF1B\u5B9E\u9645 Warn=100"
+    },
+    {
+      "name": "\u9608\u503C\u94B3\u5236\u540E\u663E\u793A\u4E0E\u914D\u7F6E\u4E00\u81F4",
+      "result": "PASS",
+      "detail": "\u94B3\u5236\u540E\u63A7\u4EF6\u6587\u672C\u5FC5\u987B\u7B49\u4E8E\u914D\u7F6E\u503C\uFF1B\u5B9E\u9645=\u0022100\u0022"
+    },
+    {
+      "name": "\u9608\u503C\u94B3\u5236\u6709\u53EF\u89C1\u884C\u5185\u63D0\u793A",
+      "result": "PASS",
+      "detail": "\u94B3\u5236\u5FC5\u987B\u8BA9\u7528\u6237\u770B\u89C1\uFF1B\u63D0\u793A=\u0022ThresholdCritRaised\u0022"
+    },
+    {
+      "name": "\u5B9A\u4F4D\u4ED3\u5E93\u6839",
+      "result": "PASS",
+      "detail": "G:\\TOOL\\LiteMonitor-fork"
+    },
+    {
+      "name": "SettingsUIBuilder \u516B\u4E2A Add* \u90FD\u6709\u6291\u5236\u5B88\u536B",
+      "result": "PASS",
+      "detail": "8/8"
+    },
+    {
+      "name": "\u4E09\u79CD ComboBox \u7684\u5237\u65B0\u4F53\u90FD\u5305\u8FDB\u4F5C\u7528\u57DF",
+      "result": "PASS",
+      "detail": "3/3"
+    },
+    {
+      "name": "MonitorPage \u590D\u9009\u6846\u6709\u6291\u5236\u5B88\u536B",
+      "result": "PASS",
+      "detail": "CheckedChanged \u5DF2\u5B88\u95E8"
+    },
+    {
+      "name": "MonitorPage.Save \u7528 _linkHorizontalEdited \u51B3\u5B9A\u63D0\u4EA4\u503C",
+      "result": "PASS",
+      "detail": "\u5DF2\u6309\u300E\u7528\u6237\u662F\u5426\u771F\u6539\u8FC7\u300F\u63D0\u4EA4"
+    },
+    {
+      "name": "MonitorPage \u540C\u6B65\u590D\u9009\u6846\u8D70\u4F5C\u7528\u57DF",
+      "result": "PASS",
+      "detail": "\u540C\u6B65\u5DF2\u5305\u8FDB\u4F5C\u7528\u57DF"
+    },
+    {
+      "name": "FillSync \u91CD\u586B\u8D70\u4F5C\u7528\u57DF",
+      "result": "PASS",
+      "detail": "\u5DF2\u5305\u8FDB\u4F5C\u7528\u57DF"
+    },
+    {
+      "name": "FillGpuSync \u91CD\u586B\u8D70\u4F5C\u7528\u57DF",
+      "result": "PASS",
+      "detail": "\u5DF2\u5305\u8FDB\u4F5C\u7528\u57DF"
+    },
+    {
+      "name": "\u516D\u4E2A\u8BBE\u5907\u504F\u597D\u4E0B\u62C9\u7528 AddComboPair",
+      "result": "PASS",
+      "detail": "6/6"
+    },
+    {
+      "name": "LiteThresholdRow \u7ACB\u5373\u7ED1\u5B9A\u6709\u6291\u5236\u5B88\u536B",
+      "result": "PASS",
+      "detail": "\u5DF2\u5B88\u95E8"
+    },
+    {
+      "name": "LiteThresholdRow \u5237\u65B0\u4F53\u8D70\u4F5C\u7528\u57DF",
+      "result": "PASS",
+      "detail": "\u5DF2\u5305\u8FDB\u4F5C\u7528\u57DF"
+    },
+    {
+      "name": "LiteThresholdRow \u89E3\u6790\u5931\u8D25\u65F6\u4E0D\u5199\u56DE",
+      "result": "PASS",
+      "detail": "\u975E\u6CD5\u8F93\u5165\u4E0D\u5F97\u628A\u9608\u503C\u9759\u9ED8\u6539\u6210 0"
+    },
+    {
+      "name": "\u9608\u503C\u884C\u4E0D\u518D\u81EA\u5E26\u79BB\u573A\u56DE\u586B\u5904\u7406\u5668",
+      "result": "PASS",
+      "detail": "\u79BB\u573A\u56DE\u586B\u7531 LiteNumberInput \u7EDF\u4E00\u8D1F\u8D23\uFF0C\u907F\u514D\u4E24\u5957\u673A\u5236\u4E92\u76F8\u6253\u7A7F"
+    },
+    {
+      "name": "\u6570\u5B57\u8F93\u5165\u8BB0\u5F55\u6700\u8FD1\u4E00\u6B21\u5408\u6CD5\u503C",
+      "result": "PASS",
+      "detail": "\u79BB\u573A\u65F6\u56DE\u586B\u300C\u6700\u8FD1\u4E00\u6B21\u5408\u6CD5\u503C\u300D\uFF0C\u800C\u4E0D\u662F\u786C\u7F16\u7801 \u00220\u0022"
+    },
+    {
+      "name": "\u6570\u5B57\u8F93\u5165\u79BB\u573A\u4E0D\u518D\u786C\u7F16\u7801 0",
+      "result": "PASS",
+      "detail": "\u786C\u7F16\u7801 \u00220\u0022 \u4F1A\u540C\u6B65\u89E6\u53D1 TextChanged \u21D2 \u628A 0 \u771F\u7684\u5199\u8FDB\u914D\u7F6E\uFF08\u7528\u6237\u53EA\u662F\u7C98\u4E86\u4E2A \u0022.\u0022\uFF09"
+    },
+    {
+      "name": "\u6570\u5B57\u8F93\u5165\u79BB\u573A\u56DE\u586B\u6700\u8FD1\u5408\u6CD5\u503C",
+      "result": "PASS",
+      "detail": "\u79BB\u573A\u65F6\u628A\u6587\u672C\u56DE\u586B\u6210\u6700\u540E\u4E00\u4E2A\u5408\u6CD5\u503C\uFF0C\u663E\u793A\u4E0E\u914D\u7F6E\u4FDD\u6301\u4E00\u81F4"
+    },
+    {
+      "name": "\u9608\u503C\u89E3\u6790\u7528\u4E25\u683C NumberStyles",
+      "result": "PASS",
+      "detail": "\u53EA\u63A5\u53D7\u6570\u5B57/\u8D1F\u53F7/\u5C0F\u6570\u70B9\uFF0C\u00221e5\u0022 / \u00221,000\u0022 / \u0022 8 \u0022 \u5747\u88AB\u62D2"
+    },
+    {
+      "name": "\u9608\u503C\u89E3\u6790\u62D2\u7EDD NaN / Infinity",
+      "result": "PASS",
+      "detail": "\u5DF2\u62D2\u975E\u6709\u9650\u503C"
+    },
+    {
+      "name": "\u9608\u503C\u89E3\u6790\u6709\u5B57\u7B26\u96C6\u6821\u9A8C\uFF08\u62D2\u524D\u5BFC\u52A0\u53F7\uFF09",
+      "result": "PASS",
+      "detail": "\u5B57\u7B26\u96C6\u4E0E KeyPress \u4E00\u81F4 \u21D2 \u0022\u002B5\u0022 \u8FD9\u7C7B\u754C\u9762\u6253\u4E0D\u51FA\u6765\u7684\u5F62\u5F0F\u88AB\u62D2"
+    },
+    {
+      "name": "\u9608\u503C\u884C\u5F3A\u5236 Crit \u003E= Warn \u4E0D\u53D8\u91CF",
+      "result": "PASS",
+      "detail": "\u6539 warn \u65F6\u62AC crit / \u6539 crit \u65F6\u538B warn \u2014\u2014 \u521A\u88AB\u7528\u6237\u6539\u7684\u90A3\u4E2A\u503C\u4FDD\u6301\u4E0D\u53D8"
+    },
+    {
+      "name": "\u9608\u503C\u94B3\u5236\u6709\u53EF\u89C1\u884C\u5185\u63D0\u793A",
+      "result": "PASS",
+      "detail": "\u94B3\u5236\u4E0E\u4E0D\u53D8\u91CF\u8C03\u6574\u5FC5\u987B\u8BA9\u7528\u6237\u770B\u89C1\uFF0C\u4E0D\u80FD\u9759\u9ED8\u6539\u503C"
+    },
+    {
+      "name": "UIFonts \u662F\u8FDB\u7A0B\u5185\u7F13\u5B58",
+      "result": "PASS",
+      "detail": "\u6309\u5B57\u53F7/\u6837\u5F0F\u590D\u7528\u540C\u4E00\u5B9E\u4F8B"
+    },
+    {
+      "name": "LiteUI.cs \u5185\u4E0D\u518D\u6709\u88F8 new Font",
+      "result": "PASS",
+      "detail": "\u5269\u4F59 1 \u5904\uFF08\u5E94\u53EA\u5269 UIFonts \u7F13\u5B58\u5185\u90E8\u90A3 1 \u5904\uFF09"
+    },
+    {
+      "name": "LiteNavBtn \u91CD\u7ED8\u4E0D\u518D\u65B0\u5EFA\u5B57\u4F53",
+      "result": "PASS",
+      "detail": "\u539F\u5199\u6CD5\u6BCF\u6B21 OnPaint \u90FD new \u4E00\u4E2A Font\uFF0C\u9F20\u6807\u5212\u8FC7\u5C31\u6F0F\u4E00\u4E2A GDI \u5BF9\u8C61"
+    },
+    {
+      "name": "UIFonts \u63D0\u4F9B CachedCount \u81EA\u68C0\u53E3",
+      "result": "PASS",
+      "detail": "A17 \u7684 S1 \u65AD\u8A00\u8981\u7528\u300C\u53CD\u590D\u5F00\u5173\u8BBE\u7F6E\u9875\u524D\u540E CachedCount \u4E0D\u53D8\u300D\u2014\u2014 \u65AD\u8A00\u4E0D\u53D8\u91CF\uFF0C\u800C\u4E0D\u662F\u67D0\u4E2A\u5177\u4F53\u4E2A\u6570\uFF08\u5B57\u4F53\u952E\u6570\u4F1A\u968F\u65B0\u5B57\u53F7\u589E\u957F\uFF0C\u5199\u6B7B\u6570\u5B57\u5FC5\u7136\u8BEF\u62A5\uFF09"
+    },
+    {
+      "name": "\u9608\u503C\u63D0\u793A\u6587\u6848 9 \u79CD\u8BED\u8A00\u5168\u8986\u76D6",
+      "result": "PASS",
+      "detail": "zh / zh-tw / en / ja / ko / de / fr / es / ru \u5747\u542B 3 \u4E2A\u65B0\u952E"
+    },
+    {
+      "name": "\u63A2\u9488\u5DE5\u7A0B\u4E0D\u8FDB sln",
+      "result": "PASS",
+      "detail": "\u672A\u51FA\u73B0\u5728 sln \u91CC"
+    }
+  ]
+}

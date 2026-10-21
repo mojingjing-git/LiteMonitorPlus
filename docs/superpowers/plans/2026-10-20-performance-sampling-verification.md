@@ -950,9 +950,10 @@ dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Release --no-bui
 - §9.9 第 2 行与 §9.11 公开 API 条目中的 **"454/454"** 是 **Task 6 三轮测量批次**（被测版本 `b777ec0`）的口径，
   **保持原样、不改写**——那是那一批次的真实记录。
 - 本节（§10）是 R1 修复后的**当前口径：467/467**。两者不矛盾：修复新增了准入时序测试，并补齐了此前不在库内的用例。
-- **合并提交自身的强制重建与全量回归结果，以合并计划
-  `docs/superpowers/plans/2026-10-20-performance-sampling-merge.md` 的验收记录为准**；
+- **合并提交自身的强制重建与全量回归结果，以 §10.10 的验收记录为准**；
   不得以功能分支上的绿灯代替合并提交的验收。
+  （合并计划 `docs/superpowers/plans/2026-10-20-performance-sampling-merge.md` 是**本地未入库**的文档；
+  §10.10 已把验收结论落到仓库内，读者不依赖该文件。）
 
 ### 10.8 未验证项与限制（如实标注，不填 0、不估算）
 
@@ -963,7 +964,7 @@ dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Release --no-bui
 | **`FpsCounter.CheckHealth` 的 isDead 分支在真机是否触发** | **【未验证】** | 取决于 PresentMon 的真实输出节拍；本机非管理员 + 禁下载 → 必然无法实测。**不得引用未经证实的假设当结论。** |
 | **§9 的性能数字是否仍适用于当前 HEAD** | **【口径边界】** | §9 的 CPU 与计数结论对应 Task 6 批次被测版本 `b777ec0`。本修复**只改 FPS 生命周期准入，未改采样协调逻辑**，采样路径未变；但这些数字**不自动成为合并提交的实测结论**。合并提交若无代码冲突与采样逻辑变化，无需机械重跑全部三轮性能矩阵。 |
 | **真实 FPS 生命周期"完全验证"** | **【不可宣称】** | 在真机 PresentMon / ETW 场景补齐之前，**不得**对外宣称 FPS 生命周期已完全验证。 |
-| §9.9 提到的 `task-6-report.md` | **【披露级·悬空引用】** | 该文件在仓库与本地账本中**均不存在**，属悬空引用；不影响 §9 的任何数字与结论。 |
+| §9.9 提到的 `task-6-report.md` | **【披露级·引用未写全路径】** | 该文件**不在仓库内** —— 它位于 gitignored 的本地协调区 `.superpowers/sdd/2026-10-20-performance-sampling-hardening/task-6-report.md`（未入库），而 §9.9 只写了裸文件名，**未写全路径**。**本地账本中该文件实际存在（457 行）**，不是缺失文件；不影响 §9 的任何数字与结论 |
 
 ### 10.9 证据归档位置
 
@@ -974,3 +975,44 @@ dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Release --no-bui
   `.review-scratch/performance-review-54febdc/review.md`。
 - `.review-scratch/` 内的克隆、`bin/obj` 与临时产物**不随仓库提交**；如需入库原始日志，
   须先选定必要文件并检查机器路径、配置与秘密信息。
+
+### 10.10 合并提交验收记录（`97f793d`）
+
+> 本节记录**合并提交自身**的验收，而不是功能分支上的绿灯。
+> 功能分支绿灯**不能**代替合并提交的验收（见 §10.7）。
+
+| 项 | 值 |
+|---|---|
+| 合并提交 | `97f793dccac6d5ab37120602ecab4f6238a855da`（`merge: performance sampling hardening`） |
+| 第一父 | `949835f7b0a7f8a2f888dd6965716b4a077b6d3f`（旧主线，合并前 master） |
+| 第二父 | `ec62fe42342a6fa54853b10dc781e29e065291aa`（`codex/performance-sampling` HEAD） |
+| 相对 §9 交付点 `15e1fc6` 的新增提交 | `4b9ed83`（R1 启动准入原子化，生产+测试）、`6ca511c`（本节归档）、`ec62fe4`（`git diff --check` 行尾清理） |
+| 回滚方式 | `git revert -m 1 97f793dccac6d5ab37120602ecab4f6238a855da` |
+| 合并后主线 | `master` 以 `--ff-only` 精确指向 `97f793d`；已跟踪文件干净 |
+
+**验收结果（合并提交上实测）**
+
+| 项 | 结果 |
+|---|---|
+| 强制重建 `dotnet build -c Release --no-incremental` | **242 个警告 / 0 个错误**，退出码 0 |
+| 全量回归 `dotnet test -c Release --no-build` | **467 通过 / 0 失败 / 0 跳过**，退出码 0 |
+| `git diff --check 949835f..97f793d` | 退出码 **0** |
+| 性能探针 `--quick --groups A,B,D`（合并提交实测） | A/B/D 三组稳态均为 **10 轮 / 10 秒 ≈ 1 次/秒**；B 组 100 请求被门限跳过 **90** 次；D 组（Web 开且无人访问）设备集合与 A/B 完全一致，`GPU.1 = 0` |
+| 实机冒烟（5 次运行） | 面板正常渲染（CPU 41.5%、3080 Ti 33.2%/56°C/6.30GB、第二张 3080 0.00%/33°C）；未鉴权 `/api/snapshot` → **401**，已鉴权 → **200** 且面板隐藏项仍带真实值；FPS 输出 `"--"` 占位且**未拉起外部服务**；`SC_CLOSE` 后正常退出且**无残留进程** |
+
+**主控独立复验（在合并提交上重做，不采信上表）**
+
+- **独立验收**：全新 `git clone --no-hardlinks` @ `97f793d` → `--no-incremental` 构建 → **242 警告 / 0 错误**、
+  全量 **467 通过 / 0 失败 / 0 跳过**、退出码 0 —— 与上表逐项一致。
+- **变异复验 `M-merge-A`**：把"最终复查 + 登记在途创建"退回 `15e1fc6` 的锁外结构 →
+  `StartupAdmissionMustRespectLifecycleChange` **2 失败 / 1 通过**，
+  两条均为 `Expected: 0 / Actual: 1`（释放与停止场景），**正常启动阳性对照保持通过** ——
+  与 §10.5 归档的红证据**逐字一致**，证明该护栏承重且不误伤。
+- **公开 API 面**：`4b9ed83` 相对 `15e1fc6` → `FpsCounter.cs` **64 → 64 条，零删除、零改签名、零新增**。
+- **合并结构**：`--no-ff` 生成的合并提交保留整体回滚点；主线用 `--ff-only` 接收，确保接收集成的就是已验收的提交。
+
+**仍然未验证（不得宣称完全验证，详见 §10.8）**
+
+真机 PresentMon / ETW 行为、真机 FPS 数值与 FPS 生命周期的"完全验证"、
+`CheckHealth` 的 isDead 分支真机是否触发、§6.2 的 I 组（需下载 `LiteMonitorPlusFPS.exe`）、Web Stop/Start 的 GUI 复现。
+§9 的性能数字对应被测版本 `b777ec0`，**不自动成为合并提交的实测结论**。
