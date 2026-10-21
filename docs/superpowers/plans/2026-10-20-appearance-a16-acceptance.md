@@ -85,8 +85,10 @@ UIController.Render(g)
 | `backdrop.opacity` | 0.72（合同归一化范围 0–1） |
 | `backdrop.blur` | 12（范围 0–32） |
 | `backdrop.fps` | 2（范围 1–6；合同 §3.4「捕获上限 6fps、默认 2fps」） |
-| `backdrop.tint` | `rgba(226,238,255,0.9)` |
-| 渐变回退 | `#9BB6D5 → #5B85B3`，角度 90° |
+| `backdrop.tint` | `rgba(9,17,30,1.0)`（深色纱罩；有效 alpha = 255 × 0.72 ≈ 0.72） |
+| 渐变回退 | `#1B2C44 → #0A1220`，角度 90° |
+| `layout.frameStyle` | **2**（圆角描边 —— 液态玻璃的轮廓特征，替代首版的切角 1） |
+| `layout.cornerRadius` | **16**（圆角半径；窗口轮廓与绘制外框同源同值） |
 
 完整取值表与配色取舍见 `docs/superpowers/plans/2026-10-20-appearance-liquid-glass-theme.md`。
 
@@ -95,6 +97,11 @@ UIController.Render(g)
 （`textGroup` 3.81 < 4.5；`barLow` 2.35 / `barMid` 2.14 / `barHigh` 2.59 < 3.0）——
 这是**真实的可读性缺陷**。修法是**改配色**而不是放宽判据：进度条三档改为与
 `valueSafe` / `valueWarn` / `valueCrit` 同色，分组标题压深 ⇒ 改后 **442 / 442 全部通过**。
+
+🔴 **第二轮（实机反馈后）整体改深色**：首版浅冷玻璃在实机上呈**浅蓝白平板**，
+且降级态与玻璃态在画面上**无法区分**（违反合同 §7「降级不静默」）。本轮把整套配色翻到
+**深色磨砂玻璃**（深底 + 亮字 + 低 alpha 深色纱罩），并把窗口轮廓从切角改成圆角描边。
+改后主题探针**重跑仍是 442 / 442**（12 项可读性判据实测值见主题说明文档 §7.3）。
 
 ---
 
@@ -148,6 +155,21 @@ UIController.Render(g)
 
 证据目录：`docs/reviews/evidence/a14-9c16ad3/a16-wiring/`
 
+🔴 **第二轮复验（深色改版 + 降级可见性 + 诊断日志）**：上表全部命令在第二轮改动后**重跑一遍**，
+结果不变 —— 主工程仍 **0 错误 / 234 警告**（与基线一致）、单元测试仍 **583 / 583**、
+M2 探针仍 **15 / 15**、主题探针仍 **442 / 442**、其余 5 个探针仍全部通过。
+
+### 5.3 第二轮针对实机反馈的三处修复
+
+| # | 实机症状 | 修复 | 落点 |
+|---|---|---|---|
+| 1 | 玻璃**没生效**但画面与正常态无法区分（静默降级） | 面板底部画「实时玻璃未生效：\<原因\>」。只在「开关已开 + 主题请求 glass + 服务确实在降级」三条件同时成立时出现，其余情况画面**零变化** | `src/UI/UIController.cs` → `UIController` → `DrawLiveGlassNotice`（竖屏与横屏两处都调） |
+| 2 | 拿不到「服务为什么没出帧」 | 诊断日志写 exe 同目录 `liveglass.log`：**状态 / 生效模式 / 降级原因 / 后端原因 / 已发布帧数**，仅在状态变化时写（不每帧刷屏），任何写失败静默 | `src/UI/LiveGlassController.cs` → `LiveGlassController` → `LiveGlassLog` |
+| 3 | 刷新请求打到了已停止的服务（死路径） | `RefreshRequest()` 先看 `svc.IsRunning`：在跑才 `UpdateRequest`，没在跑就 `Start` | `src/UI/LiveGlassController.cs` → `LiveGlassController` → `RefreshRequest` |
+
+附带修掉两处隐患：降级提示的画刷在**换主题后不刷新**（现按颜色重建），
+以及提示颜色取 `TextSecondary` 时可能为 null（现退回 `TextPrimary`，不再新增编译警告）。
+
 ---
 
 ## 6. 未验证项（不得被其它通过项覆盖）
@@ -155,6 +177,8 @@ UIController.Render(g)
 | 条件 | 状态 | 归属 |
 |---|---|---|
 | **实机玻璃效果**（真实抓屏下的模糊强度、纱罩浓度、观感） | **未验证** —— 本代理会话不合成到交互桌面，窗口不出现在屏幕捕获里 | 用户（交互会话） |
+| **实时玻璃到底有没有出帧**（后端原因） | **未验证** —— 已加 `liveglass.log` 诊断日志，但**还没跑过一次**拿到日志 | 用户（交互会话）跑一次并回传 `bin/Release/net8.0-windows/liveglass.log` |
+| **深色磨砂玻璃的实机观感**（tint 浓度 / 模糊强度 / 圆角轮廓） | **未验证** —— 只有计算依据，没有实机像素依据 | 用户（交互会话） |
 | **首次提示的实际弹出** | 代码路径已接（开关 → 确认 → 取消则复位），但**未在真实 UI 上点过** | 用户（交互会话） |
 | **后台额外 CPU ≤ 40ms/秒、单次 p95 ≤ 30ms** | **无法测量** —— 本轮只接了主面板，预算需在真实运行中测 | A17 |
 | 高饱和壁纸 / HDR 下的玻璃观感与色偏 | 未验证 | A17 |
@@ -168,13 +192,16 @@ UIController.Render(g)
 ## 7. 交接给 A17 的清单
 
 1. **先在交互会话打开一次实时玻璃**，确认：① 提示弹出且可取消；② 打开后背景确实是实时画面；
-   ③ 关闭后恢复渐变/纯色；④ 隐藏窗口时不再抓屏。
-2. **测后台 CPU 预算**：按 §6.1 口径分别记录 CPU 与经过时间；**CPU 预算只认 CPU 口径**。
-3. **录屏下验证瞬时排除**：确认面板是否"短暂消失或闪动"，并把结论写进支持矩阵。
-4. **释放压力**：反复开关实时玻璃、换肤、隐藏/显示，确认位图与句柄不持续增长
+   ③ 关闭后恢复渐变/纯色；④ 隐藏窗口时不再抓屏；⑤ 面板底部**没有**出现
+   「实时玻璃未生效：…」这一行提示（出现了就说明还在降级）。
+   跑完把 exe 同目录的 **`liveglass.log`** 回传 —— 这是确定「服务为什么没出帧」的确切依据。
+2. **看一次深色玻璃观感**：tint 浓度、模糊强度、圆角轮廓目前**只有计算依据**，需要实机观感来定标。
+3. **测后台 CPU 预算**：按 §6.1 口径分别记录 CPU 与经过时间；**CPU 预算只认 CPU 口径**。
+4. **录屏下验证瞬时排除**：确认面板是否"短暂消失或闪动"，并把结论写进支持矩阵。
+5. **释放压力**：反复开关实时玻璃、换肤、隐藏/显示，确认位图与句柄不持续增长
    （`BackdropCaptureService.Metrics` 的 `FramesDroppedStale` 与存活位图数是现成的观测量）。
-5. **Win10 / RDP / 锁屏**按支持矩阵逐项记录"通过 / 失败 / 未验证"，不外推。
-6. 未通过的后端**不发布**（保留 `gradient → solid` 降级链与可读原因）。
+6. **Win10 / RDP / 锁屏**按支持矩阵逐项记录"通过 / 失败 / 未验证"，不外推。
+7. 未通过的后端**不发布**（保留 `gradient → solid` 降级链与可读原因）。
 
 ---
 
@@ -192,3 +219,14 @@ UIController.Render(g)
 | `tests/AppearanceM2Probe/SourceGateRunner.cs` | 修改 | A16 唯一性门槛 |
 | `tests/AppearanceThemeCheck/{Program,ThemeSpec}.cs` | 修改 | 期望集合纳入 LiquidGlass + 它的完整期望表 |
 | `docs/superpowers/plans/2026-10-20-appearance-liquid-glass-theme.md` | 新增 | 主题参数说明与配色取舍 |
+
+### 8.1 第二轮（实机反馈后）追加改动
+
+| 文件 | 性质 | 说明 |
+|---|---|---|
+| `src/UI/LiveGlassController.cs` | 修改 | 诊断日志 `LiveGlassLog`（exe 同目录 `liveglass.log`，仅状态变化时写）；`RefreshRequest` 死路径修复；暴露 `LastDegradeReason` / `PublishedFrames`；`StartService` / `BeginPaint` 记日志 |
+| `src/UI/UIController.cs` | 修改 | 新增 `DrawLiveGlassNotice`（降级可见性提示行，竖屏 + 横屏两处调用）；提示画刷按颜色重建（换主题不残留旧色）；`TextSecondary` 为空时退回 `TextPrimary` |
+| `resources/themes/LiquidGlass.json` | 修改 | 整体改**深色磨砂玻璃**配色；`frameStyle` 1 → 2（圆角描边）、`cornerRadius` 0 → 16、`scanline` 30 → 18、`grid` 20 → 10、`groupRadius` 4 → 10 |
+| `tests/AppearanceThemeCheck/ThemeSpec.cs` | 修改 | `ThemeSpecs.LiquidGlass` 的期望表同步到深色配色（15 个颜色 + 布局 4 项 + backdrop 5 项） |
+| `docs/superpowers/plans/2026-10-20-appearance-liquid-glass-theme.md` | 修改 | 颜色表 / backdrop 表 / §5 降级说明 / §7 配色取舍与实测对比度 / §8 未验证项 全部同步到深色版 |
+| `docs/superpowers/plans/2026-10-20-appearance-a16-acceptance.md` | 修改 | §3 主题取值表、§5.3 三处修复、§6 未验证项、§7 交接清单、§8.1 追加改动清单 |

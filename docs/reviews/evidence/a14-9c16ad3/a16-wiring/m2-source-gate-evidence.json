@@ -1,10 +1,10 @@
 {
   "kind": "appearance_m2_source_gate_probe_result",
   "probeVersion": 1,
-  "startedAt": "2026-10-21T15:35:55.6446508\u002B08:00",
+  "startedAt": "2026-10-21T16:33:39.8268486\u002B08:00",
   "assembly": "1.0.0.0",
   "baseDirectory": "G:\\TOOL\\LiteMonitor-fork\\tests\\AppearanceM2Probe\\output\\",
-  "elapsedMs": 3118,
+  "elapsedMs": 3084,
   "repoRoot": "G:\\TOOL\\LiteMonitor-fork",
   "repoRootSource": "\u4ECE\u7A0B\u5E8F\u6240\u5728\u76EE\u5F55\u5411\u4E0A\u67E5\u627E",
   "purpose": "\u9A8C\u8BC1 M2 \u5408\u540C \u00A79 \u4E2D\u4E24\u6761\u4E0E\u6355\u83B7\u540E\u7AEF\u5B9E\u73B0\u65E0\u5173\u7684\u6E90\u7801\u7EA7\u95E8\u69DB\uFF1A\u7B2C 7 \u6761\uFF08\u7ED8\u5236\u8DEF\u5F84\u65E0\u6355\u83B7\u8C03\u7528\uFF09\u4E0E\u7B2C 10 \u6761\uFF08\u65E0\u65B0\u589E NuGet \u4F9D\u8D56\uFF09\u3002",
@@ -25,7 +25,7 @@
       "details": {
         "gate": "M2 \u5408\u540C \u00A79 \u7B2C 7 \u6761",
         "scannedFileCount": 131,
-        "scannedLineCount": 50019,
+        "scannedLineCount": 50202,
         "primitives": [
           "BitBlt",
           "CopyFromScreen",
@@ -218,7 +218,7 @@
       "details": {
         "scannedFileCount": 131,
         "backdropCaptureServiceCreations": 1,
-        "backdropCaptureServiceSites": "src/UI/LiveGlassController.cs @137",
+        "backdropCaptureServiceSites": "src/UI/LiveGlassController.cs @199",
         "engineVariableNames": "_engine, engine",
         "engineStartCalls": 0,
         "engineStartCallSites": "",
