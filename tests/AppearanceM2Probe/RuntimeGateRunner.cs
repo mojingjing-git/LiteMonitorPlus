@@ -137,6 +137,15 @@ namespace LiteMonitor.AppearanceM2Probe
         private ManualResetEventSlim? _entered;
         private ManualResetEventSlim? _gate;
 
+        /// <summary>按调用序号分段的闸门（第 N 次捕获用第 N 个闸门；不足则沿用最后一个）。</summary>
+        private readonly List<(ManualResetEventSlim Entered, ManualResetEventSlim Gate)> _steps = new();
+
+        /// <summary>当前正在进行的捕获调用数。</summary>
+        private int _concurrentCalls;
+
+        /// <summary>捕获调用并发峰值。</summary>
+        private int _maxConcurrentCalls;
+
         /// <summary>产出位图的宽度（像素）。</summary>
         public int FrameWidth { get; set; } = 64;
 
@@ -179,6 +188,27 @@ namespace LiteMonitor.AppearanceM2Probe
             get { lock (_sync) return _produced.ToArray(); }
         }
 
+        /// <summary>
+        /// 捕获调用的**并发峰值**。
+        /// <para>★ 用来证明"不会有两个捕获循环同时存在"（A15 独立复核 S1 / P1）：
+        ///   峰值 > 1 即意味着两个后台线程同时在抓屏。</para>
+        /// </summary>
+        public int MaxConcurrentCalls => Volatile.Read(ref _maxConcurrentCalls);
+
+        /// <summary>
+        /// 追加一个**按调用序号分段**的闸门：第 N 次捕获会停在第 N 个闸门上。
+        /// <para>★ 与 <see cref="UseGate"/> 的区别：后者所有调用共用一组闸门；
+        ///   这里可以精确控制"第一次捕获停在闸门 1、第二次停在闸门 2"，
+        ///   用来复现"旧轮次卡住 + 新轮次启动"的时序。</para>
+        /// </summary>
+        public void AddGatedStep(ManualResetEventSlim entered, ManualResetEventSlim gate)
+        {
+            lock (_sync)
+            {
+                _steps.Add((entered, gate));
+            }
+        }
+
         /// <summary>设置就绪状态与原因。</summary>
         public void SetReady(bool ready, string reason)
         {
@@ -202,44 +232,72 @@ namespace LiteMonitor.AppearanceM2Probe
         /// <summary>捕获一帧（现画一张小位图；所有权转移给调用方）。</summary>
         public bool TryCapture(BackdropServiceRequest request, out Image? frame, out BackdropServiceTiming timing)
         {
-            Interlocked.Increment(ref _captureCalls);
+            int callIndex = Interlocked.Increment(ref _captureCalls) - 1;
 
-            ManualResetEventSlim? entered;
-            ManualResetEventSlim? gate;
-            lock (_sync)
+            // ★ 并发峰值统计：证明"不会有两个捕获循环同时存在"（S1 / P1）
+            int current = Interlocked.Increment(ref _concurrentCalls);
+            int observed = Volatile.Read(ref _maxConcurrentCalls);
+            while (current > observed)
             {
-                entered = _entered;
-                gate = _gate;
+                int prev = Interlocked.CompareExchange(ref _maxConcurrentCalls, current, observed);
+                if (prev == observed) break;
+                observed = Volatile.Read(ref _maxConcurrentCalls);
             }
 
-            entered?.Set();
-
-            if (gate is not null && !gate.Wait(TimeSpan.FromSeconds(5)))
+            try
             {
-                // 闸门超时：按"捕获失败"返回 —— 探针绝不允许挂死。
-                frame = null;
-                timing = BackdropServiceTiming.Empty;
-                return false;
-            }
-
-            if (CaptureDelayMs > 0) Thread.Sleep(CaptureDelayMs);
-
-            lock (_sync)
-            {
-                if (FailCapture)
+                ManualResetEventSlim? entered;
+                ManualResetEventSlim? gate;
+                lock (_sync)
                 {
+                    if (_steps.Count > 0)
+                    {
+                        // ★ 按调用序号取闸门（第 N 次捕获用第 N 个），可复现"旧轮卡住、新轮启动"
+                        (ManualResetEventSlim Entered, ManualResetEventSlim Gate) step =
+                            _steps[Math.Min(callIndex, _steps.Count - 1)];
+                        entered = step.Entered;
+                        gate = step.Gate;
+                    }
+                    else
+                    {
+                        entered = _entered;
+                        gate = _gate;
+                    }
+                }
+
+                entered?.Set();
+
+                if (gate is not null && !gate.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    // 闸门超时：按"捕获失败"返回 —— 探针绝不允许挂死。
                     frame = null;
                     timing = BackdropServiceTiming.Empty;
                     return false;
                 }
 
-                Bitmap bitmap = new Bitmap(FrameWidth, FrameHeight, PixelFormat.Format32bppArgb);
-                _produced.Add(bitmap);
-                frame = bitmap;
-            }
+                if (CaptureDelayMs > 0) Thread.Sleep(CaptureDelayMs);
 
-            timing = new BackdropServiceTiming(excludeWindowMs: 0d, backendCaptureMs: 1d, backendFilterMs: 0d);
-            return true;
+                lock (_sync)
+                {
+                    if (FailCapture)
+                    {
+                        frame = null;
+                        timing = BackdropServiceTiming.Empty;
+                        return false;
+                    }
+
+                    Bitmap bitmap = new Bitmap(FrameWidth, FrameHeight, PixelFormat.Format32bppArgb);
+                    _produced.Add(bitmap);
+                    frame = bitmap;
+                }
+
+                timing = new BackdropServiceTiming(excludeWindowMs: 0d, backendCaptureMs: 1d, backendFilterMs: 0d);
+                return true;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _concurrentCalls);
+            }
         }
 
         /// <summary>恢复显示亲和性（只计数，不碰窗口）。</summary>
@@ -423,6 +481,14 @@ namespace LiteMonitor.AppearanceM2Probe
             Cases.Add(RunRestoreAffinityGate());
             Cases.Add(RunTwoClockGate());
             Cases.Add(RunBufferBudgetGate());
+
+            // ★ A15 独立复核（2026-10-21）补的**生命周期时序**回归：
+            //   这四条缺陷在合同 §9 的十条门槛里**都没有覆盖**（门槛只测了
+            //   "正常 Stop"、"pending 上限"、"代次不匹配"），必须单独硬断言。
+            Cases.Add(RunRunIsolationGate());          // S1（P1）
+            Cases.Add(RunInvalidatedLeaseGate());      // S2
+            Cases.Add(RunSuspendedInFlightGate());     // S3
+            Cases.Add(RunRecoveryStateTextGate());     // S4
         }
 
         // ---------------------------------------------------------------- 门槛 #1
@@ -1140,6 +1206,304 @@ namespace LiteMonitor.AppearanceM2Probe
                 Thread.Sleep(5);
             }
             return condition();
+        }
+
+        /// <summary>有界等待接管一帧（成功即返回租约；失败时租约为 null）。</summary>
+        private static bool TryAcquireWithTimeout(BackdropCaptureService service, out BackdropFrameLease? lease, int timeoutMs)
+        {
+            lease = null;
+            Stopwatch sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                if (service.TryAcquireFrame(out lease) && lease is not null) return true;
+                lease = null;
+                Thread.Sleep(5);
+            }
+            return false;
+        }
+
+        // ================================================================
+        // A15 独立复核（2026-10-21）补的**生命周期时序**回归
+        //
+        // ★ 为什么单独成组：合同 §9 的十条门槛**都没有覆盖**这四条缺陷 ——
+        //   #4 只测"捕获返回前换代"，没测"已接管的 active 帧作废后还能不能借"；
+        //   #5 只测 pending 上限，没接管过 active；
+        //   #6 用快速假后端测正常 Stop，没测"Stop 超时后重启"与"暂停期间在途帧返回"。
+        // ================================================================
+
+        /// <summary>
+        /// S1（P1）：Stop 超时后**禁止重启**；旧轮次的帧**不得**发布；不得出现两个捕获循环。
+        /// </summary>
+        private ProbeCase RunRunIsolationGate()
+        {
+            ProbeCase c = new ProbeCase { Name = "A15 复核 S1 停止超时后禁止重启且旧轮次不得发布帧" };
+
+            using ManualResetEventSlim entered1 = new(false);
+            using ManualResetEventSlim gate1 = new(false);
+            using ManualResetEventSlim entered2 = new(false);
+            using ManualResetEventSlim gate2 = new(false);
+
+            FakeCaptureBackend backend = new FakeCaptureBackend { FrameWidth = 8, FrameHeight = 8 };
+            backend.AddGatedStep(entered1, gate1);
+            backend.AddGatedStep(entered2, gate2);
+
+            using BackdropCaptureService service =
+                new BackdropCaptureService(backend, processor: null, takeoverTimeoutMs: 20d);
+            BackdropServiceRequest request = CreateRequest(theme: 1, handle: 1, size: 1);
+
+            service.Start(request);
+
+            bool entered = entered1.Wait(TimeSpan.FromSeconds(5));
+            c.Require(entered, "第一次捕获没有进入后端闸门（服务可能没跑起来）。");
+            if (!entered) { service.Stop(TimeSpan.FromSeconds(2)); return c; }
+
+            // ★ 后端卡住时，Stop 必须超时返回 false（不能谎报"已停止"）
+            bool stopped = service.Stop(TimeSpan.FromMilliseconds(20));
+            c.Require(!stopped, $"后端卡住时 Stop 应报告失败（实际 returned={stopped}）。");
+
+            // ★ 核心断言：用**完全相同**的请求重启必须被拒绝。
+            //   代次相同 ⇒ 单靠代次校验区分不出新旧轮次，必须靠轮次身份。
+            bool restartRejected = false;
+            string restartMessage = "(未被拒绝)";
+            try
+            {
+                service.Start(request);
+            }
+            catch (InvalidOperationException ex)
+            {
+                restartRejected = true;
+                restartMessage = ex.Message;
+            }
+            c.Require(restartRejected,
+                "Stop 超时后用**完全相同**的请求重启必须被拒绝（否则旧线程与新线程会同时抓屏并交叉发布帧）。");
+
+            // 放行旧捕获，等旧轮次彻底退出
+            gate1.Set();
+            bool exited = WaitUntil(() => !service.IsRunning, 8000);
+            c.Require(exited, "旧轮次在放行后应当退出（IsRunning 仍为 true）。");
+
+            long publishedByOldRun = service.Metrics.FramesPublished;
+            c.Require(publishedByOldRun == 0,
+                $"已请求停止的旧轮次的帧**不得**被发布（FramesPublished={publishedByOldRun}）。");
+
+            c.Require(backend.MaxConcurrentCalls <= 1,
+                $"捕获后端的并发峰值应 ≤ 1（实际 {backend.MaxConcurrentCalls}）—— 峰值 > 1 说明两个捕获循环并存。");
+
+            // 放行第二道闸门（若第二轮真的启动了，避免后台线程一直挂着）
+            gate2.Set();
+
+            // ★ 旧轮次退出后必须允许重新启动（服务不能被永久锁死）
+            bool restartAfterExitOk = true;
+            string restartAfterExitError = "";
+            try
+            {
+                service.Start(request);
+            }
+            catch (Exception ex)
+            {
+                restartAfterExitOk = false;
+                restartAfterExitError = ex.Message;
+            }
+            c.Require(restartAfterExitOk,
+                $"旧轮次退出后必须允许重新启动（实际报错：{restartAfterExitError}）。");
+
+            if (restartAfterExitOk) service.Stop(TimeSpan.FromSeconds(3));
+
+            c.Detail("source", "A15 独立复核 S1（P1）：Stop 超时后重启导致新旧捕获线程重叠");
+            c.Detail("stopReturned", stopped);
+            c.Detail("restartRejected", restartRejected);
+            c.Detail("restartRejectionMessage", restartMessage);
+            c.Detail("oldRunPublishedFrames", publishedByOldRun);
+            c.Detail("backendMaxConcurrentCalls", backend.MaxConcurrentCalls);
+            c.Detail("backendCaptureCalls", backend.CaptureCalls);
+            c.Detail("oldRunExited", exited);
+            c.Detail("restartAfterExitOk", restartAfterExitOk);
+            c.Detail("rule", "Stop 超时后禁止重启（单后台任务）；旧轮次的帧不得发布；捕获后端并发峰值必须为 1。");
+            return c;
+        }
+
+        /// <summary>
+        /// S2：租约作废（代次变化）/ 暂停 / 停止 / Dispose 之后，当前帧**不得**再被借出，
+        /// 且 <c>EffectiveMode</c> 不得再报 Glass。
+        /// </summary>
+        private ProbeCase RunInvalidatedLeaseGate()
+        {
+            ProbeCase c = new ProbeCase { Name = "A15 复核 S2 作废/暂停/停止后的帧不得再借出" };
+
+            FakeCaptureBackend backend = new FakeCaptureBackend { FrameWidth = 8, FrameHeight = 8 };
+            using BackdropCaptureService service =
+                new BackdropCaptureService(backend, processor: null, takeoverTimeoutMs: 20d);
+
+            service.Start(CreateRequest(theme: 1, handle: 1, size: 1));
+
+            BackdropFrameLease? lease = null;
+            bool acquired = WaitUntil(() => TryAcquireWithTimeout(service, out lease, 200), 5000);
+            c.Require(acquired && lease is not null, "未能接管到第一帧（后台没有产出可用帧）。");
+            if (!acquired || lease is null) { service.Stop(TimeSpan.FromSeconds(2)); return c; }
+
+            bool borrowableBefore = service.TryGetFrame(0d, out _);
+            c.Require(borrowableBefore, "接管后当前帧应当可以借出。");
+            c.Require(service.IsReady, "接管后 IsReady 应当为 true。");
+            c.Require(service.Status.EffectiveMode == BackdropRenderMode.Glass,
+                $"接管后 EffectiveMode 应当是 Glass（实际 {service.Status.EffectiveMode}）。");
+
+            // ★ 代次变化 ⇒ 租约作废 ⇒ 不得再借出
+            service.UpdateRequest(CreateRequest(theme: 2, handle: 1, size: 1));
+
+            bool borrowableAfter = service.TryGetFrame(0d, out _);
+            c.Require(!borrowableAfter, "租约因代次变化作废后，当前帧**不得**再被借出。");
+            c.Require(!service.IsReady, "租约作废后 IsReady 应当为 false。");
+            c.Require(service.Status.EffectiveMode != BackdropRenderMode.Glass,
+                $"租约作废后 EffectiveMode 不应是 Glass（实际 {service.Status.EffectiveMode}）。");
+
+            // ★ 暂停 ⇒ 不得借出
+            service.SetSuspended(true);
+            c.Require(!service.TryGetFrame(0d, out _), "暂停期间当前帧不得被借出。");
+            c.Require(!service.IsReady, "暂停期间 IsReady 应当为 false。");
+            c.Require(service.Status.EffectiveMode != BackdropRenderMode.Glass,
+                $"暂停期间 EffectiveMode 不应是 Glass（实际 {service.Status.EffectiveMode}）。");
+
+            // 恢复后应当能接管到新的一帧并重新可借出
+            service.SetSuspended(false);
+            BackdropFrameLease? lease2 = null;
+            bool acquired2 = WaitUntil(() => TryAcquireWithTimeout(service, out lease2, 200), 5000);
+            c.Require(acquired2 && lease2 is not null, "恢复后应当能接管到新的一帧。");
+            c.Require(service.TryGetFrame(0d, out _), "恢复并接管后当前帧应当可以借出。");
+
+            // ★ 停止 ⇒ 不得借出，且不再报 Glass
+            service.Stop(TimeSpan.FromSeconds(3));
+            c.Require(!service.TryGetFrame(0d, out _), "停止后当前帧不得再被借出。");
+            c.Require(!service.IsReady, "停止后 IsReady 应当为 false。");
+            c.Require(service.Status.EffectiveMode != BackdropRenderMode.Glass,
+                $"停止后 EffectiveMode 不应是 Glass（实际 {service.Status.EffectiveMode}）。");
+
+            // ★ Dispose 后仍不得报告 Glass
+            service.Dispose();
+            c.Require(!service.TryGetFrame(0d, out _), "Dispose 后当前帧不得再被借出。");
+            c.Require(!service.IsReady, "Dispose 后 IsReady 应当为 false。");
+            c.Require(service.Status.EffectiveMode != BackdropRenderMode.Glass,
+                $"Dispose 后 EffectiveMode 不应是 Glass（实际 {service.Status.EffectiveMode}）。");
+            c.Require(!service.Status.LiveFrameAvailable, "Dispose 后 LiveFrameAvailable 应当为 false。");
+
+            lease?.Dispose();
+            lease2?.Dispose();
+
+            c.Detail("source", "A15 独立复核 S2：已失效的 active 帧仍被借出、Dispose 后仍报告 Glass");
+            c.Detail("borrowedBeforeInvalidation", borrowableBefore);
+            c.Detail("borrowedAfterInvalidation", borrowableAfter);
+            c.Detail("rule", "借用与状态共用同一个可用性判定：租约有效 + 服务未 Dispose + 未暂停 + 当前轮未请求停止。");
+            return c;
+        }
+
+        /// <summary>
+        /// S3：暂停期间，已经进入后端的**在途帧**返回后不得发布、不得被接管，
+        /// 且不得把状态改回 Running。
+        /// </summary>
+        private ProbeCase RunSuspendedInFlightGate()
+        {
+            ProbeCase c = new ProbeCase { Name = "A15 复核 S3 暂停期间的在途帧不得发布" };
+
+            using ManualResetEventSlim entered = new(false);
+            using ManualResetEventSlim gate = new(false);
+
+            FakeCaptureBackend backend = new FakeCaptureBackend { FrameWidth = 8, FrameHeight = 8 };
+            backend.AddGatedStep(entered, gate);
+
+            using BackdropCaptureService service =
+                new BackdropCaptureService(backend, processor: null, takeoverTimeoutMs: 20d);
+            service.Start(CreateRequest(theme: 1, handle: 1, size: 1));
+
+            bool inFlight = entered.Wait(TimeSpan.FromSeconds(5));
+            c.Require(inFlight, "捕获没有进入后端闸门（无法复现'在途帧'）。");
+            if (!inFlight) { service.Stop(TimeSpan.FromSeconds(2)); return c; }
+
+            // ★ 暂停（此时那一帧还在后端里）
+            service.SetSuspended(true);
+            c.Require(service.Status.State == BackdropServiceState.Suspended,
+                $"暂停后状态应为 Suspended（实际 {service.Status.State}）。");
+
+            // ★ 放行在途捕获
+            gate.Set();
+
+            bool processed = WaitUntil(() => service.Metrics.FramesCaptured >= 1, 5000);
+            c.Require(processed, "在途捕获返回后后台没有完成记账（服务可能没跑起来）。");
+            Thread.Sleep(200);
+
+            c.Require(service.PendingFrameCount == 0,
+                $"暂停期间在途帧**不得**进入 pending（实际 {service.PendingFrameCount}）。");
+            c.Require(service.Metrics.FramesPublished == 0,
+                $"暂停期间在途帧**不得**被发布（FramesPublished={service.Metrics.FramesPublished}）。");
+
+            bool acquired = service.TryAcquireFrame(out BackdropFrameLease? lease);
+            c.Require(!acquired, "暂停期间不得接管到任何帧。");
+            lease?.Dispose();
+
+            c.Require(service.Status.State == BackdropServiceState.Suspended,
+                $"暂停期间状态不得被改回 Running（实际 {service.Status.State}）。");
+
+            service.Stop(TimeSpan.FromSeconds(3));
+
+            c.Detail("source", "A15 独立复核 S3：暂停后，在途结果能重新发布并将 Suspended 改回 Running");
+            c.Detail("pendingWhileSuspended", service.PendingFrameCount);
+            c.Detail("publishedWhileSuspended", service.Metrics.FramesPublished);
+            c.Detail("acquiredWhileSuspended", acquired);
+            c.Detail("finalState", service.Status.State.ToString());
+            c.Detail("rule", "发布与接管的同步边界必须检查暂停/停止状态；暂停期间的在途结果一律丢弃并释放。");
+            return c;
+        }
+
+        /// <summary>
+        /// S4：捕获从失败**恢复成功**后，状态说明必须同步更新（不能仍是失败时的文案）；
+        /// 历史失败原因仍保留在 <c>LastFailureReason</c>。
+        /// </summary>
+        private ProbeCase RunRecoveryStateTextGate()
+        {
+            ProbeCase c = new ProbeCase { Name = "A15 复核 S4 失败恢复后状态说明必须同步" };
+
+            FakeCaptureBackend backend = new FakeCaptureBackend
+            {
+                FrameWidth = 8,
+                FrameHeight = 8,
+                FailCapture = true
+            };
+
+            using BackdropCaptureService service =
+                new BackdropCaptureService(backend, processor: null, takeoverTimeoutMs: 20d);
+            service.Start(CreateRequest(theme: 1, handle: 1, size: 1));
+
+            bool failed = WaitUntil(() => service.Metrics.CaptureFailures >= 1, 8000);
+            c.Require(failed, "没有记录到捕获失败（后端应先失败一次）。");
+            if (!failed) { service.Stop(TimeSpan.FromSeconds(2)); return c; }
+
+            BackdropCaptureStatus failedStatus = service.Status;
+            string failureText = failedStatus.StateText ?? "";
+            c.Require(!string.IsNullOrWhiteSpace(failureText), "失败后 StateText 应当有可读说明。");
+            c.Require(failedStatus.State == BackdropServiceState.Faulted,
+                $"捕获失败后状态应为 Faulted（实际 {failedStatus.State}）。");
+
+            // ★ 恢复：后端不再失败 ⇒ 下一轮成功（注意失败退避，最长等 15 秒）
+            backend.FailCapture = false;
+            bool recovered = WaitUntil(() => service.Status.State == BackdropServiceState.Running, 15000);
+            c.Require(recovered, $"后端恢复后状态应回到 Running（实际 {service.Status.State}）。");
+
+            BackdropCaptureStatus okStatus = service.Status;
+            c.Require(okStatus.DegradeReason == BackdropDegradeReason.None,
+                $"恢复后不应再有降级原因码（实际 {okStatus.DegradeReason}）。");
+            c.Require(!string.IsNullOrWhiteSpace(okStatus.StateText), "恢复后 StateText 不应为空。");
+            c.Require(okStatus.StateText != failureText,
+                $"恢复后 StateText 必须更新（仍显示失败时的文案：\"{failureText}\"）。");
+            c.Require(!string.IsNullOrWhiteSpace(okStatus.LastFailureReason),
+                "历史失败原因应保留在 LastFailureReason。");
+
+            service.Stop(TimeSpan.FromSeconds(3));
+
+            c.Detail("source", "A15 独立复核 S4：捕获恢复成功后，StateText 继续显示旧故障");
+            c.Detail("failureStateText", failureText);
+            c.Detail("recoveredStateText", okStatus.StateText ?? "");
+            c.Detail("recoveredDegradeReason", okStatus.DegradeReason.ToString());
+            c.Detail("lastFailureReason", okStatus.LastFailureReason ?? "");
+            c.Detail("rule", "成功转换时同步设置当前状态说明；历史故障只留在 LastFailureReason。");
+            return c;
         }
 
         /// <summary>把一次渲染场景整理成证据条目。</summary>
