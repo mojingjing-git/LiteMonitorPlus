@@ -1,0 +1,61 @@
+{
+  "sourceCommit": "33245bc",
+  "archiveSha256": "B11E27CDEFBC554AB9AA2BC251A44EFE04BEA7F4CAF82C97EAFA6526BD393297",
+  "mainDllSha256": "2BE95E3DBF0AF90F8A6867B02154DFD0180EE553A5A83F2598F262C8977D10E2",
+  "build": {
+    "sln": true,
+    "warnings": 254,
+    "errors": 0
+  },
+  "unitTests": {
+    "trx": "G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a15-audit-33245bc/evidence/unit/a15-unit.trx",
+    "passed": 583,
+    "skipped": 0,
+    "failed": 0
+  },
+  "m2Gates": {
+    "source": 2,
+    "runtime": 8,
+    "allPassed": true
+  },
+  "wiring": {
+    "allPassed": true,
+    "caseCount": 73
+  },
+  "generatedDpi": "HighDpiMode.PerMonitorV2",
+  "realProcessDpiVerified": false,
+  "cpuEvidence": {
+    "method": "Process.TotalProcessorTime",
+    "originalDataSha256": "34CE21E3BDEB36B9B772FB285AF30A0D00674A5B7EE3D5497024F0F6B410AAA2",
+    "dataWasRecalculated": true,
+    "fullMeasurementRerun": false,
+    "drawsPerRoundPerPath": 4000,
+    "rounds": 5,
+    "totalDrawsPerPath": 20000,
+    "originalData": "docs/reviews/evidence/a14-9c16ad3/n1-cpu-caliber/cyberpunk-mech-2levels-rounds5/appearance-results.json"
+  },
+  "limitations": [
+    "No real screen capture or live GUI/UAC run in this review.",
+    "NoLaunch script was not rerun; syntax parse and source inspection only.",
+    "Original CPU run is evidence from recorded batch, not a freshly rerun hour-long benchmark.",
+    "Tiny CPU CLI smoke only checks theme/round propagation and null result when within noise.",
+    "M1 over-budget visual-priority decision is unchanged."
+  ],
+  "independentLifecycleRepros": {
+    "runs": 3,
+    "allFourDefectsReproduced": true,
+    "noRealScreenCapture": true,
+    "maxConcurrentBackendCalls": 2,
+    "oldFramePublishedAfterRestart": true,
+    "invalidFrameBorrowedAfterDispose": true,
+    "framePublishedWhileSuspended": true,
+    "staleFaultTextAfterRecovery": true
+  },
+  "reviewFindings": {
+    "P1": 1,
+    "P2": 5,
+    "serviceFindingsReproduced": 4,
+    "scriptFindingsFromSourceAndOfficialApi": 2,
+    "recommendation": "Fix lifecycle findings before A16 production wiring; fix script identification and DPI awareness checks before livecheck evidence collection."
+  }
+}

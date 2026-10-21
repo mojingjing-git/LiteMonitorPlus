@@ -1,0 +1,9 @@
+{
+  "resize_shape_integrated": {
+    "oldLength": 40,
+    "currentLength": 64,
+    "currentSnapshotLength": 64,
+    "regionIncludesPoint50_5": false,
+    "usesProductionSnapshotProviderContract": true
+  }
+}

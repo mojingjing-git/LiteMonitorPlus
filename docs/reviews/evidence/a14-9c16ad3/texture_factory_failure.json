@@ -1,0 +1,10 @@
+{
+  "texture_factory_failure": {
+    "failure": null,
+    "sourceReadableAfterCacheDispose": false,
+    "created": 1,
+    "released": 1,
+    "cacheCount": 0,
+    "injectedFailureCondition": "factory returns a LockBits-locked Bitmap"
+  }
+}

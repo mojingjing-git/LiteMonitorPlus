@@ -1,0 +1,108 @@
+[
+  {
+    "theme": "CyberPunk_Mech",
+    "gpuCount": 1,
+    "rounds": 5,
+    "segmentsPerRound": 2,
+    "drawsPerSegment": 2000,
+    "totalDrawsPerPath": 20000,
+    "cpuDelta": 2.0352,
+    "elapsedDelta": 2.1205,
+    "projectionPercentPoints": 0.159,
+    "roundsDetail": [
+      {
+        "round": 1,
+        "segments": 2,
+        "drawsPerPath": 4000,
+        "cpuDelta": 2.3398,
+        "wallDelta": 2.4,
+        "aboveHeuristicFloor": true
+      },
+      {
+        "round": 2,
+        "segments": 2,
+        "drawsPerPath": 4000,
+        "cpuDelta": 2.2734,
+        "wallDelta": 2.3806,
+        "aboveHeuristicFloor": true
+      },
+      {
+        "round": 3,
+        "segments": 2,
+        "drawsPerPath": 4000,
+        "cpuDelta": 1.6914,
+        "wallDelta": 1.8054,
+        "aboveHeuristicFloor": true
+      },
+      {
+        "round": 4,
+        "segments": 2,
+        "drawsPerPath": 4000,
+        "cpuDelta": 2.0625,
+        "wallDelta": 2.11,
+        "aboveHeuristicFloor": true
+      },
+      {
+        "round": 5,
+        "segments": 2,
+        "drawsPerPath": 4000,
+        "cpuDelta": 1.8086,
+        "wallDelta": 1.9066,
+        "aboveHeuristicFloor": true
+      }
+    ]
+  },
+  {
+    "theme": "CyberPunk_Mech",
+    "gpuCount": 4,
+    "rounds": 5,
+    "segmentsPerRound": 2,
+    "drawsPerSegment": 2000,
+    "totalDrawsPerPath": 20000,
+    "cpuDelta": 8.7328,
+    "elapsedDelta": 8.9677,
+    "projectionPercentPoints": 0.6823,
+    "roundsDetail": [
+      {
+        "round": 1,
+        "segments": 2,
+        "drawsPerPath": 4000,
+        "cpuDelta": 8.8242,
+        "wallDelta": 9.0852,
+        "aboveHeuristicFloor": true
+      },
+      {
+        "round": 2,
+        "segments": 2,
+        "drawsPerPath": 4000,
+        "cpuDelta": 8.8594,
+        "wallDelta": 9.0248,
+        "aboveHeuristicFloor": true
+      },
+      {
+        "round": 3,
+        "segments": 2,
+        "drawsPerPath": 4000,
+        "cpuDelta": 8.4727,
+        "wallDelta": 8.6184,
+        "aboveHeuristicFloor": true
+      },
+      {
+        "round": 4,
+        "segments": 2,
+        "drawsPerPath": 4000,
+        "cpuDelta": 8.7617,
+        "wallDelta": 8.9844,
+        "aboveHeuristicFloor": true
+      },
+      {
+        "round": 5,
+        "segments": 2,
+        "drawsPerPath": 4000,
+        "cpuDelta": 8.7461,
+        "wallDelta": 9.1258,
+        "aboveHeuristicFloor": true
+      }
+    ]
+  }
+]

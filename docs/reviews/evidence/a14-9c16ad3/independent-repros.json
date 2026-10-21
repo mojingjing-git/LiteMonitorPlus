@@ -1,0 +1,168 @@
+{
+  "preview": [
+    {
+      "change": "Glow",
+      "previewChangedPixels": 4256,
+      "mainChangedPixels": 4256,
+      "beforePreviewHash": "ce67253fb89e35a0df71bbeb1e60f9fad597e0a088336f5b0672542e80e95ebf",
+      "afterPreviewHash": "401750fa95ab4d45ae4dce155dc0be38601eccf2768d9e7c1a4c343c32f6cf9c"
+    },
+    {
+      "change": "BarStyle",
+      "previewChangedPixels": 9390,
+      "mainChangedPixels": 9390,
+      "beforePreviewHash": "ce67253fb89e35a0df71bbeb1e60f9fad597e0a088336f5b0672542e80e95ebf",
+      "afterPreviewHash": "642b5e8c74c307adcd6b53d2997c4dee450fb3a16dcee071ea6d1ba88ba0de59"
+    }
+  ],
+  "noise_eviction": [
+    {
+      "intensity": 10,
+      "drawn": true,
+      "entryCount": 1
+    },
+    {
+      "intensity": 10,
+      "drawn": true,
+      "entryCount": 1
+    },
+    {
+      "intensity": 20,
+      "drawn": true,
+      "entryCount": 2
+    },
+    {
+      "intensity": 20,
+      "drawn": true,
+      "entryCount": 2
+    },
+    {
+      "intensity": 30,
+      "drawn": true,
+      "entryCount": 3
+    },
+    {
+      "intensity": 30,
+      "drawn": true,
+      "entryCount": 3
+    },
+    {
+      "intensity": 40,
+      "drawn": true,
+      "entryCount": 4
+    },
+    {
+      "intensity": 40,
+      "drawn": true,
+      "entryCount": 4
+    },
+    {
+      "intensity": 50,
+      "drawn": true,
+      "entryCount": 4
+    }
+  ],
+  "bar_clip": [
+    {
+      "style": 1,
+      "changedPixelsOutsideCallerClip": 0
+    },
+    {
+      "style": 2,
+      "changedPixelsOutsideCallerClip": 0
+    }
+  ],
+  "partial_background": [
+    {
+      "horizontal": false,
+      "sampleArgb": "FF123456",
+      "expectedArgb": "FF123456"
+    },
+    {
+      "horizontal": true,
+      "sampleArgb": "FF123456",
+      "expectedArgb": "FF123456"
+    }
+  ],
+  "off_allocations": [
+    {
+      "run": 0,
+      "oldBytesPerFrame": 3112,
+      "newBytesPerFrame": 3112,
+      "addedBytesPerFrame": 0
+    },
+    {
+      "run": 1,
+      "oldBytesPerFrame": 3112,
+      "newBytesPerFrame": 3112,
+      "addedBytesPerFrame": 0
+    },
+    {
+      "run": 2,
+      "oldBytesPerFrame": 3112,
+      "newBytesPerFrame": 3112,
+      "addedBytesPerFrame": 0
+    }
+  ],
+  "texture_geometry": {
+    "size": 16,
+    "nonTransparentPixels": 160,
+    "interiorNonTransparentPixels": 86,
+    "expectedInteriorPattern": true
+  },
+  "resize_shape": {
+    "oldHeight": 80,
+    "newHeight": 200,
+    "oldSnapshotLength": 40,
+    "lengthAfterReapply": 40,
+    "freshSnapshotLength": 64,
+    "pointX": 50,
+    "pointY": 5,
+    "staleRegionIncludesPoint": true,
+    "freshRegionIncludesPoint": false
+  },
+  "texture_image_ownership": {
+    "retrievedIsSource": false,
+    "successiveImagesAreSame": false,
+    "secondWidthAfterOtherDisposals": 16,
+    "brushDrawsAfterSourceAndRetrievedImageDisposed": true
+  },
+  "noise_pipeline": [
+    {
+      "intensity": 10,
+      "drawn": true
+    },
+    {
+      "intensity": 10,
+      "drawn": true
+    },
+    {
+      "intensity": 20,
+      "drawn": true
+    },
+    {
+      "intensity": 20,
+      "drawn": true
+    },
+    {
+      "intensity": 30,
+      "drawn": true
+    },
+    {
+      "intensity": 30,
+      "drawn": true
+    },
+    {
+      "intensity": 40,
+      "drawn": true
+    },
+    {
+      "intensity": 40,
+      "drawn": true
+    },
+    {
+      "intensity": 50,
+      "drawn": true
+    }
+  ]
+}

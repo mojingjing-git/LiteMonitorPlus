@@ -125,6 +125,46 @@ A15 **不改动**任何既有渲染或 UI 文件：`src/UI/**`、`src/System/Bac
 > ⚠️ 门槛 #9 的第 4 段在加固**之前**只是 `c.Detail`（把缺口记录下来供复核，并没有断言），
 > 加固落地后已升级为 `c.Require` 硬断言 —— 证据里 `rawPathWithoutProcessor.PublishedFrames` 应为 **0**。
 
+### 5.1 独立复核发现的生命周期缺陷（2026-10-21 → 已修）
+
+> 来源：`docs/reviews/2026-10-21-appearance-a15-independent-review.md`（对 `33245bc` 的独立复核）。
+> 复核结论：**1 项 P1 + 5 项 P2**；P1 与前 4 项 P2 均用可控假后端**连续复现三次**，
+> 而现有 10 条合同门槛**没有覆盖这些时序** ⇒ 本轮补了 4 条独立断言（见 §5.1.1）。
+
+| # | 级别 | 缺陷 | 后果 | 修法 |
+|---|---|---|---|---|
+| S1 | **P1** | `Stop` 超时后能启动第二个线程；旧线程仍发布帧，并把新服务状态覆盖为 `Stopped` | 两个捕获循环并存 ⇒ 重复抓屏击穿 §6.3 的 CPU 预算；旧线程把新生命周期的状态写坏 | 引入 **per-run 上下文** `BackdropCaptureService.CaptureRun`（`RunId` + 本轮私有的 `Cts` / `StopRequested` / `Worker`）：取消标记、CTS、线程引用**下沉到本轮**；`Start` 在上一轮线程仍存活时抛 `InvalidOperationException` **拒绝重启**；`StopCore` 超时未退出时**保留** `_currentRun` 引用并如实记为「未能在超时内退出」（**不谎报** `Stopped`）；`PublishFrame` / `RecordSuccess` / `RecordFailure` 一律先校验轮次身份，旧轮次**不得**发布帧、不得改写新生命周期的状态与指标 |
+| S2 | P2 | 已失效的 active 帧仍被借出；`Dispose` 后仍报告 `Glass` | UI 会拿到已被作废的位图；状态自相矛盾（已停却显示玻璃） | 新增**唯一**判定 `IsFrameBorrowableUnderLock()`（租约有效 + 未 Dispose + 未暂停 + 当前轮未请求停止），由 `TryGetFrame` / `IsReady` / `Status.liveFrame` **共用**；作废 / 停止 / 暂停后不再借出、不再报 `Glass` |
+| S3 | P2 | 暂停期间在途帧仍被发布，并把状态改回 `Running` | 窗口不可见时仍抓屏并交付陈旧画面 | `PublishFrame` 在暂停时**丢弃并释放**在途帧（计入 `FramesDroppedStale`）；`RecordSuccess` 在暂停期间**不**把状态改回 `Running`；`TryAcquireFrame` 拒绝在暂停期接管残留 pending |
+| S4 | P2 | 捕获恢复成功后 `StateText` 仍显示旧故障 | 状态说明与真实状态不符，A16 接线后 UI 会一直显示过期故障文案 | `RecordSuccess` 在成功转换时**同步** `_stateText = "实时捕获运行中。"`；历史故障仍保留在 `LastFailureReason`（不混入状态说明） |
+| S5 | P2 | 实机启动脚本用 `DPI > 96` 判断 Per-Monitor-V2 | **双向误报**：System-Aware 进程（缩放 168）会被误判成「Per-Monitor 生效」；100% 缩放屏上的 PMv2 窗口（缩放 96）会被误判成「非 Per-Monitor」 | 改用官方 API：`GetWindowDpiAwarenessContext` + `AreDpiAwarenessContextsEqual` 与 `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`(-4) 比较。`GetDpiForWindow` 仍读、仍展示，但明确标注为「**缩放数值**，不是感知等级」，**不参与判定** |
+| S6 | P2 | 启动阶段的驱动安装对话框可能被识别成 `MainForm` | DPI 自检读到的是对话框而非主窗体，结论无效 | 主窗体标题设为**精确** `"LiteMonitor++"`（`FormBorderStyle.None` + `ShowInTaskbar = false`，**视觉零影响**）；脚本优先按标题**精确相等**命中，回退到「客户区面积最大」时**明确警告**可能是驱动安装对话框 |
+
+**S1 修法的关键取舍**：Stop 超时后**拒绝重启**，而不是强制终止旧线程 ——
+强制终止无法保证后端（`BitBlt` / `WDA` 调用）已经返回，强杀会留下不完整状态；
+「拒绝重启 + 如实报 Degraded」让上层可以重试或提示用户，而不会静默地跑出两个捕获循环。
+
+**S5 的判定依据**：`GetWindowDpiAwarenessContext` 返回的是**上下文句柄**（实测原始值 34 / 24592 / 43025 / 18），
+**不是**枚举值 ⇒ 只能与常量做**等价比较**，不能直接比大小。
+
+#### 5.1.1 新增的 4 条回归断言（探针）
+
+新增用例**不占用**合同 §9 的 1–10 编号，以「A15 复核 S1–S4」独立命名（`tests/AppearanceM2Probe` → `RuntimeGateRunner`）：
+
+| 用例 | 断言 | 反向验证 |
+|---|---|---|
+| `RunRunIsolationGate`（S1） | `Stop` 超时后 `Start` 抛 `InvalidOperationException`；旧轮次**不得**发布帧（`FramesPublished` 不增）、**不得**把状态改回 `Stopped`；假后端统计的**并发峰值必须 = 1** | ✅ 回退实现后**如期失败**（并发峰值 = 2、旧轮次 `FramesPublished = 1`） |
+| `RunInvalidatedLeaseGate`（S2） | 租约作废 / 暂停 / 停止 / `Dispose` 之后：`TryGetFrame` 返回 false、`IsReady` = false、`Status.LiveFrameAvailable` = false、`EffectiveMode` ≠ `Glass` | ✅ 回退实现后**如期失败** |
+| `RunSuspendedInFlightGate`（S3） | 暂停期间在途帧**不得**发布（`FramesPublished` 不增、pending 不残留）、状态**不得**被改回 `Running` | ✅ 回退实现后**如期失败**（pending = 1 且状态被改回 `Running`） |
+| `RunRecoveryStateTextGate`（S4） | 失败后恢复成功 ⇒ `StateText` 必须是运行中文案，且 `LastFailureReason` **仍保留**历史故障 | ✅ 回退实现后**如期失败**（`StateText` 仍是失败文案） |
+
+> ⚠️ **反向验证是必须的**：把实现回退到 `33245bc` 的版本后重跑探针，
+> S1 / S2 / S3 / S4 **四条全部失败**，且复现了复核报告描述的全部现象 ⇒ 这些断言**不是假阳性**。
+> 回退验证还额外暴露了复核报告未提及的连锁缺陷：旧实现下「上一轮未退出时再 `Start`」
+> 会把服务**永久锁死**在「捕获服务已在运行」。
+
+**探针总用例数：14** = 合同 §9 的 10 条门槛 + 4 条复核加固断言。
+
 ---
 
 ## 6. ⚠️ 必须由用户拍板的前置决策：生产进程的 DPI 感知
@@ -179,14 +219,14 @@ A15 **不改动**任何既有渲染或 UI 文件：`src/UI/**`、`src/System/Bac
 | 主工程 Release 重建 | ✅ **0 错误 / 234 警告**（均为既有警告） |
 | 源生成器产物 | ✅ 确认产出 `Application.SetHighDpiMode(HighDpiMode.PerMonitorV2)`，未被 `app.manifest` 压回 |
 | 单元测试 | ✅ **583 / 583** 通过 |
-| M2 合同探针 | ✅ **10 / 10** 门槛通过（含本轮新增的加固项硬断言） |
+| M2 合同探针 | ✅ **14 / 14** 通过（10 条合同门槛 + 4 条复核加固断言 S1–S4，见 §5.1.1） |
 | 静态背景探针 | ✅ 21 / 21 |
 | 主题探针 | ✅ 335 / 335 |
 | 装饰 / 装饰渲染 / 窗口轮廓 / 接线探针 | ✅ 全部通过 |
 | A06 环境探针 | ✅ DISPLAY1 3840×2160@168、DISPLAY2 X=−1440@120、HDR 10bpc 开启、非 RDP |
 | A14 实机清单第 1~4、7 项 | ⏳ **需用户在交互会话重做**（本代理会话不合成到交互桌面） |
 
-### 6.3 与其它未决项的关系
+### 6.4 与其它未决项的关系
 
 A14 实机清单第 4 项（跨屏 DPI 往返：装饰是否随 DPI 变化）在 SystemAware 下其实是"被系统整体拉伸"，
 在 Per-Monitor-V2 下才是"按目标屏 DPI 重新渲染"——**选 A 会顺带改变这一项的验收含义**，建议一并复验。
@@ -200,7 +240,7 @@ A14 实机清单第 4 项（跨屏 DPI 往返：装饰是否随 DPI 变化）在
 | `dotnet build LiteMonitor.csproj -c Release` | 0 错误 / 234 警告（均为既有代码） |
 | `dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Release` | 583 / 583 通过 |
 | `dotnet build tests/AppearanceM2Probe/AppearanceM2Probe.csproj -c Release` | 0 错误 / 0 警告 |
-| `tests/AppearanceM2Probe/output/AppearanceM2Probe.exe` | 10 / 10 门槛通过，退出码 0 |
+| `tests/AppearanceM2Probe/output/AppearanceM2Probe.exe` | **14 / 14** 通过（10 条合同门槛 + 4 条复核加固断言 S1–S4），退出码 0 |
 | `tests/AppearanceStaticBackdropProbe` | 21 / 21 通过 |
 | `tests/AppearanceThemeCheck` | 335 / 335 通过 |
 | `tests/AppearanceDecorProbe` | 全部通过（含纹理接管失败清理用例） |
@@ -208,8 +248,14 @@ A14 实机清单第 4 项（跨屏 DPI 往返：装饰是否随 DPI 变化）在
 | `tests/AppearanceWindowShapeProbe` | 全部通过 |
 | `tests/AppearanceWiringProbe` | 全部通过（回归证据：`docs/reviews/evidence/a14-9c16ad3/a15-regression/`） |
 | `tests/AppearanceBackdropProbe --scenario env` | 环境证据已生成（`a15-regression/backdrop-env/environment.json`） |
+| `tests/AppearanceBackdropProbe --out <目录>`（全场景） | 捕获后端 / 瞬时排除 / 模糊 / 阶跃边缘 / 性能场景全部完成，退出码 0（`a15-regression/backdrop/`） |
 | `pwsh -File scripts/run-livecheck.ps1 -NoLaunch` | exit 0（构建 → 资源平铺 → 配置备份 → 输出目录，全链路通） |
+| `[Parser]::ParseFile('scripts/run-livecheck.ps1')` | 语法错误数 = 0（S5/S6 改写后复测仍为 0） |
 | 源生成器产物导出（`-p:EmitCompilerGeneratedFiles=true`） | 确认 `Application.SetHighDpiMode(HighDpiMode.PerMonitorV2)` |
+
+> **2026-10-21 复核修复的复验证据**：
+> `docs/reviews/evidence/a14-9c16ad3/a15-lifecycle-regression/`（M2 14/14 的源码级 + 运行时门槛）
+> 与 `docs/reviews/evidence/a14-9c16ad3/a15-regression/`（接线 / 装饰 / 装饰渲染 / 窗口轮廓 / A06 背景）。
 
 ---
 
@@ -219,7 +265,8 @@ A14 实机清单第 4 项（跨屏 DPI 往返：装饰是否随 DPI 变化）在
 |---|---|---|
 | **真实抓屏**（本代理会话不合成到交互桌面，窗口不出现在屏幕捕获里） | **未在本会话验证**；引擎侧已由 worker 在交互会话做过冒烟（自排除生效、亲和性还原、p95 达标） | A16 接线后由用户在交互会话复验 |
 | **生产进程的 DPI 感知** | ✅ **已拍板并落地**（用户 2026-10-21 选 A，见 §6.3）：感知等级已由**生成代码实测确认** —— 源生成器产出 `Application.SetHighDpiMode(HighDpiMode.PerMonitorV2)`；但**实机行为**（高 DPI 屏上按 168 DPI 重绘、跨屏往返）需用户在交互会话看 | 用户（实机） |
-| **实机启动脚本的「启动 + DPI 自检」段** | 脚本的**构建 → 资源平铺 → 备份配置**全链路已实测通过（`pwsh -File scripts/run-livecheck.ps1 -NoLaunch` → exit 0）；窗口查找逻辑已用 explorer 实测验证（按客户区面积取最大，命中 3017×1462 / DPI 168）。但**真实 UAC 弹窗 + GUI 启动 + 读主窗口 DPI**这一段在本代理会话**无法完成**（需交互桌面 + 用户点 UAC） | 用户（交互会话） |
+| **实机启动脚本的「启动 + DPI 自检」段** | 脚本的**构建 → 资源平铺 → 备份配置**全链路已实测通过（`pwsh -File scripts/run-livecheck.ps1 -NoLaunch` → exit 0）。**S5/S6 改写后**已在替代场景实测：四种感知等级（DPI-Unaware / System-Aware / PMv1 / PMv2）逐一读对；同一进程跨屏的缩放数值（168 / 120）直接证明「缩放数值 ≠ 感知等级」；精确标题命中主窗、面积回退命中驱动安装对话框两条路径都验证过（脚本语法错误数 = 0）。但**真实 UAC 弹窗 + 真实 LiteMonitor 主窗 + 提权会话下的跨进程标题读取**这一段在本代理会话**无法完成**（需交互桌面 + 用户点 UAC） | 用户（交互会话） |
+| **真实抓屏后端下 `Stop` 超时的行为** | 未在实机验证（需要后端真正卡住才能复现）；S1 的拦截与轮次隔离已由假后端探针覆盖（并发峰值 = 1、重启被拒、旧轮次不发布） | A16 接线后由用户复验 |
 | 真实录屏（OBS / 游戏栏）下瞬时排除是否闪动 | 未验证 | A17 |
 | Win10（任意版本）/ 真实 RDP / 锁屏恢复 | 未验证 | A17 |
 | 负坐标屏（DISPLAY2，X = −1440）实抓 | 环境已确认（X = −1440、1440×2560 @120 DPI、`HasNegativeOrigin = true`），**实抓未做** | A17 |
@@ -231,7 +278,7 @@ A14 实机清单第 4 项（跨屏 DPI 往返：装饰是否随 DPI 变化）在
 
 ## 9. 交接给 A16 的清单
 
-1. **先拿到 §6 的 DPI 决策**，否则真实验收无从谈起。
+1. **先拿到 §6 的 DPI 决策**，否则真实验收无从谈起（已于 2026-10-21 拍板：选 A）。
 2. 接线点：`AppearanceRuntime(frameSource: captureService)`；**只**注册服务，不注册引擎。
 3. 生命周期：主题切到 glass 且开关打开 ⇒ `Start`；非 glass / 开关关闭 ⇒ `Stop`；
    窗口隐藏或最小化 ⇒ `SetSuspended(true)`；句柄重建 ⇒ 句柄代次 +1 并 `UpdateRequest`；
@@ -239,3 +286,7 @@ A14 实机清单第 4 项（跨屏 DPI 往返：装饰是否随 DPI 变化）在
 4. 绘制：`TryAcquireFrame` → 渲染 → 释放**上一个**租约。
 5. 显式开关 + 首次提示：玻璃**默认关闭**；首次开启必须提示"捕获瞬间面板可能从录屏/截图中短暂消失或闪动"。
 6. 预算验证：按 §6.2 口径分别记录 CPU 与经过时间；CPU 预算只认 CPU 口径。
+7. **（S1 新增）`Start` 会抛 `InvalidOperationException`**：上一轮的后台任务尚未退出时（`Stop` 超时）不允许重启。
+   A16 接线时**必须捕获这个异常**并给出可读提示（例如"上一次捕获任务仍在退出中，请稍候"），
+   **不要**当成致命错误，也不要无脑重试 —— 反复重启正是 S1 要杜绝的。
+   正常路径（上一轮已退出）不受影响。
