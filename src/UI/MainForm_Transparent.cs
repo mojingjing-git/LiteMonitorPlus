@@ -252,6 +252,7 @@ namespace LiteMonitor
                 //   （窗口大小变了，客户区的**物理**矩形也跟着变，坐标不变就会抓错区域）。
                 _ui?.NotifyLiveGlassSizeChanged();
             };
+            this.LocationChanged += (_, __) => _ui?.NotifyLiveGlassLocationChanged();
             this.VisibleChanged += (_, __) =>
             {
                 if (Visible) _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert: true);
