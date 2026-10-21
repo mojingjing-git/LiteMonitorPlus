@@ -201,6 +201,9 @@
     "__Comment_Page4__": "--- 4. Umbrales ---",
     "Thresholds": "Umbrales",
     "ThresholdsTips": "Color barra según umbral",
+    "ThresholdClamped": "Valor fuera de rango; ajustado a {0}",
+    "ThresholdCritRaised": "El valor crítico no puede ser menor que el de advertencia; sincronizado a {0}",
+    "ThresholdWarnLowered": "El valor de advertencia no puede ser mayor que el crítico; sincronizado a {0}",
     "AlertTemp": "Alerta Temp",
     "AlertThreshold": "Límite",
 

@@ -46,7 +46,17 @@ namespace LiteMonitor.src.UI.SettingsPage
             var grpHardware = new LiteSettingsGroup(LanguageManager.T("Menu.GeneralHardware"));
             grpHardware.AddHint(LanguageManager.T("Menu.ThresholdsTips"));
             
-            grpHardware.AddThreshold(this, LanguageManager.T("Menu.HardwareLoad"), "%", Config.Thresholds.Load);
+            // ★ 只有**硬件负载（%）**钳制到 0~100 —— 它是百分比，超出即无意义。
+            //   其余指标一律**不设**上下限：
+            //     · 温度可以为负（室外/冷藏场景是合法配置），不加 ">= 0"；
+            //     · MB/s 与 MB 的上限是**场景相关**的，通用层猜一个只会误伤用户的合法配置。
+            //   ★ 钳制不是静默改值 —— 会带行内提示，用户看得见自己的输入被调整过。
+            grpHardware.AddThreshold(this, LanguageManager.T("Menu.HardwareLoad"), "%", Config.Thresholds.Load,
+                clamp: raw =>
+                {
+                    double v = Math.Min(100.0, Math.Max(0.0, raw));
+                    return (v, (string?)null);
+                });
             grpHardware.AddThreshold(this, LanguageManager.T("Menu.HardwareTemp"), "°C", Config.Thresholds.Temp);
 
             AddGroupToPage(grpHardware);

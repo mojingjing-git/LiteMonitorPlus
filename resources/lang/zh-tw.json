@@ -201,6 +201,9 @@
     "AlertThreshold": "高溫報警閾值",
     
     "ThresholdsTips": "進度條和數值將根據硬體閾值顯示對應的顏色",
+    "ThresholdClamped": "值超出有效範圍，已調整為 {0}",
+    "ThresholdCritRaised": "嚴重值不能低於告警值，已同步為 {0}",
+    "ThresholdWarnLowered": "告警值不能高於嚴重值，已同步為 {0}",
     "GeneralHardware": "通用硬體",
     "HardwareLoad": "硬體負載",
     

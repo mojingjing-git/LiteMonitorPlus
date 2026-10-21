@@ -201,6 +201,9 @@
     "__Comment_Page4__": "--- 4. Thresholds ---",
     "Thresholds": "Thresholds",
     "ThresholdsTips": "Bar color changes by threshold",
+    "ThresholdClamped": "Value is out of range; adjusted to {0}",
+    "ThresholdCritRaised": "Critical must not be lower than Warning; synced to {0}",
+    "ThresholdWarnLowered": "Warning must not be higher than Critical; synced to {0}",
     "AlertTemp": "Temp Alert",
     "AlertThreshold": "Limit",
 

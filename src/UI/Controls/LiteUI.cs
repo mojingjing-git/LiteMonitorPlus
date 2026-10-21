@@ -64,9 +64,41 @@ namespace LiteMonitor.src.UI.Controls
 
     public class LiteThresholdRow : Panel
     {
-        public LiteThresholdRow(SettingsPageBase page, string title, string unit, ValueRange range)
+        /// <summary>
+        /// 阈值钳制回调：把用户输入的原始值钳制到**该指标类型**的合法范围。
+        /// 返回 (钳制后的值, 提示文案)；文案为 null 时由本行用通用文案兜底。
+        /// <para>★ 通用控件层**不猜**各类型的上下限（MB/s 的上限是场景相关的，
+        ///   猜一个只会误伤用户的合法配置）—— 合理范围由页面（ThresholdPage）提供。</para>
+        /// </summary>
+        public delegate (double Value, string? Hint) ThresholdClamp(double raw);
+
+        private const int RowHeightNormal = 40;
+        private const int RowHeightWithHint = 62;
+
+        /// <summary>行内提示（钳制 / 不变量被触发时显示）—— 改值必须让用户看见。</summary>
+        private Label? _hintLabel;
+
+        /// <summary>
+        /// 告警值输入框。
+        /// <para>★ 暴露出来是为了让防回退探针能对**真实的行**做端到端回归
+        ///   （粘非法文本 → 离场 ⇒ 配置不能被静默改成 0），
+        ///   而不是把绑定逻辑在探针里抄一份 —— 抄的那份会跟实现漂移。</para>
+        /// </summary>
+        public LiteNumberInput WarnInput { get; }
+
+        /// <summary>严重值输入框（同 <see cref="WarnInput"/> 的理由）。</summary>
+        public LiteNumberInput CritInput { get; }
+
+        /// <summary>
+        /// 当前行内提示的文本（没有提示时为 null）。
+        /// <para>★ 供防回退探针与诊断使用 —— 「钳制必须看得见」这条需要能被机器验证，
+        ///   而不是靠人眼看。</para>
+        /// </summary>
+        public string? HintText => (_hintLabel != null && _hintLabel.Visible) ? _hintLabel.Text : null;
+
+        public LiteThresholdRow(SettingsPageBase page, string title, string unit, ValueRange range, ThresholdClamp? clamp = null)
         {
-            this.Height = UIUtils.S(40);
+            this.Height = UIUtils.S(RowHeightNormal);
             this.Margin = new Padding(0);
             this.Padding = new Padding(0);
 
@@ -94,33 +126,89 @@ namespace LiteMonitor.src.UI.Controls
             var inputCrit = new LiteNumberInput(range.Crit.ToString(), unit, LanguageManager.T("Menu.ValueCritColor"), 140, UIColors.TextCrit);
             inputCrit.Padding = UIUtils.S(new Padding(0, 5, 0, 1));
 
+            WarnInput = inputWarn;
+            CritInput = inputCrit;
+
             // Immediate Binding
             // ★ W3：与 SettingsUIBuilder 的 8 个 Add* 同一口径 ——
             //   ① 抑制作用域内（程序化改控件）不回写；
             //   ② 解析失败时**不写**（ValueDouble 解析失败返回 0，
             //      粘贴进来的非法文本会把用户的阈值静默改成 0）。
-            // ★ 另：解析用**严格**的 NumberStyles（见 TryParseThreshold）——
-            //   粘贴能绕过 KeyPress，若用默认样式，"1e5" / "1,000" / " 8 "
-            //   这些界面上手打不出来的形式也会被写进配置。
+            // ★ 非法文本的**离场回填**由 LiteNumberInput 自己负责
+            //   （回填成「最后一个合法值」，不是硬编码 "0"）——
+            //   见 LiteNumberInput.TryParseStrict 上方的注释。
+            // ★ 不变量：Crit >= Warn —— 这是**结构性**的：
+            //   状态判定是 value >= crit → crit，否则 value >= warn → warn；
+            //   一旦 Crit < Warn，warn 档就**不可达** ⇒ 用户配的那一档告警直接废掉。
+            //   钳制方向：**刚被用户改的那个值保持不变**，另一个被调整
+            //   （改 warn 时抬高 crit 以保住 warn 档；改 crit 时压低 warn 以保住两档都有意义）。
+            // ★ 任何调整都必须**看得见**（行内提示），不能静默改值。
+            void Commit(bool warnSide, double raw)
+            {
+                double value = raw;
+                string? hint = null;
+
+                if (clamp != null)
+                {
+                    var (clamped, clampHint) = clamp(raw);
+                    if (clamped != raw)
+                    {
+                        value = clamped;
+                        hint = clampHint ?? string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            LanguageManager.T("Menu.ThresholdClamped"), clamped);
+                        SyncInput(warnSide ? inputWarn : inputCrit, value);
+                    }
+                }
+
+                if (warnSide)
+                {
+                    range.Warn = value;
+                    if (range.Crit < value)
+                    {
+                        range.Crit = value;
+                        SyncInput(inputCrit, value);
+                        hint = string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            LanguageManager.T("Menu.ThresholdCritRaised"), value);
+                    }
+                }
+                else
+                {
+                    range.Crit = value;
+                    if (range.Warn > value)
+                    {
+                        range.Warn = value;
+                        SyncInput(inputWarn, value);
+                        hint = string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            LanguageManager.T("Menu.ThresholdWarnLowered"), value);
+                    }
+                }
+
+                SetHint(hint);
+            }
+
+            // 程序化同步另一个输入框：抑制回写，避免与上面的不变量逻辑互相触发。
+            void SyncInput(LiteNumberInput input, double value)
+            {
+                string text = value.ToString(System.Globalization.CultureInfo.CurrentCulture);
+                using (page.BeginSuppressWriteBack())
+                {
+                    if (!string.Equals(input.Inner.Text, text, StringComparison.Ordinal))
+                        input.Inner.Text = text;
+                }
+            }
+
             inputWarn.Inner.TextChanged += (s, e) => {
                 if (page.IsWriteBackSuppressed) return;
-                if (TryParseThreshold(inputWarn.Inner.Text, out double w)) range.Warn = w;
+                if (!LiteNumberInput.TryParseStrict(inputWarn.Inner.Text, out double w)) return;
+                Commit(true, w);
             };
             inputCrit.Inner.TextChanged += (s, e) => {
                 if (page.IsWriteBackSuppressed) return;
-                if (TryParseThreshold(inputCrit.Inner.Text, out double c)) range.Crit = c;
-            };
-
-            // ★ 粘进非法文本时，控件仍显示非法文本、配置却保持旧值 ——
-            //   显示与配置不一致且无提示。离场时把文本回填成配置里的旧值。
-            //   （回填用 "0.####" 格式：与界面其它数字同文化，但不带千分位 ⇒ 严格样式可解析。）
-            inputWarn.Inner.Leave += (s, e) => {
-                if (!TryParseThreshold(inputWarn.Inner.Text, out _))
-                    inputWarn.Inner.Text = range.Warn.ToString("0.####", System.Globalization.CultureInfo.CurrentCulture);
-            };
-            inputCrit.Inner.Leave += (s, e) => {
-                if (!TryParseThreshold(inputCrit.Inner.Text, out _))
-                    inputCrit.Inner.Text = range.Crit.ToString("0.####", System.Globalization.CultureInfo.CurrentCulture);
+                if (!LiteNumberInput.TryParseStrict(inputCrit.Inner.Text, out double c)) return;
+                Commit(false, c);
             };
 
             page.RegisterRefresh(() => {
@@ -129,6 +217,24 @@ namespace LiteMonitor.src.UI.Controls
                 {
                     inputWarn.Inner.Text = range.Warn.ToString();
                     inputCrit.Inner.Text = range.Crit.ToString();
+                }
+
+                // ★ 载入时也保证不变量成立（旧配置里可能存着 Crit < Warn）——
+                //   改了同样给行内提示，不静默改值。
+                if (range.Crit < range.Warn)
+                {
+                    range.Crit = range.Warn;
+                    using (page.BeginSuppressWriteBack())
+                    {
+                        inputCrit.Inner.Text = range.Crit.ToString();
+                    }
+                    SetHint(string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        LanguageManager.T("Menu.ThresholdCritRaised"), range.Crit));
+                }
+                else
+                {
+                    SetHint(null);
                 }
             });
 
@@ -139,8 +245,11 @@ namespace LiteMonitor.src.UI.Controls
 
             // Layout
             this.Layout += (s, e) => {
-                lblTitle.Location = new Point(UIUtils.S(5), (this.Height - lblTitle.Height) / 2);
-                rightBox.Location = new Point(this.Width - rightBox.Width - UIUtils.S(5), (this.Height - rightBox.Height) / 2);
+                // ★ 有行内提示时，标题与输入框在上半区居中，提示独占下半区。
+                int hintH = (_hintLabel != null && _hintLabel.Visible) ? _hintLabel.Height : 0;
+                int areaH = this.Height - hintH;
+                lblTitle.Location = new Point(UIUtils.S(5), (areaH - lblTitle.Height) / 2);
+                rightBox.Location = new Point(this.Width - rightBox.Width - UIUtils.S(5), (areaH - rightBox.Height) / 2);
             };
             
             // Separator Line
@@ -150,29 +259,38 @@ namespace LiteMonitor.src.UI.Controls
         }
 
         /// <summary>
-        /// 解析阈值输入。
-        ///
-        /// ★ NumberStyles **严格限定**为「LiteNumberInput 的 KeyPress 放行的形式」：
-        ///   数字 / 前导负号 / 小数点。
-        ///   刻意**不**用 <c>NumberStyles.Float</c>（它含 AllowExponent ⇒ "1e5" 会被接受），
-        ///   也**不**用 AllowThousands（⇒ "1,000" 会被接受），也不放行首尾空白（⇒ " 8 " 会被接受）——
-        ///   这几种形式界面上**手打都打不出来**，却能靠**粘贴**写进配置。
-        /// ★ 拒绝 NaN / Infinity：<c>double.TryParse</c> 会接受 "NaN" / "Infinity"。
-        /// ★ 上下限钳制不在这里做：各阈值类型的合理范围由页面（ThresholdPage）掌握，
-        ///   在通用控件层猜一个范围只会误伤用户的合法配置。
+        /// 设置/清除行内提示。
+        /// <para>★ 钳制与不变量调整**必须看得见** —— 静默改值是本轮一直在修的病
+        ///   （配置被改了而用户不知道）。行高随提示的有无变化，提示不占位时不影响常态布局。</para>
         /// </summary>
-        private static bool TryParseThreshold(string text, out double value)
+        private void SetHint(string? text)
         {
-            const System.Globalization.NumberStyles styles =
-                System.Globalization.NumberStyles.AllowLeadingSign |
-                System.Globalization.NumberStyles.AllowDecimalPoint;
+            bool show = !string.IsNullOrEmpty(text);
 
-            if (!double.TryParse(text, styles, System.Globalization.CultureInfo.CurrentCulture, out value))
-                return false;
+            if (show)
+            {
+                if (_hintLabel == null)
+                {
+                    _hintLabel = new Label
+                    {
+                        Dock = DockStyle.Bottom,
+                        Height = UIUtils.S(18),
+                        ForeColor = UIColors.TextWarn,
+                        Font = UIFonts.Regular(8F),
+                        TextAlign = ContentAlignment.MiddleLeft,
+                        Padding = UIUtils.S(new Padding(5, 0, 0, 0)),
+                    };
+                    this.Controls.Add(_hintLabel);
+                }
+                _hintLabel.Text = text!;
+                _hintLabel.Visible = true;
+            }
+            else if (_hintLabel != null)
+            {
+                _hintLabel.Visible = false;
+            }
 
-            if (!double.IsFinite(value)) return false;
-
-            return true;
+            this.Height = UIUtils.S(show ? RowHeightWithHint : RowHeightNormal);
         }
     }
 
@@ -483,16 +601,27 @@ namespace LiteMonitor.src.UI.Controls
     // =======================================================================
     public class LiteNumberInput : LiteUnderlineInput
     {
+        /// <summary>
+        /// ★ 最近一次「合法」的文本 —— 离场时用它回填。
+        /// <para>为什么**不能**硬编码 "0"：<c>TextBox.Text</c> 的赋值会**同步**触发 <c>TextChanged</c>。
+        ///   于是「非法文本离场」会先被改写成「合法文本 0」，上层那个立即绑定的回写分支
+        ///   看到的就成了 "0" —— 解析成功 ⇒ **把 0 真的写进了配置**
+        ///   （用户只是往阈值框里粘了个 "."，CPU 负载告警阈值就变成 0 了）。
+        ///   回填成「最后一个合法值」时，同步触发的回写写回的是**同一个值** ⇒ 配置不变。</para>
+        /// </summary>
+        private string _lastValid;
+
         public LiteNumberInput(
             string text, 
             string unit = "", 
-            string label = "",      
+            string label = "",       
             int width = 160, 
-            Color? color = null,    
+            Color? color = null,     
             int maxLength = 10) 
             : base(text, unit, label, width, color, HorizontalAlignment.Center) 
         {
             this.Inner.MaxLength = maxLength;
+            _lastValid = TryParseStrict(text, out _) ? text : "0";
 
             this.Inner.KeyPress += (s, e) =>
             {
@@ -502,15 +631,60 @@ namespace LiteMonitor.src.UI.Controls
                 e.Handled = true;
             };
 
+            // ★ 记录最近一次合法文本（程序化同步也会更新它 ⇒ 刷新后回填的是新值）
+            this.Inner.TextChanged += (s, e) =>
+            {
+                if (TryParseStrict(this.Inner.Text, out _)) _lastValid = this.Inner.Text;
+            };
+
+            // ★ 离场：非法/空 ⇒ 回填最近一次合法值（**不是**硬编码 "0"）
             this.Inner.Leave += (s, e) =>
             {
-                if (string.IsNullOrWhiteSpace(this.Inner.Text) || this.Inner.Text == "." || this.Inner.Text == "-")
-                {
-                    this.Inner.Text = "0";
-                }
+                if (TryParseStrict(this.Inner.Text, out _)) return;
+                string restore = string.IsNullOrEmpty(_lastValid) ? "0" : _lastValid;
+                if (!string.Equals(this.Inner.Text, restore, StringComparison.Ordinal))
+                    this.Inner.Text = restore;
             };
         }
         
+        /// <summary>
+        /// 严格解析：只接受「界面上手打得出来」的数字形式 ——
+        /// 数字 / **前导负号** / 至多一个小数点，且至少含一个数字。
+        /// <para>★ 与本控件的 KeyPress 过滤器**逐字一致** ⇒ 粘贴也拿不到别的形式。
+        ///   拒："+5"（KeyPress 不放行 '+'）、"1e5"（指数）、"1,000"（千分位）、
+        ///   " 8 "（首尾空白）、"NaN" / "Infinity"（非有限值）、"-" / "." / "-."（没有数字）。</para>
+        /// <para>★ 与阈值行共用同一套判定 —— 两边口径不一致就会出现
+        ///   「控件认为合法、行认为非法」的缝隙（回填与回写互相打架）。</para>
+        /// </summary>
+        public static bool TryParseStrict(string? text, out double value)
+        {
+            value = 0;
+            if (string.IsNullOrEmpty(text)) return false;
+
+            // 字符集校验：与 KeyPress 完全一致
+            int i = 0;
+            if (text[0] == '-') i = 1;              // 只允许 ASCII '-'，且只能在最前
+            bool hasDigit = false;
+            bool hasDot = false;
+            for (; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (c >= '0' && c <= '9') { hasDigit = true; continue; }
+                if (c == '.' && !hasDot) { hasDot = true; continue; }
+                return false;                        // 其它任何字符一律拒（含 '+' / 'e' / ',' / 空白）
+            }
+            if (!hasDigit) return false;            // "-" / "." / "-." 都拒
+
+            const System.Globalization.NumberStyles styles =
+                System.Globalization.NumberStyles.AllowLeadingSign |
+                System.Globalization.NumberStyles.AllowDecimalPoint;
+
+            if (!double.TryParse(text, styles, System.Globalization.CultureInfo.CurrentCulture, out value))
+                return false;
+
+            return double.IsFinite(value);
+        }
+
         public int ValueInt => int.TryParse(Inner.Text, out int v) ? v : 0;
         public double ValueDouble => double.TryParse(Inner.Text, out double v) ? v : 0.0;
     }

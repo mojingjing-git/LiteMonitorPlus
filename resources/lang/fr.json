@@ -202,6 +202,9 @@
     "__Comment_Page4__": "--- 4. Seuils ---",
     "Thresholds": "Seuils",
     "ThresholdsTips": "Couleur barre selon seuil",
+    "ThresholdClamped": "Valeur hors de la plage valide ; ajustée à {0}",
+    "ThresholdCritRaised": "Le seuil critique ne peut pas être inférieur au seuil d'alerte ; synchronisé à {0}",
+    "ThresholdWarnLowered": "Le seuil d'alerte ne peut pas être supérieur au seuil critique ; synchronisé à {0}",
     "AlertTemp": "Alerte Temp",
     "AlertThreshold": "Limite",
 

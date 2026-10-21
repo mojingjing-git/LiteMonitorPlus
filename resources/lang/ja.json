@@ -202,6 +202,9 @@
     "__Comment_Page4__": "--- 4. 閾値設定 ---",
     "Thresholds": "アラート閾値",
     "ThresholdsTips": "バーと数値の色が閾値に応じて変化",
+    "ThresholdClamped": "値が有効範囲外のため {0} に調整しました",
+    "ThresholdCritRaised": "重大値は警告値より小さくできません。{0} に同期しました",
+    "ThresholdWarnLowered": "警告値は重大値より大きくできません。{0} に同期しました",
     "AlertTemp": "高温警告",
     "AlertThreshold": "警告温度",
 

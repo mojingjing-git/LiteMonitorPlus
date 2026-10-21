@@ -203,6 +203,9 @@
     "AlertThreshold": "高温报警阈值",
     
     "ThresholdsTips": "进度条和数值将根据硬件阈值显示对应的颜色",
+    "ThresholdClamped": "值超出有效范围，已调整为 {0}",
+    "ThresholdCritRaised": "严重值不能低于告警值，已同步为 {0}",
+    "ThresholdWarnLowered": "告警值不能高于严重值，已同步为 {0}",
     "GeneralHardware": "通用硬件",
     "HardwareLoad": "硬件负载",
     
