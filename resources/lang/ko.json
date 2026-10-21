@@ -201,6 +201,9 @@
     "__Comment_Page4__": "--- 4. Thresholds ---",
     "Thresholds": "알림 임계값",
     "ThresholdsTips": "바와 숫자 색상이 임계값에 따라 변경",
+    "ThresholdClamped": "값이 유효 범위를 벗어나 {0}(으)로 조정되었습니다",
+    "ThresholdCritRaised": "심각 값은 경고 값보다 작을 수 없습니다. {0}(으)로 동기화했습니다",
+    "ThresholdWarnLowered": "경고 값은 심각 값보다 클 수 없습니다. {0}(으)로 동기화했습니다",
     "AlertTemp": "고온 경보",
     "AlertThreshold": "온도 제한",
 

@@ -201,6 +201,9 @@
     "__Comment_Page4__": "--- 4. Grenzwerte ---",
     "Thresholds": "Grenzwerte",
     "ThresholdsTips": "Balkenfarbe nach Grenzwert",
+    "ThresholdClamped": "Wert liegt außerhalb des gültigen Bereichs; auf {0} angepasst",
+    "ThresholdCritRaised": "Der kritische Wert darf nicht unter dem Warnwert liegen; auf {0} angeglichen",
+    "ThresholdWarnLowered": "Der Warnwert darf nicht über dem kritischen Wert liegen; auf {0} angeglichen",
     "AlertTemp": "Hitze-Alarm",
     "AlertThreshold": "Limit",
 

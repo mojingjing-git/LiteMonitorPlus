@@ -204,7 +204,7 @@ W3 修的这类缺陷**不会让程序崩**，只会在用户没做任何事时�
 探针工程：`tests/AppearanceSettingsProbe/`（**不进 sln**，与既有探针惯例一致；
 不新增任何 NuGet 依赖；只构造内存中的 WinForms 控件与读取源码文本）。
 
-### 运行时用例（19 条）
+### 运行时用例（29 条）
 
 | 组 | 内容 |
 |---|---|
@@ -212,13 +212,16 @@ W3 修的这类缺陷**不会让程序崩**，只会在用户没做任何事时�
 | 立即绑定不回写 | `AddCombo`（构造期 / 抑制内 / 作用域外对照 / 选中项为 -1）、`AddToggle`、`AddComboPair`、`AddInt`、`AddInput`（9 条） |
 | 刷新体不改原值 | `SetContext` 与 `OnShow` 两条路径下，原值不在候选里时刷新不得把原值冲掉（2 条） |
 | **负向对照** | 无守卫的绑定在抑制作用域内**确实会回写**；非法输入经 `ValueDouble` **确实变成 0**（2 条） |
+| 严格解析 | 12 个界面打不出来的形式全拒；`85` / `-12.5` / `0` 必须能解析（2 条） |
+| **阈值行端到端** | 粘 `"."` 再离场 ⇒ **配置不变**（不是 0）；显示回到旧值（2 条） |
+| **阈值不变量与钳制** | `Crit >= Warn` 成立；调整有可见行内提示；钳制拉回范围；钳制后显示与配置一致；钳制有可见提示（5 条） |
 
 ★ 负向对照是**鉴别力自证**：如果"没有守卫的绑定在抑制作用域内也会回写"这条不成立，
 那前面那批"不回写"断言就是恒真的摆设、探针毫无价值。
 负向对照在探针内部现造等价场景实现，**不修改主工程源码** ——
 多会话共用工作树时，主工程源码的临时改动有被他人提交卷进去的风险。
 
-### 源码级门槛（10 组）
+### 源码级门槛（27 条）
 
 防止将来「顺手优化」时删掉一行守卫后**无声退化**：
 
@@ -228,13 +231,18 @@ W3 修的这类缺陷**不会让程序崩**，只会在用户没做任何事时�
 - `FillSync` 与 `FillGpuSync` 重填走作用域（2/2）
 - 六个设备偏好下拉用 `AddComboPair`（6/6）
 - `LiteThresholdRow` 的守卫、作用域包裹、解析失败不写（3 条）
+- 阈值行的**离场回填不在行里**（单机制）、`LiteNumberInput` 的 `_lastValid` 根因修法（4 条）
+- 阈值解析的严格样式 / 拒非有限值 / 字符集校验（3 条）
+- 阈值不变量与可见钳制（2 条）
+- 字体：进程内缓存 / 无裸 `new Font` / 重绘不新建 / `CachedCount` 自检口（4 条）
+- 语言资源：3 个新键 9 种语言全覆盖（1 条）
 - 探针工程不进 sln（自查）
 
 方法体提取用「从标记处取其后第一个花括号块」，
 配平时逐字符跳过行注释、块注释、普通字符串、逐字字符串 `@"..."`、字符字面量 ——
 避免注释或字符串里的花括号破坏配平。
 
-**当前结果：33 / 33 全部通过。**
+**当前结果：56 / 56 全部通过。**
 
 ---
 
@@ -253,7 +261,7 @@ W3 修的这类缺陷**不会让程序崩**，只会在用户没做任何事时�
 > 该行为在 `ValueDouble` 时代本就存在（`ValueDouble` 用的也是默认样式）⇒ **不算回归**。
 > 但既然已经把解析收进自己的方法，就该一并收紧。
 
-**修法**（`src/UI/Controls/LiteUI.cs` → `LiteThresholdRow.TryParseThreshold`）：
+**修法**（`src/UI/Controls/LiteUI.cs` → `LiteNumberInput.TryParseStrict`）：
 
 ```
 const NumberStyles styles = AllowLeadingSign | AllowDecimalPoint;
@@ -264,16 +272,24 @@ const NumberStyles styles = AllowLeadingSign | AllowDecimalPoint;
 **不**放行首尾空白。另加 `double.IsFinite` 拒绝 `NaN` / `Infinity`
 （`double.TryParse` 会接受这两个）。
 
+> ★ 这一版只用了 `NumberStyles`，而 `AllowLeadingSign` **本身会放行 `"+5"`** ——
+> 与「只接受 KeyPress 放行的形式」的说法对不上。第二轮已补上**字符集校验**
+> （见 §4.8.4），并把解析从阈值行**下沉**到 `LiteNumberInput.TryParseStrict`（见 §4.8.1）。
+
 > **上下限钳制没有在通用控件层做** —— 各阈值类型的合理范围由页面（`ThresholdPage`）掌握，
-> 在控件层猜一个范围只会误伤用户的合法配置。该项记为 A17 实测时的观察点，不在本轮范围。
+> 在控件层猜一个范围只会误伤用户的合法配置。
+> ★ 第二轮已按这个口径落地：只有**硬件负载（%）**钳到 0~100，其余不设上下限（见 §4.8.3）。
 
 ### 4.7.2 残留 B：非法文本留在界面上，与配置不一致且无提示
 
 粘进非法文本后：控件仍显示非法文本，配置保持旧值 ⇒ 界面与配置不一致，用户毫无提示。
 
-**修法**：`LiteThresholdRow` 给两个输入框加 `Leave` 处理器 ——
+**修法（第一版）**：`LiteThresholdRow` 给两个输入框加 `Leave` 处理器 ——
 离场时若文本仍不可解析，就把文本回填成配置里的旧值。
 回填用 `ToString("0.####", CurrentCulture)`：与界面其它数字同文化，但不带千分位 ⇒ 严格样式可解析。
+
+> ★ **这一版的修法在第二轮被推翻** —— 它与 `LiteNumberInput` 自带的离场处理**互相打穿**，
+> 反而造出了一个更严重的缺陷（阈值被静默改成 0）。根因与改法见 §4.8.1。
 
 ### 4.7.3 门槛问题：探针不在 sln、无 CI，平时根本不会跑
 
@@ -319,6 +335,97 @@ src/UI/Controls/LiteUI.cs → LiteNavBtn.OnPaint
 **探针门槛同步新增 4 条**（防止将来改回 `new Font`）：
 `UIFonts 是进程内缓存` / `LiteUI.cs 内不再有裸 new Font` / `LiteNavBtn 重绘不再新建字体` /
 `阈值解析用严格 NumberStyles` / `阈值解析拒绝 NaN / Infinity` / `阈值非法输入离场回填`。
+
+---
+
+## 4.8 第二轮复核的处置（2026-10-21，安全会话复核 `7870cc6` 后）
+
+安全会话复核 `7870cc6` 时，逐条独立复现了全部验证结论（探针全量实跑 9 通过 / 0 失败 / 1 跳过、
+`new Font` 计数 19 → 1、16 处替换的字体族/字号/字形 1:1 比对），随后指出
+**1 个新缺陷 + 1 条文档错误 + 阈值口径**。本节记录处置。
+
+### 4.8.1 ★ 新缺陷：离场顺序把回填打穿，阈值仍会被静默写成 0
+
+**在 `src/UI/Controls/LiteUI.cs`** —— 第一版的离场回填（§4.7.2）与
+`LiteNumberInput` **自带**的离场处理是**两套机制**，而两套机制的注册顺序决定了结果：
+
+```
+[TextChanged] -> 写配置 range.Warn = '.'      ← TryParseThreshold 拦住，不写
+[TextChanged] -> 写配置 range.Warn = '0'      ← ★ 串了：'0' 可解析 ⇒ 真写了
+[handler1 Leave] 文本 '.' -> 强制改成 '0'
+[handler2 Leave] '0' 可解析 -> 不回填
+最终控件文本 = '0'
+```
+
+`LiteNumberInput` 自己的 `Leave`（先注册）把 `空 / "." / "-"` 置为 `"0"`，
+而 `TextBox.Text` 的赋值会**同步**触发 `TextChanged`
+⇒ 阈值行的回写分支看到 `"0"`、解析成功 ⇒ **把 0 真的写进 `range.Warn`**。
+
+后果不是显示错乱，是**配置真的变了**：`ThresholdPage` 传的是
+`Config.Thresholds.Load/Temp/...` 这种**活引用**，`ValueRange.Warn` 是普通 auto-property，
+全仓库对 `Warn`/`Crit` 零钳制零校验 ⇒ 粘贴一个 `.` 再点确定，
+**CPU 负载告警阈值就变成 0**（之后任何负载 ≥ 0 都直接进 warn 态）。
+
+**修法（修的是根，不是打补丁）**：`LiteNumberInput` 维护 `_lastValid` ——
+`TextChanged` 解析成功时记下值；`Leave` 时若当前文本不可解析/为空，
+回填 `_lastValid`（**不是**硬编码 `"0"`）。
+
+回填成「最后一个合法值」时，同步触发的 `TextChanged` 写回的是**同一个值** ⇒ 配置不变。
+所有数字输入（不只阈值行）一起受益。
+
+⇒ 阈值行里那套自己的 `Leave` 回填**删掉** —— 两套机制并存正是这个缺陷的成因。
+离场回填**只有一处**：`LiteNumberInput`。
+
+### 4.8.2 严格解析下沉并统一口径
+
+解析从 `LiteThresholdRow.TryParseThreshold` **下沉**到 `LiteNumberInput.TryParseStrict`，
+行与控件共用同一套判定 ⇒ 不再有「控件认为合法、行认为非法」的缝隙。
+
+### 4.8.3 ★ 阈值不变量与钳制口径（按安全会话给的口径落地）
+
+| 判据 | 落地方式 |
+|---|---|
+| **`Crit >= Warn`**（结构性，与类型无关） | 放在 `LiteThresholdRow`（它同时持有两个值）。状态判定是 `value >= crit → crit`，否则 `value >= warn → warn`；一旦 `Crit < Warn`，**warn 档不可达** ⇒ 用户配的那一档告警直接废掉 |
+| 钳制方向 | **刚被用户改的那个值保持不变**，另一个被调整：改 warn 时**抬高 crit**（保住 warn 档）；改 crit 时**压低 warn**（保住两档都有意义） |
+| `Menu.HardwareLoad`（%） | 钳到 **0~100**（页面层传 `clamp` 回调） |
+| `Temp` / `DiskIOSpeed` / `NetUpMB` / `NetDownMB` / `DataUpMB` / `DataDownMB` | **不设**上下限。温度可以为负（室外/冷藏场景合法），**不加** `>= 0`；MB/s 与 MB 的上限是**场景相关**的，通用层猜一个只会误伤用户的合法配置 |
+| **钳制不许静默** | 钳制与不变量调整都给出**行内提示**（`LiteThresholdRow.SetHint`），行高随提示变化。静默改值正是本轮一直在修的病 |
+
+### 4.8.4 前导加号：`"+5"`
+
+第一版只用了 `NumberStyles`，而 `AllowLeadingSign` **本身会放行 `"+5"`** ——
+与「只接受 KeyPress 放行的形式」的说法对不上（KeyPress 只放行数字 / `.` / `-`）。
+
+⇒ 第二轮在 `TryParseStrict` 里补上**字符集校验**（逐字符走一遍，与 KeyPress 逐字一致），
+`"+5"` / `"1e5"` / `"1,000"` / `" 8 "` / `"NaN"` / `"Infinity"` / `"-"` / `"."` 全部拒。
+语义上 `+5 == 5` 无害，但**规则与说法必须一致** —— 说一套做一套的规则迟早会误伤。
+
+### 4.8.5 探针：39 → 56 条
+
+新增的门槛（**运行时为主** —— 源码 grep 证明力弱，真实事件顺序才是要害）：
+
+| 门槛 | 类型 | 证明什么 |
+|---|---|---|
+| 阈值行遇非法粘贴离场后配置不变 | 运行时 | **端到端复现 §4.8.1**：对**真实的行**粘 `"."` 再触发 `Leave` ⇒ `range.Warn` 仍是 75，不是 0 |
+| 阈值行离场后显示回到旧值 | 运行时 | 显示与配置一致 |
+| 阈值行强制 `Crit >= Warn` | 运行时 | 把严重值调到低于告警值后，两档仍有序 |
+| 阈值不变量调整有可见行内提示 | 运行时 | 提示**真的出现**（`HintText` 非空） |
+| 阈值钳制把越界值拉回范围 / 显示与配置一致 / 有可见行内提示 | 运行时 | 钳制生效且可见 |
+| 严格解析拒绝界面打不出来的形式 | 运行时 | 12 个反例（含 `"+5"` / `"1e5"` / `" 8 "` / `NaN` / `Infinity`）全拒 |
+| 严格解析接受正常数字 | 运行时 | `85` / `-12.5` / `0` 必须能解析 |
+| 阈值行不再自带离场回填处理器 | 源码级 | 守住「只有一套机制」 |
+| 数字输入记录最近一次合法值 / 离场不再硬编码 0 / 离场回填最近合法值 | 源码级 | 守住根因修法不被改回去 |
+| 阈值解析有字符集校验（拒前导加号） | 源码级 | 守住字符集校验还在（`NumberStyles` 单独用不住 `+`） |
+| 阈值行强制 `Crit >= Warn` 不变量 | 源码级 | 守住不变量代码存在 |
+| 阈值钳制有可见行内提示 | 源码级 | 守住提示机制存在 |
+| 阈值提示文案 9 种语言全覆盖 | 源码级 | 只加中文是最常见的漏 —— 缺键时界面会显示 `ThresholdCritRaised` 这种天书 |
+| `UIFonts 提供 CachedCount 自检口` | 源码级 | A17 的 S1 断言要用「反复开关前后 `CachedCount` 不变」，**不是**某个具体个数 |
+
+> ★ 为了让探针能测**真实的行**而不是在探针里抄一份绑定逻辑，
+> `LiteThresholdRow` 暴露了 `WarnInput` / `CritInput` / `HintText` 三个只读成员。
+> 抄的那份会跟实现漂移 —— 而漂移的副本**测不出**真实缺陷。
+
+**实跑结果：56 / 56 通过，exit 0。**
 
 ---
 
@@ -381,6 +488,18 @@ using (page.BeginSuppressWriteBack())
 
 > 语言文件在索引里是**纯 LF** 且对 git 呈 `-text` —— 写入时必须保持 LF，否则整文件 diff。
 
+### 7.1 第二轮追加的 3 键（阈值提示文案）
+
+| 键 | 用途 | 中文 |
+|---|---|---|
+| `Menu.ThresholdClamped` | 越界值被拉回范围（`{0}` = 钳制后的值） | 值超出有效范围，已调整为 {0} |
+| `Menu.ThresholdCritRaised` | 严重值被抬高以保住告警档（`{0}` = 同步后的值） | 严重值不能低于告警值，已同步为 {0} |
+| `Menu.ThresholdWarnLowered` | 告警值被压低以保住两档（`{0}` = 同步后的值） | 告警值不能高于严重值，已同步为 {0} |
+
+> ★ 只加中文是最常见的漏 —— 缺键时 `LanguageManager` 会**回退成键名后缀**，
+> 界面上就会显示 `ThresholdCritRaised` 这种天书。
+> 探针里有一条门槛专门守这个（`阈值提示文案 9 种语言全覆盖`）。
+
 ---
 
 ## 8. 验证记录
@@ -388,7 +507,7 @@ using (page.BeginSuppressWriteBack())
 | 项 | 命令 / 口径 | 结果 |
 |---|---|---|
 | 主工程编译 | `dotnet build LiteMonitor.csproj -c Release` | **0 错误 / 233 警告** |
-| 单元测试 | `dotnet test tests/LiteMonitor.Tests -c Release` | **604 通过 / 0 失败 / 7 跳过**（总计 611） |
+| 单元测试 | `dotnet test tests/LiteMonitor.Tests -c Release` | **605 通过 / 0 失败 / 7 跳过**（总计 612） |
 | 主题探针 | `tests/AppearanceThemeCheck` | **442 / 442** |
 | 静态背景探针 | `tests/AppearanceStaticBackdropProbe` | **21 / 21** |
 | M2 合同探针 | `tests/AppearanceM2Probe` | 全部通过 |
@@ -397,7 +516,8 @@ using (page.BeginSuppressWriteBack())
 | 装饰渲染探针 | `tests/AppearanceDecorRendererProbe` | 全部通过 |
 | 窗口轮廓探针 | `tests/AppearanceWindowShapeProbe` | 全部通过 |
 | 背景验证探针（实机） | `tests/AppearanceBackdropProbe` | exit=0（见 §9） |
-| **W3 防回退探针** | `tests/AppearanceSettingsProbe` | **33 / 33** |
+| **W3 防回退探针** | `tests/AppearanceSettingsProbe` | **56 / 56** |
+| **统一入口全量** | `scripts/run-probes.ps1` | **9 通过 / 0 失败 / 1 跳过，exit 0**（Backdrop 按设计跳过） |
 
 > 单元测试总数比上一轮的 593 多 11 个 —— 增量来自安全会话新增的测试文件
 > （`WebAuthHardeningTests` / `SettingsRecoveryTests` / `UpdateSignatureTests` 等），**不是**本缺陷包引入。
@@ -453,6 +573,8 @@ Blur=24 @scale=1：合同 24.49 / 实测 25.36）。
 | 「配置未保存」提示在主面板左下角的实际观感 | 需要人为制造配置 IO 故障 |
 | W3-1 的端到端复现 | 需要实机：开「跟随任务栏」→ 进设置页主标签页 → 改点别的 → 应用 → 确认未被改回 |
 | W3-3 的端到端复现 | 需要实机：指定设备偏好 → 使该设备不可用 → 进设置页 → 应用 → 确认偏好未被清空 |
+| 阈值**行内提示**的实际观感 | 需要实机：把告警值调到高于严重值 / 把负载调到 150 → 看行下方提示是否出现、行高变化是否影响排版、提示文案是否本地化正确 |
+| 阈值行提示与标题的横向对齐 | 行高从 40 变 62 后，标题与输入框要仍在上半区居中（只有机器能验「提示非空」，观感要人眼看） |
 
 > 建议把这几项并入 `2026-10-20-appearance-a14-live-checklist.md` 一并重做。
 
@@ -482,3 +604,14 @@ Blur=24 @scale=1：合同 24.49 / 实测 25.36）。
 | `resources/lang/*.json` × 9 | 新增 `Menu.ConfigWriteBlocked` / `Menu.ConfigWriteBlockedShort` / `Menu.PreferenceUnavailable` |
 | `src/UI/Controls/LiteUI.cs` | `LiteThresholdRow` 立即绑定加抑制守卫 + 刷新体包进作用域 + 解析失败不写（§4.5） |
 | `tests/AppearanceSettingsProbe/`（新） | W3 防回退探针：运行时断言 + 源码级门槛 + 负向对照（§4.6），**不进 sln** |
+
+### 11.1 第二轮追加的变更（§4.8）
+
+| 文件 | 变更 |
+|---|---|
+| `src/UI/Controls/LiteUI.cs` | `LiteNumberInput`：`._lastValid` 根因修法（离场回填最近合法值，不再硬编码 `"0"`）+ `TryParseStrict`（字符集校验，与 KeyPress 逐字一致）；`LiteThresholdRow`：`Crit >= Warn` 不变量 + 钳制 + 可见行内提示（`SetHint`）+ 移除行内自带的离场回填 + 暴露 `WarnInput` / `CritInput` / `HintText` |
+| `src/UI/Settings/SettingsUIBuilder.cs` | `AddThreshold` 增加可选 `clamp` 回调（各类型上下限由页面提供，通用层不猜） |
+| `src/UI/Settings/ThresholdPage.cs` | 只给 `Menu.HardwareLoad`（%）传 0~100 钳制；其余指标不设上下限 |
+| `resources/lang/*.json` × 9 | 新增 `Menu.ThresholdClamped` / `Menu.ThresholdCritRaised` / `Menu.ThresholdWarnLowered`（**LF**） |
+| `tests/AppearanceSettingsProbe/Program.cs` | 门槛 39 → **56**：新增阈值行端到端回归（粘 `"."` 离场 ⇒ 配置不变）、不变量与钳制的运行时断言、字符集校验门槛、语言资源全覆盖门槛、`UIFonts.CachedCount` 门槛 |
+| `scripts/run-probes.ps1` | 探针计数订正（39 → 56） |

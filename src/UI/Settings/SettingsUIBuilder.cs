@@ -279,10 +279,13 @@ namespace LiteMonitor.src.UI.SettingsPage
 
         /// <summary>
         /// Adds a Threshold Row (Warn -> Crit)
+        /// <para>★ <paramref name="clamp"/>：该指标类型的取值范围钳制（可为 null）。
+        ///   通用层**不猜**各类型的上下限 —— 由页面（ThresholdPage）按指标类型提供。
+        ///   钳制结果会带**行内提示**，不会静默改值。</para>
         /// </summary>
-        public static LiteThresholdRow AddThreshold(this LiteSettingsGroup group, SettingsPageBase page, string title, string unit, ValueRange range)
+        public static LiteThresholdRow AddThreshold(this LiteSettingsGroup group, SettingsPageBase page, string title, string unit, ValueRange range, LiteThresholdRow.ThresholdClamp? clamp = null)
         {
-            var row = new LiteThresholdRow(page, title, unit, range);
+            var row = new LiteThresholdRow(page, title, unit, range, clamp);
             group.AddFullItem(row);
             return row;
         }
