@@ -169,9 +169,11 @@ namespace LiteMonitor
                 // [Refactor] 使用新的原子函数分别构建普通和紧凑文本
                 
                 // === 1. 更新主界面缓存 (Panel) ===
-                string valNormal = MetricUtils.GetValueStr(Key, DisplayValue, false);
-                string unitNormal = MetricUtils.GetUnitStr(Key, DisplayValue, MetricUtils.UnitContext.Panel);
+                // ★ 把该监控项自己的单位格式一起传进去：内存容量模式下若用户把单位写成 %，
+                //   数值必须保持百分比，不能换算成 GB —— 见 MetricUtils.IsPercentUnitOverride。
                 string userFmtPanel = cfg?.UnitPanel;
+                string valNormal = MetricUtils.GetValueStr(Key, DisplayValue, false, userFmtPanel);
+                string unitNormal = MetricUtils.GetUnitStr(Key, DisplayValue, MetricUtils.UnitContext.Panel);
                 
                 string finalUnitPanel = MetricUtils.GetDisplayUnit(Key, unitNormal, userFmtPanel);
                 _cachedNormalText = valNormal + finalUnitPanel;
@@ -185,7 +187,7 @@ namespace LiteMonitor
                 // 自定义模式：不做数值压缩 (false)，但单位仍需基于 Taskbar 上下文计算基础值
                 bool compact = !hasCustomTaskbar;
                 
-                string valTaskbar = MetricUtils.GetValueStr(Key, DisplayValue, compact);
+                string valTaskbar = MetricUtils.GetValueStr(Key, DisplayValue, compact, userFmtTaskbar);
                 string unitTaskbar = MetricUtils.GetUnitStr(Key, DisplayValue, MetricUtils.UnitContext.Taskbar);
                 
                 string finalUnitTaskbar = MetricUtils.GetDisplayUnit(Key, unitTaskbar, userFmtTaskbar);
