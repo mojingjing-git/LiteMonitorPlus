@@ -273,6 +273,8 @@ namespace LiteMonitor
                 // 外观上下文：客户区尺寸会变（横屏会改 ClientSize），每帧同步一次
                 UpdateAppearanceContext(t);
                 HorizontalRenderer.Render(g, t, _hxColsHorizontal, _hxLayout.PanelWidth, _appearance);
+                // ★ 降级提示在横屏下同样要出现（否则横屏用户看不到玻璃没生效）。
+                DrawLiveGlassNotice(g, t);
                 return;
             }
 
@@ -291,7 +293,64 @@ namespace LiteMonitor
 
             UpdateAppearanceContext(t);
             UIRenderer.Render(g, _groups, t, _appearance);
+
+            // ★ A16 复核修正：降级必须**看得见**（合同 §7「降级不静默」）。
+            //   之前玻璃没生效时，背景层静默降级成一块浅色板 —— 屏幕上与正常状态
+            //   毫无区别，用户既不知道坏了，也无从判断该怎么处理。
+            DrawLiveGlassNotice(g, t);
         }
+
+        /// <summary>
+        /// 在面板底部画一行"实时玻璃未生效"的原因说明。
+        /// <para>★ 只在三个条件同时成立时出现：开关已打开、当前主题请求 glass、服务确实在降级。
+        ///   其余情况一律不画 ⇒ 旧主题与正常状态的画面**零变化**。</para>
+        /// </summary>
+        private void DrawLiveGlassNotice(Graphics g, Theme t)
+        {
+            if (!_cfg.LiveGlassEnabled) return;
+
+            ThemeAppearanceOptions? options = _appearance?.Options;
+            if (options is null || !options.GlassRequested) return;
+
+            string reason = _liveGlass?.LastDegradeReason ?? string.Empty;
+            if (string.IsNullOrEmpty(reason)) return;
+
+            string text = "实时玻璃未生效：" + reason;
+            const int maxChars = 46;
+            if (text.Length > maxChars) text = text.Substring(0, maxChars) + "…";
+
+            int w = _form.ClientRectangle.Width;
+            int h = _form.ClientRectangle.Height;
+            if (w <= 0 || h <= 18) return;
+
+            // ★ 画刷按颜色缓存：换主题后颜色会变，必须重建，否则提示文字停留在旧主题的颜色上。
+            //   次级文字色可为空（新旧主题都可能没有），此时退回主文字色 —— 它一定有值。
+            Color noticeColor = ThemeManager.ParseColor(t.Color.TextSecondary ?? t.Color.TextPrimary);
+            if (_noticeBrush == null || _noticeBrushColor != noticeColor)
+            {
+                _noticeBrush?.Dispose();
+                _noticeBrush = new SolidBrush(noticeColor);
+                _noticeBrushColor = noticeColor;
+            }
+
+            using var fmt = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
+
+            g.DrawString(
+                text,
+                LiveGlassNoticeFont,
+                _noticeBrush,
+                new RectangleF(0, h - 16, w - 4, 14),
+                fmt);
+        }
+
+        /// <summary>降级提示用的字体（静态缓存：绝不能每帧 new Font —— 会漏 GDI 句柄）。</summary>
+        private static readonly Font LiveGlassNoticeFont = new Font("Microsoft YaHei UI", 7.5f);
+
+        /// <summary>降级提示用的画刷（缓存，避免每帧分配）。</summary>
+        private SolidBrush? _noticeBrush;
+
+        /// <summary>画刷当前对应的颜色（换主题时用来判断要不要重建画刷）。</summary>
+        private Color _noticeBrushColor;
 
         /// <summary>
         /// 同步外观运行时上下文。
@@ -834,6 +893,10 @@ namespace LiteMonitor
             //   代理还指向服务，顺序反了会漏掉最后一次亲和性恢复）。
             _liveGlass?.Dispose();
             _liveGlass = null;
+
+            // 降级提示的画刷
+            _noticeBrush?.Dispose();
+            _noticeBrush = null;
         }
     }
 }
