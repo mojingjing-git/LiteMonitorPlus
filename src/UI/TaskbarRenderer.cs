@@ -35,15 +35,37 @@ namespace LiteMonitor
         {     
             var s = cfg.GetStyle();
 
-            // ★★★ 修复：先释放旧字体资源，防止 GDI 句柄泄漏 ★★★
+            // ★★★ 这个字体由本类独占，所以「先释放旧的、再建新的」才是正确的所有权闭环 ★★★
+            //
+            // 为什么不能用 UIUtils.GetFont(...)：
+            //   它返回的是 UIUtils._fontCache 里的**共享实例**（同 key 永远是同一个 Font 对象）。
+            //   在这里 Dispose 它，缓存里就留下一个已释放的 Font，后续同 key 取值会把坏对象原样取回；
+            //   而 TextRenderer.DrawText 用已释放字体并不抛异常、只是静默降级，
+            //   于是症状是「应用设置 / 换肤后任务栏字体不再生效」，且没有任何异常可查。
+            //   反过来若不 Dispose、只丢弃引用，则每次换样式漏一个 GDI 字体。
+            //   两个方向都错 —— 所以改成自己 new 一份：谁建谁释放。
+            //
+            // 为什么必须自己持有而不能借缓存的实例：
+            //   UIController.ApplyTheme 与 MainFormBizHelper.RebuildMenus 都会调
+            //   UIUtils.ClearBrushCache()（换语言 / 改监控布局 / 主题编辑器确认都会走到 RebuildMenus），
+            //   那一刻共享实例会被 Dispose 并清空，而之后并没有任何地方刷新本字段 ——
+            //   借来的引用会变成悬空对象。本类自有的实例不来自那个缓存，天然不受影响。
             if (_cachedFont != null)
             {
                 try { _cachedFont.Dispose(); } catch { }
                 _cachedFont = null;
             }
 
-            // 无论开关怎么变，这里拿到的永远是正确参数
-            _cachedFont = UIUtils.GetFont(s.Font, s.Size, s.Bold);
+            try
+            {
+                _cachedFont = new Font(s.Font, s.Size, s.Bold ? FontStyle.Bold : FontStyle.Regular);
+            }
+            catch
+            {
+                // 字体族不存在或参数越界时退到系统默认族，避免整条任务栏渲染路径抛异常
+                _cachedFont = new Font(SystemFonts.DefaultFont.FontFamily, s.Size,
+                                       s.Bold ? FontStyle.Bold : FontStyle.Regular);
+            }
 
             // 颜色依然允许自定义
             _useCustom = cfg.TaskbarCustomStyle;

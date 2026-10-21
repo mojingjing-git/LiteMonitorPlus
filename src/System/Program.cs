@@ -46,7 +46,14 @@ namespace LiteMonitor
                     if (baseName.Length > 250) 
                     {
                          // 如果路径太长，使用路径的哈希值来保证唯一性且不超长
-                         baseName = $"Global\\LiteMonitor_SingleInstance_{sanitizedPath.GetHashCode()}_Mutex";
+                         // [Fix] 用 SHA-256 摘要前 16 位十六进制替代 string.GetHashCode()。
+                         // .NET Core 的字符串哈希按进程随机化，同一路径在两个进程里会算出不同的值，
+                         // 长路径时 Mutex 名就不一致，单实例保护失效（两个实例可共存）。
+                         // SHA-256 是确定性摘要，跨进程稳定，且长度固定不会顶到 260 字符上限。
+                         string pathDigest = Convert.ToHexString(
+                             System.Security.Cryptography.SHA256.HashData(
+                                 System.Text.Encoding.UTF8.GetBytes(sanitizedPath ?? string.Empty)));
+                         baseName = $"Global\\LiteMonitor_SingleInstance_{pathDigest.Substring(0, 16)}_Mutex";
                     }
                     
                     mutexName = baseName;

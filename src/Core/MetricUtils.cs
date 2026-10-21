@@ -189,9 +189,10 @@ namespace LiteMonitor.src.Core
 
                 double totalGB = (key.IndexOf("MEM", StringComparison.OrdinalIgnoreCase) >= 0) ? Settings.DetectedRamTotalGB : GetGpuVramTotalGB(key);
                 
-                return (totalGB > 0 && value.HasValue) 
-                    ? FormatDataSizeParts((value.Value / 100.0) * totalGB * 1073741824.0, -1).unit 
-                    : "GB";
+                return (totalGB > 0) 
+                    ? FormatDataSizeParts(((value ?? 0f) / 100.0) * totalGB * 1073741824.0, -1).unit 
+                    : "%"; // [Fix] 容量未知(totalGB<=0)时回退百分比，与 GetValueStr 的数值回退口径一致；
+                           // 原先此处返回 "GB"，而数值已回退成百分比，界面会显示成「45.0 GB」这种既非容量也非百分比的读数。
             }
             
 
@@ -393,7 +394,11 @@ namespace LiteMonitor.src.Core
             else
                 rawPct = value / 100.0;
 
-            // 2. 负值处理 (充电状态) - 统一返回 1.0 (满条)，颜色由状态决定
+            // 2. 负值处理：电池**充电**时放电功率/电流为负（放电为正）。
+            //    产品口径（已确认）：取绝对值，按实际幅度绘制进度条 ——
+            //    充电 20W 就画 20% 长的条，而不是一律满条。
+            //    满条只能看出「正在充电」，看不出充得多快，信息量更低。
+            //    颜色不由这里决定：GetState 对 BAT 负值返回 STATE_SAFE，所以不会误判为告警。
             if (rawPct < 0) rawPct = Math.Abs(rawPct);
 
             // 3. 视觉修正：限制在 [0.05, 1.0] 之间
