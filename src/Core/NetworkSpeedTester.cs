@@ -17,12 +17,10 @@ namespace LiteMonitor
         {
             PooledConnectionLifetime = TimeSpan.FromMinutes(5), // 连接重用
             PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1),
-            MaxConnectionsPerServer = 32, // 增加到服务器的最大连接数
-            // ★★★ 修复：正确设置忽略 SSL 证书错误 (解决 CS0117 错误) ★★★
-            SslOptions = new SslClientAuthenticationOptions
-            {
-                RemoteCertificateValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
-            }
+            MaxConnectionsPerServer = 32 // 增加到服务器的最大连接数
+            // 不设置自定义证书校验回调：TLS 校验按系统信任链进行。
+            // 曾为「解决用户证书报错」整体关闭校验，等于允许中间人伪造测速响应；
+            // 企业 TLS 拦截环境应引导用户导入根证书，而不是关闭校验。
         })
         {
             Timeout = TimeSpan.FromSeconds(25) // 增加全局超时时间，为下载预留更多时间

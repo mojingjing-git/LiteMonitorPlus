@@ -18,6 +18,10 @@ namespace LiteMonitor.src.WebServer
         private int _currentRunningPort = -1;
         private int _generation = 0;   // Start/Stop 代次：用来区分 Stop 前后的监听任务
 
+        // 正在处理中的连接数（含已经建好的 WebSocket 长连接）。
+        // 只由 Interlocked 读写：ListenLoop 与各连接自己的收尾路径分别在不同线程上跑。
+        private int _activeConnections = 0;
+
         public string CurrentPassword { get;set; }
 
         private readonly Settings _cfg;
@@ -46,6 +50,20 @@ namespace LiteMonitor.src.WebServer
         /// ★ 默认值保持生产语义不变 —— 这是一个**只给测试用**的接缝，不改变任何生产行为。
         /// </remarks>
         internal IPAddress? ListenAddress { get; set; }
+
+        /// <summary>
+        /// 同时在处理中的连接上限，超出直接断开。
+        /// </summary>
+        /// <remarks>
+        /// ★ 内部接缝（<c>internal</c>，**不属于公开 API**）：只为让测试能把上限压到很小，
+        ///   从而在不建 64 条连接的前提下验证"超限即拒"。默认值就是生产行为。
+        /// ★ 语义是"在途连接"：WebSocket 握手成功后，长连接会一直占着一个名额
+        ///   （直到连接断开，收尾路径在 finally 里归还）。
+        /// ★ 默认 64 的理由：浏览器对同一源头的并发连接上限是 6，几个标签页也远低于此；
+        ///   而一个脚本开几千条连接时，这里把"无上限累积任务 + 缓冲"降级成"大部分被立刻拒绝"。
+        /// ★ 这是**背压**而不是准入控制：正常情况下不会触顶，触顶时拒绝比耗尽资源更可接受。
+        /// </remarks>
+        internal int MaxConcurrentConnections { get; set; } = 64;
 
         public bool IsRunning => _isRunning;
         public int CurrentRunningPort => _isRunning ? _currentRunningPort : -1;
@@ -280,8 +298,52 @@ namespace LiteMonitor.src.WebServer
                     continue;
                 }
 
+                // ★ 并发上限（背压）：没有这道闸时，一个脚本可以建立起任意多条连接，
+                //   每条都会拉起一个连接处理任务并占住自己的缓冲与读取期限；
+                //   进程内存和线程池排队长度随之无上界增长。
+                //   超限时直接断开 —— 此时还没读请求，无法区分 HTTP/WebSocket，也就无法回 503。
+                if (Interlocked.Increment(ref _activeConnections) > MaxConcurrentConnections)
+                {
+                    Interlocked.Decrement(ref _activeConnections);
+                    Debug.WriteLine($"Web 在途连接数已达上限 {MaxConcurrentConnections}，拒绝新连接");
+                    try { client.Close(); } catch { }
+                    continue;
+                }
+
                 // [Refactor] All connection handling logic moved to WebSessionManager (now serving as unified ConnectionManager)
-                _ = _sessionManager.HandleClientAsync(client);
+                // ★ 走包装方法而不是直接 `_ = _sessionManager.HandleClientAsync(client)`：
+                //   fire-and-forget 的 Task 一旦抛出未处理异常，异常只会在 GC 时才以
+                //   UnobservedTaskException 冒出来，且没人负责归还并发名额。
+                _ = HandleClientGuardedAsync(client);
+            }
+        }
+
+        /// <summary>
+        /// 调用连接处理器，并保证无论成功、失败还是取消都会归还一个并发名额。
+        /// </summary>
+        /// <param name="client">已接受的连接（其关闭由被调用方负责）。</param>
+        /// <remarks>
+        /// ★ 这里必须吞掉异常而不是让它逃逸：
+        ///   本方法是 <c>_ = ...</c> 的 fire-and-forget 调用，异常一旦逃逸就没有任何代码观察它，
+        ///   最终只会在 GC 时以 <c>UnobservedTaskException</c> 出现（默认还会被静默忽略）。
+        ///   记录到 Debug 是这条路径上唯一能留下痕迹的地方。
+        /// ★ 名额在 finally 里归还：这是"计数不会永久泄漏"的唯一保证 ——
+        ///   进程内 Stop → Start 之后，上一轮的连接都会因为 socket 被关闭而在
+        ///   HandleClientAsync 里退出，从而把名额还回来。
+        /// </remarks>
+        private async Task HandleClientGuardedAsync(TcpClient client)
+        {
+            try
+            {
+                await _sessionManager.HandleClientAsync(client).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("HandleClient Error: " + ex.Message);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeConnections);
             }
         }
 
