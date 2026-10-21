@@ -30,4 +30,8 @@
 		<!-- 指定 Main 入口 -->
 		<StartupObject>LiteMonitor.Updater.Program</StartupObject>
 	</PropertyGroup>
+
+	<ItemGroup>
+		<InternalsVisibleTo Include="LiteMonitor.Updater.Tests" />
+	</ItemGroup>
 </Project>

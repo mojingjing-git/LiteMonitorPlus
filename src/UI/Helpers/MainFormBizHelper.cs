@@ -362,16 +362,180 @@ namespace LiteMonitor.src.UI.Helpers
             catch { }
         }
 
+        /// <summary>
+        /// 读取更新器留下的三种结论并提示，然后清理标记。
+        ///
+        /// 三种状态必须分开，否则「更新器跑到了最后一步」会被误报成「已成功更新」：
+        ///   update_success     → 全部文件替换并校验成功
+        ///   update_error.log   → 按 [Result] 恢复结果区分提交前失败、完整恢复或恢复不完整
+        ///   update_in_progress → 更新器被强杀，更新和恢复状态均未确认
+        /// </summary>
         private void CheckUpdateSuccess()
         {
-            string tokenPath = Path.Combine(AppContext.BaseDirectory, "update_success");
-            if (File.Exists(tokenPath))
+            string baseDir = AppContext.BaseDirectory;
+            string successPath = Path.Combine(baseDir, "update_success");
+            string errorPath = Path.Combine(baseDir, "update_error.log");
+            string inProgressPath = Path.Combine(baseDir, "update_in_progress");
+
+            bool zh = _cfg.Language == "zh";
+            string title = "LiteMonitor++_v" + UpdateChecker.GetCurrentVersion();
+
+            if (File.Exists(successPath))
             {
-                try { File.Delete(tokenPath); } catch { }
-                string title = "LiteMonitor++_v" + UpdateChecker.GetCurrentVersion();
-                string content = _cfg.Language == "zh" ? "软件已成功更新到最新版本！" : "Software updated to latest version!";
+                try { File.Delete(successPath); } catch { }
+                // 成功时顺手清掉历史错误日志，避免下次启动误报失败
+                try { if (File.Exists(errorPath)) File.Delete(errorPath); } catch { }
+                try { if (File.Exists(inProgressPath)) File.Delete(inProgressPath); } catch { }
+
+                string content = zh ? "软件已成功更新到最新版本！" : "Software updated to latest version!";
                 ShowNotification(title, content, ToolTipIcon.Info);
+                return;
             }
+
+            if (File.Exists(errorPath))
+            {
+                // 更新器把恢复结果写在这里；读取后提示一次，避免每次启动都弹。
+                string[] lines = Array.Empty<string>();
+                try
+                {
+                    lines = File.ReadAllLines(errorPath);
+                }
+                catch { }
+
+                string status = FindTaggedValue(lines, "[Result]", "status") ?? "unknown";
+                string? backup = FindTaggedValue(lines, "[Result]", "backup");
+                string? reason = FindTaggedLine(lines, "[Failure]")
+                    ?? FindTaggedLine(lines, "[Summary]");
+
+                try { File.Delete(errorPath); } catch { }
+                try { File.Delete(inProgressPath); } catch { }
+
+                string content;
+                ToolTipIcon icon = ToolTipIcon.Warning;
+                if (string.Equals(status, "recovered", StringComparison.OrdinalIgnoreCase))
+                {
+                    content = zh
+                        ? AppendReason("上次更新失败，受影响文件已恢复。", reason)
+                        : AppendReason("The last update failed, and all affected files were restored.", reason);
+                }
+                else if (string.Equals(status, "failed_before_commit", StringComparison.OrdinalIgnoreCase))
+                {
+                    content = zh
+                        ? AppendReason("上次更新在提交前失败，目标文件未被修改。", reason)
+                        : AppendReason("The last update failed before commit; target files were not changed.", reason);
+                }
+                else if (string.Equals(status, "recovery_incomplete", StringComparison.OrdinalIgnoreCase))
+                {
+                    icon = ToolTipIcon.Error;
+                    content = zh
+                        ? $"上次更新失败，恢复不完整。请使用保留的恢复材料人工检查。{BackupLocation(zh, backup)}"
+                        : $"The last update failed and recovery is incomplete. Inspect the retained recovery materials.{BackupLocation(zh, backup)}";
+                    content = AppendReason(content, reason);
+                }
+                else
+                {
+                    icon = ToolTipIcon.Error;
+                    content = zh
+                        ? $"上次更新失败，恢复状态未确认。请检查保留的更新材料。{BackupLocation(zh, backup)}"
+                        : $"The last update failed and its recovery state is unconfirmed. Check the retained update materials.{BackupLocation(zh, backup)}";
+                    content = AppendReason(content, reason);
+                }
+
+                ShowNotification(title, content, icon);
+                return;
+            }
+
+            if (File.Exists(inProgressPath))
+            {
+                // 既无成功也无失败日志 = 更新器被强制结束（断电、任务管理器、安全软件拦截）。
+                // 提示一次后删除标记；备份目录 _update_backup_* 本身保留，供人工恢复。
+                string[] markerLines = Array.Empty<string>();
+                try { markerLines = File.ReadAllLines(inProgressPath); } catch { }
+                string? backup = FindTaggedValue(markerLines, null, "backup");
+                try { File.Delete(inProgressPath); } catch { }
+
+                string content = zh
+                    ? $"上次更新被中断，当前安装状态待确认，部分文件可能已更新。请检查保留的恢复材料。{BackupLocation(zh, backup)}"
+                    : $"The last update was interrupted. The current installation state is unconfirmed, and some files may already be updated. Check the retained recovery materials.{BackupLocation(zh, backup)}";
+                ShowNotification(title, content, ToolTipIcon.Error);
+            }
+        }
+
+        private static string? FindTaggedLine(string[] lines, string tag)
+        {
+            for (int i = lines.Length - 1; i >= 0; i--)
+            {
+                string line = lines[i].Trim();
+                int tagIndex = line.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
+                if (tagIndex >= 0)
+                {
+                    string value = line.Substring(tagIndex + tag.Length).Trim();
+                    return value.Length == 0 ? null : value;
+                }
+            }
+
+            return null;
+        }
+
+        private static string? FindTaggedValue(
+            string[] lines,
+            string? tag,
+            string key)
+        {
+            for (int i = lines.Length - 1; i >= 0; i--)
+            {
+                string line = lines[i].Trim();
+                int tagIndex = 0;
+                if (tag != null)
+                {
+                    tagIndex = line.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
+                    if (tagIndex < 0)
+                    {
+                        continue;
+                    }
+                }
+
+                int keyIndex = line.IndexOf(
+                    key + "=",
+                    tagIndex + (tag?.Length ?? 0),
+                    StringComparison.OrdinalIgnoreCase);
+                if (keyIndex < 0) continue;
+
+                int start = keyIndex + key.Length + 1;
+                if (start >= line.Length) return null;
+
+                if (line[start] == '"')
+                {
+                    int endQuote = line.IndexOf('"', start + 1);
+                    if (endQuote < 0) return null;
+                    return line.Substring(start + 1, endQuote - start - 1);
+                }
+
+                int end = start;
+                while (end < line.Length && !char.IsWhiteSpace(line[end])) end++;
+                return line.Substring(start, end - start);
+            }
+
+            return null;
+        }
+
+        private static string AppendReason(string message, string? reason) =>
+            string.IsNullOrWhiteSpace(reason)
+                ? message
+                : message + Environment.NewLine + reason;
+
+        private static string BackupLocation(bool zh, string? backup)
+        {
+            if (string.IsNullOrWhiteSpace(backup))
+            {
+                return zh
+                    ? "\n恢复标记未提供备份位置，请检查更新目录。"
+                    : "\nThe recovery marker did not provide a backup location; inspect the update directory.";
+            }
+
+            return zh
+                ? "\n恢复材料：" + backup
+                : "\nRecovery materials: " + backup;
         }
 
         public void Dispose()
