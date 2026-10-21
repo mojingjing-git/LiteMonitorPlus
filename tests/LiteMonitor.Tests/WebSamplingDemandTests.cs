@@ -169,6 +169,75 @@ namespace LiteMonitor.Tests
             public override void Update() { }
         }
 
+        [Fact]
+        public async Task StopAtHttpGrantBoundaryDoesNotRestoreDemand()
+        {
+            var fakeTime = new FakeTimeProvider();
+            var demand = new WebDemandState(fakeTime, TimeSpan.FromSeconds(2));
+            var manager = NewManager(
+                demandState: demand,
+                samplingRequester: _ => Task.FromResult(false));
+            var sink = new RecordingDemandSink();
+            var sync = new WebDemandSynchronizer(() => manager.HasWebDataDemand, sink.Apply);
+            manager.DemandChanged = () => sync.SyncNow();
+
+            var atGrantBoundary = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseGrant = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            // Pause after the running/generation checks while holding clientsGate.
+            manager.HttpLeaseGrantTestHook = () =>
+            {
+                atGrantBoundary.TrySetResult(true);
+                releaseGrant.Task.GetAwaiter().GetResult();
+            };
+
+            manager.Start();
+            using var host = new LoopbackHost(manager);
+            Task<string> pendingResponse = SendHttpAsync(host.Port, "/api/snapshot");
+
+            try
+            {
+                await atGrantBoundary.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+                var stopAttempted = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                Task stopTask = Task.Run(() =>
+                {
+                    stopAttempted.TrySetResult(true);
+                    manager.Stop();
+                });
+                await stopAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(stopTask.IsCompleted);
+
+                releaseGrant.TrySetResult(true);
+                await stopTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+                Assert.False(manager.HasHttpLease);
+                Assert.False(manager.HasWebDataDemand);
+                Assert.True(sink.Count > 0);
+                Assert.False(sink.Last);
+
+                string response = await pendingResponse.WaitAsync(TimeSpan.FromSeconds(5));
+
+                Assert.Contains("200", response);
+                Assert.False(manager.HasHttpLease);
+                Assert.False(manager.HasWebDataDemand);
+                Assert.False(sink.Last);
+
+                fakeTime.Advance(TimeSpan.FromSeconds(3));
+                sync.SyncNow();
+                Assert.False(manager.HasHttpLease);
+                Assert.False(manager.HasWebDataDemand);
+                Assert.False(sink.Last);
+            }
+            finally
+            {
+                releaseGrant.TrySetResult(true);
+                manager.Stop();
+            }
+        }
+
         /// <summary>
         /// 新建一个会话管理器。
         /// </summary>

@@ -218,6 +218,68 @@ namespace LiteMonitor.Tests
             }, demand);
         }
 
+        [Fact]
+        public async Task QuickRestartOldConnectionCompletesWithoutGrantingLease()
+        {
+            var clock = new FakeTimeProvider();
+            var demand = new WebDemandState(clock, TimeSpan.FromSeconds(2));
+            var manager = new WebSessionManager(
+                (writer, _) =>
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("k", "test");
+                    writer.WriteEndObject();
+                    return Task.CompletedTask;
+                },
+                demand,
+                clock,
+                _ => Task.FromResult(false));
+
+            var atLeaseCheck = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseLeaseCheck = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            // Pause before the old request crosses the lease-check boundary.
+            manager.HttpLeaseCheckTestHook = () =>
+            {
+                atLeaseCheck.TrySetResult(true);
+                releaseLeaseCheck.Task.GetAwaiter().GetResult();
+            };
+
+            manager.Start();
+            using var host = new LoopbackHost(manager);
+            Task<string> oldRequest = SendHttpAsync(host.Port, "/api/snapshot");
+            try
+            {
+                await atLeaseCheck.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+                int oldGeneration = manager.Generation;
+                manager.Stop();
+                manager.Start();
+                Assert.NotEqual(oldGeneration, manager.Generation);
+
+                // The response may finish, but its old generation cannot grant demand.
+                releaseLeaseCheck.TrySetResult(true);
+                string oldResponse = await oldRequest.WaitAsync(TimeSpan.FromSeconds(5));
+
+                Assert.Contains("200", oldResponse);
+                Assert.False(manager.HasHttpLease);
+                Assert.False(manager.HasWebDataDemand);
+
+                manager.HttpLeaseCheckTestHook = null;
+                string newResponse = await SendHttpAsync(host.Port, "/api/snapshot");
+
+                Assert.Contains("200", newResponse);
+                Assert.True(manager.HasHttpLease);
+                Assert.True(manager.HasWebDataDemand);
+            }
+            finally
+            {
+                releaseLeaseCheck.TrySetResult(true);
+                manager.Stop();
+            }
+        }
+
         private static string LangPath(string lang)
             => Path.Combine(AppContext.BaseDirectory, "resources", "lang", lang + ".json");
 

@@ -446,6 +446,10 @@ namespace LiteMonitor.src.WebServer
         /// </summary>
         public Action? DemandChanged { get; set; }
 
+        // Test-only synchronization points for HTTP lease lifecycle regressions.
+        internal Action? HttpLeaseCheckTestHook { get; set; }
+        internal Action? HttpLeaseGrantTestHook { get; set; }
+
         /// <summary>
         /// 当前运行代次（每次 Start / Stop 都会 +1）。
         /// 用来识别"跨越 Stop 边界"的连接与请求：它们不再登记为需求。
@@ -752,11 +756,21 @@ namespace LiteMonitor.src.WebServer
                 //   跨越 Stop 边界的在途请求不再授予租期：Stop 已经清空过全部需求，
                 //   再补一个 2 秒租期等于把已停止的服务又变成"有需求"。
                 //   ★ 授权点必须在**采样之前**：等待采样期间不能没有需求。
-                if (connectionGeneration == Volatile.Read(ref _generation))
+                HttpLeaseCheckTestHook?.Invoke();
+
+                bool leaseGranted = false;
+                lock (_clientsGate)
                 {
-                    _demand.GrantHttpLease();
-                    NotifyDemandChanged();
+                    if (_isRunning && connectionGeneration == Volatile.Read(ref _generation))
+                    {
+                        HttpLeaseGrantTestHook?.Invoke();
+                        _demand.GrantHttpLease();
+                        leaseGranted = true;
+                    }
                 }
+
+                // Keep notifications outside the lifecycle lock.
+                if (leaseGranted) NotifyDemandChanged();
 
                 // ★ 共享采样（限频）：HTTP 轮询与网页广播走**同一条**限频采样路径，
                 //   协调器保证 1 秒 1 次 + 并发合并 → 多个网页 + 轮询不会叠加真实采集。
