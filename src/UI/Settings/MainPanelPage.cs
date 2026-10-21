@@ -110,8 +110,75 @@ namespace LiteMonitor.src.UI.SettingsPage
                 () => (Config.UIScale * 100) + "%",
                 s => Config.UIScale = MetricUtils.ParseDouble(s) / 100.0);
 
+            // 6. 实时玻璃（M2 / A16）
+            //   ★ 默认关闭（M2 合同 §8.1）；开启是**显式**操作，且首次开启必须弹副作用提示。
+            var liveGlassCheck = new LiteCheck(Config.LiveGlassEnabled, LanguageManager.T("Menu.Enable"));
+            liveGlassCheck.CheckedChanged += (s, e) =>
+            {
+                bool want = liveGlassCheck.Checked;
+
+                if (want && !Config.LiveGlassHintShown)
+                {
+                    // ★ 首次提示（M2 合同 §8.3）：必须如实表述副作用。
+                    //   用户点"取消" ⇒ 不开启（把开关拨回去），不得"先开后问"。
+                    if (!ShowLiveGlassHint())
+                    {
+                        liveGlassCheck.Checked = false;
+                        return;
+                    }
+                    Config.LiveGlassHintShown = true;
+                }
+
+                Config.LiveGlassEnabled = want;
+                UI?.SetLiveGlassEnabled(want);
+                UpdateLiveGlassStatus();
+            };
+            group.AddItem(new LiteSettingsItem(LanguageManager.T("Menu.LiveGlass"), liveGlassCheck));
+
+            // 实际状态行：显示**真实**的降级原因，而不是只回显配置值
+            // （合同 §7「降级不静默」；A16「配置和实际降级状态一致」）。
+            _liveGlassStatusLabel = new Label
+            {
+                AutoSize = false,
+                Width = UIUtils.S(240),
+                Height = UIUtils.S(22),
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = UIColors.TextSub,
+                Font = new Font("Microsoft YaHei UI", 8F),
+                Text = UI?.LiveGlassStatusText ?? "实时玻璃未启用。",
+            };
+            group.AddItem(new LiteSettingsItem(LanguageManager.T("Menu.LiveGlassStatus"), _liveGlassStatusLabel));
+
             AddGroupToPage(group);
 
+        }
+
+        /// <summary>实时玻璃的实际状态标签（设置页用；null = 页面尚未创建）。</summary>
+        private Label? _liveGlassStatusLabel;
+
+        /// <summary>
+        /// 首次开启实时玻璃时的副作用提示。
+        /// <para>★ 文案由语言资源提供，必须如实表述：捕获瞬间面板可能从录屏/截图中短暂消失或闪动
+        /// （M2 合同 §8.3），不得承诺"所有录屏软件都无感"（§8.4）。</para>
+        /// </summary>
+        private bool ShowLiveGlassHint()
+        {
+            string title = LanguageManager.T("Menu.LiveGlass");
+            string text = LanguageManager.T("Menu.LiveGlassHint");
+
+            IWin32Window? owner = FindForm();
+            DialogResult result = owner is null
+                ? MessageBox.Show(text, title, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning)
+                : MessageBox.Show(owner, text, title, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+
+            return result == DialogResult.OK;
+        }
+
+        /// <summary>刷新实时玻璃的实际状态显示。</summary>
+        private void UpdateLiveGlassStatus()
+        {
+            if (_liveGlassStatusLabel is null) return;
+            _liveGlassStatusLabel.Text = UI?.LiveGlassStatusText ?? "实时玻璃未启用。";
         }
 
         private void CreateHorizontalModeGroup()

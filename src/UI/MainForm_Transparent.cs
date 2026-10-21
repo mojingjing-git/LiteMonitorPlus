@@ -245,13 +245,26 @@ namespace LiteMonitor
             //   MainFormWinHelper 里原先那份已删除 —— 两处绑定会把轮廓重建两遍。
             //   ★ 尺寸变化时轮廓会按**当前**快照重算（切角边长按新高度重新夹紧），
             //   见 WindowAppearanceController.SnapshotProvider。
-            this.Resize += (_, __) => _winHelper.ApplyRoundedCorners();
-            this.VisibleChanged += (_, __) => { if (Visible) _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert: true); };
+            this.Resize += (_, __) =>
+            {
+                _winHelper.ApplyRoundedCorners();
+                // ★ A16：尺寸代次 +1 并更新捕获请求
+                //   （窗口大小变了，客户区的**物理**矩形也跟着变，坐标不变就会抓错区域）。
+                _ui?.NotifyLiveGlassSizeChanged();
+            };
+            this.VisibleChanged += (_, __) =>
+            {
+                if (Visible) _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert: true);
+                // ★ A16：隐藏 / 最小化 ⇒ 暂停捕获；重新显示 ⇒ 继续（合同 §5.1）。
+                _ui?.NotifyLiveGlassVisibility(Visible);
+            };
             this.HandleCreated += (_, __) =>
             {
                 _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert: true);
                 // 句柄重建后旧窗口的 Region 已随旧窗口销毁，必须重新应用一次轮廓
                 _windowAppearance?.OnHandleCreated();
+                // ★ A16：句柄代次 +1（句柄变了，旧请求里的句柄已失效，必须换新的）。
+                _ui?.NotifyLiveGlassHandleChanged();
             };
 
             // 换肤 / DPI 变化 → 重新应用窗口轮廓（外框样式可能在切角与圆角之间切换）
@@ -372,6 +385,9 @@ namespace LiteMonitor
             // ★ A13：句柄销毁后清掉窗口级状态（Region 交回 WinForms 释放），
             //   避免句柄重建时把"上一次尺寸的旧 Region"再套到新窗口上。
             _windowAppearance?.OnHandleDestroyed();
+            // ★ A16：句柄没了 ⇒ 捕获必须停（否则会对着已失效的句柄抓屏）。
+            //   句柄重建后由 HandleCreated 事件重新接上。
+            _ui?.StopLiveGlass();
             base.OnHandleDestroyed(e);
         }
 
@@ -380,6 +396,8 @@ namespace LiteMonitor
             base.OnDpiChanged(e);
             // ApplyTheme 内部会重建外观快照并触发 AppearanceChanged → 轮廓随之更新
             _ui?.ApplyTheme(_cfg.Skin);
+            // ★ A16：DPI 变了 ⇒ 客户区的物理尺寸与坐标都变了 ⇒ 尺寸代次 +1。
+            _ui?.NotifyLiveGlassSizeChanged();
             ApplyWindowAppearance();
             this.Invalidate();
         }
@@ -444,7 +462,9 @@ namespace LiteMonitor
             src.WebServer.LiteWebServer.Instance?.Stop();
             
             base.OnFormClosed(e);
-            
+
+            // ★ A16：退出前停掉后台捕获服务（恢复显示亲和性，避免窗口在用户录屏里永久消失）。
+            _ui?.StopLiveGlass();
             _ui?.Dispose();
             _bizHelper.Dispose();
 
