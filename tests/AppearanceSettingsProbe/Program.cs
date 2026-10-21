@@ -360,10 +360,41 @@ namespace LiteMonitor.AppearanceSettingsProbe
             Add("LiteThresholdRow 刷新体走作用域", threshold.Contains("BeginSuppressWriteBack"),
                 threshold.Contains("BeginSuppressWriteBack") ? "已包进作用域" : "阈值行刷新未包进作用域");
             Add("LiteThresholdRow 解析失败时不写回",
-                threshold.Contains("double.TryParse") && !threshold.Contains("= inputWarn.ValueDouble"),
+                threshold.Contains("TryParseThreshold") && !threshold.Contains("= inputWarn.ValueDouble"),
                 "非法输入不得把阈值静默改成 0");
 
-            // ---- S6：探针工程不进 sln ----
+            // 阈值解析必须**严格**：只接受 KeyPress 放行的形式（数字/负号/小数点）。
+            // 粘贴能绕过 KeyPress，用默认 NumberStyles 的话 "1e5" / "1,000" / " 8 " 都会被写进配置。
+            string thresholdParse = ExtractBlock(liteUi, "private static bool TryParseThreshold(");
+            bool strictStyles = thresholdParse.Contains("AllowLeadingSign")
+                && thresholdParse.Contains("AllowDecimalPoint")
+                && !thresholdParse.Contains("NumberStyles.Float")
+                && !thresholdParse.Contains("AllowThousands")
+                && !thresholdParse.Contains("AllowExponent")
+                && !thresholdParse.Contains("AllowLeadingWhite")
+                && !thresholdParse.Contains("AllowTrailingWhite");
+            Add("阈值解析用严格 NumberStyles", strictStyles,
+                strictStyles
+                    ? "只接受数字/负号/小数点，\"1e5\" / \"1,000\" / \" 8 \" 均被拒"
+                    : "解析样式过宽：粘贴可写入界面手打不出来的形式");
+            Add("阈值解析拒绝 NaN / Infinity", thresholdParse.Contains("IsFinite"),
+                thresholdParse.Contains("IsFinite") ? "已拒非有限值" : "未拒非有限值");
+            Add("阈值非法输入离场回填", threshold.Contains("Inner.Leave"),
+                threshold.Contains("Inner.Leave") ? "离场时回填旧值，显示与配置保持一致" : "非法文本会一直显示，配置却是旧值");
+
+            // ---- S6：字体必须是进程内复用的，不能每次 new ----
+            // Control.Dispose **不**释放借用的 Font ⇒ 每次 new Font 都是一个
+            // 只靠终结器回收的 GDI 资源，反复开设置页就持续累积。
+            string uiFonts = ExtractBlock(liteUi, "public static class UIFonts");
+            Add("UIFonts 是进程内缓存", uiFonts.Contains("ConcurrentDictionary"),
+                uiFonts.Contains("ConcurrentDictionary") ? "按字号/样式复用同一实例" : "UIFonts 又变回每次 new");
+            int newFontCount = Regex.Matches(liteUi, "new Font\\(").Count;
+            Add("LiteUI.cs 内不再有裸 new Font", newFontCount <= 1,
+                "剩余 " + newFontCount + " 处（应只剩 UIFonts 缓存内部那 1 处）");
+            Add("LiteNavBtn 重绘不再新建字体", !liteUi.Contains("new Font(Font,"),
+                "原写法每次 OnPaint 都 new 一个 Font，鼠标划过就漏一个 GDI 对象");
+
+            // ---- S7：探针工程不进 sln ----
             bool inSln = false;
             if (File.Exists(slnPath))
             {

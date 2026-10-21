@@ -90,6 +90,31 @@ tests/AppearanceResourceProbe/output/AppearanceResourceProbe.exe --pid 12345 --l
 
 ---
 
+## 2.5 外观探针的防回退入口（`scripts/run-probes.ps1`）
+
+本文件 §3 的场景要人操作 GUI 才能跑，但**代码层面的防回退门槛**可以自动化 ——
+那些探针（主题一致性 / M2 合同 / 接线 / 装饰 / 窗口轮廓 / W3 设置页回写）全是机器判定。
+
+问题是：外观探针一律**不进 sln**，`dotnet build` / `dotnet test` 平时不会碰它们
+⇒ 门槛只在有人想起来手动跑时成立。`scripts/run-probes.ps1` 就是补这个缺口：
+
+```powershell
+scripts/run-probes.ps1                                   # 默认：8 个探针 + 单元测试
+scripts/run-probes.ps1 -SkipUnitTests                    # 只跑探针
+scripts/run-probes.ps1 -IncludeBackdrop -OutDir D:\ev   # 连实机捕获一起跑，证据写别处
+```
+
+- **串行**构建 + 串行运行（并发会争抢主工程 `obj/`）
+- 收录清单与命名由外观线定；`AppearanceBackdropProbe` 需要实机抓屏，默认跳过
+- 失败时打印失败输出并以 exit 1 结束 ⇒ 可直接挂到任何本地 CI / 提交前钩子
+
+> 这条是安全会话复核时指出的**真门槛问题**：
+> 「探针不在 sln、无 CI、scripts 下也无统一入口 ⇒ 平时 build/test 不会跑它，
+> 防回退只在有人想起时成立。」
+> 工具齐了不等于门槛成立，**门槛需要一个入口**。
+
+---
+
 ## 3. 实测场景清单
 
 每个场景：**先启动采样器 → 在另一个窗口做操作 → 等采样结束 → 读斜率**。
@@ -150,11 +175,22 @@ tests/AppearanceResourceProbe/output/AppearanceResourceProbe.exe --pid 12345 --l
 |---|---|
 | `src/UI/Controls/MonitorControls.cs` → 监控项控件 | 3 个（8F ×2、9F Bold ×2）**每个监控项** |
 | `src/UI/Controls/LiteUI.cs` → `LiteSettingsGroup` 标题 | 1 个**每个设置组** |
+| `src/UI/Controls/LiteUI.cs` → `LiteThresholdRow` 标题与箭头 | 2 个**每个阈值行** |
 | `src/UI/Settings/PluginMarketPage.cs` | 4 个**每次进页面**（`RebuildUI` 每次重建） |
 | `src/UI/Settings/MonitorPage.cs` | 4 个 |
 | `src/UI/Settings/PluginPage.cs`、`MainPanelPage.cs`、`SettingsBase.cs` | 各 1 个 |
 
 ⇒ 打开一次设置页、监控项多一点，就能新建**几十个**字体对象；反复开关设置页就持续累积。
+
+**最严重的一处**（复核时扩查 `LiteUI.cs` 全量才发现）：
+
+```
+src/UI/Controls/LiteUI.cs → LiteNavBtn.OnPaint
+    Font = new Font(Font, FontStyle.Bold);   // ★ 每次重绘都 new 一个
+```
+
+⇒ **鼠标划过导航按钮就漏一个 GDI 字体对象** —— 这比设置页的泄漏严重得多，因为它随鼠标移动
+**持续发生**，而不只是「每次开页一次」。
 
 **修法**（不改成在页面 Dispose 里 Dispose 字体 —— 控件可能正在用它绘制，提前释放会画出错字）：
 
@@ -167,11 +203,15 @@ public static Font Bold(float size) => Get(size, FontStyle.Bold);
 ```
 
 ⇒ 进程内**每种字号/样式只存在一个实例**（当前设置页用到 5 种），不再随操作次数增长。
+`LiteUI.cs` 的 19 处全部改走缓存（含新增 `Underline` / `BoldUnderline` 变体），
+`LiteNavBtn.OnPaint` 改为复用两个固定实例。
+
 安全性已核：所有调用点都只是 `Font = UIFonts.xxx(...)` 赋值，**没有任何地方修改返回的 Font 对象属性**；
 且 `Control.Dispose` 不会释放借用的 Font ⇒ 共享实例不会被误释放。
 
 > ★ 这条是「静态审计 → 实测」之间的一个例子：光看 `new Font(...)` 那一处（8 处）
-> 只能看出 8 个；把 `UIFonts` 的调用链一起看，才知道实际是**几十个**。
+> 只能看出 8 个；把 `UIFonts` 的调用链一起看，才知道实际是**几十个**；
+> 再把 `LiteUI.cs` 全量扫一遍，才发现 `LiteNavBtn` 那个**随鼠标移动持续泄漏**的点。
 
 ---
 

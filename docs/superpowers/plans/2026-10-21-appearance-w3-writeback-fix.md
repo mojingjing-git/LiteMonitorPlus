@@ -238,6 +238,90 @@ W3 修的这类缺陷**不会让程序崩**，只会在用户没做任何事时�
 
 ---
 
+## 4.7 复核后的加固（2026-10-21，安全会话复核后）
+
+安全会话独立复核了 `a9973ff`（三条地基立论逐条重验 + 独立跑探针 33/33），确认修复成立，
+并指出两条**残留**与一条**门槛问题**。本节记录这三项的处理。
+
+### 4.7.1 残留 A：阈值解析过宽，粘贴能写入「界面手打不出来」的形式
+
+复核结论：`double.TryParse` 默认样式含 `AllowExponent` / `AllowThousands` / 首尾空白，
+于是 `"1e5"`→100000、`"1,000"`→1000、`" 8 "`→8、`"-3"`→-3 全部放行。
+`LiteNumberInput` 的 `KeyPress` 只放行数字/`.`/`-`，但**粘贴能绕过**它
+⇒ 这几种形式界面上打不出来，却能被写进配置。
+
+> 该行为在 `ValueDouble` 时代本就存在（`ValueDouble` 用的也是默认样式）⇒ **不算回归**。
+> 但既然已经把解析收进自己的方法，就该一并收紧。
+
+**修法**（`src/UI/Controls/LiteUI.cs` → `LiteThresholdRow.TryParseThreshold`）：
+
+```
+const NumberStyles styles = AllowLeadingSign | AllowDecimalPoint;
+```
+
+**只接受 KeyPress 放行的形式**：数字 / 前导负号 / 小数点。
+刻意**不**用 `NumberStyles.Float`（含 `AllowExponent`）、**不**用 `AllowThousands`、
+**不**放行首尾空白。另加 `double.IsFinite` 拒绝 `NaN` / `Infinity`
+（`double.TryParse` 会接受这两个）。
+
+> **上下限钳制没有在通用控件层做** —— 各阈值类型的合理范围由页面（`ThresholdPage`）掌握，
+> 在控件层猜一个范围只会误伤用户的合法配置。该项记为 A17 实测时的观察点，不在本轮范围。
+
+### 4.7.2 残留 B：非法文本留在界面上，与配置不一致且无提示
+
+粘进非法文本后：控件仍显示非法文本，配置保持旧值 ⇒ 界面与配置不一致，用户毫无提示。
+
+**修法**：`LiteThresholdRow` 给两个输入框加 `Leave` 处理器 ——
+离场时若文本仍不可解析，就把文本回填成配置里的旧值。
+回填用 `ToString("0.####", CurrentCulture)`：与界面其它数字同文化，但不带千分位 ⇒ 严格样式可解析。
+
+### 4.7.3 门槛问题：探针不在 sln、无 CI，平时根本不会跑
+
+复核结论很直接：外观探针一律**不进 sln**，`dotnet build` / `dotnet test` 平时不会碰它们
+⇒ 「防回退」只在有人想起来手动跑时成立。这条是真门槛问题。
+
+**修法**：新增 `scripts/run-probes.ps1` —— 外观探针的**统一入口**：
+
+- 串行构建 + 串行运行全部探针（并发会争抢主工程 `obj/`）
+- 收录清单（命名与范围由外观线定）：
+  `AppearanceThemeCheck` / `AppearanceStaticBackdropProbe` / `AppearanceM2Probe` /
+  `AppearanceWiringProbe` / `AppearanceDecorProbe` / `AppearanceDecorRendererProbe` /
+  `AppearanceWindowShapeProbe` / `AppearanceSettingsProbe`
+  + `AppearanceBackdropProbe`（**实机屏幕捕获**，默认跳过，需 `-IncludeBackdrop`）
+  + `LiteMonitor.Tests`（`-SkipUnitTests` 可跳过）
+- 汇总通过/失败/跳过，失败时打印失败输出并以 exit 1 结束
+- 探针输出用 `Process` + `RedirectStandardOutput` 捕获
+  （`Console.OutputEncoding` 在 stdout 被重定向时会抛异常，管道直接调用会崩）
+- 主工程 exe 被运行中实例锁住导致构建失败时，给出明确提示
+
+```powershell
+scripts/run-probes.ps1                                   # 默认：8 个探针 + 单元测试
+scripts/run-probes.ps1 -IncludeBackdrop -OutDir D:\ev   # 连实机捕获一起跑，证据写别处
+```
+
+### 4.7.4 顺带补齐的字体泄漏面（复核时扩查发现）
+
+复核 B 项时把 `src/UI/Controls/LiteUI.cs` 全量扫了一遍，发现 **19 处** `new Font(...)`
+（此前只处理了设置页目录里的 8 处）。其中最严重的一处：
+
+```
+src/UI/Controls/LiteUI.cs → LiteNavBtn.OnPaint
+    Font = new Font(Font, FontStyle.Bold);   // ★ 每次重绘都 new 一个
+```
+
+⇒ **鼠标划过导航按钮就会漏一个 GDI 字体对象**（比设置页的泄漏严重得多，因为它随鼠标移动持续发生）。
+
+**修法**：
+- `LiteUI.cs` 的 19 处全部改走 `UIFonts`（含新增 `Underline` / `BoldUnderline` 变体）
+- `LiteNavBtn.OnPaint` 改为复用 `UIFonts.Bold(10F)` / `UIFonts.Regular(10F)` 两个固定实例
+- `UIFonts` 补 `Underline` / `BoldUnderline`（`FontStyle` 是 Flags，可组合）
+
+**探针门槛同步新增 4 条**（防止将来改回 `new Font`）：
+`UIFonts 是进程内缓存` / `LiteUI.cs 内不再有裸 new Font` / `LiteNavBtn 重绘不再新建字体` /
+`阈值解析用严格 NumberStyles` / `阈值解析拒绝 NaN / Infinity` / `阈值非法输入离场回填`。
+
+---
+
 ## 5. 回写抑制作用域（核心机制）
 
 在 `src/UI/Settings/SettingsBase.cs` → `SettingsPageBase` 引入**作用域**，而不是每页各加 bool 标志：
