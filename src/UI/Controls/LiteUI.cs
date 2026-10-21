@@ -94,12 +94,26 @@ namespace LiteMonitor.src.UI.Controls
             inputCrit.Padding = UIUtils.S(new Padding(0, 5, 0, 1));
 
             // Immediate Binding
-            inputWarn.Inner.TextChanged += (s, e) => range.Warn = inputWarn.ValueDouble;
-            inputCrit.Inner.TextChanged += (s, e) => range.Crit = inputCrit.ValueDouble;
+            // ★ W3：与 SettingsUIBuilder 的 8 个 Add* 同一口径 ——
+            //   ① 抑制作用域内（程序化改控件）不回写；
+            //   ② 解析失败时**不写**（ValueDouble 解析失败返回 0，
+            //      粘贴进来的非法文本会把用户的阈值静默改成 0）。
+            inputWarn.Inner.TextChanged += (s, e) => {
+                if (page.IsWriteBackSuppressed) return;
+                if (double.TryParse(inputWarn.Inner.Text, out double w)) range.Warn = w;
+            };
+            inputCrit.Inner.TextChanged += (s, e) => {
+                if (page.IsWriteBackSuppressed) return;
+                if (double.TryParse(inputCrit.Inner.Text, out double c)) range.Crit = c;
+            };
 
             page.RegisterRefresh(() => {
-                inputWarn.Inner.Text = range.Warn.ToString();
-                inputCrit.Inner.Text = range.Crit.ToString();
+                // ★ 刷新时写入文本会触发 TextChanged —— 那是程序化改动，不能回写。
+                using (page.BeginSuppressWriteBack())
+                {
+                    inputWarn.Inner.Text = range.Warn.ToString();
+                    inputCrit.Inner.Text = range.Crit.ToString();
+                }
             });
 
             rightBox.Controls.Add(inputWarn);

@@ -1,7 +1,8 @@
 # W3 —— 设置页「意外回写」缺陷包交付说明
 
 > 日期：2026-10-21
-> 交付 commit：`5add165`（`fix(settings)`）
+> 交付 commit：`5add165`（`fix(settings)`，3 个缺陷）→ `7ea421e`（`docs(appearance)`，交付说明）
+> → 本 commit（`fix(settings)`，阈值行补齐 + W3 防回退探针，§4.5 / §4.6）
 > 性质：跨会话移交缺陷包 —— 由安全会话发现的设置页缺陷，本工作线接收并修复
 > 关联：A16 主面板接线（`2026-10-20-appearance-a16-acceptance.md`）、M2 合同（`2026-10-20-appearance-m2-contract.md`）
 
@@ -149,6 +150,94 @@ else
 
 ---
 
+## 4.5 W3-4 阈值行：同一类缺陷的漏网之处（写探针时发现）
+
+### 现象
+
+用户配置的告警/严重阈值（如「网速上传 警告 1 MB/s、严重 2 MB/s」）在某次操作后变成 0。
+
+### 根因
+
+`src/UI/Controls/LiteUI.cs` → `LiteThresholdRow` 构造函数的立即绑定**没有** W3 的抑制守卫：
+
+```
+inputWarn.Inner.TextChanged += (s, e) => range.Warn = inputWarn.ValueDouble;
+inputCrit.Inner.TextChanged += (s, e) => range.Crit = inputCrit.ValueDouble;
+```
+
+两个问题叠加：
+
+1. **没有抑制守卫** —— 刷新体 `page.RegisterRefresh(...)` 把文本写回控件时同样触发 `TextChanged`，
+   程序化改动被当成用户输入写回配置。
+2. **`ValueDouble` 解析失败返回 `0.0`**（`LiteNumberInput.ValueDouble`）——
+   `LiteNumberInput` 的 `KeyPress` 只放行数字/`.`/`-`，但**粘贴可以绕过**它。
+   粘进一段非法文本后，用户的阈值就被静默改成 **0**。
+
+`ValueRange` 是 **class**（`src/Core/Settings.cs`）⇒ `range.Warn = ...` 改的是共享对象，
+这个 0 会真的进配置。
+
+### 修法
+
+与 W3-2 同一口径，另加一条「解析失败不写」：
+
+```
+inputWarn.Inner.TextChanged += (s, e) => {
+    if (page.IsWriteBackSuppressed) return;
+    if (double.TryParse(inputWarn.Inner.Text, out double w)) range.Warn = w;
+};
+```
+
+- 抑制作用域内不回写；
+- 刷新体包进 `using (page.BeginSuppressWriteBack())`；
+- **解析失败时保持原值**（不再用 `ValueDouble` 那个"失败即 0"的语义）。
+
+> 这一点在原缺陷清单里没有 —— 是写 W3 防回退探针、准备把"所有立即绑定都要守门"这条口径
+> 做成源码级门槛时发现的漏网之处。`LiteUI.cs` 不在安全会话的写集内，未与他人冲突。
+
+---
+
+## 4.6 W3-5 防回退探针（`tests/AppearanceSettingsProbe`）
+
+W3 修的这类缺陷**不会让程序崩**，只会在用户没做任何事时悄悄改掉配置 ——
+人工点一遍界面很难稳定复现。因此需要一个机器断言把「程序化改动不许回写」钉死。
+
+探针工程：`tests/AppearanceSettingsProbe/`（**不进 sln**，与既有探针惯例一致；
+不新增任何 NuGet 依赖；只构造内存中的 WinForms 控件与读取源码文本）。
+
+### 运行时用例（19 条）
+
+| 组 | 内容 |
+|---|---|
+| 抑制作用域语义 | 作用域外/内、嵌套、内层释放后仍在抑制、最外层释放后恢复、重复释放安全（6 条） |
+| 立即绑定不回写 | `AddCombo`（构造期 / 抑制内 / 作用域外对照 / 选中项为 -1）、`AddToggle`、`AddComboPair`、`AddInt`、`AddInput`（9 条） |
+| 刷新体不改原值 | `SetContext` 与 `OnShow` 两条路径下，原值不在候选里时刷新不得把原值冲掉（2 条） |
+| **负向对照** | 无守卫的绑定在抑制作用域内**确实会回写**；非法输入经 `ValueDouble` **确实变成 0**（2 条） |
+
+★ 负向对照是**鉴别力自证**：如果"没有守卫的绑定在抑制作用域内也会回写"这条不成立，
+那前面那批"不回写"断言就是恒真的摆设、探针毫无价值。
+负向对照在探针内部现造等价场景实现，**不修改主工程源码** ——
+多会话共用工作树时，主工程源码的临时改动有被他人提交卷进去的风险。
+
+### 源码级门槛（10 组）
+
+防止将来「顺手优化」时删掉一行守卫后**无声退化**：
+
+- `SettingsUIBuilder` 的 8 个 `Add*` 都有抑制守卫（8/8）
+- 三种 ComboBox 的刷新体都包进作用域（3/3）
+- `MonitorPage` 复选框有守卫 / `Save` 用 `_linkHorizontalEdited` / 同步走作用域
+- `FillSync` 与 `FillGpuSync` 重填走作用域（2/2）
+- 六个设备偏好下拉用 `AddComboPair`（6/6）
+- `LiteThresholdRow` 的守卫、作用域包裹、解析失败不写（3 条）
+- 探针工程不进 sln（自查）
+
+方法体提取用「从标记处取其后第一个花括号块」，
+配平时逐字符跳过行注释、块注释、普通字符串、逐字字符串 `@"..."`、字符字面量 ——
+避免注释或字符串里的花括号破坏配平。
+
+**当前结果：33 / 33 全部通过。**
+
+---
+
 ## 5. 回写抑制作用域（核心机制）
 
 在 `src/UI/Settings/SettingsBase.cs` → `SettingsPageBase` 引入**作用域**，而不是每页各加 bool 标志：
@@ -224,6 +313,7 @@ using (page.BeginSuppressWriteBack())
 | 装饰渲染探针 | `tests/AppearanceDecorRendererProbe` | 全部通过 |
 | 窗口轮廓探针 | `tests/AppearanceWindowShapeProbe` | 全部通过 |
 | 背景验证探针（实机） | `tests/AppearanceBackdropProbe` | exit=0（见 §9） |
+| **W3 防回退探针** | `tests/AppearanceSettingsProbe` | **33 / 33** |
 
 > 单元测试总数比上一轮的 593 多 11 个 —— 增量来自安全会话新增的测试文件
 > （`WebAuthHardeningTests` / `SettingsRecoveryTests` / `UpdateSignatureTests` 等），**不是**本缺陷包引入。
@@ -306,3 +396,5 @@ Blur=24 @scale=1：合同 24.49 / 实测 25.36）。
 | `src/UI/Settings/SystemHardwarPage.cs` | `FillSync` / `FillGpuSync` 包进抑制作用域 + 不可用时保留原值并加提示项；6 个设备偏好下拉改 `AddComboPair` |
 | `src/UI/UIController.cs` | `DrawConfigWriteBlockedNotice()`；竖屏 / 横屏两条路径都调用 |
 | `resources/lang/*.json` × 9 | 新增 `Menu.ConfigWriteBlocked` / `Menu.ConfigWriteBlockedShort` / `Menu.PreferenceUnavailable` |
+| `src/UI/Controls/LiteUI.cs` | `LiteThresholdRow` 立即绑定加抑制守卫 + 刷新体包进作用域 + 解析失败不写（§4.5） |
+| `tests/AppearanceSettingsProbe/`（新） | W3 防回退探针：运行时断言 + 源码级门槛 + 负向对照（§4.6），**不进 sln** |
