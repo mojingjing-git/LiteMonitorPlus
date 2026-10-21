@@ -102,6 +102,21 @@ namespace LiteMonitor.src.Core
             }
         }
 
+        /// <summary>
+        /// 取字体缓存里的**共享**实例。
+        ///
+        /// ★ 同一个 (familyName, size, bold) 永远返回同一个 <see cref="Font"/> 对象，
+        ///   所以调用方**不得 Dispose** 它。释放后缓存里会留下一个已释放对象，
+        ///   下次同 key 取值把坏对象原样取回；而 <c>TextRenderer.DrawText</c> 用已释放字体
+        ///   并不抛异常、只是静默降级 —— 症状表现成「字体莫名不生效」，没有任何异常可查。
+        ///   （<c>TaskbarRenderer</c> 曾因此让「换肤 / 换语言后任务栏字体失效」长期无从排查。）
+        ///   需要独占实例时，请自己 <c>new Font(...)</c> 并自行释放，谁建谁释放。
+        ///
+        /// ★ 生命周期只由 <see cref="ClearBrushCache"/> 统一管理（它会 Dispose 并清空字体缓存）。
+        ///   这也意味着返回值的**有效期只到下一次 ClearBrushCache 为止**：
+        ///   若要存进长生命周期字段，必须在 ClearBrushCache 之后重新取用，否则该字段会悬空。
+        ///   （<c>UIController.ApplyTheme</c> 与 <c>MainFormBizHelper.RebuildMenus</c> 都会触发它。）
+        /// </summary>
         public static Font GetFont(string familyName, float size, bool bold)
         {
             string key = $"{familyName}_{size}_{bold}";
@@ -124,6 +139,16 @@ namespace LiteMonitor.src.Core
             }
         }
 
+        /// <summary>
+        /// 释放并清空画刷 / 画笔 / 字体缓存。
+        ///
+        /// ★ 这里是这三类资源的**唯一**释放点。调用之后，此前经 <see cref="GetFont"/> 取到的
+        ///   字体实例全部变成已释放对象 —— 把它们存进字段的调用方必须在此之后重新取用，
+        ///   否则该字段就是悬空引用，且绘制时会静默降级而不是报错。
+        /// ★ 已知调用点：<c>UIController.ApplyTheme</c>（换肤，后面会重新 ReloadStyle）、
+        ///   <c>MainFormBizHelper.RebuildMenus</c>（换语言 / 改监控布局 / 主题编辑器确认）、
+        ///   <c>ThemeManager.ClearCaches</c>（当前无调用方）。
+        /// </summary>
         public static void ClearBrushCache()
         {
             lock (_brushLock)
