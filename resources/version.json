@@ -2,5 +2,7 @@
   "version": "1.0.0",
   "changelog": "LiteMonitor++ 首个自有版本\n1，多显卡监控：可同时监控 N 张独立显卡，温度/占用/功耗等指标分卡显示\n2，插件市场：远程插件索引的浏览与安装\n3，监控历史：温度、负载、功耗、频率、FPS 等指标的历史趋势曲线\n4，解除对上游服务器的运行时依赖（更新源/驱动源/城市库/行情接口全部自有）\n5，下载产物 SHA256 完整性校验\n6，品牌与程序集更名，与上游 LiteMonitor 完全解耦",
   "releaseDate": "2026-10-20",
-  "downloadUrl": "https://github.com/mojingjing-git/LiteMonitorPlus/releases"
+  "downloadUrl": "https://github.com/mojingjing-git/LiteMonitorPlus/releases",
+  "sha256": "",
+  "signature": ""
 }

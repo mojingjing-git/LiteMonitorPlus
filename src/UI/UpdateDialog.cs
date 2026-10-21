@@ -9,11 +9,22 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Security.Principal;
-using System.Net.Security; // For SslClientAuthenticationOptions
 using LiteMonitor.src.Core; // 修复: 引用 Settings 类
 
 namespace LiteMonitor
 {
+    /// <summary>
+    /// 更新包与已验签的摘要不一致（或根本没有摘要）。
+    /// </summary>
+    /// <remarks>
+    /// 单独一个类型是为了让调用方能把"校验失败"与"网络失败"分开提示 ——
+    /// 这两种失败对用户意味着完全不同的下一步动作。
+    /// </remarks>
+    public sealed class UpdateIntegrityException : Exception
+    {
+        public UpdateIntegrityException(string message) : base(message) { }
+    }
+
     public class DownloadContext
     {
         public string Title { get; set; } = "";
@@ -27,6 +38,17 @@ namespace LiteMonitor
         /// 复制后仍由调用方执行 SHA256 校验，信任边界不变。
         /// </summary>
         public string? LocalPath { get; set; }
+
+        /// <summary>
+        /// 期望的产物 SHA-256（大写十六进制，来自已验签的 version.json）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 非空时，下载（或本地复制）完成后**必须**比对通过才允许交给更新器；
+        ///   不匹配则删除产物并中止，保留现有版本。
+        /// ★ 空表示"调用方没有提供摘要"。更新流程（AutoExitOnSuccess = true）里
+        ///   这等同于拒绝——见 UpdateDialog 中的校验分支，不存在"没摘要就放行"的路径。
+        /// </remarks>
+        public string? ExpectedSha256 { get; set; }
         
         // UI 配置
         public string VersionLabel { get; set; } = "";
@@ -236,16 +258,11 @@ namespace LiteMonitor
                             ? $"正在连接下载服务器..." 
                             : $"Connecting to server...";
 
-                        // 4. 配置 HttpClient (支持 SSL Bypass 和超时)
-                        var handler = new SocketsHttpHandler
-                        {
-                            SslOptions = new SslClientAuthenticationOptions
-                            {
-                                RemoteCertificateValidationCallback = delegate { return true; }
-                            }
-                        };
-
-                        using var http = new HttpClient(handler)
+                        // 4. 配置 HttpClient
+                        // 【安全】不设置自定义证书校验回调：TLS 校验按系统信任链进行。
+                        // 这里下载的是随后会被执行的 update.zip，关闭校验等于允许中间人替换更新包；
+                        // 证书失败必须可见并中止更新，不得静默降级，也不得提供跳过开关。
+                        using var http = new HttpClient()
                         { 
                             Timeout = TimeSpan.FromMinutes(10) 
                         };
@@ -329,6 +346,47 @@ namespace LiteMonitor
                 _cts = null; 
                 ctsToDispose?.Dispose();
 
+                // ---- 7.5 产物摘要校验（W1.2）----
+                // ★ 为什么必须在这里、在 StartUpdater 之前：
+                //   更新器会以管理员令牌替换程序文件，等它跑起来再发现内容不对就已经太晚
+                //   （旧文件可能已被覆盖）。这里是唯一还能"什么都不做"的时间点。
+                // ★ 更新模式下摘要为空 = 直接失败。"没提供摘要"不能被解释成"不需要校验"，
+                //   否则只需把 version.json 的 sha256 删掉就能绕过整条认证链路。
+                if (_context.AutoExitOnSuccess)
+                {
+                    string? expected = _context.ExpectedSha256;
+                    if (string.IsNullOrWhiteSpace(expected))
+                    {
+                        throw new UpdateIntegrityException(
+                            IsChinese
+                                ? "更新元数据里没有校验摘要，无法确认这个安装包的来源。"
+                                : "The update metadata carries no checksum, so this package's origin cannot be confirmed.");
+                    }
+
+                    string actual;
+                    try
+                    {
+                        actual = UpdateChecker.ComputeFileSha256(_context.SavePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new UpdateIntegrityException(
+                            IsChinese
+                                ? $"无法读取已下载的安装包：{ex.Message}"
+                                : $"Could not read the downloaded package: {ex.Message}");
+                    }
+
+                    if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new UpdateIntegrityException(
+                            IsChinese
+                                ? $"期望 SHA-256：{expected}\n实际 SHA-256：{actual}"
+                                : $"Expected SHA-256: {expected}\nActual SHA-256: {actual}");
+                    }
+
+                    Debug.WriteLine($"[Update] 安装包摘要校验通过：{actual}");
+                }
+
                 if (_context.AutoExitOnSuccess)
                 {
                     StartUpdater();
@@ -359,11 +417,50 @@ namespace LiteMonitor
             {
                 CleanupPartialFile();
                 bool isZh = _settings?.Language?.ToLower() == "zh";
-                string errTitle = isZh ? "错误" : "Error";
-                string errMsg = isZh ? $"下载失败：\n{ex.Message}" : $"Download failed:\n{ex.Message}";
-                
-                MessageBox.Show(errMsg, errTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                
+
+                if (UpdateChecker.IsCertificateFailure(ex))
+                {
+                    // 证书校验失败：明确告知已中止，并给出浏览器下载入口（对应 P-1 决策）。
+                    // 不提供「跳过校验继续」之类的选项——那会把本次修复直接作废。
+                    lblStatus.Text = isZh ? "无法验证更新源，已停止" : "Update source not verified, stopped";
+
+                    string m = isZh
+                        ? "无法验证更新源的身份，已停止自动更新。\n\n" +
+                          "常见原因：公司网络做了流量审计、使用了自签代理、服务器证书过期，或系统时间不正确。\n\n" +
+                          "可以在浏览器中手动下载安装包继续。注意：手动下载的包不经过本程序的签名核验。\n\n" +
+                          "是否现在打开下载页面？"
+                        : "Could not verify the update source, so the automatic update was stopped.\n\n" +
+                          "Usual causes: corporate TLS inspection, a self-signed proxy, an expired server certificate, or a wrong system clock.\n\n" +
+                          "You can download the package manually in a browser. Note: a manually downloaded package is not verified by this program's signature check.\n\n" +
+                          "Open the download page now?";
+
+                    var choice = MessageBox.Show(m,
+                        isZh ? "更新源不可信" : "Update source not trusted",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button1);
+
+                    if (choice == DialogResult.Yes) OpenReleasePage();
+                }
+                else if (ex is UpdateIntegrityException)
+                {
+                    // 摘要不符或缺失：这是"来源不可信"，不是"网络不好"。
+                    // 坏包已被 CleanupPartialFile 删除，现有版本原封不动。
+                    lblStatus.Text = isZh ? "安装包校验失败，已中止" : "Package verification failed, stopped";
+
+                    string errTitle = isZh ? "安装包校验失败" : "Package Verification Failed";
+                    string errMsg = isZh
+                        ? $"下载到的安装包与发布方签名声明的内容不一致，已删除并中止更新。\n\n{ex.Message}\n\n" +
+                          "现有版本未被改动。若反复出现，请从发布页手工下载。"
+                        : $"The downloaded package does not match the checksum declared in the signed metadata. It was deleted and the update was canceled.\n\n{ex.Message}\n\n" +
+                          "Your current version is unchanged. If this keeps happening, download manually from the release page.";
+                    MessageBox.Show(errMsg, errTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                else
+                {
+                    string errTitle = isZh ? "错误" : "Error";
+                    string errMsg = isZh ? $"下载失败：\n{ex.Message}" : $"Download failed:\n{ex.Message}";
+                    MessageBox.Show(errMsg, errTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+
                 // 重置 UI
                 btnUpdate.Enabled = true;
                 btnUpdate.Text = isZh ? "重试" : "Retry";
@@ -375,6 +472,29 @@ namespace LiteMonitor
             {
                 _cts?.Dispose();
                 _cts = null;
+            }
+        }
+
+        /// <summary>
+        /// 在默认浏览器中打开发布页。
+        /// 仅用于证书校验失败后的手工下载路径，见 UpdateChecker.ReleasePageUrl。
+        /// </summary>
+        private void OpenReleasePage()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = UpdateChecker.ReleasePageUrl,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    IsChinese ? $"无法打开下载页面：{ex.Message}" : $"Cannot open the download page: {ex.Message}",
+                    IsChinese ? "错误" : "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
