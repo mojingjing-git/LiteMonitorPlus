@@ -264,8 +264,12 @@ namespace LiteMonitor
                 if (_layoutDirty)
                 {
                     int h = _hxLayout.Build(_hxColsHorizontal);
+                    // ★ D10：列集合为空（全部可见项关闭）时，Build 过去返回 0，
+                    //   客户区高度被写成 0 ⇒ 面板整个从屏幕上消失。
+                    //   这里再兜一层最小高度：面板退化成空面板，由空态提示说明原因。
+                    h = Math.Max(h, _hxLayout.MinPanelHeight);
                     // 同样建议横屏模式也使用 ClientSize
-                    // _form.Width = ... 
+                    // _form.Width = ...
                     // _form.Height = h;
                     _form.ClientSize = new Size(_hxLayout.PanelWidth, h);
                     _layoutDirty = false;
@@ -275,6 +279,8 @@ namespace LiteMonitor
                 HorizontalRenderer.Render(g, t, _hxColsHorizontal, _hxLayout.PanelWidth, _appearance);
                 // ★ 降级提示在横屏下同样要出现（否则横屏用户看不到玻璃没生效）。
                 DrawLiveGlassNotice(g, t);
+                // ★ D10：没有可见项时说明原因（否则用户只看到一块空板）。
+                DrawEmptyStateNotice(g, t, _hxColsHorizontal.Count == 0);
                 return;
             }
 
@@ -282,6 +288,9 @@ namespace LiteMonitor
             if (_layoutDirty)
             {
                 int h = _layout.Build(_groups);
+                // ★ D10 同理：竖屏在没有任何可见分组时只返回 Padding（≈10px），
+                //   面板会退化成一条几像素的细缝。同样兜一个最小高度。
+                h = Math.Max(h, MinEmptyPanelHeight(t));
                 // [修复2补充] 设置高度时也使用 ClientSize，确保高度精准
                 _form.ClientSize = new Size(_form.ClientSize.Width, h);
                 _layoutDirty = false;
@@ -298,6 +307,9 @@ namespace LiteMonitor
             //   之前玻璃没生效时，背景层静默降级成一块浅色板 —— 屏幕上与正常状态
             //   毫无区别，用户既不知道坏了，也无从判断该怎么处理。
             DrawLiveGlassNotice(g, t);
+
+            // ★ D10：没有可见分组时说明原因（否则用户只看到一块空板）。
+            DrawEmptyStateNotice(g, t, _groups.Count == 0);
         }
 
         /// <summary>
@@ -325,6 +337,56 @@ namespace LiteMonitor
 
             // ★ 画刷按颜色缓存：换主题后颜色会变，必须重建，否则提示文字停留在旧主题的颜色上。
             //   次级文字色可为空（新旧主题都可能没有），此时退回主文字色 —— 它一定有值。
+            SolidBrush brush = EnsureNoticeBrush(t);
+
+            using var fmt = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
+
+            g.DrawString(
+                text,
+                LiveGlassNoticeFont,
+                brush,
+                new RectangleF(0, h - 16, w - 4, 14),
+                fmt);
+        }
+
+        /// <summary>
+        /// 空态提示：面板里一个可见项都没有时，居中画一行说明。
+        /// <para>★ 只在**确实没有可见项/分组**时出现，正常状态画面零变化。</para>
+        /// <para>★ 不画的话用户只看到一块空板，无法区分"没勾选任何指标"与"程序坏了"。
+        ///   D10 的另一半修复：尺寸写入点只保证面板不消失，这一行负责说明原因。</para>
+        /// </summary>
+        private void DrawEmptyStateNotice(Graphics g, Theme t, bool isEmpty)
+        {
+            if (!isEmpty) return;
+
+            int w = _form.ClientRectangle.Width;
+            int h = _form.ClientRectangle.Height;
+            if (w <= 0 || h <= 12) return;
+
+            string text = LanguageManager.T("Menu.NoVisibleItems");
+            if (string.IsNullOrEmpty(text)) return;
+
+            SolidBrush brush = EnsureNoticeBrush(t);
+            using var fmt = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+
+            g.DrawString(text, t.FontItem, brush, new RectangleF(0, 0, w, h), fmt);
+        }
+
+        /// <summary>
+        /// 竖屏空态下的最小客户区高度（物理像素）。
+        /// <para>★ 竖屏布局在没有任何可见分组时只返回 Padding（≈10px），
+        ///   面板会退化成一条几像素的细缝；这里给一个"一行指标 + 上下留白"的最小高度。</para>
+        /// </summary>
+        private static int MinEmptyPanelHeight(Theme t) =>
+            Math.Max(t.Layout.RowHeight + t.Layout.Padding * 2, 48);
+
+        /// <summary>
+        /// 取（并按需重建）提示文字用的画刷。
+        /// <para>★ 换主题后颜色会变，必须重建，否则提示文字停留在旧主题的颜色上。
+        ///   次级文字色可为空（新旧主题都可能没有），此时退回主文字色 —— 它一定有值。</para>
+        /// </summary>
+        private SolidBrush EnsureNoticeBrush(Theme t)
+        {
             Color noticeColor = ThemeManager.ParseColor(t.Color.TextSecondary ?? t.Color.TextPrimary);
             if (_noticeBrush == null || _noticeBrushColor != noticeColor)
             {
@@ -332,15 +394,7 @@ namespace LiteMonitor
                 _noticeBrush = new SolidBrush(noticeColor);
                 _noticeBrushColor = noticeColor;
             }
-
-            using var fmt = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
-
-            g.DrawString(
-                text,
-                LiveGlassNoticeFont,
-                _noticeBrush,
-                new RectangleF(0, h - 16, w - 4, 14),
-                fmt);
+            return _noticeBrush;
         }
 
         /// <summary>降级提示用的字体（静态缓存：绝不能每帧 new Font —— 会漏 GDI 句柄）。</summary>

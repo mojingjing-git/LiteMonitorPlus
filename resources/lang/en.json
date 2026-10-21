@@ -92,6 +92,7 @@
     "LiveGlass": "Live Glass",
     "LiveGlassHint": "Live Glass captures the screen behind this window in real time.\nWhile capturing, the panel may briefly disappear or flicker in screen recordings or screenshots.",
     "LiveGlassStatus": "Current status",
+    "NoVisibleItems": "No metrics enabled",
     "HardwareInfo": "Hardware Info",
     "SpeedTest": "Network Test",
     "Traffic": "Traffic History",
