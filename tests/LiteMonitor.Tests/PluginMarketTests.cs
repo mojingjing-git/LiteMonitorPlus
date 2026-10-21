@@ -316,5 +316,205 @@ namespace LiteMonitor.Tests
             Assert.False(ok);
             Assert.True(reason == MarketErrorReason.NotManaged || reason == MarketErrorReason.BuiltinConflict);
         }
+
+        [Fact]
+        public void Uninstall_ValidDirectChild_DeletesFileAndManagedRecord()
+        {
+            using var temp = new TemporaryDirectory("lm-plugin-uninstall-");
+            string pluginsDir = temp.CreateSubdirectory("plugins");
+            string filePath = Path.Combine(pluginsDir, "demo.json");
+            File.WriteAllText(filePath, "{\"id\":\"demo\"}");
+
+            var store = new InMemoryPluginRecordStore();
+            store.Add(new MarketPluginRecord
+            {
+                Id = "demo",
+                File = "demo.json"
+            });
+
+            bool removed = PluginMarketUninstallCore.Uninstall(
+                new MarketPluginEntry { Id = "demo" },
+                pluginsDir,
+                store.Find,
+                store.Remove,
+                out var reason);
+
+            Assert.True(removed, reason.ToString());
+            Assert.False(File.Exists(filePath));
+            Assert.Empty(store.Records);
+            Assert.Equal(1, store.RemoveCalls);
+        }
+
+        [Fact]
+        public void Uninstall_InvalidEntryId_StopsBeforeLookupOrDelete()
+        {
+            using var temp = new TemporaryDirectory("lm-plugin-invalid-entry-");
+            string pluginsDir = temp.CreateSubdirectory("plugins");
+            var store = new InMemoryPluginRecordStore();
+            store.Add(new MarketPluginRecord
+            {
+                Id = "../demo",
+                File = "../demo.json"
+            });
+
+            bool removed = PluginMarketUninstallCore.Uninstall(
+                new MarketPluginEntry { Id = "../demo" },
+                pluginsDir,
+                store.Find,
+                store.Remove,
+                out var reason);
+
+            Assert.False(removed);
+            Assert.Equal(MarketErrorReason.InvalidId, reason);
+            Assert.Equal(0, store.FindCalls);
+            Assert.Equal(0, store.RemoveCalls);
+            Assert.Single(store.Records);
+        }
+
+        [Theory]
+        [InlineData("../corrupt", "demo.json")]
+        [InlineData("other", "demo.json")]
+        [InlineData("demo", "../plugins-evil/demo.json")]
+        [InlineData("demo", "demo.json.txt")]
+        public void Uninstall_CorruptRecord_LeavesFileAndRecordUntouched(
+            string recordId,
+            string recordFile)
+        {
+            using var temp = new TemporaryDirectory("lm-plugin-corrupt-record-");
+            string pluginsDir = temp.CreateSubdirectory("plugins");
+            string filePath = Path.Combine(pluginsDir, "demo.json");
+            File.WriteAllText(filePath, "{\"id\":\"demo\"}");
+
+            var store = new InMemoryPluginRecordStore();
+            store.Add(new MarketPluginRecord
+            {
+                Id = recordId,
+                File = recordFile
+            }, lookupId: "demo");
+
+            bool removed = PluginMarketUninstallCore.Uninstall(
+                new MarketPluginEntry { Id = "demo" },
+                pluginsDir,
+                store.Find,
+                store.Remove,
+                out var reason);
+
+            Assert.False(removed);
+            Assert.Equal(MarketErrorReason.RecordCorrupted, reason);
+            Assert.True(File.Exists(filePath));
+            Assert.Single(store.Records);
+            Assert.Equal(0, store.RemoveCalls);
+        }
+
+        [Fact]
+        public void Uninstall_FileContentIdMismatch_LeavesFileAndRecordUntouched()
+        {
+            using var temp = new TemporaryDirectory("lm-plugin-content-id-");
+            string pluginsDir = temp.CreateSubdirectory("plugins");
+            string filePath = Path.Combine(pluginsDir, "demo.json");
+            File.WriteAllText(filePath, "{\"id\":\"different\"}");
+
+            var store = new InMemoryPluginRecordStore();
+            store.Add(new MarketPluginRecord
+            {
+                Id = "demo",
+                File = "demo.json"
+            });
+
+            bool removed = PluginMarketUninstallCore.Uninstall(
+                new MarketPluginEntry { Id = "demo" },
+                pluginsDir,
+                store.Find,
+                store.Remove,
+                out var reason);
+
+            Assert.False(removed);
+            Assert.Equal(MarketErrorReason.RecordCorrupted, reason);
+            Assert.True(File.Exists(filePath));
+            Assert.Single(store.Records);
+            Assert.Equal(0, store.RemoveCalls);
+        }
+
+        [Fact]
+        public void Uninstall_BuiltinRecord_IsProtectedEvenWhenConsistent()
+        {
+            using var temp = new TemporaryDirectory("lm-plugin-builtin-");
+            string pluginsDir = temp.CreateSubdirectory("plugins");
+            string filePath = Path.Combine(pluginsDir, "PublicIP.json");
+            File.WriteAllText(filePath, "{\"id\":\"PublicIP\"}");
+
+            var store = new InMemoryPluginRecordStore();
+            store.Add(new MarketPluginRecord
+            {
+                Id = "PublicIP",
+                File = "PublicIP.json"
+            });
+
+            bool removed = PluginMarketUninstallCore.Uninstall(
+                new MarketPluginEntry { Id = "PublicIP" },
+                pluginsDir,
+                store.Find,
+                store.Remove,
+                out var reason);
+
+            Assert.False(removed);
+            Assert.Equal(MarketErrorReason.BuiltinConflict, reason);
+            Assert.True(File.Exists(filePath));
+            Assert.Single(store.Records);
+            Assert.Equal(0, store.RemoveCalls);
+        }
+
+        private sealed class InMemoryPluginRecordStore
+        {
+            internal Dictionary<string, MarketPluginRecord> Records { get; } =
+                new(StringComparer.OrdinalIgnoreCase);
+
+            internal int FindCalls { get; private set; }
+            internal int RemoveCalls { get; private set; }
+
+            internal void Add(
+                MarketPluginRecord record,
+                string? lookupId = null)
+            {
+                Records[lookupId ?? record.Id] = record;
+            }
+
+            internal MarketPluginRecord? Find(string id)
+            {
+                FindCalls++;
+                return Records.TryGetValue(id, out var record) ? record : null;
+            }
+
+            internal void Remove(string id)
+            {
+                RemoveCalls++;
+                Records.Remove(id);
+            }
+        }
+
+        private sealed class TemporaryDirectory : IDisposable
+        {
+            internal TemporaryDirectory(string prefix)
+            {
+                Path = System.IO.Path.Combine(
+                    System.IO.Path.GetTempPath(),
+                    prefix + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(Path);
+            }
+
+            internal string Path { get; }
+
+            internal string CreateSubdirectory(string name)
+            {
+                string path = System.IO.Path.Combine(Path, name);
+                Directory.CreateDirectory(path);
+                return path;
+            }
+
+            public void Dispose()
+            {
+                try { Directory.Delete(Path, recursive: true); } catch { }
+            }
+        }
     }
 }
