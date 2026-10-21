@@ -188,30 +188,38 @@ namespace LiteMonitor.src.Plugins
             => pluginId + ".json";
 
         /// <summary>目标路径是否安全（id 合法 + 不撞内置）</summary>
-        public static bool CanInstall(string pluginId, out string reason)
+        internal static bool TryValidatePluginId(string pluginId, out string reason)
         {
-            if (string.IsNullOrWhiteSpace(pluginId)) { reason = "id 为空"; return false; }
+            if (string.IsNullOrWhiteSpace(pluginId))
+            {
+                reason = "id 为空";
+                return false;
+            }
 
-            // ★ 用 \A..\z 而不是 ^..$：
-            // .NET 的 $（非 Multiline）会匹配「串尾或串尾换行之前」，
-            // 所以 "abc\n" 能通过 ^..$ 校验。实测：
-            //     [regex]::IsMatch("abc`n", '^[A-Za-z0-9_-]{1,64}$')  ->  True  ← 漏过
-            // 而 Path.GetInvalidFileNameChars() 含 LF/CR，落盘时会抛 ArgumentException。
-            if (!System.Text.RegularExpressions.Regex.IsMatch(pluginId, @"\A[A-Za-z0-9_-]{1,64}\z"))
+            // 使用 \A..\z 而非 ^..$：.NET 的 $ 会匹配末尾换行符之前的位置，
+            // 使 "abc\n" 也可能通过校验；路径处理又会拒绝其中的 CR/LF。
+            if (!System.Text.RegularExpressions.Regex.IsMatch(
+                    pluginId, @"\A[A-Za-z0-9_-]{1,64}\z"))
             {
                 reason = "id 含非法字符";
                 return false;
             }
 
-            if (PluginConstants.BuiltinPluginIds.Contains(pluginId)) { reason = "与内置插件 id 冲突"; return false; }
             reason = "";
             return true;
         }
 
-        /// <summary>
-        /// L2 核心规则：目标文件已存在且【不是本市场装的】→ 拒绝安装。
-        /// 这一条不依赖内置名单，同时覆盖：内置插件（含未来新增的）、用户手放的文件、旧版市场残留。
-        /// </summary>
+        public static bool CanInstall(string pluginId, out string reason)
+        {
+            if (!TryValidatePluginId(pluginId, out reason)) return false;
+            if (PluginConstants.BuiltinPluginIds.Contains(pluginId))
+            {
+                reason = "插件 id 与内置插件冲突";
+                return false;
+            }
+            return true;
+        }
+
         public static bool IsTargetAvailable(string pluginId, out string reason)
         {
             string path = Path.Combine(PluginsDir, GetInstallFileName(pluginId));
@@ -230,7 +238,7 @@ namespace LiteMonitor.src.Plugins
         }
 
         /// <summary>读取插件文件的 id 字段；读不出来返回 false</summary>
-        private static bool FileContentIdMatches(string path, string expectedId)
+        internal static bool FileContentIdMatches(string path, string expectedId)
         {
             try
             {
@@ -329,39 +337,12 @@ namespace LiteMonitor.src.Plugins
         /// </summary>
         public static bool Uninstall(MarketPluginEntry entry, out MarketErrorReason reason)
         {
-            reason = MarketErrorReason.Unknown;
-
-            if (entry == null || string.IsNullOrEmpty(entry.Id))
-            {
-                reason = MarketErrorReason.InvalidId;
-                return false;
-            }
-
-            // 1) 只有记录在案的市场插件才允许卸载
-            var record = PluginMarketState.Find(entry.Id);
-            if (record == null) { reason = MarketErrorReason.NotManaged; return false; }
-
-            // 2) ★ 落盘文件名必须由 id 唯一推导，不接受 settings.json 里写入的任意路径。
-            //    否则一个被篡改的 File: "../../LiteMonitor++.exe" 就能删掉程序目录内的任意文件。
-            string expected = GetInstallFileName(record.Id);
-            if (!string.Equals(record.File, expected, StringComparison.OrdinalIgnoreCase))
-            {
-                reason = MarketErrorReason.RecordCorrupted;
-                return false;
-            }
-
-            // 3) ★ 内置插件永不可卸载
-            if (PluginConstants.BuiltinPluginIds.Contains(record.Id))
-            {
-                reason = MarketErrorReason.BuiltinConflict;
-                return false;
-            }
-
-            string path = Path.Combine(PluginsDir, expected);
-            if (File.Exists(path)) File.Delete(path);
-
-            PluginMarketState.Remove(entry.Id);
-            return true;
+            return PluginMarketUninstallCore.Uninstall(
+                entry,
+                PluginsDir,
+                PluginMarketState.Find,
+                PluginMarketState.Remove,
+                out reason);
         }
     }
 }
