@@ -93,18 +93,27 @@ namespace LiteMonitor.src.UI.SettingsPage
                     if (combo == null || combo.Inner.Items.Count > 2) return;
 
                     var fullList = new List<string>(data);
-                    fullList.Insert(0, strAuto);
 
-                    combo.Inner.BeginUpdate(); // 锁定 ComboBox 自身
-                    combo.Inner.Items.Clear();
-                    foreach (var item in fullList) combo.Inner.Items.Add(item);
+                    // ★ W3-3：重填期间必须**抑制选中事件**。
+                    //   原值不在候选里（U 盘没插、网卡改名等）时，旧代码会落到"自动"，
+                    //   事件随即把空串写回配置 ⇒ 用户的设备偏好就此丢失。
+                    using (BeginSuppressWriteBack())
+                    {
+                        combo.Inner.BeginUpdate(); // 锁定 ComboBox 自身
+                        combo.Inner.Items.Clear();
+                        combo.AddItem(strAuto, "");
+                        foreach (var item in fullList) combo.AddItem(item, item);
 
-                    if (!string.IsNullOrEmpty(currentVal) && fullList.Contains(currentVal))
-                        combo.Inner.SelectedItem = currentVal;
-                    else
-                        combo.Inner.SelectedIndex = 0;
-                    
-                    combo.Inner.EndUpdate(); // 解锁 ComboBox
+                        // 原值不可用时**保留原值**，并加一条只读提示项：
+                        // 提示项的取值仍然是原值 ⇒ 即便用户又点回它，写回的也是原值。
+                        if (!string.IsNullOrEmpty(currentVal) && !fullList.Contains(currentVal))
+                            combo.AddItem(string.Format(LanguageManager.T("Menu.PreferenceUnavailable"), currentVal), currentVal);
+
+                        combo.Inner.EndUpdate(); // 解锁 ComboBox
+
+                        if (!string.IsNullOrEmpty(currentVal)) combo.SelectValue(currentVal);
+                        else combo.SelectedIndex = 0;
+                    }
                 }
 
                 void FillGpuSync(LiteComboBox combo, List<HardwareScanner.GpuOption> data, string currentVal)
@@ -124,14 +133,24 @@ namespace LiteMonitor.src.UI.SettingsPage
                         return byName.Count == 1 ? byName[0] : null;
                     }
 
-                    combo.Inner.BeginUpdate();
-                    combo.Inner.Items.Clear();
-                    combo.AddItem(strAuto, "");
-                    foreach (var item in data) combo.AddItem(item.Label, item.Value);
+                    // ★ W3-3：重填期间抑制选中事件（否则"落到自动"会写空串）。
+                    using (BeginSuppressWriteBack())
+                    {
+                        combo.Inner.BeginUpdate();
+                        combo.Inner.Items.Clear();
+                        combo.AddItem(strAuto, "");
+                        foreach (var item in data) combo.AddItem(item.Label, item.Value);
 
-                    var selected = ResolveCurrent();
-                    combo.SelectValue(selected?.Value ?? "");
-                    combo.Inner.EndUpdate();
+                        var selected = ResolveCurrent();
+
+                        // 显卡原值不可用时同样保留原值 + 只读提示项，
+                        // 绝不落到"自动"把配置写成空串。
+                        if (selected == null && !string.IsNullOrWhiteSpace(currentVal))
+                            combo.AddItem(string.Format(LanguageManager.T("Menu.PreferenceUnavailable"), currentVal), currentVal);
+
+                        combo.Inner.EndUpdate();
+                        combo.SelectValue(selected?.Value ?? currentVal ?? "");
+                    }
                 }
 
                 // 3. 瞬间填入所有数据 (因为布局被挂起，用户看不见中间过程)
@@ -230,13 +249,18 @@ namespace LiteMonitor.src.UI.SettingsPage
             group.AddHint(LanguageManager.T("Menu.RefreshTip"));
 
             // ★★★ 修复：强制转换为 LiteComboBox ★★★
-            _cbDisk = (LiteComboBox)group.AddCombo(this, "Menu.DiskSource", new List<string> { strAuto }, 
-                () => Config?.PreferredDisk ?? strAuto, 
-                v => { if(Config!=null) Config.PreferredDisk = (v == strAuto ? "" : v); });
+            // ★ W3-3：设备偏好改用「标签/取值」成对的下拉 ——
+            //   原值不可用时可以加一条"提示项"（标签写明不可用，取值仍是原值），
+            //   选中它写回的也是原值，不会把配置冲成空串。
+            _cbDisk = (LiteComboBox)group.AddComboPair(this, LanguageManager.T("Menu.DiskSource"),
+                new[] { new { Label = strAuto, Value = "" } },
+                () => Config?.PreferredDisk ?? "",
+                v => { if (Config != null) Config.PreferredDisk = v ?? ""; });
 
-            _cbNet = (LiteComboBox)group.AddCombo(this, "Menu.NetworkSource", new List<string> { strAuto },
-                () => Config?.PreferredNetwork ?? strAuto,
-                v => { if (Config != null) Config.PreferredNetwork = (v == strAuto ? "" : v); });
+            _cbNet = (LiteComboBox)group.AddComboPair(this, LanguageManager.T("Menu.NetworkSource"),
+                new[] { new { Label = strAuto, Value = "" } },
+                () => Config?.PreferredNetwork ?? "",
+                v => { if (Config != null) Config.PreferredNetwork = v ?? ""; });
 
             _cbGpu = (LiteComboBox)group.AddComboPair(this, LanguageManager.T("Menu.GpuSource"),
                 new[] { new { Label = strAuto, Value = "" } },
@@ -267,17 +291,25 @@ namespace LiteMonitor.src.UI.SettingsPage
             );
             group.AddHint(LanguageManager.T("Menu.GpuMonitorCountTip"));
 
-            _cbMobo = (LiteComboBox)group.AddCombo(this, "Items.MOBO.Temp", new List<string> { strAuto },
-                () => Config?.PreferredMoboTemp ?? strAuto, v => { if (Config != null) Config.PreferredMoboTemp = (v == strAuto ? "" : v); });
+            _cbMobo = (LiteComboBox)group.AddComboPair(this, LanguageManager.T("Items.MOBO.Temp"),
+                new[] { new { Label = strAuto, Value = "" } },
+                () => Config?.PreferredMoboTemp ?? "",
+                v => { if (Config != null) Config.PreferredMoboTemp = v ?? ""; });
 
-            _cbFanCpu = (LiteComboBox)group.AddCombo(this, "Items.CPU.Fan", new List<string> { strAuto },
-                () => Config?.PreferredCpuFan ?? strAuto, v => { if (Config != null) Config.PreferredCpuFan = (v == strAuto ? "" : v); });
+            _cbFanCpu = (LiteComboBox)group.AddComboPair(this, LanguageManager.T("Items.CPU.Fan"),
+                new[] { new { Label = strAuto, Value = "" } },
+                () => Config?.PreferredCpuFan ?? "",
+                v => { if (Config != null) Config.PreferredCpuFan = v ?? ""; });
             
-            _cbFanPump = (LiteComboBox)group.AddCombo(this, "Items.CPU.Pump", new List<string> { strAuto },
-                () => Config?.PreferredCpuPump ?? strAuto, v => { if (Config != null) Config.PreferredCpuPump = (v == strAuto ? "" : v); });
+            _cbFanPump = (LiteComboBox)group.AddComboPair(this, LanguageManager.T("Items.CPU.Pump"),
+                new[] { new { Label = strAuto, Value = "" } },
+                () => Config?.PreferredCpuPump ?? "",
+                v => { if (Config != null) Config.PreferredCpuPump = v ?? ""; });
 
-            _cbFanCase = (LiteComboBox)group.AddCombo(this, "Items.CASE.Fan", new List<string> { strAuto },
-                () => Config?.PreferredCaseFan ?? strAuto, v => { if (Config != null) Config.PreferredCaseFan = (v == strAuto ? "" : v); });
+            _cbFanCase = (LiteComboBox)group.AddComboPair(this, LanguageManager.T("Items.CASE.Fan"),
+                new[] { new { Label = strAuto, Value = "" } },
+                () => Config?.PreferredCaseFan ?? "",
+                v => { if (Config != null) Config.PreferredCaseFan = v ?? ""; });
 
             AddGroupToPage(group);
         }
