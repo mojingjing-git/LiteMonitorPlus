@@ -18,18 +18,110 @@ namespace LiteMonitor
         public static string FilePath => _cachedPath;
 
         // Global block save lock
-        public static bool GlobalBlockSave { get; set; } = false;
+        private static bool _globalBlockSave;
+        private static SaveBlockOwner _saveBlockOwner = SaveBlockOwner.None;
+
+        /// <summary>
+        /// 谁把「禁止保存」置上的。
+        ///
+        /// <see cref="GlobalBlockSave"/> 有两个使用方：本类在「配置暂时读不到」时置真，
+        /// 以及 <c>SettingsForm</c> 的「重置配置」在删掉配置文件后、进程退出前置真（防止刚删的配置被内存值写回）。
+        /// 读取成功时只能撤销**自己置的那一次**，否则一次成功的读取会把重置兜底一起撤销。
+        ///
+        /// 不能只用一个「我置过没有」的 bool：外部置真之后那个 bool 仍可能为真
+        /// （此前有过一次瞬时 IO 故障且尚未被成功读取清掉），一次成功读取就会连外部的禁写一起解除。
+        /// 因此记录的是当前持有者。
+        /// </summary>
+        private enum SaveBlockOwner
+        {
+            None,
+
+            /// <summary>本类因 IO 故障置上，读取成功后自动解除。</summary>
+            IoFailure,
+
+            /// <summary>外部（如「重置配置」）置上，本类不得解除。</summary>
+            External,
+        }
+
+        public static bool GlobalBlockSave
+        {
+            get => _globalBlockSave;
+            set
+            {
+                _globalBlockSave = value;
+                // 外部赋值一律记为 External：本类自己置真走 BlockSaveForIoFailure()。
+                _saveBlockOwner = value ? SaveBlockOwner.External : SaveBlockOwner.None;
+            }
+        }
+
+        private static void BlockSaveForIoFailure()
+        {
+            _globalBlockSave = true;
+            _saveBlockOwner = SaveBlockOwner.IoFailure;
+        }
+
+        private static void ReleaseSaveBlockFromIoFailure()
+        {
+            // 只解除「本类因 IO 故障置上的」禁写。外部（「重置配置」）置上的强制禁写不在解除范围内。
+            if (_saveBlockOwner != SaveBlockOwner.IoFailure) return;
+
+            _globalBlockSave = false;
+            _saveBlockOwner = SaveBlockOwner.None;
+        }
 
         public static Settings Load(bool forceReload = false)
         {
             // Note: The singleton instance management is kept in Settings.Load() facade
             // or handled by the caller. This method strictly loads from disk/creates default.
             
-            Settings s;
+            Settings? s;
+            LoadFailure primaryFailure;
             lock (_ioLock)
             {
-                s = TryLoadFile(FilePath) ?? TryLoadFile(_backupPath) ?? new Settings();
+                s = TryLoadFile(FilePath, out primaryFailure);
+
+                // 主文件内容损坏：立刻改名留证。
+                // 这样后续保存不会把它当作「当前主文件」复制进备份（见 AtomicWrite 第 3 步），
+                // 备份里那份有效配置才保得住。
+                if (primaryFailure == LoadFailure.Corrupt)
+                {
+                    QuarantineCorruptFile(FilePath);
+                }
+
+                // 只有「不存在」或「损坏」才回落到备份。
+                // I/O 故障时不回落：另一个文件很可能锁在同一原因上，
+                // 而真正的危险是把默认值当成用户配置、解锁后再写回去覆盖。
+                if (s == null && primaryFailure != LoadFailure.IoFailure)
+                {
+                    LoadFailure backupFailure;
+                    s = TryLoadFile(_backupPath, out backupFailure);
+
+                    if (backupFailure == LoadFailure.Corrupt)
+                    {
+                        QuarantineCorruptFile(_backupPath);
+                    }
+                    else if (backupFailure == LoadFailure.IoFailure)
+                    {
+                        primaryFailure = LoadFailure.IoFailure;
+                    }
+                }
             }
+
+            // 配置暂时读不到时：本次会话用默认配置继续运行，但禁止任何自动落盘，
+            // 否则用户一改设置就会用默认值把磁盘上那份完好的配置覆盖掉。
+            if (primaryFailure == LoadFailure.IoFailure)
+            {
+                BlockSaveForIoFailure();
+                System.Diagnostics.Debug.WriteLine(
+                    "[Settings] 配置暂时无法读取（IO 故障），本次会话已禁止自动保存，避免用默认值覆盖用户配置。");
+            }
+            else
+            {
+                // 读取成功后解除本类此前置上的禁写 —— 否则一次瞬时故障会让本次会话永久存不了盘。
+                ReleaseSaveBlockFromIoFailure();
+            }
+
+            s ??= new Settings();
 
             if (s.GroupAliases == null) s.GroupAliases = new Dictionary<string, string>();
 
@@ -112,20 +204,97 @@ namespace LiteMonitor
             }
         }
 
-        private static Settings? TryLoadFile(string path)
+        /// <summary>
+        /// 单个配置文件加载失败的原因分类。
+        ///
+        /// 必须把「没有这个文件」（新装）与「暂时读不到」（被独占锁 / 权限不足 / 磁盘错误）区分开：
+        /// 后者如果按新装处理，随后任何一次自动保存都会用默认值把用户的真实配置覆盖掉。
+        /// </summary>
+        internal enum LoadFailure
+        {
+            /// <summary>加载成功。</summary>
+            None,
+
+            /// <summary>文件不存在 —— 可以按新装处理。</summary>
+            NotFound,
+
+            /// <summary>内容无法解析 —— 文件本身已损坏，可留证后弃用并回落到备份。</summary>
+            Corrupt,
+
+            /// <summary>临时 I/O 故障（被独占锁、权限不足、磁盘错误）—— 绝不可当作新装。</summary>
+            IoFailure
+        }
+
+        /// <summary>
+        /// 把无法解析的配置文件改名留证。
+        ///
+        /// 两个作用：一是保留现场供排查；二是让它不再占据主文件位置 ——
+        /// 否则下一次保存会把它当作「当前主文件」复制进备份，把备份里那份有效配置一起毁掉。
+        /// </summary>
+        private static void QuarantineCorruptFile(string path)
         {
             try
             {
-                if (!File.Exists(path)) return null;
+                if (!File.Exists(path)) return;
 
-                var json = File.ReadAllText(path);
-                return JsonSerializer.Deserialize<Settings>(json, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
+                string quarantine = path + ".corrupt-" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                if (File.Exists(quarantine))
+                    quarantine += "_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+
+                File.Move(path, quarantine);
             }
             catch
             {
+                // 留证失败不能阻断启动；主文件仍是坏的，但 Load 会继续走备份回落
+            }
+        }
+
+        private static Settings? TryLoadFile(string path, out LoadFailure failure)
+        {
+            failure = LoadFailure.None;
+
+            try
+            {
+                // 注意：File.Exists 在权限不足时也返回 false 而不抛异常，
+                // 因此「无权限」在这个判定上会被归为 NotFound。这是已知取舍：
+                // 要区分它必须真的去打开文件，那会让每次启动都产生一次失败的 IO。
+                if (!File.Exists(path))
+                {
+                    failure = LoadFailure.NotFound;
+                    return null;
+                }
+
+                var json = File.ReadAllText(path);
+                var loaded = JsonSerializer.Deserialize<Settings>(json, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                if (loaded == null)
+                {
+                    failure = LoadFailure.Corrupt;
+                    return null;
+                }
+
+                return loaded;
+            }
+            catch (JsonException)
+            {
+                // 内容不是合法 JSON（或字段类型对不上）：文件本身是坏的，可以留证后弃用
+                failure = LoadFailure.Corrupt;
+                return null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                // 被独占锁 / 权限不足 / 路径异常：文件可能完好，只是此刻读不到。
+                // 绝不能当作「新装」处理，否则随后的自动保存会用默认值覆盖用户的真实配置。
+                failure = LoadFailure.IoFailure;
+                return null;
+            }
+            catch
+            {
+                // 其余异常保守归入 IO 故障：宁可本次会话不落盘，也不要用默认值覆盖用户配置
+                failure = LoadFailure.IoFailure;
                 return null;
             }
         }
@@ -136,14 +305,31 @@ namespace LiteMonitor
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
+            // 1. 先写临时文件
             File.WriteAllText(_tempPath, json);
 
-            if (File.Exists(FilePath))
+            // 2. 回读校验：落盘内容必须还能解析回配置对象。
+            //    校验放在「刷新备份」之前，这样半截内容既不会顶替主文件，也不会污染备份。
+            string verifyJson = File.ReadAllText(_tempPath);
+            if (JsonSerializer.Deserialize<Settings>(verifyJson, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                }) == null)
+            {
+                throw new InvalidOperationException("临时配置文件回读校验失败，已放弃本次保存");
+            }
+
+            // 3. 校验通过后才刷新备份。顺序很关键：
+            //    备份的语义是「上一份有效内容」，所以要在替换主文件**之前**复制当前主文件。
+            //    但只有当当前主文件本身可解析时它才算一份有效内容 ——
+            //    主文件已损坏还去复制它，会把备份里那份好配置一起毁掉。
+            if (File.Exists(FilePath) && TryLoadFile(FilePath, out _) != null)
             {
                 try { File.Copy(FilePath, _backupPath, true); }
                 catch { }
             }
 
+            // 4. 最后替换主文件
             File.Move(_tempPath, FilePath, true);
         }
 
