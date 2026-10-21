@@ -162,10 +162,20 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         /// <summary>后台任务是否在运行。</summary>
         public bool IsRunning { get; }
 
-        /// <summary>是否有**可借出**的实时帧（与 <c>IBackdropFrameSource.IsReady</c> 同义）。</summary>
+        /// <summary>
+        /// 是否有**可借出**的实时帧（与 <c>IBackdropFrameSource.IsReady</c> 同义）。
+        /// <para>
+        /// ★ S2（P2）：与 <see cref="EffectiveMode"/> 共用**同一个**判定
+        ///   （租约有效 + 服务未 Dispose + 未暂停 + 当前轮未请求停止）。
+        ///   帧被作废 / 服务已停止 / 已暂停之后，本值立即为 false，**不再**报告 Glass。
+        /// </para>
+        /// </summary>
         public bool IsReady { get; }
 
-        /// <summary>当前是否持有一帧实时底图。</summary>
+        /// <summary>
+        /// 当前是否持有一帧实时底图。
+        /// <para>★ 与 <see cref="IsReady"/> **同源同值**：两者都由同一个判定得出，不会自相矛盾。</para>
+        /// </summary>
         public bool LiveFrameAvailable { get; }
 
         /// <summary>
@@ -285,7 +295,13 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         /// <summary>成功发布（交给 UI 候选池）的帧数。</summary>
         public long FramesPublished { get; }
 
-        /// <summary>因代次不匹配被**后台自己回收**的帧数（合同 §4.2.4）。</summary>
+        /// <summary>
+        /// 被**后台自己回收**、从未交给 UI 的帧数（合同 §4.2.4）。
+        /// <para>
+        /// ★ 计入范围：代次不匹配、**旧轮次**的迟到帧、**暂停期间**的在途帧。
+        ///   这三类帧都不会进入 UI 的绘制路径；该计数用于诊断"帧被丢弃"的真实原因分布。
+        /// </para>
+        /// </summary>
         public long FramesDroppedStale { get; }
 
         /// <summary>捕获/滤波失败次数。</summary>
@@ -552,15 +568,66 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         // 线程与运行状态
         // ============================================================
 
-        private CancellationTokenSource? _cts;
-        private Thread? _worker;
-        private int _suspended;
+        /// <summary>
+        /// 一次后台运行的上下文（"一轮生命周期"）。
+        /// <para>
+        /// ★ 为什么取消标记 / CTS / 线程引用必须**属于本轮**而不是服务实例：
+        ///   「Stop 超时后重启」时，旧线程还没退出。若取消标记挂在服务实例上，
+        ///   新的 <see cref="Start"/> 会把标记清零 ⇒ 旧线程畅通无阻地继续发布帧，
+        ///   并在退出时把**新生命周期**的状态覆盖成 Stopped（A15 独立复核 P1）。
+        ///   挂在本轮上之后，旧轮的"已请求停止"永远不会被新一轮清掉。
+        /// </para>
+        /// </summary>
+        private sealed class CaptureRun
+        {
+            public CaptureRun(int runId, CancellationTokenSource cts)
+            {
+                RunId = runId;
+                Cts = cts;
+                Worker = null!;
+            }
 
-        /// <summary>已请求停止（Interlocked 标记）：防止"卡住的后端"在停止后仍发布帧。</summary>
-        private int _stopRequested;
+            /// <summary>本轮的运行序号（单调递增）。</summary>
+            public int RunId { get; }
+
+            /// <summary>本轮的取消源。</summary>
+            public CancellationTokenSource Cts { get; }
+
+            /// <summary>本轮的后台线程。</summary>
+            public Thread Worker { get; set; }
+
+            /// <summary>本轮是否已被请求停止（**本轮私有**，不会被其它轮清零）。</summary>
+            public bool StopRequested => Volatile.Read(ref _stopRequested) != 0;
+
+            private int _stopRequested;
+
+            /// <summary>请求本轮停止：置标记 + 取消 CTS（幂等、可重复调用）。</summary>
+            public void RequestStop()
+            {
+                Interlocked.Exchange(ref _stopRequested, 1);
+                try { Cts.Cancel(); }
+                catch (ObjectDisposedException) { /* 已释放 */ }
+                catch (AggregateException) { /* 回调异常不影响停止流程 */ }
+            }
+        }
+
+        /// <summary>当前运行轮次（无锁读用 <c>Volatile.Read</c>；结构性修改在 <c>_gate</c> 内）。</summary>
+        private CaptureRun? _currentRun;
+
+        /// <summary>运行序号计数器（只在 <c>_gate</c> 内自增）。</summary>
+        private int _runIdCounter;
+
+        private int _suspended;
 
         /// <summary>失败退避的到期时刻（毫秒，_clock 口径）—— 只有后台线程读写。</summary>
         private double _retryNotBeforeMs;
+
+        /// <summary>
+        /// 本轮是否仍是"当前轮"（无锁判定）。
+        /// <para>★ 用于阻止**旧轮次**改写新生命周期的状态与指标。</para>
+        /// </summary>
+        private bool IsCurrentRun(CaptureRun run) =>
+            ReferenceEquals(Volatile.Read(ref _currentRun), run);
 
         // ============================================================
         // 状态与指标（受 _metricsGate 保护）
@@ -637,7 +704,8 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         {
             get
             {
-                Thread? worker = _worker;
+                CaptureRun? run = Volatile.Read(ref _currentRun);
+                Thread? worker = run?.Worker;
                 return worker is not null && worker.IsAlive;
             }
         }
@@ -675,30 +743,48 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         {
             if (request is null) throw new ArgumentNullException(nameof(request));
 
-            CancellationTokenSource cts;
             Thread worker;
             lock (_gate)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                if (_worker is not null)
+
+                CaptureRun? previous = Volatile.Read(ref _currentRun);
+                if (previous is not null)
                 {
-                    throw new InvalidOperationException("捕获服务已在运行；请先调用 StopAsync()。");
+                    // ★ S1（P1）：上一轮的后台任务**还没退出** ⇒ 拒绝启动。
+                    //   两个捕获循环并存会重复抓屏，直接击穿合同 §6.3 的 CPU 预算，
+                    //   而且旧线程会向新生命周期发布帧（A15 独立复核已复现三次）。
+                    if (previous.Worker.IsAlive)
+                    {
+                        throw new InvalidOperationException(
+                            "上一次后台捕获任务尚未退出（Stop 超时或后端卡住）。" +
+                            "为避免两个捕获循环并存（会击穿 CPU 预算、且旧线程会向新生命周期发布帧），" +
+                            "不允许在此之前重新启动；请等待后台任务退出后再启动。");
+                    }
+
+                    // 上一轮确实已退出：回收它的 CTS，允许开始新一轮
+                    SafeDisposeRun(previous);
+                    Volatile.Write(ref _currentRun, null);
                 }
 
                 Volatile.Write(ref _request, request);
-                cts = new CancellationTokenSource();
-                _cts = cts;
-                Interlocked.Exchange(ref _stopRequested, 0);
-                worker = new Thread(() => WorkerLoop(cts.Token))
+
+                CaptureRun run = new CaptureRun(++_runIdCounter, new CancellationTokenSource());
+                worker = new Thread(() => WorkerLoop(run))
                 {
                     IsBackground = true,
                     Name = "LiteMonitor.BackdropCapture",
                 };
-                _worker = worker;
-            }
+                run.Worker = worker;
 
-            SetState(BackdropServiceState.Starting, "正在启动实时捕获……");
-            worker.Start();
+                // ★ 先写状态再起线程：否则线程可能在 SetState(Starting) 之前就失败，
+                //   把状态写成 Faulted，随后又被 Starting 覆盖掉。
+                SetState(BackdropServiceState.Starting, "正在启动实时捕获……");
+                Volatile.Write(ref _currentRun, run);
+
+                // ★ 在锁内启动：避免与并发 Stop（StopAsync 走线程池）交错
+                worker.Start();
+            }
         }
 
         /// <summary>
@@ -742,21 +828,20 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         /// </summary>
         public void SetSuspended(bool suspended)
         {
+            // ★ 先置标记：在途捕获返回后，发布检查会看到"已暂停"而丢弃该帧（S3）
             Interlocked.Exchange(ref _suspended, suspended ? 1 : 0);
             if (!suspended) return;
 
             lock (_gate)
             {
                 _activeLease?.Invalidate();
-
-                if (_pending is not null)
-                {
-                    Image? stale = _pending;
-                    _pending = null;
-                    _pendingRequest = null;
-                    stale.Dispose();
-                }
+                ReleasePendingUnderLock();
             }
+
+            // ★ 只有服务确实在运行、且没被要求停止时才改状态；
+            //   否则会把已经 Stopped 的服务改成 Suspended。
+            CaptureRun? run = Volatile.Read(ref _currentRun);
+            if (run is null || run.StopRequested) return;
 
             SetState(BackdropServiceState.Suspended, "窗口不可见，已暂停捕获。");
         }
@@ -800,23 +885,26 @@ namespace LiteMonitor.src.SystemServices.Backdrop
 
         private bool StopCore(TimeSpan timeout)
         {
-            CancellationTokenSource? cts;
-            Thread? worker;
-            lock (_gate)
+            CaptureRun? run = Volatile.Read(ref _currentRun);
+
+            if (run is null)
             {
-                cts = _cts;
-                worker = _worker;
-                _cts = null;
-                _worker = null;
+                // 没有正在运行的轮次：仍做一次清理（释放 pending、恢复亲和性）
+                RestoreAffinitySafely();
+                lock (_gate)
+                {
+                    ReleasePendingUnderLock();
+                }
+                SetState(BackdropServiceState.Stopped, "捕获服务已停止。");
+                return true;
             }
 
-            try { cts?.Cancel(); } catch (ObjectDisposedException) { /* 已释放 */ }
-
-            // ★ 兜底：即使后端卡住、超时未退出，也不允许它把"迟到的帧"发布出去
-            Interlocked.Exchange(ref _stopRequested, 1);
+            // ★ 请求停止：本轮的取消标记 + CTS（**本轮私有**，不会被其它轮清零）
+            run.RequestStop();
 
             bool stopped = true;
-            if (worker is not null && worker.IsAlive)
+            Thread worker = run.Worker;
+            if (worker.IsAlive)
             {
                 try
                 {
@@ -828,7 +916,24 @@ namespace LiteMonitor.src.SystemServices.Backdrop
                 }
             }
 
-            try { cts?.Dispose(); } catch (ObjectDisposedException) { /* 已释放 */ }
+            // ★ 只有后台任务**确实退出**了，才清空 _currentRun。
+            //   超时未退出时**保留**引用 ⇒ 之后的 Start 会因为"上一轮还活着"而拒绝重启，
+            //   从根上杜绝两个捕获循环并存（S1 / P1）。
+            if (!worker.IsAlive)
+            {
+                lock (_gate)
+                {
+                    if (ReferenceEquals(Volatile.Read(ref _currentRun), run))
+                    {
+                        Volatile.Write(ref _currentRun, null);
+                        SafeDisposeRun(run);
+                    }
+                }
+            }
+
+            // ★ 后台任务**仍在运行**时**不释放**本轮的 CTS：它还在用 ct 等待/取消，
+            //   提前 Dispose 会让等待走异常路径。CTS 会在本轮真正退出时
+            //   （WorkerLoop 的 finally）释放。
 
             // ★ 取消后必须恢复显示亲和性（否则窗口在录屏里永久消失）
             RestoreAffinitySafely();
@@ -836,17 +941,44 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             // ★ 同步释放后台仍拥有的候选帧（合同 §4.2.6）
             lock (_gate)
             {
-                if (_pending is not null)
-                {
-                    Image? stale = _pending;
-                    _pending = null;
-                    _pendingRequest = null;
-                    stale.Dispose();
-                }
+                ReleasePendingUnderLock();
             }
+
+            if (!stopped)
+            {
+                // ★ 超时未退出：如实报告"还没停掉"，**不能**谎报 Stopped
+                //   （此时后台线程还活着，IsRunning 仍为 true）。
+                RecordFailure(
+                    run,
+                    BackdropDegradeReason.BackendNotReady,
+                    "后台捕获任务未能在超时内退出（仍在运行）；已阻止重启以避免两个捕获循环并存。",
+                    false);
+                return false;
+            }
+
+            // ★ S1：只有当本轮确实结束了才写 Stopped。
+            //   若本轮已被新一轮接管（_currentRun 指向别的轮），**绝不**覆盖新生命周期的状态。
+            if (!IsCurrentRun(run)) return stopped;
 
             SetState(BackdropServiceState.Stopped, "捕获服务已停止。");
             return stopped;
+        }
+
+        /// <summary>释放后台仍拥有的候选帧（调用方必须持有 <c>_gate</c>）。</summary>
+        private void ReleasePendingUnderLock()
+        {
+            if (_pending is null) return;
+            Image? stale = _pending;
+            _pending = null;
+            _pendingRequest = null;
+            stale.Dispose();
+        }
+
+        /// <summary>安全释放一轮运行的 CTS（幂等）。</summary>
+        private static void SafeDisposeRun(CaptureRun run)
+        {
+            try { run.Cts.Dispose(); }
+            catch (ObjectDisposedException) { /* 已释放 */ }
         }
 
         // ============================================================
@@ -870,6 +1002,14 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             lock (_gate)
             {
                 if (_disposed) return false;
+
+                // ★ S3（P2）：暂停 / 停止期间**不接管**。
+                //   暂停前已经进入后端的那一次捕获，返回后会被发布检查丢弃；
+                //   这里再加一道，防止任何残留 pending 被接管。
+                if (Volatile.Read(ref _suspended) != 0) return false;
+
+                CaptureRun? run = Volatile.Read(ref _currentRun);
+                if (run is null || run.StopRequested) return false;
 
                 Image? frame = _pending;
                 if (frame is null) return false;
@@ -915,9 +1055,39 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             {
                 lock (_gate)
                 {
-                    return _activeLease is not null && _activeLease.FrameOrNull is not null;
+                    return IsFrameBorrowableUnderLock();
                 }
             }
+        }
+
+        /// <summary>
+        /// 当前是否**真有一帧可以借给绘制路径**（借用与状态共用的**唯一**判定）。
+        /// <para>
+        /// ★ S2（P2）：原先这里只看"租约的位图还在不在"，于是
+        ///   <see cref="UpdateRequest"/> / <see cref="SetSuspended"/> / <see cref="Dispose"/>
+        ///   把租约作废之后，旧图**仍然能被借出**，并且 <see cref="Status"/> 仍报告
+        ///   <see cref="BackdropRenderMode.Glass"/>。现在必须同时满足：
+        ///   租约存在、租约未作废未释放、位图在、服务未 Dispose、
+        ///   当前轮未请求停止、服务未暂停。
+        /// </para>
+        /// <para>★ 调用方必须持有 <c>_gate</c>。</para>
+        /// </summary>
+        private bool IsFrameBorrowableUnderLock()
+        {
+            BackdropFrameLease? lease = _activeLease;
+            if (lease is null) return false;
+
+            // 已作废（代次变化 / 暂停 / 停止）或已释放 ⇒ 不可借出
+            if (!lease.IsValid) return false;
+
+            if (_disposed) return false;
+
+            CaptureRun? run = Volatile.Read(ref _currentRun);
+            if (run is null || run.StopRequested) return false;
+
+            if (Volatile.Read(ref _suspended) != 0) return false;
+
+            return true;
         }
 
         /// <summary>
@@ -957,10 +1127,10 @@ namespace LiteMonitor.src.SystemServices.Backdrop
 
             lock (_gate)
             {
-                BackdropFrameLease? lease = _activeLease;
-                if (lease is null) return false;
+                // ★ S2：与 IsReady / Status 共用同一个判定 —— 作废/停止/暂停后不再借出
+                if (!IsFrameBorrowableUnderLock()) return false;
 
-                Image? image = lease.FrameOrNull;
+                Image? image = _activeLease?.FrameOrNull;
                 if (image is null) return false;
 
                 frame = image;
@@ -981,7 +1151,9 @@ namespace LiteMonitor.src.SystemServices.Backdrop
                 bool liveFrame;
                 lock (_gate)
                 {
-                    liveFrame = _activeLease is not null && _activeLease.FrameOrNull is not null;
+                    // ★ S2：与 TryGetFrame / IsReady 共用同一判定 ——
+                    //   作废 / 停止 / 暂停 / Dispose 后不再报告 Glass。
+                    liveFrame = IsFrameBorrowableUnderLock();
                 }
 
                 lock (_metricsGate)
@@ -1068,61 +1240,82 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         // 后台任务
         // ============================================================
 
-        private void WorkerLoop(CancellationToken ct)
+        private void WorkerLoop(CaptureRun run)
         {
+            CancellationToken ct = run.Cts.Token;
             double nextDueMs = 0d;
 
-            while (!ct.IsCancellationRequested)
+            try
             {
-                BackdropServiceRequest? request = Volatile.Read(ref _request);
-                if (request is null)
+                while (!ct.IsCancellationRequested)
                 {
-                    WaitOrCancel(ct, 100);
-                    continue;
+                    BackdropServiceRequest? request = Volatile.Read(ref _request);
+                    if (request is null)
+                    {
+                        WaitOrCancel(ct, 100);
+                        continue;
+                    }
+
+                    if (Interlocked.CompareExchange(ref _suspended, 0, 0) != 0)
+                    {
+                        // ★ 隐藏 / 最小化：不捕获；恢复后合并为一帧（nextDue 归零 ⇒ 立即捕获一次）
+                        nextDueMs = 0d;
+                        WaitOrCancel(ct, 100);
+                        continue;
+                    }
+
+                    double nowMs = _clock.Elapsed.TotalMilliseconds;
+                    if (nowMs < nextDueMs)
+                    {
+                        WaitOrCancel(ct, (int)Math.Min(Math.Max(nextDueMs - nowMs, 1d), 100d));
+                        continue;
+                    }
+
+                    if (nowMs < _retryNotBeforeMs)
+                    {
+                        // ★ 失败退避：不在每次绘制里无限重试（合同 §5.2.4）
+                        WaitOrCancel(ct, (int)Math.Min(Math.Max(_retryNotBeforeMs - nowMs, 1d), 100d));
+                        continue;
+                    }
+
+                    RunOneCapture(run, request, ct);
+
+                    // ★ 不追帧：下一次到期时间从"本轮结束"起算 ⇒ 不会突发补帧
+                    nextDueMs = _clock.Elapsed.TotalMilliseconds + request.FrameIntervalMs;
                 }
-
-                if (Interlocked.CompareExchange(ref _suspended, 0, 0) != 0)
-                {
-                    // ★ 隐藏 / 最小化：不捕获；恢复后合并为一帧（nextDue 归零 ⇒ 立即捕获一次）
-                    nextDueMs = 0d;
-                    WaitOrCancel(ct, 100);
-                    continue;
-                }
-
-                double nowMs = _clock.Elapsed.TotalMilliseconds;
-                if (nowMs < nextDueMs)
-                {
-                    WaitOrCancel(ct, (int)Math.Min(Math.Max(nextDueMs - nowMs, 1d), 100d));
-                    continue;
-                }
-
-                if (nowMs < _retryNotBeforeMs)
-                {
-                    // ★ 失败退避：不在每次绘制里无限重试（合同 §5.2.4）
-                    WaitOrCancel(ct, (int)Math.Min(Math.Max(_retryNotBeforeMs - nowMs, 1d), 100d));
-                    continue;
-                }
-
-                RunOneCapture(request, ct);
-
-                // ★ 不追帧：下一次到期时间从"本轮结束"起算 ⇒ 不会突发补帧
-                nextDueMs = _clock.Elapsed.TotalMilliseconds + request.FrameIntervalMs;
             }
+            finally
+            {
+                // ★ S1（P1）：只有"本轮仍是当前轮"才写 Stopped。
+                //   旧线程退出时若新一轮已经接管，**绝不能**把新生命周期的状态覆盖成 Stopped。
+                if (IsCurrentRun(run))
+                {
+                    SetState(BackdropServiceState.Stopped, "捕获服务已停止。");
 
-            SetState(BackdropServiceState.Stopped, "捕获服务已停止。");
+                    lock (_gate)
+                    {
+                        if (ReferenceEquals(Volatile.Read(ref _currentRun), run))
+                        {
+                            Volatile.Write(ref _currentRun, null);
+                            SafeDisposeRun(run);
+                        }
+                    }
+                }
+            }
         }
 
-        private void RunOneCapture(BackdropServiceRequest request, CancellationToken ct)
+        private void RunOneCapture(CaptureRun run, BackdropServiceRequest request, CancellationToken ct)
         {
             if (!request.HasValidBounds)
             {
-                RecordFailure(BackdropDegradeReason.InvalidBounds, "客户区物理矩形无效，已跳过捕获。", false);
+                RecordFailure(run, BackdropDegradeReason.InvalidBounds, "客户区物理矩形无效，已跳过捕获。", false);
                 return;
             }
 
             if (!SafeBackendIsReady())
             {
                 RecordFailure(
+                    run,
                     BackdropDegradeReason.BackendNotReady,
                     SafeBackendUnavailableReason() ?? "捕获后端未就绪。",
                     false);
@@ -1148,7 +1341,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             {
                 captured = false;
                 raw = null;
-                RecordFailure(BackdropDegradeReason.BackendFrameInvalid, "捕获异常：" + ex.Message, true);
+                RecordFailure(run, BackdropDegradeReason.BackendFrameInvalid, "捕获异常：" + ex.Message, true);
                 return;
             }
 
@@ -1159,6 +1352,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
                 // ★ 失败路径：释放"已创建但未发布"的中间位图（合同 §4.2.6）
                 raw?.Dispose();
                 RecordFailure(
+                    run,
                     BackdropDegradeReason.BackendFrameInvalid,
                     "捕获失败：后端没有给出可用帧。",
                     true);
@@ -1181,7 +1375,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
                 {
                     filtered = false;
                     processed = null;
-                    RecordFailure(BackdropDegradeReason.BackendFrameInvalid, "滤波异常：" + ex.Message, true);
+                    RecordFailure(run, BackdropDegradeReason.BackendFrameInvalid, "滤波异常：" + ex.Message, true);
                     raw.Dispose();
                     return;
                 }
@@ -1192,6 +1386,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
                     // ★ 滤波失败：释放输入位图（合同 §4.2.6）
                     raw.Dispose();
                     RecordFailure(
+                        run,
                         BackdropDegradeReason.BackendFrameInvalid,
                         "滤波失败：没有得到可用的处理结果。",
                         true);
@@ -1226,6 +1421,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             {
                 processed.Dispose();
                 RecordFailure(
+                    run,
                     BackdropDegradeReason.BackendFrameInvalid,
                     $"捕获帧 {frameWidth}×{frameHeight}（{framePixels} 像素 / 约 {frameBytes / 1024 / 1024}MiB）" +
                     $"超出缓冲预算（{_maxFramePixels} 像素 / {_maxFrameBytes / 1024 / 1024}MiB），本帧已丢弃。",
@@ -1234,10 +1430,10 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             }
 
             // --------------------------------------------------------
-            // 发布（代次校验 + pending 替换）
+            // 发布（轮次校验 + 暂停校验 + 代次校验 + pending 替换）
             // --------------------------------------------------------
             double t2 = _clock.Elapsed.TotalMilliseconds;
-            bool published = PublishFrame(processed!, request);
+            bool published = PublishFrame(run, processed!, request);
             double publishMs = _clock.Elapsed.TotalMilliseconds - t2;
 
             // --------------------------------------------------------
@@ -1249,6 +1445,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             double cpuMs = (_process.TotalProcessorTime - cpuStart).TotalMilliseconds;
 
             RecordSuccess(
+                run,
                 captureMs,
                 filterMs,
                 publishMs,
@@ -1267,14 +1464,35 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         /// ★ 合同 §4.2.4：代次不匹配的帧由**发布方自己回收**，不交给 UI。
         /// </para>
         /// </summary>
-        private bool PublishFrame(Image frame, BackdropServiceRequest request)
+        private bool PublishFrame(CaptureRun run, Image frame, BackdropServiceRequest request)
         {
             lock (_gate)
             {
-                if (_disposed || Volatile.Read(ref _stopRequested) != 0)
+                // ★ S1（P1）：**旧轮次**一律不得发布 —— 即使代次完全相同。
+                //   「Stop 超时后用相同请求重启」时，旧请求与新请求代次相同，
+                //   只靠代次校验区分不出来，必须靠轮次身份。
+                if (!ReferenceEquals(Volatile.Read(ref _currentRun), run) || run.StopRequested)
+                {
+                    frame.Dispose();
+                    Interlocked.Increment(ref _framesDroppedStale);
+                    return false;
+                }
+
+                if (_disposed)
                 {
                     // 已停止：不再发布（迟到的帧由本服务释放）
                     frame.Dispose();
+                    Interlocked.Increment(ref _framesDroppedStale);
+                    return false;
+                }
+
+                // ★ S3（P2）：暂停期间的**在途帧**一律丢弃并释放 ——
+                //   暂停前已经进入后端的那一次捕获，返回后不能重新填进 pending，
+                //   更不能被 UI 接管、也不能把状态改回 Running。
+                if (Volatile.Read(ref _suspended) != 0)
+                {
+                    frame.Dispose();
+                    Interlocked.Increment(ref _framesDroppedStale);
                     return false;
                 }
 
@@ -1336,6 +1554,7 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         // ============================================================
 
         private void RecordSuccess(
+            CaptureRun run,
             double captureMs,
             double filterMs,
             double publishMs,
@@ -1347,6 +1566,9 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         {
             lock (_metricsGate)
             {
+                // ★ S1（P1）：旧轮次的成功**不得**污染新生命周期（状态与指标都不记）。
+                if (!IsCurrentRun(run)) return;
+
                 _framesCaptured++;
                 if (published) _framesPublished++;
 
@@ -1376,17 +1598,32 @@ namespace LiteMonitor.src.SystemServices.Backdrop
                 _consecutiveFailures = 0;
                 _retryNotBeforeMs = 0d;
                 _lastFrameUtc = DateTime.UtcNow;
-                _state = BackdropServiceState.Running;
-                _degradeReason = BackdropDegradeReason.None;
-                _degradeReasonText = null;
+
+                // ★ S3（P2）：**暂停期间不把状态改回 Running**（保持 Suspended）。
+                //   在途帧已在发布处被丢弃，这里只负责不覆盖暂停态。
+                if (Volatile.Read(ref _suspended) == 0)
+                {
+                    _state = BackdropServiceState.Running;
+
+                    // ★ S4（P2）：成功转换时**同步状态说明** ——
+                    //   否则恢复成功后 StateText 仍显示上一次故障的文案，
+                    //   与真实状态不符。历史故障继续保留在 LastFailureReason，不混进来。
+                    _stateText = "实时捕获运行中。";
+
+                    _degradeReason = BackdropDegradeReason.None;
+                    _degradeReasonText = null;
+                }
             }
         }
 
-        private void RecordFailure(BackdropDegradeReason reason, string text, bool backendFailure)
+        private void RecordFailure(CaptureRun run, BackdropDegradeReason reason, string text, bool backendFailure)
         {
             int failures;
             lock (_metricsGate)
             {
+                // ★ S1（P1）：旧轮次的失败**不得**改写新生命周期的状态。
+                if (!IsCurrentRun(run)) return;
+
                 _consecutiveFailures++;
                 failures = _consecutiveFailures;
                 _degradeReason = reason;

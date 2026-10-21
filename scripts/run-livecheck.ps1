@@ -13,7 +13,8 @@
        （driver.zip / LiteMonitorPlusFPS.exe）——否则 dev 版装驱动会走网络下载
     3. 备份**当前输出目录**里的 settings.json（★ 见下方「配置在哪」）
     4. 启动 LiteMonitor++.exe
-    5. 启动后自动取主窗口的 GetDpiForWindow，判定 Per-Monitor-V2 是否真的生效，
+    5. 启动后自动取主窗口的 DPI **感知上下文**（GetWindowDpiAwarenessContext +
+       AreDpiAwarenessContextsEqual），判定 Per-Monitor-V2 是否真的生效，
        并把实机验收清单的 8 项打出来供逐项核对
 
   用法：
@@ -35,6 +36,12 @@
     * **强烈建议用管理员 PowerShell 跑**：LiteMonitor++ 自己也跑在高完整性级别上，
       非提权的 PowerShell 读不到它的 exe 路径、也结束不了它，
       遇到"文件被占用"时 -StopExisting 会失效（脚本会给出提示）。
+      ★ 同理：非提权会话**跨进程读它的窗口标题**也可能被拦掉（读到空串），
+        此时按标题精确识别主窗体会失败，脚本会退回到"面积最大"并明确警告。
+    * **主窗体识别约定**：主工程把主窗体标题固定成精确的 "LiteMonitor++"
+      （src/UI/MainForm_Transparent.cs 里设置，无边框窗体不影响外观），
+      而驱动安装对话框的标题是 "LiteMonitor++ - {说明}"。
+      脚本按**精确相等**匹配，不会把启动阶段的驱动安装对话框误认成主窗体。
     * 单实例互斥体按 exe 所在目录生成（Program.cs 里按 MainModule 路径取哈希），
       所以同目录重复启动时第二个会立刻退出 —— 脚本会先提示。
     * **配置在哪**：settings.json 放在 **exe 同目录**（SettingsHelper 用
@@ -119,12 +126,81 @@ using System.Text;
 
 namespace LiveCheck
 {
+    /// <summary>
+    /// DPI 感知等级 —— 由**感知上下文**归类得出。
+    /// ★ 它与 GetDpiForWindow 返回的**缩放数值**是两回事，切勿混用。
+    /// </summary>
+    public enum DpiAwarenessKind
+    {
+        /// <summary>取不到感知上下文（API 缺失 / 返回 NULL / 未知取值）—— 无法判定，不猜。</summary>
+        Unknown = 0,
+        /// <summary>DPI-Unaware：玻璃不可用。</summary>
+        Unaware = 1,
+        /// <summary>System-Aware：玻璃不可用。</summary>
+        SystemAware = 2,
+        /// <summary>Per-Monitor-V1：可以抓屏，但不是 v2。</summary>
+        PerMonitorAwareV1 = 3,
+        /// <summary>Per-Monitor-V2：期望结果，玻璃抓屏可用。</summary>
+        PerMonitorAwareV2 = 4
+    }
+
+    /// <summary>DPI 感知上下文的查询结果。</summary>
+    public class DpiAwarenessInfo
+    {
+        /// <summary>GetWindowDpiAwarenessContext 返回的原始上下文（0 = 没取到）。</summary>
+        public IntPtr Context = IntPtr.Zero;
+        /// <summary>归类出来的感知等级。</summary>
+        public DpiAwarenessKind Kind = DpiAwarenessKind.Unknown;
+        /// <summary>感知等级的简短名称，仅用于打印。</summary>
+        public string KindName = "未知";
+        /// <summary>无法判定时的原因（可为空）。</summary>
+        public string Detail = "";
+        /// <summary>缩放数值（GetDpiForWindow）—— 只是参考信息，不是感知等级。</summary>
+        public uint Dpi = 0;
+        /// <summary>缩放数值的读取错误（可为空）。</summary>
+        public string DpiError = "";
+    }
+
+    /// <summary>窗口查找结果。</summary>
+    public class WindowLookup
+    {
+        /// <summary>窗口句柄（IntPtr.Zero = 没找到）。</summary>
+        public IntPtr Handle = IntPtr.Zero;
+        /// <summary>窗口标题（跨进程读不到时是空串）。</summary>
+        public string Title = "";
+        /// <summary>标题是否**精确等于**期望的主窗体标题。</summary>
+        public bool TitleMatched = false;
+        /// <summary>客户区面积（物理像素²）。</summary>
+        public long ClientArea = 0;
+        /// <summary>客户区宽（物理像素）。</summary>
+        public int ClientWidth = 0;
+        /// <summary>客户区高（物理像素）。</summary>
+        public int ClientHeight = 0;
+    }
+
     public static class Native
     {
         public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
 
+        // ★ DPI_AWARENESS_CONTEXT 的四个常量（微软 API 定义的固定值）。
+        //   官方要求用 AreDpiAwarenessContextsEqual 比较两个上下文是否等价，
+        //   **不要**直接拿上下文位值去比。
+        public static readonly IntPtr DpiAwarenessContextUnaware = new IntPtr(-1);
+        public static readonly IntPtr DpiAwarenessContextSystemAware = new IntPtr(-2);
+        public static readonly IntPtr DpiAwarenessContextPerMonitorAware = new IntPtr(-3);
+        public static readonly IntPtr DpiAwarenessContextPerMonitorAwareV2 = new IntPtr(-4);
+
         [DllImport("user32.dll")]
         public static extern uint GetDpiForWindow(IntPtr hwnd);
+
+        // ★ 取窗口的 DPI **感知上下文**（Win10 1607+）。返回的不是缩放数值。
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr hwnd);
+
+        // ★ 比较两个感知上下文是否等价（Win10 1703+）。官方推荐的比较方式。
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool AreDpiAwarenessContextsEqual(IntPtr dpiAwarenessContext1, IntPtr dpiAwarenessContext2);
 
         [DllImport("user32.dll")]
         public static extern bool GetClientRect(IntPtr hwnd, out RECT rect);
@@ -150,25 +226,46 @@ namespace LiveCheck
             public int Bottom;
         }
 
-        /// <summary>找出属于指定进程、可见、且**客户区面积最大**的顶层窗口。</summary>
+        /// <summary>读窗口标题（读不到时返回空串）。</summary>
+        public static string ReadWindowTitle(IntPtr hwnd)
+        {
+            try
+            {
+                StringBuilder sb = new StringBuilder(512);
+                int n = GetWindowTextW(hwnd, sb, sb.Capacity);
+                return n > 0 ? sb.ToString() : "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        /// <summary>
+        /// 找出目标进程的主窗体：**优先**取标题**精确等于** expectedTitle 的可见顶层窗口；
+        /// 没有精确匹配时回退到客户区面积最大的可见顶层窗口（TitleMatched=false 表示走了回退）。
+        /// </summary>
         /// <remarks>
-        /// ★ 为什么不能靠标题找：
-        ///   1. LiteMonitor++ 的主窗体是 <c>FormBorderStyle.None</c> + <c>ShowInTaskbar=false</c>
-        ///      的分层透明窗口，而且项目里**没有 MainForm.Designer.cs** ——
-        ///      <see cref="System.Windows.Forms.Form.Text"/> 保持 WinForms 默认的**空字符串**，
-        ///      主窗体根本没有标题；
-        ///   2. 进程跑在**高完整性级别**（manifest 要求管理员），非提权的 PowerShell
-        ///      连别的进程的窗口标题都读不到（会返回空串）。
-        ///   ⇒ 只要按"有标题"筛，就永远找不到主窗口，DPI 自检必然失败。
+        /// ★ 为什么必须用标题精确匹配：
+        ///   启动顺序是 ApplicationConfiguration.Initialize() → DriverInstaller.CheckPawnIOBeforeHardware()
+        ///   （内部用模态 UpdateDialog **阻塞**）→ Application.Run(new MainForm())。
+        ///   PawnIO 缺失/升级时，驱动安装对话框**与主窗体同属一个进程**，
+        ///   只按"面积最大"会把那个对话框当成主窗体，报出它的 DPI 与客户区。
+        ///   主工程已把主窗体标题固定成精确的 "LiteMonitor++"（见 MainForm_Transparent.cs），
+        ///   而 UpdateDialog 的标题是 "LiteMonitor++ - {说明}"，**精确比较**不会混淆。
+        ///   ★ 比较必须是**精确相等**（Ordinal），不能用 StartsWith/Contains ——
+        ///     否则 "LiteMonitor++ - 安装驱动" 会被误判成主窗。
         /// <para>
-        /// 改为按**客户区面积**取最大者：主面板是 480×2660 物理像素，
-        /// 远大于任何辅助窗口；不可见的辅助窗口会被 <c>IsWindowVisible</c> 直接滤掉。
+        /// 回退路径的取舍：主窗体是无边框窗体（FormBorderStyle.None），
+        /// 而进程跑在**高完整性级别**（manifest 要求管理员），
+        /// 非提权的 PowerShell 跨进程读它的标题可能被拦掉（返回空串）——
+        /// 此时标题精确匹配注定失败，只能走面积最大回退，脚本会明确给出警告。
         /// </para>
         /// </remarks>
-        public static IntPtr FindVisibleWindow(uint targetProcessId)
+        public static WindowLookup FindMainWindow(uint targetProcessId, string expectedTitle)
         {
-            IntPtr found = IntPtr.Zero;
-            long bestArea = -1;
+            WindowLookup exact = null;
+            WindowLookup best = null;
             EnumWindows(delegate (IntPtr hwnd, IntPtr lParam)
             {
                 uint pid;
@@ -177,22 +274,112 @@ namespace LiveCheck
                 if (!IsWindowVisible(hwnd)) return true;
 
                 long area = 0;
+                int cw = 0;
+                int ch = 0;
                 RECT rect;
                 if (GetClientRect(hwnd, out rect))
                 {
-                    long w = rect.Right - rect.Left;
-                    long h = rect.Bottom - rect.Top;
-                    area = w * h;
+                    cw = rect.Right - rect.Left;
+                    ch = rect.Bottom - rect.Top;
+                    area = (long)cw * ch;
                 }
 
-                if (area > bestArea)
+                WindowLookup cand = new WindowLookup();
+                cand.Handle = hwnd;
+                cand.Title = ReadWindowTitle(hwnd);
+                cand.ClientArea = area;
+                cand.ClientWidth = cw;
+                cand.ClientHeight = ch;
+
+                // 精确相等（Ordinal）才算主窗体命中
+                if (!string.IsNullOrEmpty(expectedTitle) && string.Equals(cand.Title, expectedTitle, StringComparison.Ordinal))
                 {
-                    bestArea = area;
-                    found = hwnd;
+                    cand.TitleMatched = true;
+                    exact = cand;
+                    return false;   // 停止枚举：主窗体已确定
                 }
-                return true;    // 枚举全部，取面积最大
+
+                if (best == null || area > best.ClientArea) best = cand;
+                return true;
             }, IntPtr.Zero);
-            return found;
+
+            if (exact != null) return exact;
+            return best;   // 回退：面积最大（调用方必须据此发出警告）
+        }
+
+        /// <summary>
+        /// 查询窗口的 DPI 感知上下文并归类。
+        /// ★ 判定只看**感知上下文**；GetDpiForWindow 的缩放数值只作参考，不参与判定。
+        /// </summary>
+        public static DpiAwarenessInfo QueryDpiAwareness(IntPtr hwnd)
+        {
+            DpiAwarenessInfo info = new DpiAwarenessInfo();
+
+            // 缩放数值：仍然读、仍然显示，但**只作参考**
+            try
+            {
+                info.Dpi = GetDpiForWindow(hwnd);
+            }
+            catch (Exception ex)
+            {
+                info.DpiError = ex.Message;
+            }
+
+            try
+            {
+                IntPtr ctx = GetWindowDpiAwarenessContext(hwnd);
+                info.Context = ctx;
+                if (ctx == IntPtr.Zero)
+                {
+                    info.Kind = DpiAwarenessKind.Unknown;
+                    info.KindName = "未知";
+                    info.Detail = "GetWindowDpiAwarenessContext 返回 NULL：取不到该窗口的 DPI 感知上下文";
+                    return info;
+                }
+
+                // ★ 必须用 AreDpiAwarenessContextsEqual 比较，不能直接比上下文位值
+                if (AreDpiAwarenessContextsEqual(ctx, DpiAwarenessContextPerMonitorAwareV2))
+                {
+                    info.Kind = DpiAwarenessKind.PerMonitorAwareV2;
+                    info.KindName = "Per-Monitor-V2";
+                }
+                else if (AreDpiAwarenessContextsEqual(ctx, DpiAwarenessContextPerMonitorAware))
+                {
+                    info.Kind = DpiAwarenessKind.PerMonitorAwareV1;
+                    info.KindName = "Per-Monitor-V1";
+                }
+                else if (AreDpiAwarenessContextsEqual(ctx, DpiAwarenessContextSystemAware))
+                {
+                    info.Kind = DpiAwarenessKind.SystemAware;
+                    info.KindName = "System-Aware";
+                }
+                else if (AreDpiAwarenessContextsEqual(ctx, DpiAwarenessContextUnaware))
+                {
+                    info.Kind = DpiAwarenessKind.Unaware;
+                    info.KindName = "DPI-Unaware";
+                }
+                else
+                {
+                    info.Kind = DpiAwarenessKind.Unknown;
+                    info.KindName = "未知";
+                    info.Detail = "取到的感知上下文与四个已知常量都不等价";
+                }
+            }
+            catch (EntryPointNotFoundException ex)
+            {
+                // 老系统（Win10 1703 之前）没有这两个 API：如实报告"无法判定"，不能让脚本报错退出
+                info.Kind = DpiAwarenessKind.Unknown;
+                info.KindName = "未知";
+                info.Detail = "当前系统缺少 DPI 感知上下文 API（GetWindowDpiAwarenessContext / AreDpiAwarenessContextsEqual 需要 Win10 1703+）：" + ex.Message;
+            }
+            catch (Exception ex)
+            {
+                info.Kind = DpiAwarenessKind.Unknown;
+                info.KindName = "未知";
+                info.Detail = "读取 DPI 感知上下文失败：" + ex.Message;
+            }
+
+            return info;
         }
     }
 }
@@ -201,18 +388,43 @@ namespace LiveCheck
 
 $script:LiveCheckNativeReady = $false
 
-function Get-AppWindowHandle([int]$processId, [int]$timeoutSec = 40) {
+# ★ 主窗体的**精确**窗口标题。
+#   主工程在 src/UI/MainForm_Transparent.cs 的 MainForm 构造函数里把它设成这个精确值；
+#   驱动安装对话框的标题是 "LiteMonitor++ - {说明}"，两者精确比较不会混淆。
+$script:LiveCheckMainWindowTitle = 'LiteMonitor++'
+
+function Get-AppMainWindow([int]$processId, [int]$timeoutSec = 40) {
+    <#
+        等待主窗体出现，返回 [LiveCheck.WindowLookup]（找不到时返回 $null）。
+
+        ★ 为什么要"先等精确标题、最后才回退面积最大"：
+          启动阶段 DriverInstaller 会用模态 UpdateDialog **阻塞在** MainForm 创建之前，
+          那个对话框与主窗体同属一个进程。若一发现可见窗口就返回，
+          脚本会把驱动安装对话框当成主窗体，报出它的 DPI 与客户区。
+          所以这里**优先等**标题精确等于 "LiteMonitor++" 的窗口；
+          只有等到超时仍没出现，才回退到"面积最大"的那个，并在报告里明确警告。
+    #>
     if (-not $script:LiveCheckNativeReady) {
         Initialize-DpiInterop
         $script:LiveCheckNativeReady = $true
     }
     $deadline = (Get-Date).AddSeconds($timeoutSec)
+    $fallback = $null
     while ((Get-Date) -lt $deadline) {
-        $h = [LiveCheck.Native]::FindVisibleWindow([uint32]$processId)
-        if ($h -ne [IntPtr]::Zero) { return $h }
+        $r = [LiveCheck.Native]::FindMainWindow([uint32]$processId, $script:LiveCheckMainWindowTitle)
+        if ($r -ne $null -and $r.Handle -ne [IntPtr]::Zero) {
+            if ($r.TitleMatched) { return $r }   # 标题精确命中：确定是主窗体
+            $fallback = $r                        # 回退候选：可能是驱动安装对话框，继续等
+        }
         Start-Sleep -Milliseconds 400
     }
-    return [IntPtr]::Zero
+    # 最后再枚举一次，避免把已经关闭的对话框句柄报出去
+    $r = [LiveCheck.Native]::FindMainWindow([uint32]$processId, $script:LiveCheckMainWindowTitle)
+    if ($r -ne $null -and $r.Handle -ne [IntPtr]::Zero) {
+        if ($r.TitleMatched) { return $r }
+        $fallback = $r
+    }
+    return $fallback
 }
 
 function Get-WindowTitle([IntPtr]$hwnd) {
@@ -359,25 +571,56 @@ try {
 if (-not $NoDpiCheck) {
     Write-Host "`n==> 等待主窗口并检查 DPI 感知..." -ForegroundColor Cyan
     try {
-        $hwnd = Get-AppWindowHandle $proc.Id
-        if ($hwnd -eq [IntPtr]::Zero) {
+        $win = Get-AppMainWindow $proc.Id
+        if ($null -eq $win -or $win.Handle -eq [IntPtr]::Zero) {
             Write-Host '    ? 40 秒内没找到可见主窗口（程序可能没起来，或被单实例挡掉了）。' -ForegroundColor Yellow
             Write-Host '      排查：① UAC 提示是否被取消 ② 同一输出目录是否已有实例在跑（加 -StopExisting）' -ForegroundColor Yellow
         } else {
-            $dpi = [LiveCheck.Native]::GetDpiForWindow($hwnd)
+            $hwnd = $win.Handle
+            $title = Get-WindowTitle $hwnd
+            if ([string]::IsNullOrEmpty($title)) { $title = $win.Title }
             $rect = New-Object LiveCheck.Native+RECT
             [void][LiveCheck.Native]::GetClientRect($hwnd, [ref]$rect)
             $cw = $rect.Right - $rect.Left
             $ch = $rect.Bottom - $rect.Top
-            $title = Get-WindowTitle $hwnd
-            Write-Host ("    窗口句柄 = {0}   标题 = {1}" -f $hwnd, $(if ([string]::IsNullOrEmpty($title)) { '(空 —— 主面板本来就是无标题窗口，属正常)' } else { $title })) -ForegroundColor DarkGray
-            Write-Host ("    主窗口 DPI = {0}   客户区 = {1}x{2} 物理像素" -f $dpi, $cw, $ch)
-            if ($dpi -gt 96) {
-                Write-Host '    ✔ Per-Monitor 感知已生效（窗口所在屏 DPI > 96；系统感知下只会报 96）' -ForegroundColor Green
-            } elseif ($dpi -eq 96) {
-                Write-Host '    ✘ 仍是系统感知（DPI=96）：Per-Monitor-V2 未生效，抓屏会错位，玻璃不可用。' -ForegroundColor Red
-            } else {
-                Write-Host '    ? 拿到非预期的 DPI 值，请人工确认。' -ForegroundColor Yellow
+
+            Write-Host ("    窗口句柄 = {0}" -f $hwnd) -ForegroundColor DarkGray
+            Write-Host ("    窗口标题 = {0}" -f $(if ([string]::IsNullOrEmpty($title)) { '(空 —— 跨进程读不到标题，通常是没提权)' } else { $title })) -ForegroundColor DarkGray
+            Write-Host ("    客户区   = {0}x{1} 物理像素" -f $cw, $ch) -ForegroundColor DarkGray
+
+            if (-not $win.TitleMatched) {
+                Write-Host '    ⚠ 没找到标题**精确等于** "LiteMonitor++" 的窗口 —— 下面这些数据**可能不是主窗体**。' -ForegroundColor Yellow
+                Write-Host '      可能是启动阶段的驱动安装/更新对话框（它与主窗体同属一个进程，且模态阻塞在主窗体创建之前）。' -ForegroundColor Yellow
+                Write-Host '      若程序正在提示安装/更新驱动，说明主窗体尚未创建，请等待该对话框关闭后再读 DPI。' -ForegroundColor Yellow
+            }
+
+            # ★ 判定只看 DPI **感知上下文**；GetDpiForWindow 的缩放数值仅作参考展示。
+            $info = [LiveCheck.Native]::QueryDpiAwareness($hwnd)
+            Write-Host ("    缩放数值 GetDpiForWindow = {0}   ← 这是**缩放数值**，不是感知等级，仅作参考" -f $info.Dpi)
+            Write-Host ("    DPI 感知上下文 = {0}   归类 = {1}" -f $info.Context, $info.KindName)
+
+            switch ($info.Kind) {
+                ([LiveCheck.DpiAwarenessKind]::PerMonitorAwareV2) {
+                    Write-Host '    ✔ Per-Monitor-V2 感知已生效（玻璃抓屏可用）。' -ForegroundColor Green
+                }
+                ([LiveCheck.DpiAwarenessKind]::PerMonitorAwareV1) {
+                    Write-Host '    △ Per-Monitor-V1 感知（不是 v2）：可抓屏，但非 v2。' -ForegroundColor Yellow
+                }
+                ([LiveCheck.DpiAwarenessKind]::SystemAware) {
+                    Write-Host '    ✘ System-Aware 感知：Per-Monitor-V2 未生效，玻璃不可用（抓屏会错位）。' -ForegroundColor Red
+                }
+                ([LiveCheck.DpiAwarenessKind]::Unaware) {
+                    Write-Host '    ✘ DPI-Unaware：Per-Monitor-V2 未生效，玻璃不可用（抓屏会错位）。' -ForegroundColor Red
+                }
+                default {
+                    Write-Host '    ? 无法判定 DPI 感知等级 —— 如实报告"无法判定"，不猜。' -ForegroundColor Yellow
+                    if ($info.Detail) {
+                        Write-Host ("      原因：{0}" -f $info.Detail) -ForegroundColor Yellow
+                    }
+                }
+            }
+            if ($info.DpiError) {
+                Write-Host ("      (缩放数值读取失败：{0})" -f $info.DpiError) -ForegroundColor Yellow
             }
         }
     } catch {

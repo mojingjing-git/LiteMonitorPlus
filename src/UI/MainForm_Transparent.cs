@@ -124,6 +124,16 @@ namespace LiteMonitor
         // ========== 构造函数 ==========
         public MainForm()
         {
+            // ★ 主窗体的身份标识：把窗口标题固定成**精确的** "LiteMonitor++"。
+            //   用途：外部实机验收脚本（scripts/run-livecheck.ps1）靠"标题精确等于 LiteMonitor++"
+            //   来唯一识别主窗体 —— 启动阶段的驱动安装对话框（UpdateDialog）标题形如
+            //   "LiteMonitor++ - {说明}"，与主窗体同属一个进程，用精确相等就能把它排除掉。
+            //   为什么设标题不会有任何可见外观变化：本窗体是 FormBorderStyle.None 的无边框透明窗口，
+            //   且 ShowInTaskbar=false（见 MainFormWinHelper.InitializeStyle），本来就不画标题栏。
+            //   ★ 标题必须**精确等于** "LiteMonitor++"，不要加" - 主界面"之类后缀，
+            //     否则会被 UpdateDialog 的标题前缀规则误伤。
+            Text = "LiteMonitor++";
+
             // 语言加载
             if (string.IsNullOrEmpty(_cfg.Language))
             {
