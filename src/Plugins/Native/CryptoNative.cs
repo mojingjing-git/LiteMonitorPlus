@@ -44,11 +44,10 @@ namespace LiteMonitor.src.Plugins.Native
                 PooledConnectionLifetime = TimeSpan.FromMinutes(2),
                 MaxConnectionsPerServer = 8,
                 UseProxy = true,
-                Proxy = System.Net.WebRequest.GetSystemWebProxy(),
-                SslOptions = new System.Net.Security.SslClientAuthenticationOptions 
-                {
-                    RemoteCertificateValidationCallback = delegate { return true; }
-                }
+                Proxy = System.Net.WebRequest.GetSystemWebProxy()
+                // 不设置自定义证书校验回调：TLS 校验按系统信任链进行。
+                // 曾为「解决用户证书报错」整体关闭校验，等于允许中间人替换汇率数据；
+                // 企业 TLS 拦截环境应引导用户导入根证书，而不是关闭校验。
             };
             var client = new HttpClient(handler);
             client.Timeout = TimeSpan.FromSeconds(12);

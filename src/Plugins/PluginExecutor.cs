@@ -52,11 +52,9 @@ namespace LiteMonitor.src.Plugins
                 {
                     // 关键修复：允许 HttpClient 自动识别并解压 GZip 或 Deflate 数据
                     AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                    
-                    SslOptions = new SslClientAuthenticationOptions
-                    {
-                        RemoteCertificateValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
-                    },
+                    // 【安全】不设置自定义证书校验回调：TLS 校验按系统信任链进行。
+                    // 插件内容随取随执行，关闭校验等于允许中间人下发任意插件脚本。
+                    // 企业 TLS 拦截/自签代理环境应引导用户导入根证书，而不是关闭校验。
                     // [Fix] Reduce pooled connection lifetime to ensure timely DNS updates and socket release
                     PooledConnectionLifetime = TimeSpan.FromMinutes(2),
                     // [Fix] Limit connections per server to prevent ephemeral port exhaustion
@@ -438,10 +436,7 @@ namespace LiteMonitor.src.Plugins
                 handler.UseProxy = true;
                 // 补上这一行，确保代理请求也能解压缩
                 handler.AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate;
-                handler.SslOptions = new SslClientAuthenticationOptions
-                {
-                    RemoteCertificateValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
-                };
+                // 【安全】不设置自定义证书校验回调：TLS 校验按系统信任链进行。
                 // [Fix] Limit pooled connections for proxies too
                 handler.PooledConnectionLifetime = TimeSpan.FromMinutes(2);
                 handler.MaxConnectionsPerServer = 20;

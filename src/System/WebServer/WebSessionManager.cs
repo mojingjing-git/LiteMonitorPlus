@@ -339,6 +339,46 @@ namespace LiteMonitor.src.WebServer
         /// <summary>共享采样等待的超时（超时后按既有行为降级：照常序列化缓存值，不挂死请求线程）。</summary>
         public static readonly TimeSpan SamplingWaitTimeout = TimeSpan.FromSeconds(2);
 
+        /// <summary>
+        /// 读完整个请求头的期限：从这里开始计时，超时直接断开连接。
+        /// </summary>
+        /// <remarks>
+        /// ★ 这个期限**不能**用 <c>NetworkStream.ReadTimeout</c> 实现。
+        ///   那个属性只作用于**同步** <c>Read</c>；本类的读取全部是 <c>ReadAsync</c>，
+        ///   异步路径根本不看它 —— 设置之后看起来"有防护"，实际一行防护也没有。
+        /// ★ 没有真实期限时，慢速连接（slowloris：每次只发 1 个字节，永不发完 CRLFCRLF）
+        ///   可以让读取循环无限期挂着，每条这样的连接长期占住一个任务 + 一块 8KB 池化缓冲。
+        /// ★ 用取消令牌施加期限：链接服务级令牌，所以 Stop 也能立刻中断它。
+        /// </remarks>
+        private static readonly TimeSpan DefaultHeaderReadTimeout = TimeSpan.FromSeconds(5);
+
+        /// <summary>
+        /// 读完整个请求头的期限（默认 <see cref="DefaultHeaderReadTimeout"/>）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 内部接缝（<c>internal</c>，**不属于公开 API**）：只为让测试把期限压到几百毫秒，
+        ///   否则每条相关用例都得真的空等 5 秒。默认值就是生产行为。
+        /// </remarks>
+        internal TimeSpan HeaderReadTimeout { get; set; } = DefaultHeaderReadTimeout;
+
+        /// <summary>
+        /// 同步写入（HTTP 响应 / WebSocket 握手）的期限。
+        /// </summary>
+        /// <remarks>
+        /// 与读取相反，<c>WriteTimeout</c> 对**同步** <c>Write</c> 是有效的，
+        /// 而 <see cref="SendHttpResponse"/> / <see cref="Handshake"/> 用的正是同步写。
+        /// 客户端只建连不读（接收窗口打满）时，没有这个期限就会一直阻塞在写调用里。
+        /// </remarks>
+        private const int StreamWriteTimeoutMs = 5000;
+
+        /// <summary>
+        /// 请求行里的访问口令参数：<c>?pwd=</c> 或 <c>&amp;pwd=</c>。
+        /// </summary>
+        /// <remarks>
+        /// 静态实例而不是 <c>Regex.Match(...)</c> 静态方法：后者每次调用都要查正则缓存表。
+        /// </remarks>
+        private static readonly Regex PwdQueryRegex = new Regex(@"[?&]pwd=([^&\s]+)");
+
         /// <summary>没有同步序列化回调时的占位实现（此时只会走可等待形态）。</summary>
         private static readonly Action<Utf8JsonWriter> NoSnapshotProvider = writer => { };
 
@@ -509,12 +549,34 @@ namespace LiteMonitor.src.WebServer
             try
             {
                 var stream = client.GetStream();
-                stream.ReadTimeout = 5000; // 防恶意连接
+
+                // ★ 写超时对**同步** Write 有效，而 SendHttpResponse / Handshake 正是同步写：
+                //   客户端只建连不读、把发送窗口打满时，靠它结束阻塞。
+                stream.WriteTimeout = StreamWriteTimeoutMs;
+
+                // ★ 这里刻意**不**设置 stream.ReadTimeout：
+                //   它只作用于同步 Read，对下面的 ReadAsync 完全无效。
+                //   留着这行会让人误以为"已经有读取期限了"，真正的期限见 HeaderReadTimeout。
 
                 // 1. 读取请求头 (最多 8KB)
                 buffer = ArrayPool<byte>.Shared.Rent(8192);
-                int bytesRead = await ReadHeaderAsync(stream, buffer);
-                
+
+                // ★ 真实读取期限：CancelAfter 到点即放弃，防 slowloris。
+                //   作用域收紧到"读完请求头"为止：握手成功转入长连接后不再受这个期限约束
+                //   （WebSocket 连接的寿命本来就由客户端决定，不该被握手期限杀掉）。
+                // ★ 这里**刻意不**链接 lifetimeToken（服务级令牌）。
+                //   Stop 的既有契约是"不再授予需求"，不是"掐断在途连接的响应" ——
+                //   在途请求读完头之后由代次检查拒绝授予租期，但仍然得到完整响应；
+                //   两条回归用例锁着它：`跨越Stop边界的快照请求不再授予租期`、
+                //   `快速重启后在途HTTP请求仍能得到响应`。
+                //   把期限挂在生命周期上会让 Stop 直接关连接，把"不该续租"错做成"不该回应"。
+                //   期限只负责对抗慢速连接，与运行代次正交。
+                int bytesRead;
+                using (var headerReadCts = new CancellationTokenSource(HeaderReadTimeout))
+                {
+                    bytesRead = await ReadHeaderAsync(stream, buffer, headerReadCts.Token);
+                }
+
                 if (bytesRead == 0) { client.Close(); return; }
 
                 string requestStr = Encoding.UTF8.GetString(buffer, 0, bytesRead);
@@ -535,6 +597,14 @@ namespace LiteMonitor.src.WebServer
                     await HandleHttpRequestAsync(stream, requestStr, connectionGeneration, lifetimeToken).ConfigureAwait(false);
                     client.Close(); // HTTP 是短连接
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                // ★ 请求头读取超过 HeaderReadTimeout（slowloris / 半开连接）。
+                //   这是**预期**的防御路径，不是故障 —— 刻意不让它落进下面的 catch(Exception)，
+                //   否则每次超时都会打一条 "Client Error"，真实故障会被这种噪声淹没。
+                RemoveClient(client);
+                try { client.Close(); } catch { }
             }
             catch (Exception ex)
             {
@@ -620,17 +690,25 @@ namespace LiteMonitor.src.WebServer
 
         // --- 内部网络辅助方法 ---
 
-        private async Task<int> ReadHeaderAsync(NetworkStream stream, byte[] buffer)
+        /// <summary>
+        /// 逐段读取直到拿到完整的请求头（以空行结束），或缓冲写满、对端关闭。
+        /// </summary>
+        /// <param name="stream">连接流。</param>
+        /// <param name="buffer">接收缓冲。</param>
+        /// <param name="cancellationToken">
+        /// 读取期限令牌。**必须**传：<c>ReadAsync</c> 会响应它，
+        /// 而 <c>NetworkStream.ReadTimeout</c> 对异步读没有任何作用。
+        /// </param>
+        /// <returns>已读到的总字节数；0 表示对端在发任何数据之前就关闭了。</returns>
+        private async Task<int> ReadHeaderAsync(NetworkStream stream, byte[] buffer, CancellationToken cancellationToken)
         {
             int totalBytes = 0;
             while (totalBytes < buffer.Length)
             {
-                // 预留空间检查
-                if (totalBytes >= buffer.Length) break;
-
-                int read = await stream.ReadAsync(buffer, totalBytes, buffer.Length - totalBytes);
+                int read = await stream.ReadAsync(buffer, totalBytes, buffer.Length - totalBytes, cancellationToken)
+                    .ConfigureAwait(false);
                 if (read == 0) break;
-                
+
                 totalBytes += read;
                 if (FindHeaderEnd(buffer, totalBytes) >= 0) return totalBytes;
             }
@@ -719,18 +797,75 @@ namespace LiteMonitor.src.WebServer
             }
         }
 
+        /// <summary>
+        /// 校验请求行里的访问口令（<c>?pwd=</c> 或 <c>&amp;pwd=</c>）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 有两处必须做对，否则要么功能坏掉、要么安全性虚设：
+        ///   <list type="number">
+        ///   <item>
+        ///   <b>先 URL 解码，再比较。</b>
+        ///   前端是把口令经 <c>encodeURIComponent</c> 编码后塞进查询串的
+        ///   （WebPageContent：<c>'/api/snapshot?pwd=' + encodeURIComponent(pwd)</c>）。
+        ///   于是含空格、<c>&amp;</c>、<c>%</c>、<c>+</c>、中文的口令在线上全都是 <c>%XX</c> 形态，
+        ///   拿编码串去比对原文必然对不上 —— 这不是"口令错了"，是口令**永远**不能含这些字符。
+        ///   这里用 <see cref="Uri.UnescapeDataString"/> 而不是 <c>WebUtility.UrlDecode</c>：
+        ///   后者会把裸 <c>+</c> 当空格，而 <c>encodeURIComponent</c> 从不产生裸 <c>+</c>
+        ///   （它把 <c>+</c> 编成 <c>%2B</c>），两者的 '+' 语义不一致，用错会把
+        ///   形如 <c>a+b</c> 的口令解成 <c>a b</c>。
+        ///   </item>
+        ///   <item>
+        ///   <b>恒时比较。</b>
+        ///   普通字符串比较在第一个不同的字符处提前返回，逐位试错可以从响应耗时差异里
+        ///   反向还原口令内容。
+        ///   </item>
+        ///   </list>
+        /// ★ 长度不同仍会快速返回（<see cref="CryptographicOperations.FixedTimeEquals"/> 的固有行为）。
+        ///   这里接受这一点：口令长度来自本机设置，不是攻击者能通过请求探测的秘密；
+        ///   为掩盖它而改走"两边先做定长哈希"只是把常数开销换个位置，收益并不真实。
+        /// </remarks>
         private bool CheckAuth(string requestHeader)
         {
             var pwd = Settings.Load().WebServerPassword;
             if (string.IsNullOrEmpty(pwd)) return true;
 
-            var firstLine = requestHeader.Split('\n')[0]; 
-            var match = Regex.Match(firstLine, @"[?&]pwd=([^&\s]+)");
-            if (match.Success)
+            // ★ 只取请求行（第一行）：若从整段头部里捞 pwd，请求体或后续头里的同名内容也会被命中。
+            var newline = requestHeader.IndexOf('\n');
+            var firstLine = newline >= 0 ? requestHeader.Substring(0, newline) : requestHeader;
+
+            var match = PwdQueryRegex.Match(firstLine);
+            if (!match.Success) return false;
+
+            string supplied;
+            try
             {
-                return match.Groups[1].Value == pwd;
+                supplied = Uri.UnescapeDataString(match.Groups[1].Value);
             }
-            return false;
+            catch (ArgumentException)
+            {
+                // 含非法转义：一律按"口令错误"处理，绝不让它抛到连接处理层
+                return false;
+            }
+            catch (UriFormatException)
+            {
+                return false;
+            }
+
+            return FixedTimeEqualsUtf8(supplied, pwd);
+        }
+
+        /// <summary>
+        /// 以恒定时间比较两个字符串的 UTF-8 编码。
+        /// </summary>
+        /// <remarks>
+        /// <see cref="CryptographicOperations.FixedTimeEquals"/> 的耗时只取决于长度，
+        /// 与"从第几个字节开始不同"无关 —— 这正是逐位试错所需的信息。
+        /// </remarks>
+        private static bool FixedTimeEqualsUtf8(string left, string right)
+        {
+            byte[] leftBytes = Encoding.UTF8.GetBytes(left);
+            byte[] rightBytes = Encoding.UTF8.GetBytes(right);
+            return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
         }
 
         private void SendHttpResponse(NetworkStream stream, int code, string type, byte[] body, int len)

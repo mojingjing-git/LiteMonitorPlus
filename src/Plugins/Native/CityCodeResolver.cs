@@ -165,12 +165,10 @@ namespace LiteMonitor.src.Plugins.Native
                         PooledConnectionLifetime = TimeSpan.FromMinutes(5),
                         UseProxy = true,
                         // Use system proxy
-                        Proxy = System.Net.WebRequest.GetSystemWebProxy(),
-                        // [Fix] Bypass SSL validation for users with problematic certificates/proxies
-                        SslOptions = new System.Net.Security.SslClientAuthenticationOptions 
-                        {
-                            RemoteCertificateValidationCallback = delegate { return true; }
-                        }
+                        Proxy = System.Net.WebRequest.GetSystemWebProxy()
+                        // 不设置自定义证书校验回调：TLS 校验按系统信任链进行。
+                        // 曾为「解决用户证书报错」整体关闭校验，等于允许中间人伪造城市代码库；
+                        // 企业 TLS 拦截环境应引导用户导入根证书，而不是关闭校验。
                     };
 
                     using (var client = new HttpClient(handler))
