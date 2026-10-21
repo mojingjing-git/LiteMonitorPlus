@@ -11,6 +11,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{FBBED1CF
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.Tests", "tests\LiteMonitor.Tests\LiteMonitor.Tests.csproj", "{B77EF4A8-6039-4E1E-A3B6-5086A8EF6460}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.Updater.Tests", "tests\LiteMonitor.Updater.Tests\LiteMonitor.Updater.Tests.csproj", "{F110731D-B65B-44E9-A050-317BEF16A38B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -29,6 +31,10 @@ Global
 		{B77EF4A8-6039-4E1E-A3B6-5086A8EF6460}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B77EF4A8-6039-4E1E-A3B6-5086A8EF6460}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B77EF4A8-6039-4E1E-A3B6-5086A8EF6460}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F110731D-B65B-44E9-A050-317BEF16A38B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F110731D-B65B-44E9-A050-317BEF16A38B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F110731D-B65B-44E9-A050-317BEF16A38B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F110731D-B65B-44E9-A050-317BEF16A38B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -38,5 +44,6 @@ Global
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{B77EF4A8-6039-4E1E-A3B6-5086A8EF6460} = {FBBED1CF-CD8F-4771-8689-B98097D2DB1C}
+		{F110731D-B65B-44E9-A050-317BEF16A38B} = {FBBED1CF-CD8F-4771-8689-B98097D2DB1C}
 	EndGlobalSection
 EndGlobal

@@ -1,10 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 
@@ -78,8 +76,8 @@ namespace LiteMonitor.Updater
             string successPath = Path.Combine(baseDir, SuccessToken);
             string errorLogPath = Path.Combine(baseDir, ErrorLogFile);
 
-            // 已成功替换的文件清单，用于失败时逆序回滚
-            var replaced = new List<(string Rel, string Dest, string? Backup)>();
+            UpdateFileTransaction? fileTransaction = null;
+            UpdateApplyResult? applicationResult = null;
             bool committed = false;
             string? failure = null;
 
@@ -92,9 +90,10 @@ namespace LiteMonitor.Updater
                 // 主程序下次启动会看到标记却没有任何结论，从而提示"上次更新未完成"。
                 try
                 {
+                    string safeBackup = backupDir.Replace("\"", "'");
                     File.WriteAllText(inProgressPath,
                         "version=" + UpdaterVersion + Environment.NewLine +
-                        "backup=" + backupDir + Environment.NewLine +
+                        "backup=\"" + safeBackup + "\"" + Environment.NewLine +
                         "time=" + DateTime.Now.ToString("O") + Environment.NewLine);
                 }
                 catch (Exception ex)
@@ -119,64 +118,36 @@ namespace LiteMonitor.Updater
                 string realFolder = ResolveZipRoot(tempDir);
 
                 // =======================================================
-                // 6. 备份 → 替换 → 校验（任一失败即抛，进入回滚）
+                // 6. 逐文件暂存 → 校验 → 提交 → 再校验
                 // =======================================================
-                Directory.CreateDirectory(backupDir);
+                fileTransaction = new UpdateFileTransaction(baseDir, backupDir);
+                applicationResult = fileTransaction.ApplyDirectory(
+                    realFolder,
+                    IsUpdaterBinary);
 
-                foreach (string srcPath in Directory.GetFiles(realFolder, "*", SearchOption.AllDirectories))
+                if (!applicationResult.Succeeded)
                 {
-                    string rel = Path.GetRelativePath(realFolder, srcPath);
-
-                    // 更新器自身已由主程序（PreUpdateUpdater）在启动前更新，这里跳过，
-                    // 否则会因"文件正在使用"而失败。
-                    if (IsUpdaterBinary(rel)) continue;
-
-                    string destPath = Path.Combine(baseDir, rel);
-                    string? destDir = Path.GetDirectoryName(destPath);
-                    if (!string.IsNullOrEmpty(destDir)) Directory.CreateDirectory(destDir);
-
-                    // 先备份原文件，再覆盖。备份是回滚的唯一依据，必须在覆盖之前完成。
-                    string? backup = null;
-                    if (File.Exists(destPath))
-                    {
-                        backup = Path.Combine(backupDir, rel);
-                        string? backupParent = Path.GetDirectoryName(backup);
-                        if (!string.IsNullOrEmpty(backupParent)) Directory.CreateDirectory(backupParent);
-                        File.Copy(destPath, backup, true);
-                    }
-
-                    if (!TryCopyFile(srcPath, destPath))
-                        throw new IOException("无法覆盖文件（被占用或权限不足）：" + rel);
-
-                    // 校验：长度必须一致；二进制再比对摘要，防止只写了一半或写入损坏。
-                    long srcLen = new FileInfo(srcPath).Length;
-                    long dstLen = new FileInfo(destPath).Length;
-                    if (srcLen != dstLen)
-                        throw new IOException($"覆盖后长度不一致：{rel}（源 {srcLen} / 目标 {dstLen}）");
-
-                    if (IsBinaryAsset(rel) &&
-                        !string.Equals(Sha256Of(srcPath), Sha256Of(destPath), StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new IOException("覆盖后摘要不一致：" + rel);
-                    }
-
-                    replaced.Add((rel, destPath, backup));
+                    failure = applicationResult.FailureReason ?? "文件应用失败。";
                 }
+                else
+                {
+                    // ===================================================
+                    // 7. 目标可执行存在性校验
+                    // ===================================================
+                    string mainExe = Path.Combine(baseDir, ExeName);
+                    if (!File.Exists(mainExe))
+                        throw new FileNotFoundException("替换后找不到主程序：" + mainExe);
 
-                // =======================================================
-                // 7. 目标可执行存在性校验
-                // =======================================================
-                string mainExe = Path.Combine(baseDir, ExeName);
-                if (!File.Exists(mainExe))
-                    throw new FileNotFoundException("替换后找不到主程序：" + mainExe);
-
-                committed = true;
+                    committed = true;
+                }
             }
             catch (Exception ex)
             {
                 failure = ex.Message;
-                LogError(baseDir, "[Rollback] " + ex.Message);
-                Rollback(replaced, baseDir);
+                if (fileTransaction != null)
+                {
+                    applicationResult = fileTransaction.RollbackAfterFailure(failure);
+                }
 
                 // 结论由 update_error.log 承载；这里清掉 in_progress，
                 // 否则主程序每次启动都会报"上次更新未完成"。
@@ -202,22 +173,92 @@ namespace LiteMonitor.Updater
             {
                 // 失败：保留备份与 zip 作为恢复材料，绝不写成功标记
                 try { if (File.Exists(successPath)) File.Delete(successPath); } catch { }
-                LogError(baseDir,
-                    $"[Failed] 更新未完成（{failure}）。已回滚 {replaced.Count} 个文件，备份保留在 {backupDir}");
-
-                // 把失败摘要单独留一份，供主程序启动时读取并提示后删除
-                LogError(baseDir, "[Summary] 上次更新失败，已回滚到原版本。原因：" + failure);
+                WriteFailureDiagnostics(baseDir, backupDir, failure, applicationResult);
             }
 
             // ===========================================================
             // 8. 无论成败都拉起主程序
             // ===========================================================
-            // 失败时不拉起会留下"程序消失、无人负责"的状态；此时已经回滚，
-            // 拉起的是旧版本，是更小的伤害。失败事实由"不写 success + 写 error log"表达，
-            // 而不是由"不重启"表达。
+            // 失败时不拉起会留下"程序消失、无人负责"的状态。完整恢复时拉起当前
+            // 旧版本；恢复不完整时安装状态未确认。两种情况都保留失败/恢复日志，
+            // 让主程序启动后提示用户检查恢复材料。
             RestartMain(baseDir);
 
             return committed ? 0 : 5;
+        }
+
+        internal static void WriteFailureDiagnostics(
+            string baseDir,
+            string backupDir,
+            string? failure,
+            UpdateApplyResult? applicationResult)
+        {
+            UpdateRollbackResult? rollback = applicationResult?.Rollback;
+            string safeFailure = (failure ?? "未知错误")
+                .Replace('\r', ' ')
+                .Replace('\n', ' ');
+            string safeBackup = backupDir.Replace("\"", "'");
+
+            LogError(baseDir, "[Failure] " + safeFailure);
+            if (rollback != null)
+            {
+                foreach (UpdateFileRecord record in rollback.Records
+                    .Where(record => record.RecoveryState == UpdateRecoveryState.Failed))
+                {
+                    LogError(
+                        baseDir,
+                        $"[Rollback] 恢复失败：{record.RelativePath} -> {record.RecoveryError}");
+                }
+            }
+
+            string status;
+            string summary;
+            if (applicationResult?.Outcome == UpdateApplyOutcome.FailedBeforeCommit)
+            {
+                status = "failed_before_commit";
+                summary = "上次更新在提交前失败，目标文件未被修改。";
+            }
+            else if (applicationResult?.Outcome == UpdateApplyOutcome.FailedRecovered)
+            {
+                status = "recovered";
+                summary = "上次更新失败，当前文件和此前文件均已恢复。";
+            }
+            else if (applicationResult?.Outcome == UpdateApplyOutcome.FailedRecoveryIncomplete)
+            {
+                status = "recovery_incomplete";
+                summary = "上次更新失败，恢复不完整，请使用保留的备份人工恢复。";
+            }
+            else
+            {
+                status = "unknown";
+                summary = "上次更新失败，恢复状态未确认，请检查保留的更新材料。";
+            }
+
+            LogError(
+                baseDir,
+                $"[Result] status={status} backup=\"{safeBackup}\" " +
+                $"restored={rollback?.RestoredCount ?? 0} " +
+                $"removed={rollback?.RemovedCount ?? 0} " +
+                $"failed={rollback?.FailedCount ?? 0}");
+            LogError(baseDir, "[Summary] " + summary + " 原因：" + safeFailure);
+
+            // 主程序会在显示一次性通知后删除日志，必须在重启它之前保留完整副本。
+            // backupDir 由更新器为本次更新生成，绝不从日志内容读取写入路径。
+            try
+            {
+                Directory.CreateDirectory(backupDir);
+                File.Copy(
+                    Path.Combine(baseDir, ErrorLogFile),
+                    Path.Combine(backupDir, ErrorLogFile),
+                    overwrite: false);
+            }
+            catch (Exception ex)
+            {
+                // 保留诊断失败不改变文件恢复结论，也不能破坏已经存在的备份。
+                LogError(
+                    baseDir,
+                    $"[Diagnostics] 完整更新日志保留失败，恢复材料目录：{backupDir}。原因：{ex.Message}");
+            }
         }
 
         // ======================================================
@@ -241,41 +282,6 @@ namespace LiteMonitor.Updater
             {
                 return 2;
             }
-        }
-
-        // ======================================================
-        // 回滚
-        // ======================================================
-        private static void Rollback(List<(string Rel, string Dest, string? Backup)> replaced, string baseDir)
-        {
-            int restored = 0, removed = 0, failedCount = 0;
-
-            // 逆序恢复：后替换的先还原，避免目录被先删后建
-            for (int i = replaced.Count - 1; i >= 0; i--)
-            {
-                var (rel, dest, backup) = replaced[i];
-                try
-                {
-                    if (backup != null && File.Exists(backup))
-                    {
-                        File.Copy(backup, dest, true);
-                        restored++;
-                    }
-                    else
-                    {
-                        // 原本不存在的新增文件：删掉，回到"没有这个文件"的状态
-                        if (File.Exists(dest)) { File.Delete(dest); removed++; }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    failedCount++;
-                    LogError(baseDir, $"[Rollback] 恢复失败：{rel} -> {ex.Message}");
-                }
-            }
-
-            LogError(baseDir,
-                $"[Rollback] 已恢复 {restored} 个、删除 {removed} 个新增文件、失败 {failedCount} 个");
         }
 
         // ======================================================
@@ -330,46 +336,6 @@ namespace LiteMonitor.Updater
         {
             return rel.EndsWith("Updater.exe", StringComparison.OrdinalIgnoreCase) ||
                    rel.EndsWith("LiteMonitor++.Updater.exe", StringComparison.OrdinalIgnoreCase);
-        }
-
-        /// <summary>需要做摘要校验的二进制资产。</summary>
-        private static bool IsBinaryAsset(string rel)
-        {
-            string ext = Path.GetExtension(rel);
-            return ext.Equals(".exe", StringComparison.OrdinalIgnoreCase)
-                || ext.Equals(".dll", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static string Sha256Of(string path)
-        {
-            using var sha = SHA256.Create();
-            using var fs = File.OpenRead(path);
-            return Convert.ToHexString(sha.ComputeHash(fs));
-        }
-
-        private static bool TryCopyFile(string src, string dest)
-        {
-            // 最多重试 10 次，每次间隔 500ms (总共等待 5秒)
-            for (int i = 0; i < 10; i++)
-            {
-                try
-                {
-                    // 简单粗暴：直接覆盖
-                    File.Copy(src, dest, true);
-                    return true; 
-                }
-                catch (IOException) // 文件被占用
-                {
-                    if (i == 9) return false; 
-                    Thread.Sleep(500); 
-                }
-                catch (UnauthorizedAccessException) // 权限不足
-                {
-                    if (i == 9) return false;
-                    Thread.Sleep(500);
-                }
-            }
-            return false;
         }
 
         private static bool ContainsMainExe(string dir)
@@ -478,8 +444,16 @@ namespace LiteMonitor.Updater
         {
             try
             {
-                File.AppendAllText(Path.Combine(dir, ErrorLogFile),
-                    DateTime.Now + " " + msg + Environment.NewLine);
+                string path = Path.Combine(dir, ErrorLogFile);
+                string normalized = (msg ?? string.Empty)
+                    .Replace("\r\n", "\n")
+                    .Replace('\r', '\n');
+                DateTime timestamp = DateTime.Now;
+                using var writer = new StreamWriter(path, append: true);
+                foreach (string line in normalized.Split('\n'))
+                {
+                    writer.WriteLine(timestamp + " " + line);
+                }
             }
             catch { }
         }
