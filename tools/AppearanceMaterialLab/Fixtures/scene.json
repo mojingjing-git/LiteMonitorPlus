@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "fixture": "deterministic-gpu-material-scene",
+  "seed": 620078248,
+  "time": 1.5,
+  "backgroundSize": [1600, 1000],
+  "hostSizes": [[1280, 800], [720, 800], [1280, 420]],
+  "dpi": [100, 150, 175, 200],
+  "metrics": {
+    "cpuPercent": 62.0,
+    "gpuPercent": 78.0,
+    "gpuTemperatureC": 71,
+    "networkMBps": 24.8,
+    "diskPercent": 41.0,
+    "memoryPercent": 54.0
+  },
+  "states": ["normal", "warning", "danger", "missing-sensor"],
+  "content": [
+    "中文", "English", "GPU 78%", "NETWORK 24.8 MB/s",
+    "MISSING SENSOR", "GPU 02 OFFLINE"
+  ]
+}
