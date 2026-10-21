@@ -116,11 +116,12 @@ tests/AppearanceResourceProbe/output/AppearanceResourceProbe.exe --pid 12345 --l
 
 | # | 泄漏点 | 修法 | 状态 |
 |---|---|---|---|
-| L1 | 设置窗体 `Dispose(bool)` 覆盖，只在**模态**入口生效 | 非模态 `Show()` 入口需要 `FormClosed` 钩子才会在关闭时释放 | **修法已提交，待复核** |
+| L1 | （**已排除**）曾怀疑非模态入口不触发 `Dispose` | 见 §7：对方以可复现探针证明 5 个入口全部覆盖 | **不成立，无需修** |
 | L2 | `_pages` 里 6 个从未挂载的页面不被释放 | `DisposeCachedPages()` 显式释放 | 已修 |
 | L3 | `pnlBottom.Paint` 每次重绘 `new Pen` 从不释放 | `using var pen` | 已修 |
 
-> L1 的细节与核验过程见 §7。
+> L1 的核查过程与**被推翻的推断**见 §7 —— 那是一条「看起来很对、但没验证就下了结论」的推断，
+> 留档是为了不让后人再推一遍同一个错。
 
 ### 4.2 候选点（静态审计所见，**必须用实测判定**）
 
@@ -163,49 +164,60 @@ tests/AppearanceResourceProbe/output/AppearanceResourceProbe.exe --pid 12345 --l
 
 ---
 
-## 7. 与 L1 相关的核验过程（2026-10-21）
+## 7. 一条被推翻的推断（2026-10-21，留档）
 
-安全会话在 `src/UI/SettingsForm.cs` 增加了 `Dispose(bool)` 覆盖 + `DisposeCachedPages()` +
-`pnlBottom.Paint` 的 `using var pen`（方向正确）。
+外观线在核验安全会话的 `src/UI/SettingsForm.cs` 释放改动时，**推断**非模态入口不会触发 `Dispose`，
+并据此建议加 `FormClosed` 钩子。该推断**被对方以可复现探针推翻** —— 记录在此，
+以免后人再推一遍同一个错。
 
-外观线只读核验发现 **L1**：该修复**在非模态入口下不生效**。
+### 7.1 被推翻的推断
 
-全仓库开设置窗体共 5 个调用点：
+当时的推理是：`Form.Close()` 对非模态窗体走 `PostMessage(WM_CLOSE)` → `WmClose` → 只触发
+`FormClosing` / `FormClosed`，**不**调 `Dispose()`；没有 `using`、窗体也没被字段持有 ⇒
+`Dispose(bool)` 永远不被调用 ⇒ 未挂载页面照旧泄漏。
 
-| 调用点 | 写法 | Dispose 会不会发生 | 修复是否生效 |
-|---|---|---|---|
-| `src/UI/MenuManager.cs` → 设置项 | `using { ShowDialog(); }` | 会 | ✅ |
-| `src/UI/Helpers/MenuMonitorHelper.cs` → 插件入口 | `using { ShowDialog(); }` | 会 | ✅ |
-| `src/UI/Helpers/MenuMonitorHelper.cs` → 首次运行引导 | `using { ShowDialog(); }` | 会 | ✅ |
-| `src/UI/Helpers/MainFormBizHelper.cs` → `OpenSettings()` | `new SettingsForm(...).Show();` | **不会** | ❌ |
-| `src/UI/Helpers/TaskbarBizHelper.cs` → 任务栏双击动作 2 | `new SettingsForm(...).Show();` | **不会** | ❌ |
+据此还追加了第二条推断：`Control.Dispose()` **不会**把控件从父容器的 `Controls` 里摘掉
+⇒ `InitPages()` 里需要先 `_pnlContent?.Controls.Clear()`。
 
-原因：非模态 `Show()` 打开的窗体，`Close()` 只走 `OnFormClosing` / `OnFormClosed`，
-**不会自动 Dispose**（`Form.Close()` 对非模态走 `PostMessage(WM_CLOSE)` → `WmClose` → 只触发事件）。
-没有 `using`、窗体也没被任何字段持有 ⇒ `Dispose(bool)` 永远不被调用。
+### 7.2 实测结论（安全会话，2026-10-21）
 
-而这两个恰好是**最常走**的入口（托盘菜单「设置」、任务栏双击）——
-也就是用户反复打开/关闭设置页的主路径 ⇒ 每次打开都 new 一个新窗体，
-旧窗体连同 6 个未挂载页面的子控件窗口句柄永不释放 ⇒ **句柄与 GDI 对象持续累积**。
+用 PowerShell 7（STA）加载 WinForms 复现**真实拓扑**（主窗体跑 `Application.Run` 消息循环，
+设置窗体是次级非模态窗体 `.Show()`，Timer 里 `.Close()`）：
 
-**建议修法**（完全在 `SettingsForm` 内部，不碰外部调用点）：
-
-```csharp
-// 构造函数里
-this.FormClosed += (s, e) => DisposeCachedPages();
+```
+Close 前:                IsDisposed=False
+Close 后（同一 Tick 内）: IsDisposed=True
+Close 后 200ms:           IsDisposed=True  IsHandleCreated=False
+仍在 Application.OpenForms: False
 ```
 
-- 非模态：`FormClosed` 触发 ⇒ 页面被释放 ⇒ 所有入口都生效；
-- 模态：`FormClosed` 先释放（`_pages` 清空）→ 随后 `using` 调 `Dispose()` →
-  `Dispose(bool)` → `DisposeCachedPages()` 看到 `_pages.Count == 0` 直接 return ⇒ 幂等。
+另一次探针里 `FormClosed` 与 `Disposed` 两个事件都真实触发（事件回调里读到
+`IsDisposed=False` 是正常的 —— 它在 Dispose 完成后才翻转）。
 
-**另有一处防御性建议**：`InitPages()` 里的 `DisposeCachedPages()` 之前应补
-`_pnlContent?.Controls.Clear();`。现在 `InitPages` 只在构造时调用一次（`_pages` 为空 ⇒ 直接 return）
-所以无实害；但该调用点自己的注释写明是「防止将来重调时退化成泄漏」——
-若将来重调，`DisposeCachedPages()` 会把**当前挂载页也 Dispose 掉**，
-而它仍留在 `_pnlContent.Controls` 里 ⇒ 后续 Paint/布局访问已释放控件可能抛
-`ObjectDisposedException`。构造顺序是 `InitializeComponent()` → `InitPages()`，
-此时 `_pnlContent` 已创建，不会是 null。
+**正确的机制**：`Form.Close()` 走 `PostMessage(WM_CLOSE)` 这半句没错，但 `WmClose` 在
+**非模态分支**的最后就是调 `Dispose()`；只有**模态分支**才只隐藏不定时销毁，
+留给 `ShowDialog` 返回后的 `using` 管。
+
+**子控件 Dispose 的行为**：`Panel` 里放一个 `UserControl`，`CreateControl` 后
+`parent.Controls.Count = 1`；调用 `uc.Dispose()` 后 `Count = 0`、`Contains = false` ——
+`Control.Dispose()` **会**顺手把子控件从父容器摘掉。
+`BufferedPanel`（`src/UI/Controls/LiteUI.cs`）没有重写 `Dispose`（只重写了 `CreateParams`
+与 `WM_ERASEBKGND` 拦截），语义与 `Control` 一致。
+
+### 7.3 结论
+
+- 全仓库 5 个打开设置窗体的入口**全部**会走到 `Dispose(bool)`：
+  三处 `using { ShowDialog(); }`（`MenuManager` 设置项、`MenuMonitorHelper` ×2）
+  由 `using` 调 `Dispose`；两处 `new SettingsForm(...).Show()`
+  （`MainFormBizHelper.OpenSettings`、`TaskbarBizHelper` 双击）由 `Close()` 自己 Dispose。
+- ⇒ **不需要** `FormClosed` 钩子；加了也只是靠幂等养着的冗余代码。
+- ⇒ **不需要** `_pnlContent?.Controls.Clear()`；不存在「已释放却仍挂在 `_pnlContent` 里」的悬挂页。
+- L1 不成立。安全会话本轮**只有注释变更**，无功能改动；其 `DisposeCachedPages()` 的释放范围
+  本来就覆盖全部 5 个入口。
+
+> ★ 留档要点：上面两条推断都是**读源码推出来的、没验证就下了结论**的。
+> 对方用**可复现的探针**推翻它们，比任何推理都可靠。
+> A17 的释放压力判据本身就是「不靠推理、靠实测」—— 这条经验同样适用于本次核验本身。
 
 ---
 
