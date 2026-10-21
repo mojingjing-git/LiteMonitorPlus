@@ -62,6 +62,40 @@ It supports horizontal/vertical display, multiple languages, theme switching, tr
 | **Auto Startup** | Uses Windows Task Scheduler (supports elevated run). |
 | **Persistent Settings** | All preferences saved to `settings.json` in real time. |
 
+
+## GPU Material Themes and Live Desktop Background
+
+Some themes declare `rendering.backend = "gpu"` in their JSON and render the panel material directly through DirectX 11 (DXGI / D3D11) instead of the classic GDI+ path. **Both** the theme declaration **and** the user switch must be satisfied to enter the GPU route; either one missing keeps the original GDI+ appearance.
+
+### Support Matrix
+
+| Item | Requirement | When not met |
+|---|---|---|
+| OS | Windows 10 / 11 | Not supported |
+| Runtime | .NET 8 desktop runtime (the release package is framework-dependent) | Cannot start |
+| GPU | A DXGI adapter with DirectX 11 support | Falls back to GDI+, panel still renders |
+| Theme | Theme JSON declares `rendering.backend = "gpu"` | Theme keeps its original GDI+ look |
+| User switch | Settings → Main panel → Appearance → "GPU material rendering" | GPU route is not entered |
+| Multi-monitor / mixed DPI | Supported, including a secondary display with a negative origin | — |
+| Live desktop background | Requires DXGI Desktop Duplication and WDA | On capture failure a readable fixed material is kept |
+
+### WDA (window capture exclusion) behavior
+
+With "Live desktop background" enabled the app requests `WDA_EXCLUDEFROMCAPTURE`, which excludes the **entire top-level window** from supported screen capture:
+
+- Supported screenshot and screen-recording tools **do not show LiteMonitor++**; that area shows the background itself
+- Legacy themes and **fixed-input mode** (live background off) are unaffected
+- The **CyberPunk** theme always performs **zero desktop capture** and never requests it
+- The first enable shows a "Live glass capture policy" confirmation; declining keeps it off
+
+### Fallback behavior
+
+- Without the "GPU material rendering" switch, a GPU-declaring theme is not activated
+- No DXGI adapter / device creation failure → falls back to the GDI+ route
+- Live capture failure → the window-level capture exclusion is **withdrawn** (the panel shows up in screenshots and recordings again) while the readable fixed GPU material is kept, so no blank hole is left behind
+- After a failed GPU start the app does not retry in a loop; re-applying the settings once is required to try again
+- The `--safe` / `--safe-mode` / `--disable-gpu` launch arguments force the GDI+ route
+
 ---
 
 ## Installation
