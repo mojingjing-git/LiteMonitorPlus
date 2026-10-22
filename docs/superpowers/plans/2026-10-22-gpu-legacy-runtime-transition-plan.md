@@ -206,11 +206,15 @@ HWND 重建失败时保留明确 Failed 状态及可控重试入口，禁止显�
 
 ### 4.6 GPU 主题的 legacy 回退外观
 
-采用独立解析的、仅供 legacy 使用的回退样式，保留原主题对象与用户 Skin。优先扩展已有 `rendering.fallback` 的可选样式字段，由 T02 冻结字段与校验规则，避免建立主题文件名映射表。
+采用独立解析的、仅供 legacy 使用的回退样式，保留原主题对象与用户 Skin。样式字段**随主题走**，由 T02 冻结字段与校验规则，避免建立主题文件名映射表。
+
+> **字段载体（2026-10-23 主审裁决，见 §12）**：本段原文为"优先扩展已有 `rendering.fallback` 的可选样式字段"。该字面要求与本段自己列出的硬依赖 2（新增字段必须用**纯 CLR 类型**）**不可同时满足** —— `rendering.fallback` 的类型是 `Dictionary<string, JsonElement>`（`ThemeRenderingConfig.cs:34`），放进去的新字段必然是 `JsonElement`。**裁决：改用加法式兄弟块 `rendering.fallbackStyle`**（typed class `ThemeFallbackStyle`，字段全为 `string?`），`rendering.fallback` 的类型、`backend`/`material` 语义与 `Validate()` 规则**一字不动**。理由：本段用的是"**优先**"（偏好而非绝对），与硬依赖冲突时**硬依赖优先**；且兄弟块同样满足本段意图（样式随主题走、不建文件名映射表、保留原主题与用户 Skin）且**零破坏性**。
 
 > **扩展 `rendering.fallback` 的三个硬依赖（既有约束，T05 必须同步处理）**：
 > 1. **既有校验器会拒绝**：`src/Rendering/Configuration/ThemeRenderingConfig.cs:136-141` 当前**强制** `rendering.fallback` 的 `backend`/`material` 必须是 `legacy`/`legacy`，否则整份主题报 `rendering.fallback must select legacy/legacy.`。T05 新增样式字段时**必须同步扩展 `Validate()`**，否则新字段不受校验，且实现者一旦给 `backend` 赋非 legacy 值会被校验器直接拒绝整份主题。
-> 2. **克隆路径是浅拷贝**：`ThemeRenderingConfig.cs:53-57` 的拷贝路径对 `Fallback` 走 `CopyDictionary`（字典浅拷贝）。若新增字段以 `JsonElement` 承载，克隆对象会与源 `JsonDocument` 共享生命周期，可能在源文档释放后抛 `ObjectDisposedException`——**新增字段应使用纯 CLR 类型**（如 `string`/`int`/`bool`），而非 `JsonElement`。克隆路径本身由 `src/ThemeEditor/AppearanceFields.cs:256-260` `CloneRendering` 调用。
+> 2. **克隆路径是浅拷贝**（**2026-10-23 主审更正归因，结论不变**）：原归因" `ThemeRenderingConfig.cs:53-57` 的拷贝路径对 `Fallback` 走 `CopyDictionary`（字典浅拷贝）"**不准确** —— 实测 `CopyDictionary`（`ThemeRenderingConfig.cs:48-49`）对每个值调用 `JsonElement.Clone()` ⇒ **是深脱离，安全**。**真正的浅拷贝在编辑器克隆路径**：`src/ThemeEditor/AppearanceFields.cs:292-318` 的 `CloneValue` 在 `:297` 判定 `t.IsValueType` ⇒ `JsonElement`（struct）**原值返回、不脱离**；`:320-326` 的 `CloneDictionary` 同样按值复制；而 `CloneRendering`（`:256-260`）走 `CloneObject` → `CopyInto` → `CloneValue` ⇒ **命中这条路径**。
+>    **结论不变但理由更准**：新增字段**必须用纯 CLR 类型**（如 `string`/`int`/`bool`），而非 `JsonElement` —— 用纯 CLR 类型后，`CloneValue`（`:297`）按值复制，克隆路径**彻底无风险**。
+>    **当前尚未触发** `ObjectDisposedException`：主题加载走 `JsonSerializer.Deserialize<Theme>(json, …)`（`src/Core/ThemeManager.cs:496`）⇒ STJ 对 `Dictionary<string, JsonElement>` 的元素已做脱离克隆 ⇒ 风险是**潜伏的**，不是现存的。
 > 3. **未知字段保留**：`ThemeManager` 的 `PruneNode(theme.Rendering, typeof(ThemeRenderingConfig))`（`src/Core/ThemeManager.cs:563`）负责裁剪未声明字段；新增字段必须被 `ThemeRenderingConfig` 声明，否则保存时会被裁掉。
 
 - 为 `LiquidGlass_GPU`、`LiquidGlass_Toolbar_GPU`、`CyberPunk_GPU` 提供背景、分组底色、边框与必要前景色回退。
@@ -266,7 +270,7 @@ T00/T03 必须搜索真实 HWND 持有者，而不是只处理 GPU 文件。逐�
 
 | Owner | 独占写入范围 | 工作 |
 | --- | --- | --- |
-| A：主审/集成 | 本计划、ADR、最终报告；**T02 产出的纯状态类型**（`src/Rendering/Configuration/` 下**新增**文件）、`src/Rendering/Configuration/RenderingRoutePolicy.cs` 的扩展、合同文档 | T00/T02、集成排程、最后审查；合同文件先集中冻结再交接 |
+| A：主审/集成 | 本计划、ADR、最终报告；**T02 产出的纯状态类型**（`src/Rendering/Configuration/` 下**新增**文件）、`src/Rendering/Configuration/RenderingRoutePolicy.cs` 的扩展、**`src/Rendering/Configuration/GpuStartupGuard.cs`（2026-10-23 主审补齐，见 §12.3）**、合同文档 | T00/T02、集成排程、最后审查；合同文件先集中冻结再交接 |
 | B：窗口切换 | `src/UI/UIController.cs`、`src/UI/MainForm_Transparent.cs`、`src/UI/Helpers/MainFormWinHelper.cs`、**`src/UI/LiveGlassController.cs`（句柄代次同步点）**、新增切换协调器（**独立类**；`MainForm` 非 partial，薄入口只能加在 `MainForm_Transparent.cs`） | T03；其他 owner 只提供接口，不同时写这些文件 |
 | C：宿主与清理 | `src/Rendering/Presentation/PresentationSession.cs`、`GpuPresentationHostController.cs`、必要的 `GpuSceneRenderer.cs` 诊断字段、清理类型、**`src/System/Backdrop/**`（捕获代次消费点，见 §4.2 唯一真相源）** | T04、T01 的底层接口 |
 | D：回退外观 | fallback resolver、**`src/Rendering/Configuration/ThemeRenderingConfig.cs`（回退样式字段）**、**`src/ThemeEditor/AppearanceFields.cs`**、**`src/Core/ThemeManager.cs`（仅 `PruneNode` 的字段保留路径；不得改 `ThemeManager.Current` 的共享已缩放对象）**、三份 GPU 主题 | T05；对 UIController/ThemeManager 的消费接口交 B 接入 |
@@ -458,3 +462,68 @@ T00 完成后，B 期启动门槛（§3 冻结候选要求 4：其它任务代�
 - §7.3 证据纪律：**不得**以 `DrawToBitmap` / `PrintWindow` / "GDI 函数被调用" / "offscreen render 成功" 单独证明 GDI 已恢复桌面呈现；需要**实际桌面观察**（受控截取窗口所在屏幕区域并回读像素）。
 - §7.2 固定输入：必须使用**可识别合成背景与连续变化的测试指标**，避免"旧 GPU 冻结帧看上去像 legacy"的误判；必须等待 **GPU 首次成功呈现**后再操作。
 - 窗口纪律（§7.3）：默认非置顶 / 不激活 / 不抢焦点；单轮 ≤ 60 秒；外部 watchdog 与取消机制必须先具备；窗口测试串行。
+
+---
+
+## 12. T02 合同冻结与主审裁决（2026-10-23）
+
+### 12.1 交付物
+
+T02 合同已冻结：**`docs/superpowers/plans/2026-10-23-gpu-transition-t02-contract.md`**（743 行）。含 10 条裁决 D1–D10、6 条被否决备选、8 维度状态表、§4.3 的 9 步事件顺序、11 个既有错误码 + 16 个新码、清理责任转交规则、句柄代次裁决、`HandleCreated` 判别位规格、fallback 字段规则、U01–U14 → owner 映射、物化顺序，以及 **10 项 `NOT_VERIFIED`**。
+
+**本轮未在 `src/` 下产生任何文件**（T01 在跑、`src/Rendering/**` 聚合哈希冻结）⇒ 纯状态类型与合同扩展**只落规格**，物化交接见 §12.5。
+
+### 12.2 主审对合同的事实复核
+
+主审**未直接采信**合同自述，逐条复核了它提出的 3 处事实更正，**全部成立**：
+
+| 合同主张 | 主审复核 | 结论 |
+|---|---|---|
+| `rendering.fallback` 类型是 `Dictionary<string, JsonElement>` | `src/Rendering/Configuration/ThemeRenderingConfig.cs:34` | ✅ 属实 |
+| 计划 §4.6 把浅拷贝归因于 `ThemeRenderingConfig.cs:53-57` 的 `CopyDictionary`（字典浅拷贝）**不准确** | `ThemeRenderingConfig.cs:48-49` 的 `CopyDictionary` 对每个值调用 `JsonElement.Clone()` ⇒ **深脱离**；真正的浅拷贝在 `src/ThemeEditor/AppearanceFields.cs:297`（`t.IsValueType` ⇒ `JsonElement` 原值返回）与 `:320-326` | ✅ 合同更正正确；已回写 §4.6 |
+| `PruneNode` 只裁 `ExtensionData` 中与已知属性名冲突的键（`:574-584`） | `src/Core/ThemeManager.cs:566-585` 属实；未知键由 STJ 落到 `ThemeFallbackStyle.ExtensionData` ⇒ 保留 | ✅ 合同对 HD-3 的分析成立 |
+
+另核实：`src/Rendering/Contracts/RenderContracts.cs:499` 的 `RenderingConfig.Fallback` 确为 `IReadOnlyDictionary<string, JsonElement>`。
+
+### 12.3 主审裁决记录
+
+| # | 裁决 | 理由 |
+|---|---|---|
+| **D-A** | **批准** fallback 字段载体改为**加法式兄弟块 `rendering.fallbackStyle`**（typed class `ThemeFallbackStyle`，6 个 `string?` 字段 + `[JsonExtensionData]` 承接未知键），**偏离** §4.6 `:209` 的"优先扩展已有 `rendering.fallback`"字面表述 | ① §4.6 用的是"**优先**"（偏好非绝对），而 HD-2（纯 CLR 类型）是该段自己列出的**硬依赖**；`rendering.fallback` 是 `Dictionary<string, JsonElement>`（`:34`）⇒ 塞进去的新字段必然是 `JsonElement` ⇒ **二者不可同时按字面满足，硬依赖优先**。② 兄弟块同样满足 §4.6 的**意图**（样式随主题走、不建文件名映射表、保留原主题与用户 Skin）且**零破坏性**（`rendering.fallback` 类型与全部消费点不动，`Validate()` 一字不改）。③ 就地扩展会把样式字段混入"backend/material 语义"的字典，职责混淆。已回写 §4.6 |
+| **D-B** | **更正** §4.6 硬依赖 2 的**风险归因**（结论不变）：从 `ThemeRenderingConfig.cs:53-57`（实为深脱离）改为 `AppearanceFields.cs:297`/`:320-326`（编辑器克隆路径的浅拷贝）；并补记"当前尚未触发 `ObjectDisposedException`，风险潜伏而非现存" | 主审已逐行复核属实。**纯 CLR 类型的硬约束不变** |
+| **D-C** | **批准** `src/Rendering/Configuration/GpuStartupGuard.cs` 归 **owner A**，补齐 §6 所有权表缺口（合同 D6/GPU-005 需改它，但原表未归属任何 owner） | 与 A 已有的 `src/Rendering/Configuration/` 归属一致，且与 owner D 的 `ThemeRenderingConfig.cs` **文件不重叠**，符合 §6 `:278` 约定。已回写 §6 |
+| **D-D** | **登记** `src/Rendering/Contracts/RenderContracts.cs` 在 §6 表中**未归属任何 owner**（信息项，**不阻塞**） | 在 D-A 方案下该文件**无需改动**（fallback resolver 直接读 `ThemeRenderingConfig`）⇒ 不阻塞物化；但缺口客观存在，后续若改 `RenderingConfig` 契约须先补归属 |
+
+### 12.4 合同给出的 GPU-001 ~ GPU-005 处置
+
+| ID | 处置（合同 §6/§7/§10） |
+|---|---|
+| **GPU-001** | 新增 `WindowCapturePolicyCleanup` 记录 + `CapturePolicyCleanupLedger`；宿主恢复失败时**移交**清理责任并**释放自己**，`StopGpuPresentation()` **无条件置 null** ⇒ 三条重启路径重新可达 |
+| **GPU-002** | **正式采用** `PresentationSession.RecreateWindow`（`:176-214`），确认其"先恢复旧句柄 → 新句柄重读原值"顺序已满足，补齐 R1–R6（代次单调、失败不改句柄、同 HWND 清理未完成则拒绝等） |
+| **GPU-003** | `WS_EX_LAYERED` 与 WDA **互斥**：期望状态由 `CreateParams` 按配置决定（重建后**不继承**残留），同 HWND 上不新增清除行为；改为 GPU 侧读 ex-style 并**不申请** WDA，有效路由降为 `GpuFixedInput` |
+| **GPU-004** | **代次判据先于 `IsWindow`**：`cleanup.Generation < Current` ⇒ 禁止任何 Win32 调用并直接终结；仅同代次才用 `IsWindow` |
+| **GPU-005** | pending 精确定义为"已开始但未被显式确认为干净"的尝试；清除只允许"首帧成功"或"受控放弃且停止流程干净"，**首帧失败且停止不干净 ⇒ pending 保留** |
+
+### 12.5 句柄代次与判别位裁决摘要（合同 §7/§8）
+
+- **句柄代次：合并为同一真相源**（计划 §4.2 二选一的"合并"方案）—— 新增 `WindowHandleGeneration`，唯一递增点 `Advance()`；`LiveGlassController._handleGeneration`（`src/UI/LiveGlassController.cs:87`）移除改为只读消费；GPU 清理链与 live 捕获链**共用同一代次** ⇒ GPU-004 的判据退化为一次整数比较。**满足计划 §4.2 "不得出现两套各自递增、互不知情的代次"。**
+- **判别位**：`internal int PendingControlledRecreateCount` + `long PendingControlledRecreateRequestId`（owner B 协调器）；受控重建入口在 `RecreateHandle()` **之前**置位、`HandleCreated` 消费一次，配"取消 + 陈旧清理 + 5 秒超时"三重兜底。
+- **错误码**：11 个既有码沿用原命名 + 16 个新码；`FailureCode` / `CleanupErrorCode` / `CleanupWarningCode` 三字段**互不覆盖**（诊断不混成一个字符串，满足 §4.2）。
+- **不分叉自检**：复用 `RenderingRoute` 枚举与唯一 `Decide` 纯函数；**`src/UI/UIController.cs:951` 逐字不动**；不新建第二套期望路由枚举 / 决策函数 / 句柄代次计数器；不为主题文件名建映射表；不为不存在的机制（热键 / `NativeWindow` / hook / `WM_SIZE` 等）新建绑定。
+- **物化顺序**（合同 §12.4）：序 3、5、8 可与 T03/T05 并行；序 4、6、7 必须等序 1、2 落地。物化前置 = **T01 结论落地 + `src/Rendering/**` 重新冻结哈希**。
+
+### 12.6 fallback 字段名清单（合同 §9.3；取值与配色属 T05）
+
+`ThemeFallbackStyle`（纯 CLR，全部可空，`null` = 未声明）：`Background`（背景）/ `PanelBackground`（分组底色）/ `Border`（边框）/ `Text`（主前景）/ `MutedText`（次要前景）/ `Accent`（强调）。颜色格式沿用 `ThemeManager.ParseColor`（`src/Core/ThemeManager.cs:596`）可解析的既有色值字符串。未知键由 `[JsonExtensionData]` 承接保留。
+
+### 12.7 与 T01 的交接（待定项，**T01 结论落地后本节必须回填**）
+
+| T01 结论 | 合同条款的变动 |
+|---|---|
+| **可安全使用** | §8 判别位、§4 步 4–7、§7.3 `RecreateWindow` 全量生效 |
+| **不可安全使用**（走 §9 备用路线） | **步 4 删除**、判别位的"重建"分支作废、`RecreateWindow` **不采用**、4 个重建类错误码不适用、**U02 / U03 / U06b 改判**；需新增"子 HWND 呈现历史"与"子 HWND / 顶层各自持有 affinity 所有权"两条规则 |
+| 路线无关、照常实现 | §6 清理转交（GPU-001）、§7 代次合并、§9 fallback 规则 |
+
+### 12.8 合同登记的 10 项 `NOT_VERIFIED`
+
+含 T00 已标的两项（重建后 `Form.Opacity` 分层 alpha 是否自动恢复；DXGI 工厂级 `MakeWindowAssociation` 在旧 HWND 销毁后的残留），以及：本仓库 layered 窗口上 `SetWindowDisplayAffinity` 是否确实失败（error 8，**T00 GPU-003 要求 T01/T09 实测确认**）、清理预算 6 次 / 退避 250→2000 ms 是否足够、6 个字段的具体配色（T05）、错误码的用户可见文案（T08）、清理转交后"新代次独立取得所有权"在实机上是否无 WDA 副作用（T09/G10）、`WindowIsLayered` 落在 `Decide` 的具体位置是否影响既有单测期望（T06）。
