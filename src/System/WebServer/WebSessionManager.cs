@@ -761,6 +761,20 @@ namespace LiteMonitor.src.WebServer
                         AddClient(client, connectionGeneration);
                         await ReceiveLoop(client); // 进入 WS 循环
                     }
+                    else
+                    {
+                        // ★ 被拒绝的握手**必须关闭连接**（LM-034）。
+                        //   被拒的原因都在 <see cref="Handshake"/> 内部：Host/Origin 校验失败（403）、
+                        //   旧 ?pwd= 协议（401）、票据无效（401）、Sec-WebSocket-Key 非法（400），
+                        //   以及写响应时抛异常（Handshake 的 catch 分支）。
+                        //   错误响应里已经带了 "Connection: close"，但服务端**不发 FIN** ——
+                        //   连接就一直悬挂：实测 10 次被拒握手 ⇒ 10 条连接一直停在 ESTABLISHED，
+                        //   服务端套接字不回收（连接额度被白占），客户端只能一直等到进程结束。
+                        //   顺序不能变：**先写回错误响应（客户端要能看到 401/403/400），再关闭**。
+                        //   关闭失败要留下痕迹（不能静默吞掉），否则这类泄漏又变成查不到原因的现象。
+                        try { client.Close(); }
+                        catch (Exception ex) { Debug.WriteLine("关闭被拒绝的 WebSocket 连接失败: " + ex.Message); }
+                    }
                 }
                 else
                 {
