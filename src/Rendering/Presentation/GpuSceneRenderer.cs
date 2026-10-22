@@ -76,6 +76,8 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
     private FixedBackgroundInput? _fixedInput;
     private SceneBackgroundMode _backgroundMode;
     private bool _foregroundWasDisabled;
+    private int _presentAttempts;
+    private int _presentedFrames;
     private GpuResourceLease? _swapChainLease;
     private GpuResourceLease? _shaderLease;
     private MaterialKind _material;
@@ -289,6 +291,17 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
         _captureSource.State is CaptureLifecycleState.Running or
             CaptureLifecycleState.Initializing or
             CaptureLifecycleState.AccessLost;
+
+    /// <summary>
+    /// 【诊断 / 合同 §2 维度 6】已提交给合成器的呈现次数。
+    /// <para>用于区分"从未尝试呈现"与"尝试过但结果不明"（U03 / 计划 §4.1 :124）。</para>
+    /// </summary>
+    public int PresentAttemptCount => _presentAttempts;
+
+    /// <summary>
+    /// 【诊断 / 合同 §2 维度 6】合成器已接受的呈现帧数（&gt; 0 ⇒ 已成功呈现）。
+    /// </summary>
+    public int PresentedFrameCount => _presentedFrames;
 
     public BackgroundInputDiagnostics CurrentBackgroundInput => _backgroundMode == SceneBackgroundMode.LiveCapture
         ? new(_backgroundMode, "desktop-duplication", _captureSource?.Bounds.Width ?? 0,
@@ -641,7 +654,12 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
             // Present(0) only records submission cadence. Synchronize the
             // production frame to the compositor so present timing, frame
             // age and the 30 FPS budget describe an actually displayed frame.
+            //
+            // 【诊断】呈现历史计数：尝试数在提交前自增，成功数在合成器接受后自增。
+            // 宿主据此上报合同 §2 维度 6 的呈现历史与 §2 维度 8 的首帧结果。
+            _presentAttempts++;
             _swapChain.Present(1, PresentFlags.None).CheckError();
+            _presentedFrames++;
             RecordPresentTiming(renderStartedTimestamp);
         }
         finally
