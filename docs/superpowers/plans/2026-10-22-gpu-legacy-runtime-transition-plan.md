@@ -116,7 +116,7 @@
 > - **不可安全使用** → **直接走 §9 备用路线**（独立 GPU 子 HWND），并按 §9 末尾要求重新复审与调整验收。
 > - **不确定** → 结论记为 `NOT_VERIFIED`，**不得**先落主线再打补丁。
 >
-> 背景：全仓 `src/` 与 `tools/` 搜索 `RecreateHandle` **零命中**，本项目无先例；`Control.RecreateHandle()` 为 `protected`，对 `Form` 重建顶层窗口并非官方常规路径（会销毁并重建顶层窗口，触发完整一轮 `HandleDestroyed`/`HandleCreated`，并丢失部分窗口状态）。本节对"换 BitBlt""改 `WS_EX_LAYERED`""加 `GDI_COMPATIBLE`"的克制态度，同样适用于主路线本身。
+> 背景（**T00 更正，2026-10-23**）：生产代码 `src/` 搜索 `RecreateHandle` **零命中**，本项目**生产侧无先例**；但**工具与测试侧已有先例** —— `tools/GpuUiProbe/Program.cs:469-473` 用反射调用 `typeof(Form).GetMethod("RecreateHandle", …).Invoke(form, null)`，`tests/AppearanceWindowShapeProbe/WindowShapeProbeRunner.cs:1183-1197` 有 `TryRecreateHandle` 辅助。**这些先例只证明"反射调用受保护方法"在本仓库可行，不构成生产可用的依据** —— 生产路径按 §4.3 步骤 4 的要求，走 MainForm 自己提供的内部受控入口，不通过反射。`Control.RecreateHandle()` 为 `protected`，对 `Form` 重建顶层窗口并非官方常规路径（会销毁并重建顶层窗口，触发完整一轮 `HandleDestroyed`/`HandleCreated`，并丢失部分窗口状态）。本节对"换 BitBlt""改 `WS_EX_LAYERED`""加 `GDI_COMPATIBLE`"的克制态度，同样适用于主路线本身。
 
 重建触发依据按 HWND 代次保存，不能存放在即将 Dispose 的 renderer 内而随之丢失：
 
@@ -405,3 +405,56 @@ G07/G08 的实机部分以真实现有设备为准，不自动重排屏幕。无
 - 未验证环境、明确已知限制；性能延期单独保留。
 
 **收口门槛：同一候选上，GPU 已实际出帧后能恢复 legacy 动态画面，能够重新开启 GPU，窗口状态和捕获策略均正确，且没有未解决的非性能 P0/P1/P2。缺少必要实机证据时只能报告实现完成、验收待补，不能写“全部通过”。**
+
+---
+
+## 11. T00 基线结论与新发现缺陷（2026-10-23）
+
+### 11.1 T00 交付
+
+T00 已完成。完整交付见 **`docs/superpowers/plans/2026-10-23-gpu-transition-t00-baseline.md`**（基线、冻结候选、§4.7 HWND 持有者清单 26 项、句柄代次真相源现状、计划行号复核更正表、验证环境与窗口纪律）。
+
+| 项 | 值 |
+|---|---|
+| 冻结候选 HEAD | `e1bd58772a42ac73053ebeff8c2cd82c95b583f1` |
+| `src/Rendering/**` 聚合 SHA-256（22 文件） | `a39d49ce83d13a7bbba0bbe2536a40583831eb742bf5bef7f0d62e831ba8a8e2` |
+| `src/UI/**` 聚合 SHA-256（57 文件） | `502629b54aded5d78c06540e83813fcceff54e19e80052f45969fe3d51dcb1e7` |
+| 两个探针 聚合 SHA-256（7 文件，已排除 `bin/`/`obj/`） | `6c49338496b4295ff678c65f82eb3323d08758647d7d0b3a1a3e4bfe8a3b593c` |
+| 主题 JSON 聚合 SHA-256（15 文件） | `76422a86cf1fe20a2b1fafacbfbd24834f201283f388f278fea85f465c483cf6` |
+| 配置与 shader 聚合 SHA-256（8 文件） | `1078b22e49b3642afa27bb0784790e3863a4a674a06ee8a102c2851dbb1d9e65` |
+| 屏幕 | `DISPLAY1` `0,0 2194x1234` 96dpi 主屏；`DISPLAY2` `-1152,0 1152x2048` 96dpi **竖屏**副屏 |
+| 权限 | **非管理员** ⇒ §7.2 的 **G05 / G09 需人工在场** |
+| 显示适配器 | 2 × NVIDIA（RTX 3080 / 3080 Ti）+ **4 个虚拟显示适配器**（GameViewer / Meta / MuMu / Todesk）⇒ T01 报告须记录窗口实际落在哪块适配器上 |
+
+聚合算法：组内文件按相对路径排序 → `"<相对路径>\0<小写SHA256>\n"` → 对 UTF-8 字节流取 SHA-256（与枚举顺序、换行风格无关，可复现）。
+
+### 11.2 新发现缺陷
+
+> 编号独立于 V3 修复批次的 `LM-` 序列。全部为**既有生产代码**的问题，非本轮新引入。
+
+| ID | 级别 | 摘要 | 归属 |
+|---|---|---|---|
+| **GPU-001** | 🔴 高 | **WDA 恢复失败后 GPU 呈现永久不可重启** —— `GpuPresentationHostController.StopCore()`（`src/Rendering/Presentation/GpuPresentationHostController.cs:699-711`）连续两次恢复失败时**不置空** `_presentation` ⇒ `WindowCapturePolicyRestored`（`:93`）为 false ⇒ `UIController.StopGpuPresentation()`（`src/UI/UIController.cs:363-367`）**保留已 Dispose 的宿主引用** ⇒ 三条重启路径全部被同一个早退挡住：`NotifyGpuHandleChanged()`（`:280` `if (_gpuPresentation is not null) return;`）、`EnsureGpuPresentationStarted()`（`:312` 同形早退）、Tick 兜底（`:634` 依赖 `NeedsRestart`，而 `NeedsRestart => !_disposed && …`（宿主 `:81-85`）对**已 Dispose** 的宿主恒为 false）。⇒ **GPU 呈现在整个进程生命周期内永久不可用**，只有重启进程能恢复。**直接卡死 §4.1 主线**（HWND 重建依赖 `NotifyGpuHandleChanged` 重建宿主）。根因是把"**宿主引用非空**"当成"**清理责任仍在**"的代理，二者必须解耦 | **T02 合同必须解决**，落地 **T03/T04**。**B 期不修**（B 期不写生产代码） |
+| **GPU-002** | 🟡 中 | `PresentationSession._originalAffinity`（`src/Rendering/Presentation/PresentationSession.cs:110`）是**进程内缓存**，跨 HWND 代次不可复用（它描述的是旧窗口）。现有路径之所以安全，是因为宿主**整体重建**（`GpuPresentationHostController.cs:201-213` 新建 session ⇒ `PresentationSession.cs:358-368` 在新句柄上重读原值）。若 T02 选择复用同一 session（`RecreateWindow`，`:176-214`），必须**先恢复旧句柄、再在新句柄重读原值** | T02 / T04 |
+| **GPU-003** | 🟡 中 | 开启鼠标穿透后窗口**永久**保持 `WS_EX_LAYERED` —— `MainFormWinHelper.SetClickThrough(false)`（`src/UI/Helpers/MainFormWinHelper.cs:148`）只清 `WS_EX_TRANSPARENT`、**不清 `WS_EX_LAYERED`**；全仓无 `WS_EX_LAYERED` 清除点。而 `SetWindowDisplayAffinity` 在 `WS_EX_LAYERED` 窗口上**会失败**（微软社区支持明确："Windows currently does not support monitor affinity for this type of layered window."；StackOverflow 记 `GetLastError()=8` / `ERROR_NOT_ENOUGH_MEMORY`），且**事后 `SetWindowLong` 置位正是已知复现条件** —— 本仓库正是事后置位（`:146`）⇒ 可能把 GPU-001 从边缘情形变成常见路径 | T02 / T03；**T01/T09 实测确认** |
+| **GPU-004** | 🟡 中 | `IsWindow` 无法区分"旧 HWND 已销毁"与"句柄值被复用"（`PresentationSession.cs:39` / `:65`）⇒ 旧清理可能命中新窗口。计划 §4.1 禁止以 `newHwnd != oldHwnd` 断言重建，但**单调代次必须贯穿 WDA 清理路径**，而不只是 live 捕获链 | T04 |
+| **GPU-005** | 🟡 低 | `GpuStartupGuard` 的 pending 语义比 §4.4 描述**更弱** —— `GpuStartupAttempt.Dispose()`（`src/Rendering/Configuration/GpuStartupGuard.cs:316-324`）**无论首帧是否成功**都会调用 `CompleteAttempt`，而 `GpuPresentationHostController.StopCore()`（`:715`）正是 `_startupAttempt?.Dispose()` ⇒ 首帧失败但宿主正常停止时 pending 也会被清除；保守保护只在**进程非正常退出留下文件残留**时生效（`:52-62`）⇒ §4.4「不得通过每次 Tick 清标记规避保护」**缺少可操作判据** | T02（合同澄清） |
+
+### 11.3 计划文本更正（已就地落笔）
+
+1. §4.1「全仓 `src/` 与 `tools/` 搜索 `RecreateHandle` **零命中**，本项目无先例」**已被 T00 推翻**：`src/` 确实零命中，但 **工具与测试侧已有先例** —— `tools/GpuUiProbe/Program.cs:469-473`（反射 `typeof(Form).GetMethod("RecreateHandle", …).Invoke(form, null)`）与 `tests/AppearanceWindowShapeProbe/WindowShapeProbeRunner.cs:1183-1197`（`TryRecreateHandle`）。**这些先例只证明"反射调用受保护方法"在本仓库可行，不构成生产可用的依据** —— 生产仍按 §4.3 步骤 4 走 MainForm 内部受控入口。已就地更正。
+2. §4.7 未点名但**已存在**的重绑机制：`PresentationSession.RecreateWindow(IntPtr, RenderGenerations, WindowCapturePolicy, out string?, out string?)`（`src/Rendering/Presentation/PresentationSession.cs:176-214`）—— 先 `RestoreOriginalAffinityCore` → 再 `ApplyCapturePolicyCore(newHandle)` → 更新 `_windowHandle`/`_generations`。**全仓无生产调用点**，仅 `tests/LiteMonitor.Tests/PresentationSessionTests.cs:161` 调用。**T02 必须决定它被正式采用还是废弃。**
+3. 行号区间偏移（以实测为准）：`BackdropServiceRequest.cs:143-147` → **`:141-148`**；`ScreenCaptureFrameSource.cs:184-186` → **`:182-187`**；`ThemeRenderingConfig.cs:53-57` → 块 **`:51-57`**、`Fallback` 拷贝在 **`:57`**。
+4. §7.2 **G08（不同 DPI 屏幕往返）的实机环境在本机不存在**（两屏均 96 dpi）⇒ 按 §7.2 记 `BLOCKED` + 人工步骤，**不得用数学夹具冒充跨 DPI 通过**。**G07**（X<0 副屏）与 **G06**（横→竖→横）的硬件前提**存在**（副屏 X=−1152、竖屏 1152×2048）。
+5. §4.7 盘点结论：热键 / `NativeWindow` / hook（#9）、`WM_SIZE`/`WM_MOVE`/`WM_WINDOWPOSCHANGED`/`WM_EXITSIZEMOVE`/`WM_ENTERSIZEMOVE`（#17）、针对本窗的 `WM_SETTINGCHANGE`（#20）、`SystemEvents.DisplaySettingsChanged`（#21）在本仓库**根本不存在** —— 按 §4.7「不能为了清单新增不存在的机制」，实现者**不得**为其新建绑定。
+
+### 11.4 T01 启动授权
+
+T00 完成后，B 期启动门槛（§3 冻结候选要求 4：其它任务代码改动已全部提交、工作区干净、全量构建通过）**已满足**。
+
+- **T01** 按 §4.1 的**三分支规则**产出明确结论（「可安全使用」/「不可安全使用」→ 走 §9 备用路线 /「不确定」→ 记 `NOT_VERIFIED`），**不得含糊**。
+- T01 报告必须绑定 §11.1 的候选哈希，并实现「**运行期间检测到被测源文件哈希变化 ⇒ 结论作废重跑**」（§3 冻结候选要求 3）。
+- T01 会修改探针本身 ⇒ 报告须给出**改后**的探针哈希，并声明生产侧 `src/Rendering/**` 与 `src/UI/**` 聚合哈希未变。
+- §7.3 证据纪律：**不得**以 `DrawToBitmap` / `PrintWindow` / "GDI 函数被调用" / "offscreen render 成功" 单独证明 GDI 已恢复桌面呈现；需要**实际桌面观察**（受控截取窗口所在屏幕区域并回读像素）。
+- §7.2 固定输入：必须使用**可识别合成背景与连续变化的测试指标**，避免"旧 GPU 冻结帧看上去像 legacy"的误判；必须等待 **GPU 首次成功呈现**后再操作。
+- 窗口纪律（§7.3）：默认非置顶 / 不激活 / 不抢焦点；单轮 ≤ 60 秒；外部 watchdog 与取消机制必须先具备；窗口测试串行。
