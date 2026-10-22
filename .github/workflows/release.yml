@@ -1,0 +1,252 @@
+name: Release
+
+# ============================================================================
+# LiteMonitorPlus 发布流程（人工触发）
+#
+# ★ 触发方式：仅 workflow_dispatch（手动）。
+#   ★★ 绝不使用 pull_request / pull_request_target：签名私钥绝不出现在 PR 流程里。
+#      仓库里没有任何自动触发发布的入口 —— 合并到 master 不会自动签名、不会自动发版。
+#   ★★ 额外硬门禁：即使手动派发，选了非 master 分支也会在第一个 job 步骤直接失败。
+#
+# ★ 本流程只做到"把资产准备好并上传到**草稿** Release"：
+#   是否真正公开发布由人工决定 —— softprops/action-gh-release 以 draft: true 运行，
+#   产出的 Release 是草稿（对外不可见），需要人工在 GitHub 上点 Publish 才公开。
+#
+# ★ 密钥处理：
+#   私钥来自 GitHub Secret（UPDATE_SIGNING_KEY_PKCS8，PKCS#8 DER 的 base64），
+#   只写入 runner 临时目录（$env:RUNNER_TEMP，仓库之外），流程结束即删除。
+#   Secret 缺失 / 格式错误 / 与客户端内置公钥不匹配 —— 一律**直接失败**，
+#   绝不跳过、绝不用占位密钥、绝不降级为"未签名发布"。
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_date:
+        description: '发布日期（YYYY-MM-DD，留空则取 UTC 今天）'
+        required: false
+        type: string
+
+# 默认最小权限；下面 job 里单独提权到 contents: write（仅用于上传 Release 资产）
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: 构建 / 测试 / 签名 / 上传资产（草稿）
+    # net8.0-windows + x64 + win-x64 RID ⇒ 只能在 Windows runner 上构建
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    permissions:
+      contents: write
+
+    env:
+      # 与 ci.yml 完全一致的防假绿阈值，改动必须两处同步
+      MIN_TEST_TOTAL: 1000
+      EXPECTED_TEST_ASSEMBLIES: 'LiteMonitor.Tests, LiteMonitor.Updater.Tests, LiteMonitor.GpuNonperformance.Tests'
+      LITEMONITOR_PLUGIN_REPO: ${{ github.workspace }}/tests/fixtures/plugin-repo
+      # 故意不设置 LITEMONITOR_E2E=1
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+    steps:
+      - name: 仅允许在 master 上发布
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "GITHUB_REF : $env:GITHUB_REF"
+          Write-Host "GITHUB_SHA : $env:GITHUB_SHA"
+          if ($env:GITHUB_REF -ne 'refs/heads/master') {
+            throw "发布流程只允许在 master 分支上运行，当前分支为 $env:GITHUB_REF"
+          }
+
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: 还原依赖
+        run: dotnet restore LiteMonitor.sln
+
+      - name: 构建（Debug）
+        run: dotnet build LiteMonitor.sln -c Debug --nologo
+
+      - name: 清理历史测试结果
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem -Path 'tests' -Filter 'TestResults' -Directory -Recurse -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force
+          New-Item -ItemType Directory -Force -Path 'ci-artifacts' | Out-Null
+
+      - name: 运行单元测试
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $log = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\test-console.log'
+          dotnet test LiteMonitor.sln -c Debug --nologo --logger "trx;LogFileName=results.trx" |
+            Tee-Object -FilePath $log
+          $code = $LASTEXITCODE
+          Write-Host "dotnet test 退出码: $code"
+          if ($code -ne 0) { throw "dotnet test 失败（退出码 $code）" }
+
+      - name: 强制校验测试发现数（防假绿）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assertArgs = @(
+            '-NoProfile',
+            '-File', '.github/workflows/assert-test-counts.ps1',
+            '-TrxRoot', 'tests',
+            '-MinTotal', $env:MIN_TEST_TOTAL,
+            '-ExpectedAssembly', $env:EXPECTED_TEST_ASSEMBLIES
+          )
+          & pwsh @assertArgs
+          if ($LASTEXITCODE -ne 0) { throw "测试发现数断言失败（退出码 $LASTEXITCODE）" }
+
+      - name: 构建（Release）
+        run: dotnet build LiteMonitor.sln -c Release --nologo
+
+      - name: 读取版本号
+        id: version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $json = Get-Content -LiteralPath 'resources/version.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          $v = [string]$json.version
+          if ([string]::IsNullOrWhiteSpace($v)) { throw 'resources/version.json 里没有 version 字段' }
+          Write-Host "版本号: $v"
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: 确定发布日期
+        id: release_date
+        shell: pwsh
+        env:
+          RELEASE_DATE_INPUT: ${{ inputs.release_date }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $date = ([string]$env:RELEASE_DATE_INPUT).Trim()
+          if ([string]::IsNullOrWhiteSpace($date)) {
+            $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+          }
+          if ($date -notmatch '^\d{4}-\d{2}-\d{2}$') {
+            throw "发布日期格式必须是 yyyy-MM-dd，收到：$date"
+          }
+          Write-Host "发布日期: $date"
+          "date=$date" >> $env:GITHUB_OUTPUT
+
+      - name: 打包发布件并计算 SHA-256
+        shell: pwsh
+        env:
+          PACK_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:PACK_VERSION
+          & pwsh -NoProfile -File 'scripts/pack-release.ps1' -Version $version -Brand 'LiteMonitorPlus' -OutDir 'dist'
+          if ($LASTEXITCODE -ne 0) { throw "pack-release.ps1 失败（退出码 $LASTEXITCODE）" }
+          $zip = "dist/LiteMonitorPlus_v$version-win-x64.zip"
+          if (-not (Test-Path -LiteralPath $zip)) { throw "发布包缺失: $zip" }
+          $sha = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()
+          $size = (Get-Item -LiteralPath $zip).Length
+          Write-Host "ZIP    : $zip"
+          Write-Host ("大小   : {0:N2} MB" -f ($size / 1MB))
+          Write-Host "SHA256 : $sha"
+
+      - name: 准备签名私钥（仅写入 runner 临时目录）
+        shell: pwsh
+        env:
+          SIGNING_KEY_B64: ${{ secrets.UPDATE_SIGNING_KEY_PKCS8 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # ★ 私钥缺失 = 直接失败。绝不跳过、绝不用占位密钥、绝不降级成未签名发布。
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_KEY_B64)) {
+            throw '缺少 GitHub Secret UPDATE_SIGNING_KEY_PKCS8（应为 PKCS#8 DER 的 base64）。发布流程必须签名，不允许跳过。'
+          }
+          $b64 = $env:SIGNING_KEY_B64.Trim()
+          try {
+            $keyBytes = [Convert]::FromBase64String($b64)
+          }
+          catch {
+            throw 'UPDATE_SIGNING_KEY_PKCS8 不是合法的 base64（应为 PKCS#8 DER 的 base64）。'
+          }
+          if ($keyBytes.Length -lt 32) { throw '私钥长度异常，拒绝继续。' }
+          # ★ 只写入 runner 临时目录（仓库之外）：不会被 git 看到，不会进 artifact
+          $keyPath = Join-Path $env:RUNNER_TEMP 'update-signing-key.pkcs8'
+          [System.IO.File]::WriteAllText($keyPath, $b64, (New-Object System.Text.UTF8Encoding($false)))
+          Write-Host "私钥已写入 runner 临时目录: $keyPath"
+          Write-Host "（仓库目录之外，流程结束时删除；内容不会打印）"
+          Write-Host "私钥文件 SHA-256 指纹: $((Get-FileHash -LiteralPath $keyPath -Algorithm SHA256).Hash)"
+
+      - name: 生成签名后的 version.json
+        shell: pwsh
+        env:
+          SIGNING_VERSION: ${{ steps.version.outputs.version }}
+          SIGNING_DATE: ${{ steps.release_date.outputs.date }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:SIGNING_VERSION
+          $date = $env:SIGNING_DATE
+          $keyPath = Join-Path $env:RUNNER_TEMP 'update-signing-key.pkcs8'
+          if (-not (Test-Path -LiteralPath $keyPath)) { throw "签名私钥不存在: $keyPath" }
+          $zip = "dist/LiteMonitorPlus_v$version-win-x64.zip"
+          # sign-release.ps1 会校验"私钥 ↔ 客户端内置公钥"是否一致，不一致直接抛错
+          & pwsh -NoProfile -File 'scripts/sign-release.ps1' `
+            -ZipPath $zip `
+            -Version $version `
+            -ReleaseDate $date `
+            -KeyPath $keyPath
+          if ($LASTEXITCODE -ne 0) { throw "sign-release.ps1 失败（退出码 $LASTEXITCODE）" }
+
+      - name: 独立复验签名（客户端内置公钥）
+        shell: pwsh
+        env:
+          SIGNING_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:SIGNING_VERSION
+          & pwsh -NoProfile -File '.github/workflows/verify-release-signature.ps1' `
+            -VersionJsonPath 'resources/version.json' `
+            -ZipPath "dist/LiteMonitorPlus_v$version-win-x64.zip"
+          if ($LASTEXITCODE -ne 0) { throw "签名复验失败（退出码 $LASTEXITCODE）" }
+
+      - name: 上传测试报告与签名后的 version.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata
+          path: |
+            resources/version.json
+            tests/**/TestResults/*.trx
+            ci-artifacts/test-console.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 上传发布包到 GitHub Release（草稿，不自动公开）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: LiteMonitorPlus v${{ steps.version.outputs.version }}
+          # ★ draft: true —— Release 以草稿形式存在，对外不可见。
+          #   是否发布由人工在 GitHub 页面点 Publish 决定，流水线不会自动公开。
+          draft: true
+          prerelease: false
+          files: dist/LiteMonitorPlus_v${{ steps.version.outputs.version }}-win-x64.zip
+          fail_on_unmatched_files: true
+
+      - name: 清理签名私钥
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $keyPath = Join-Path $env:RUNNER_TEMP 'update-signing-key.pkcs8'
+          if (Test-Path -LiteralPath $keyPath) {
+            Remove-Item -LiteralPath $keyPath -Force
+            Write-Host "已删除: $keyPath"
+          }
+          else {
+            Write-Host '私钥文件不存在，无需清理'
+          }

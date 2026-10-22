@@ -1,0 +1,168 @@
+name: CI
+
+# ============================================================================
+# LiteMonitorPlus 最小可用 CI（审计项 BASE-004 / 假绿禁令 G3）
+#
+# ★ 本仓库此前**完全没有 CI**。在测试工程进入解决方案之前，
+#   `dotnet test LiteMonitor.sln` 会静默空跑并返回退出码 0，
+#   于是"Unit Test"这一步恒为绿，却一个用例都没跑（G3 假绿）。
+#
+# ★ 本工作流的核心不是"跑 dotnet test"，而是**强制校验发现了多少条用例**：
+#   断言脚本 .github/workflows/assert-test-counts.ps1 会逐程序集核对
+#   总计/通过/失败/跳过，任何一个程序集"0 发现"、缺程序集、或总数低于阈值，
+#   都会让 job 以非零退出码失败。
+#
+# ★ 行尾说明：本仓库 core.autocrlf=true 且**没有 .gitattributes**。
+#   windows-latest runner 的系统 gitconfig 同样是 autocrlf=true，
+#   检出行为与本地一致（文本文件 CRLF），因此脚本按 LF 提交的写法在 runner 上照常工作，
+#   无需额外的 .gitattributes 或 actions/checkout 的 crlf 设置。
+# ============================================================================
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+
+# 最小权限：CI 只需要读代码 + 上传 artifact，不需要写仓库内容
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-package:
+    name: 构建 / 测试 / 打包
+    # net8.0-windows + <PlatformTarget>x64</PlatformTarget> + win-x64 RID
+    #   ⇒ 只能在 Windows runner 上构建
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    env:
+      # ★★ 用例发现数下限（防假绿的核心阈值）★★
+      #    改动这个值必须是**有意**的（例如新增测试工程后调高），
+      #    绝不允许为了"让流水线变绿"而调低。
+      #    当前基线：1022（990 + 13 + 19）。
+      MIN_TEST_TOTAL: 1000
+
+      # ★ 必须出现的测试程序集。少任何一个都会让断言失败
+      #   （防止某个测试工程悄悄没被测到）。
+      EXPECTED_TEST_ASSEMBLIES: 'LiteMonitor.Tests, LiteMonitor.Updater.Tests, LiteMonitor.GpuNonperformance.Tests'
+
+      # ★ 插件市场契约夹具路径（由 S4.1 创建）。
+      #    目录不存在时 xunit 会把用例**显式记为 Skipped**（而不是失败），
+      #    跳过的数量与用例名由 assert-test-counts.ps1 打印出来，不会静默。
+      LITEMONITOR_PLUGIN_REPO: ${{ github.workspace }}/tests/fixtures/plugin-repo
+
+      # ★ 故意**不**设置 LITEMONITOR_E2E=1：联网 E2E 单独跑，不进 PR 门禁。
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: 还原依赖
+        run: dotnet restore LiteMonitor.sln
+
+      - name: 构建（Debug）
+        run: dotnet build LiteMonitor.sln -c Debug --nologo
+
+      - name: 清理历史测试结果
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 清掉上一次运行遗留的 TRX，保证下面"每个程序集一份结果"是干净的
+          Get-ChildItem -Path 'tests' -Filter 'TestResults' -Directory -Recurse -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force
+          New-Item -ItemType Directory -Force -Path 'ci-artifacts' | Out-Null
+          Write-Host '已清理历史 TestResults 目录'
+
+      - name: 运行单元测试
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $log = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\test-console.log'
+          # TRX 落在每个测试工程自己的 TestResults 目录，文件名固定为 results.trx，
+          # 三个工程各写各的目录，不会互相覆盖。
+          dotnet test LiteMonitor.sln -c Debug --nologo --logger "trx;LogFileName=results.trx" |
+            Tee-Object -FilePath $log
+          $code = $LASTEXITCODE
+          Write-Host "dotnet test 退出码: $code"
+          if ($code -ne 0) { throw "dotnet test 失败（退出码 $code）" }
+
+      - name: 强制校验测试发现数（防假绿）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assertArgs = @(
+            '-NoProfile',
+            '-File', '.github/workflows/assert-test-counts.ps1',
+            '-TrxRoot', 'tests',
+            '-MinTotal', $env:MIN_TEST_TOTAL,
+            '-ExpectedAssembly', $env:EXPECTED_TEST_ASSEMBLIES
+          )
+          # 以子进程方式调用：脚本里的 Set-StrictMode / exit 不会污染本步骤
+          & pwsh @assertArgs
+          if ($LASTEXITCODE -ne 0) { throw "测试发现数断言失败（退出码 $LASTEXITCODE）" }
+
+      - name: 构建（Release）
+        run: dotnet build LiteMonitor.sln -c Release --nologo
+
+      - name: 读取版本号
+        id: version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $json = Get-Content -LiteralPath 'resources/version.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          $v = [string]$json.version
+          if ([string]::IsNullOrWhiteSpace($v)) { throw 'resources/version.json 里没有 version 字段' }
+          Write-Host "版本号: $v"
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: 打包发布件并计算 SHA-256
+        shell: pwsh
+        env:
+          PACK_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:PACK_VERSION
+          Write-Host "打包版本: $version"
+          & pwsh -NoProfile -File 'scripts/pack-release.ps1' -Version $version -Brand 'LiteMonitorPlus' -OutDir 'dist'
+          if ($LASTEXITCODE -ne 0) { throw "pack-release.ps1 失败（退出码 $LASTEXITCODE）" }
+          $zip = "dist/LiteMonitorPlus_v$version-win-x64.zip"
+          if (-not (Test-Path -LiteralPath $zip)) { throw "发布包缺失: $zip" }
+          $sha = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()
+          $size = (Get-Item -LiteralPath $zip).Length
+          Write-Host "ZIP    : $zip"
+          Write-Host ("大小   : {0:N2} MB" -f ($size / 1MB))
+          Write-Host "SHA256 : $sha"
+          "sha256=$sha" >> $env:GITHUB_OUTPUT
+
+      - name: 上传测试报告（TRX + 控制台日志）
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            tests/**/TestResults/*.trx
+            ci-artifacts/test-console.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 上传发布包
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: dist/LiteMonitorPlus_v${{ steps.version.outputs.version }}-win-x64.zip
+          if-no-files-found: error
+          retention-days: 14
