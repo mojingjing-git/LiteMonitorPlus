@@ -133,6 +133,23 @@ public sealed class RenderingTransitionStateTests
         Assert.Equal(1, second.Current);
     }
 
+    [Fact]
+    public void ProcessWideInstanceIsSharedAndNotASecondCounter()
+    {
+        // 【主审裁决 D-G】唯一实例由类型自身持有 ⇒ 全进程只有一个代次序列。
+        // 生产路径（owner B 的协调器、owner C 的宿主）必须都消费这**同一个**实例，
+        // 否则两侧会读到不同的代次 ⇒ 合同 §7.4 的跨代次丢弃判据失效。
+        Assert.Same(WindowHandleGeneration.Instance, WindowHandleGeneration.Instance);
+
+        long before = WindowHandleGeneration.Instance.Current;
+        long advanced = WindowHandleGeneration.Instance.Advance();
+
+        Assert.Equal(before + 1, advanced);
+        Assert.Equal(advanced, WindowHandleGeneration.Instance.Current);
+        Assert.True(WindowHandleGeneration.Instance.IsCurrent(advanced));
+        Assert.True(WindowHandleGeneration.Instance.IsOlder(before));
+    }
+
     // ---------------------------------------------------------------- §3.2 / §6
 
     [Fact]

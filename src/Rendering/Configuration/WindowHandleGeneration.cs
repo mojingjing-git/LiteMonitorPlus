@@ -15,6 +15,19 @@ namespace LiteMonitor.Rendering.Configuration;
 /// </summary>
 public sealed class WindowHandleGeneration
 {
+    /// <summary>
+    /// 进程内**唯一**实例。
+    /// <para>【主审裁决 D-G】句柄代次必须**全进程唯一**：若 owner B（协调器）与 owner C（宿主）
+    /// 各自 <c>new</c> 一个，两侧会读到**不同的代次** ⇒ 合同 §7.4 的跨代次丢弃判据
+    /// （"代次先于 <c>IsWindow</c>"）失效，GPU 清理链与 live 捕获链会互相误判。</para>
+    /// <para>因此唯一实例由**类型自身**持有，并落在 owner A 的本文件 ——
+    /// <c>src/Rendering/Configuration/</c> 位于 UI 层与 Rendering 层**之下**，
+    /// 两侧都只读消费它 ⇒ **不产生层次倒置**，也**不可能**出现第二份 holder。</para>
+    /// <para>owner B 与 owner C **禁止**另行 <c>new WindowHandleGeneration()</c>；
+    /// 测试如需隔离实例仍可自行 <c>new</c>（生产路径不得）。</para>
+    /// </summary>
+    public static WindowHandleGeneration Instance { get; } = new WindowHandleGeneration();
+
     private long _current = 1;
 
     /// <summary>当前句柄代次。初始为 1。</summary>
