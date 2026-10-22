@@ -561,6 +561,15 @@ namespace LiteMonitor.src.Core
             }
             PruneNode(theme.Backdrop, typeof(BackdropConfig));
             PruneNode(theme.Rendering, typeof(ThemeRenderingConfig));
+
+            // 【GPU T05】新增兄弟块 rendering.fallbackStyle 的字段保留路径：
+            //   1. 该块是 ThemeRenderingConfig 的**已声明属性** ⇒ 不会被顶层裁剪丢掉；
+            //   2. 块内未知键同样按"已知属性名"口径清理，避免保存时与已知键同名重复写出；
+            //      未知键本身原样保留（不裁），保存后不丢。
+            if (theme.Rendering?.FallbackStyle != null)
+            {
+                PruneNode(theme.Rendering.FallbackStyle, typeof(ThemeFallbackStyle));
+            }
         }
 
         private static void PruneNode(object? node, Type type)

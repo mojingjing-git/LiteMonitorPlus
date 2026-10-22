@@ -23,6 +23,14 @@
     "fallback": {
       "backend": "legacy",
       "material": "legacy"
+    },
+    "fallbackStyle": {
+      "background": "#0A1017",
+      "panelBackground": "#121B24",
+      "border": "#345064",
+      "text": "#E8F7FA",
+      "mutedText": "#91A7B2",
+      "accent": "#48E6F2"
     }
   },
   "layout": {
