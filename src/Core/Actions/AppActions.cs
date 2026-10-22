@@ -232,44 +232,115 @@ namespace LiteMonitor.src.Core.Actions
         // =============================================================
         // 7. 网页服务 (新增逻辑)
         // =============================================================
+
+        /// <summary>
+        /// 应用网页服务设置（启停 / 端口 / 凭据）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 保留无返回值的老签名给既有调用点；需要结果（提示 / 断言）用
+        ///   <see cref="ApplyWebServerWithResult"/>。
+        /// </remarks>
         public static void ApplyWebServer(Settings cfg)
         {
+            ApplyWebServerWithResult(cfg);
+        }
+
+        /// <summary>
+        /// 应用网页服务设置，并返回**确定的结果**（停止 / 重启 / 拒绝 / 失败）。
+        /// </summary>
+        /// <remarks>
+        /// ★ R03：判定"凭据是否变了"必须用**有效凭据指纹**
+        ///   （<see cref="Settings.GetWebPasswordFingerprint"/>）而不是明文 ——
+        ///   迁移后的生产形态里明文恒为空串，拿明文比较**永远发现不了**
+        ///   "哈希被清掉 / 哈希被换掉"这类变更。
+        /// ★ R03：「局域网暴露 + 没有有效凭据」⇒ **停止服务**（并给出明确结果），
+        ///   绝不"无口令继续监听"；判定与冷启动守卫共用
+        ///   <see cref="WebServerAccessPolicy"/>，运行中的变更绕不过冷启动约束。
+        /// ★ 停止 / 重启都会连带撤销全部主会话、票据与已建立的 WebSocket 连接
+        ///   （见 <c>WebSessionManager.Stop()</c>）—— 凭据变了还留着旧连接等于撤销形同虚设。
+        /// </remarks>
+        public static WebServerApplyResult ApplyWebServerWithResult(Settings cfg)
+        {
+            var result = new WebServerApplyResult();
             var server = LiteWebServer.Instance;
-            if (server != null)
+            if (server == null || cfg == null)
             {
-                bool shouldRun = cfg.WebServerEnabled;
-                bool isRunning = server.IsRunning;
-                int targetPort = cfg.WebServerPort;
-                int currentPort = server.CurrentRunningPort;
-                string targetPwd = cfg.WebServerPassword;
-                string currentPwd = server.CurrentPassword;
+                result.ServiceRunning = false;
+                return result;
+            }
 
-                // ★ 注意：WebFpsEnabled 不需要重启服务。
-                //   它只在"网页版帧率"开关里参与 FPS 需求判定（WebFpsDemand），
-                //   而需求判定是每次实时读取配置的，改完立即生效。
-                //   反过来，服务 Stop/重启会清空全部 Web 需求（连接 + HTTP 租期），见 WebSessionManager.Stop()。
+            bool shouldRun = cfg.WebServerEnabled;
+            bool isRunning = server.IsRunning;
+            int targetPort = cfg.WebServerPort;
+            int currentPort = server.CurrentRunningPort;
 
-                if (shouldRun)
+            // ★ 有效凭据指纹："" = 没有有效凭据
+            string targetFingerprint = cfg.GetWebPasswordFingerprint();
+            string currentFingerprint = server.CurrentCredentialFingerprint;
+            bool credentialChanged = !string.Equals(targetFingerprint, currentFingerprint, StringComparison.Ordinal);
+
+            // ★ 运行时监听策略：配置要求监听局域网，**或**运行时实际绑在非回环地址上
+            bool runtimeLanExposed = server.IsLanExposed;
+
+            // ★ 注意：WebFpsEnabled 不需要重启服务。
+            //   它只在"网页版帧率"开关里参与 FPS 需求判定（WebFpsDemand），
+            //   而需求判定是每次实时读取配置的，改完立即生效。
+            //   反过来，服务 Stop/重启会清空全部 Web 需求（连接 + HTTP 租期），见 WebSessionManager.Stop()。
+
+            // ★ 「局域网暴露 + 没有有效凭据」⇒ 停止服务（确定行为，不是"继续监听"）
+            if (shouldRun && WebServerAccessPolicy.IsLanAccessForbidden(cfg, runtimeLanExposed))
+            {
+                if (isRunning)
                 {
-                    // 端口变更 或 密码变更 均触发重启
-                    if (!isRunning || targetPort != currentPort || targetPwd != currentPwd)
+                    // ★ Stop 会连带撤销全部会话 / 票据 / 已建立的 WS 连接
+                    server.Stop();
+                }
+                result.RejectedLanWithoutPassword = true;
+                result.ServiceRunning = server.IsRunning;
+                result.ErrorMessage = "局域网模式必须设置访问口令：网页服务已停止" +
+                                      "（不会以无口令方式继续对局域网监听）。";
+                System.Diagnostics.Debug.WriteLine("[WebServer] " + result.ErrorMessage);
+                return result;
+            }
+
+            if (shouldRun)
+            {
+                if (!isRunning)
+                {
+                    if (!server.Start(out string err))
                     {
-                        server.Stop();
-                        if (!server.Start(out string err))
-                        {
-                            System.Diagnostics.Debug.WriteLine("WebServer restart failed: " + err);
-                        }
+                        result.ErrorMessage = err;
+                        System.Diagnostics.Debug.WriteLine("WebServer start failed: " + err);
                     }
                 }
-                else
+                else if (targetPort != currentPort || credentialChanged)
                 {
-                    // 如果需要关闭，且当前正在运行 -> 关闭
-                    if (isRunning)
+                    // ★ 端口变更 或 **凭据变更**（含"凭据被清掉"）均触发重启
+                    //   ⇒ 重启会撤销全部会话 / 票据 / WS 连接
+                    server.Stop();
+                    if (!server.Start(out string err))
                     {
-                        server.Stop();
+                        result.ErrorMessage = err;
+                        System.Diagnostics.Debug.WriteLine("WebServer restart failed: " + err);
                     }
+                    else
+                    {
+                        result.Restarted = true;
+                    }
+                }
+                // else：端口与凭据都没变 ⇒ **不**重启（避免每次"应用设置"都断连）
+            }
+            else
+            {
+                // 如果需要关闭，且当前正在运行 -> 关闭
+                if (isRunning)
+                {
+                    server.Stop();
                 }
             }
+
+            result.ServiceRunning = server.IsRunning;
+            return result;
         }
 
         // --- 内部辅助 ---
@@ -282,5 +353,27 @@ namespace LiteMonitor.src.Core.Actions
                 tf.ReloadLayout();
             }
         }
+    }
+
+    /// <summary>
+    /// 网页服务设置的**应用结果**（供设置界面提示与回归测试断言）。
+    /// </summary>
+    /// <remarks>
+    /// ★ 存在的意义：把"应用设置"对网页服务的影响变成**可断言的事实**，
+    ///   而不是只有一行 <c>Debug.WriteLine</c>（R03）。
+    /// </remarks>
+    public sealed class WebServerApplyResult
+    {
+        /// <summary>应用完成后服务是否在运行。</summary>
+        public bool ServiceRunning { get; set; }
+
+        /// <summary>本次应用是否**重启**了服务（端口或凭据变化）。</summary>
+        public bool Restarted { get; set; }
+
+        /// <summary>本次应用是否拒绝了「局域网模式 + 无有效凭据」（服务已被停止）。</summary>
+        public bool RejectedLanWithoutPassword { get; set; }
+
+        /// <summary>失败 / 拒绝的原因（成功时为空串）。</summary>
+        public string ErrorMessage { get; set; } = "";
     }
 }
