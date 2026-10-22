@@ -13,6 +13,45 @@ using LiteMonitor.src.SystemServices.InfoService;
 namespace LiteMonitor.src.Plugins
 {
     /// <summary>
+    /// 调度计时器抽象（内部接缝，LM-001）。
+    /// 生产实现是 <see cref="System.Timers.Timer"/> 的 Stop-Wait（AutoReset=false）包装：
+    /// 触发一次之后必须由调度逻辑显式"重新武装 (re-arm)"才会再次触发。
+    /// 测试可注入手动驱动实现，使"重新武装"这一关键行为能够确定性验证，无需真实等待。
+    /// </summary>
+    internal interface IPluginTimer : IDisposable
+    {
+        /// <summary>距离下一次触发的时间（毫秒）。</summary>
+        double Interval { get; set; }
+
+        /// <summary>武装计时器（触发一次）。</summary>
+        void Start();
+
+        /// <summary>停止计时器（之后仍可再次武装）。</summary>
+        void Stop();
+    }
+
+    /// <summary>
+    /// 生产计时器：包装 <see cref="System.Timers.Timer"/>（AutoReset=false 的 Stop-Wait 模式）。
+    /// </summary>
+    internal sealed class SystemPluginTimer : IPluginTimer
+    {
+        internal System.Timers.Timer Inner { get; }
+
+        public SystemPluginTimer(double intervalMs)
+        {
+            Inner = new System.Timers.Timer(intervalMs) { AutoReset = false };
+        }
+
+        public double Interval { get => Inner.Interval; set => Inner.Interval = value; }
+
+        public void Start() => Inner.Start();
+
+        public void Stop() => Inner.Stop();
+
+        public void Dispose() => Inner.Dispose();
+    }
+
+    /// <summary>
     /// 插件管理器 (Refactored)
     /// 负责插件的加载、生命周期管理以及调度执行
     /// </summary>
@@ -22,18 +61,92 @@ namespace LiteMonitor.src.Plugins
         public static PluginManager Instance => _instance ??= new PluginManager();
 
         private readonly List<PluginTemplate> _templates = new();
-        private readonly Dictionary<string, System.Timers.Timer> _timers = new();
+        private readonly Dictionary<string, IPluginTimer> _timers = new();
         private readonly Dictionary<string, System.Threading.CancellationTokenSource> _cts = new();
         private readonly ConcurrentDictionary<string, int> _consecutiveFailures = new();
         private readonly Dictionary<string, string> _configSnapshots = new();
         private readonly PluginExecutor _executor;
 
+        /// <summary>
+        /// 调度代次（LM-001）。每个实例一个单调递增的代号：
+        /// <c>StopInstance()</c> / <c>Stop()</c> / 重新 <c>StartInstance()</c> 时递增。
+        /// <para>
+        /// 异步回调在继续之前必须核对"自己仍属于当前代次"，否则：
+        /// 不得重新启动计时器、不得写回执行结果、不得访问已释放的计时器或 CTS。
+        /// </para>
+        /// <para>
+        /// ★ 代次只用于"结果写回裁决"，<b>不</b>参与在途请求键的构成（契约 C6）。
+        /// </para>
+        /// </summary>
+        private readonly ConcurrentDictionary<string, long> _generations = new();
+
+        /// <summary>
+        /// 保护 <see cref="_timers"/> / <see cref="_cts"/> 的锁。
+        /// 计时器回调运行在线程池线程上，与 UI 线程的启停会并发访问这两个字典。
+        /// </summary>
+        private readonly object _scheduleLock = new();
+
         public event Action OnPluginSchemaChanged;
 
-        private PluginManager()
+        /// <summary>
+        /// 首次心跳延迟（毫秒）：调度启动后尽快触发一次，
+        /// 这样第一次执行的结果也能被捕获，从而触发失败重试逻辑。
+        /// </summary>
+        internal const int InitialTickDelayMs = 50;
+
+        /// <summary>
+        /// 插件不可见时的复查间隔（毫秒）：可见性是"按需刷新"的开关，
+        /// 不可见时仍必须按此间隔重新武装计时器，否则调度会永久停摆（LM-001）。
+        /// <para>internal 可变：测试可压到毫秒级以在生产计时器上验证"仍在轮询"，不改变生产取值。</para>
+        /// </summary>
+        internal int InvisibleRetryIntervalMs { get; set; } = 2000;
+
+        /// <summary>
+        /// 构造插件管理器。
+        /// <para>
+        /// internal 而非 private：测试需要构造与单例隔离的实例，
+        /// 以便注入可见性 / 执行 / 计时器接缝而不触碰真实设置与真实网络。
+        /// </para>
+        /// </summary>
+        internal PluginManager(PluginExecutor executor = null)
         {
-            _executor = new PluginExecutor();
+            _executor = executor ?? new PluginExecutor();
             _executor.OnSchemaChanged += () => OnPluginSchemaChanged?.Invoke();
+        }
+
+        // ==========================================================
+        // 测试接缝（internal；生产路径保持 null，走默认实现）
+        // ==========================================================
+
+        /// <summary>可见性探针：null 时使用 <see cref="IsPluginVisible"/>。</summary>
+        internal Func<string, bool> VisibilityProbe { get; set; }
+
+        /// <summary>执行探针：null 时使用 <see cref="PluginExecutor.ExecuteInstanceAsync"/>。</summary>
+        internal Func<PluginInstanceConfig, PluginTemplate, System.Threading.CancellationToken, Task<bool>> ExecutionProbe { get; set; }
+
+        /// <summary>计时器工厂：null 时使用生产计时器（System.Timers.Timer）。</summary>
+        internal Func<double, Func<IPluginTimer, Task>, IPluginTimer> TimerFactory { get; set; }
+
+        /// <summary>连续失败触发"重置网络客户端 + 清缓存"时的观察点（仅供测试断言）。</summary>
+        internal Action<string> NetworkResetObserver { get; set; }
+
+        /// <summary>测试/诊断用：读取某实例当前的连续失败计数。</summary>
+        internal int GetConsecutiveFailures(string instanceId)
+            => _consecutiveFailures.TryGetValue(instanceId, out var v) ? v : 0;
+
+        /// <summary>测试/诊断用：内部执行器实例（便于测试释放其持有的 HttpClient）。</summary>
+        internal PluginExecutor ExecutorInternal => _executor;
+
+        /// <summary>测试/诊断用：当前登记在册的调度循环总数。</summary>
+        internal int RegisteredScheduleCount
+        {
+            get { lock (_scheduleLock) { return _timers.Count; } }
+        }
+
+        /// <summary>测试/诊断用：某实例当前登记在册的调度循环数量（正常恒为 0 或 1）。</summary>
+        internal int GetRegisteredScheduleCount(string instanceId)
+        {
+            lock (_scheduleLock) { return _timers.ContainsKey(instanceId) ? 1 : 0; }
         }
 
         public void LoadPlugins(string directoryPath)
@@ -155,7 +268,8 @@ namespace LiteMonitor.src.Plugins
         public void Reload(Settings cfg)
         {
             // 1. Identify active instances
-            var currentIds = _timers.Keys.ToList();
+            List<string> currentIds;
+            lock (_scheduleLock) { currentIds = _timers.Keys.ToList(); }
             var newInstances = cfg.PluginInstances.Where(x => x.Enabled).ToDictionary(x => x.Id);
 
             // 2. Process Removals
@@ -215,24 +329,49 @@ namespace LiteMonitor.src.Plugins
             try { return JsonSerializer.Serialize(inst); } catch { return ""; }
         }
 
-        private void StopInstance(string instanceId)
+        /// <summary>
+        /// 停止某个插件实例的调度循环。
+        /// 返回后，该实例的旧计时器不得再自行启动（LM-001）。
+        /// </summary>
+        internal void StopInstance(string instanceId)
         {
-            if (_timers.TryGetValue(instanceId, out var timer))
-            {
-                timer.Stop();
-                timer.Dispose();
-                _timers.Remove(instanceId);
-            }
-
-            if (_cts.TryGetValue(instanceId, out var cts))
-            {
-                cts.Cancel();
-                cts.Dispose();
-                _cts.Remove(instanceId);
-            }
+            StopSchedule(instanceId);
 
             // Reset failure count
             _consecutiveFailures.TryRemove(instanceId, out _);
+        }
+
+        /// <summary>
+        /// 停止某个实例的调度循环：停表 + 释放计时器 + 取消 CTS + <b>递增代次</b>。
+        /// <para>
+        /// ★ 代次递增是"停止后不复活"的裁决依据：所有仍在运行的旧回调在下一次同步点
+        /// 都会发现代次不匹配，从而放弃重新调度、放弃写回结果。
+        /// </para>
+        /// <para>
+        /// ★ 取消/释放在锁外执行：<c>CancellationTokenSource.Cancel()</c> 会同步触发
+        /// 已注册的回调，回调不应该被同一把锁挡住。
+        /// </para>
+        /// </summary>
+        private void StopSchedule(string instanceId)
+        {
+            if (string.IsNullOrEmpty(instanceId)) return;
+
+            IPluginTimer timer = null;
+            System.Threading.CancellationTokenSource cts = null;
+
+            lock (_scheduleLock)
+            {
+                // ★ 代次递增：旧回调在继续之前都会核对代次
+                _generations.AddOrUpdate(instanceId, 1, (k, v) => v + 1);
+
+                if (_timers.TryGetValue(instanceId, out timer)) _timers.Remove(instanceId);
+                if (_cts.TryGetValue(instanceId, out cts)) _cts.Remove(instanceId);
+            }
+
+            try { timer?.Stop(); } catch { }
+            try { timer?.Dispose(); } catch { }
+            try { cts?.Cancel(); } catch { }
+            try { cts?.Dispose(); } catch { }
         }
 
         public void Start()
@@ -301,19 +440,15 @@ namespace LiteMonitor.src.Plugins
 
         public void Stop()
         {
-            foreach (var t in _timers.Values)
+            List<string> ids;
+            lock (_scheduleLock)
             {
-                t.Stop();
-                t.Dispose();
+                ids = _timers.Keys.Concat(_cts.Keys).Distinct().ToList();
             }
-            _timers.Clear();
 
-            foreach (var cts in _cts.Values)
-            {
-                cts.Cancel();
-                cts.Dispose();
-            }
-            _cts.Clear();
+            // ★ 逐实例走 StopSchedule：每个实例的代次都会递增，
+            //   返回后旧计时器不得再自行启动（LM-001）。
+            foreach (var id in ids) StopSchedule(id);
         }
 
         private bool IsPluginVisible(string instanceId)
@@ -350,84 +485,212 @@ namespace LiteMonitor.src.Plugins
             return Math.Max(interval, GetMinimumInterval(tmpl));
         }
 
-        private void StartInstance(PluginInstanceConfig inst, PluginTemplate tmpl)
+        /// <summary>
+        /// 启动某个插件实例的调度循环。
+        /// <para>
+        /// ★ 先无条件停掉同一实例可能残留的旧循环，保证"同一实例最多一个有效调度循环"（LM-001）。
+        /// </para>
+        /// </summary>
+        internal void StartInstance(PluginInstanceConfig inst, PluginTemplate tmpl)
         {
+            if (inst == null || tmpl == null) return;
+
+            // ★ 同实例重复启动（快速 stop/start/restart）时，先彻底停掉旧循环：
+            //   旧计时器被释放、旧代次作废，剩下唯一一条新循环。
+            StopSchedule(inst.Id);
+
             var cts = new System.Threading.CancellationTokenSource();
-            _cts[inst.Id] = cts;
+            // ★ 提前取出 token：CTS 被释放后再访问 .Token 会抛 ObjectDisposedException
+            var token = cts.Token;
+
+            // ★ 代次：本次启动的代号。Stop/StopInstance/再次 StartInstance 都会让它递增。
+            long generation = _generations.AddOrUpdate(inst.Id, 1, (k, v) => v + 1);
+
+            lock (_scheduleLock)
+            {
+                _cts[inst.Id] = cts;
+            }
 
             // 设定间隔 (单位：秒)
             int interval = GetEffectiveInterval(inst, tmpl);
 
             // 使用 Timer 统一调度：初始间隔设为极短(例如 50ms)以触发立即执行
             // 这样第一次执行的结果也能被捕获，从而触发失败重试逻辑
-            var newTimer = new System.Timers.Timer(50); 
-            newTimer.AutoReset = false; // Stop-Wait 模式
-            
-            newTimer.Elapsed += async (s, e) => 
+            IPluginTimer newTimer = CreateTimer(InitialTickDelayMs,
+                timer => RunScheduleTickAsync(inst, tmpl, generation, interval, timer, token));
+
+            lock (_scheduleLock)
             {
-                if (cts.IsCancellationRequested) return;
+                _timers[inst.Id] = newTimer;
+            }
+
+            newTimer.Start();
+
+            // ★★★ Inject Initial Loading State ★★★
+            InitDefaultValues(inst, tmpl);
+        }
+
+        /// <summary>
+        /// 调度心跳：执行插件，并根据结果调整下一次心跳的间隔。
+        /// <para>
+        /// ★ 不可见分支必须留在 <c>try</c> 内部 —— 否则它会在进入 <c>finally</c> 之前
+        /// 直接返回，而"重新武装计时器"只发生在 <c>finally</c> 里，
+        /// <c>AutoReset=false</c> 的计时器便再也不会自行触发 ⇒ 该实例的调度永久停摆（LM-001 根因）。
+        /// </para>
+        /// <para>
+        /// ★ 所有退出路径（可见 / 不可见 / 失败 / 取消 / 停止）统一由 <c>finally</c> 收尾。
+        /// </para>
+        /// </summary>
+        private async Task RunScheduleTickAsync(PluginInstanceConfig inst, PluginTemplate tmpl, long generation, int intervalSeconds, IPluginTimer timer, System.Threading.CancellationToken token)
+        {
+            try
+            {
+                // ★ 代次校验：Stop/Restart 之后，旧回调必须自我否决
+                if (!IsCurrentGeneration(inst.Id, generation)) return;
+                if (token.IsCancellationRequested) return;
 
                 // [Optimization] On-Demand Update: Skip if not visible
-                if (!IsPluginVisible(inst.Id))
+                if (!ProbeVisible(inst.Id))
                 {
-                    newTimer.Interval = 2000; // Check again in 2s
-                    return;
+                    timer.Interval = InvisibleRetryIntervalMs; // Check again in 2s
+                    return; // ★ 仍然会走 finally → 统一收尾 → 重新武装
                 }
 
-                try 
-                {
-                    // Execute and get success status
-                    bool success = await _executor.ExecuteInstanceAsync(inst, tmpl, cts.Token);
-                    
-                    // 动态调整间隔：如果失败，使用快速重试间隔 (5s)；如果成功，恢复正常间隔
-                    if (!success)
-                    {
-                        // 失败逻辑：线性退避 (5s, 10s, 15s... max 60s)
-                        int fails = _consecutiveFailures.AddOrUpdate(inst.Id, 1, (k, v) => v + 1);
-                        int backoff = Math.Min(fails * PluginConstants.RETRY_INTERVAL_MS, 60000);
-                        
-                        // [Fix] 连续失败达到一定次数时，尝试重置网络客户端，以应对网络环境切换(如VPN/代理)导致的连接僵死
-                        // [Optimization] Reduced threshold from 5 to 3 to recover faster from network changes
-                        if (fails >= 3 && fails % 3 == 0)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Plugin {inst.Id} failed {fails} times. Resetting network clients and clearing cache.");
-                            _executor.ResetNetworkClients();
-                            _executor.ClearCache(inst.Id);
-                        }
+                // Execute and get success status
+                bool success = await ProbeExecute(inst, tmpl, token);
 
-                        newTimer.Interval = backoff;
-                        System.Diagnostics.Debug.WriteLine($"Plugin {inst.Id} failed ({fails} times). Retry in {backoff}ms.");
-                    }
-                    else
+                // ★ 再次校验代次：旧代次的执行结果不得写回（契约 C6）
+                if (!IsCurrentGeneration(inst.Id, generation)) return;
+
+                // 动态调整间隔：如果失败，使用快速重试间隔 (5s)；如果成功，恢复正常间隔
+                if (!success)
+                {
+                    // 失败逻辑：线性退避 (5s, 10s, 15s... max 60s)
+                    int fails = _consecutiveFailures.AddOrUpdate(inst.Id, 1, (k, v) => v + 1);
+                    int backoff = Math.Min(fails * PluginConstants.RETRY_INTERVAL_MS, 60000);
+
+                    // [Fix] 连续失败达到一定次数时，尝试重置网络客户端，以应对网络环境切换(如VPN/代理)导致的连接僵死
+                    // [Optimization] Reduced threshold from 5 to 3 to recover faster from network changes
+                    if (fails >= 3 && fails % 3 == 0)
                     {
-                        // 成功：重置失败计数
-                        if (_consecutiveFailures.ContainsKey(inst.Id)) _consecutiveFailures.TryRemove(inst.Id, out _);
-                        newTimer.Interval = interval * 1000;
+                        System.Diagnostics.Debug.WriteLine($"Plugin {inst.Id} failed {fails} times. Resetting network clients and clearing cache.");
+                        _executor.ResetNetworkClients();
+                        _executor.ClearCache(inst.Id);
+                        NetworkResetObserver?.Invoke(inst.Id);
                     }
+
+                    timer.Interval = backoff;
+                    System.Diagnostics.Debug.WriteLine($"Plugin {inst.Id} failed ({fails} times). Retry in {backoff}ms.");
+                }
+                else
+                {
+                    // 成功：重置失败计数
+                    if (_consecutiveFailures.ContainsKey(inst.Id)) _consecutiveFailures.TryRemove(inst.Id, out _);
+                    timer.Interval = intervalSeconds * 1000;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Timer execution failed: {ex.Message}");
+
+                // ★ 代次校验：旧代次的异常不得写回失败计数（契约 C6）
+                if (!IsCurrentGeneration(inst.Id, generation)) return;
+                // ★ 取消不是失败：不应计入连续失败
+                if (token.IsCancellationRequested) return;
+
+                // 异常逻辑：同样应用退避
+                int fails = _consecutiveFailures.AddOrUpdate(inst.Id, 1, (k, v) => v + 1);
+                int backoff = Math.Min(fails * PluginConstants.RETRY_INTERVAL_MS, 60000);// 最大 60s
+                timer.Interval = backoff;
+            }
+            finally
+            {
+                // ★★ 统一收尾（LM-001 修复要求 1）：所有退出路径都经过这里，
+                //    由这里统一裁决是否重新武装计时器。
+                RearmSchedule(inst, timer, generation, token);
+            }
+        }
+
+        /// <summary>
+        /// 统一收尾：决定是否重新武装计时器。
+        /// <para>
+        /// ★ 以下任一条件成立时都<b>不得</b>重新武装：
+        /// 代次已变（实例被停止/重启）、令牌已取消（实例被停止）、
+        /// 实例已被禁用、计时器已不是该实例当前的计时器（被更替）。
+        /// </para>
+        /// </summary>
+        private void RearmSchedule(PluginInstanceConfig inst, IPluginTimer timer, long generation, System.Threading.CancellationToken token)
+        {
+            try
+            {
+                // ★ 代次不匹配 → 旧调度不得复活
+                if (!IsCurrentGeneration(inst.Id, generation)) return;
+                if (token.IsCancellationRequested) return;
+                if (!inst.Enabled) return;
+
+                // ★ 计时器必须仍是该实例当前的计时器
+                lock (_scheduleLock)
+                {
+                    if (!_timers.TryGetValue(inst.Id, out var current) || !ReferenceEquals(current, timer)) return;
+                }
+
+                timer.Start();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[PluginManager] Failed to re-arm timer for {inst?.Id}: {ex.Message}");
+            }
+        }
+
+        /// <summary>某实例的当前代次是否仍等于回调自称的代次。</summary>
+        private bool IsCurrentGeneration(string instanceId, long generation)
+        {
+            return _generations.TryGetValue(instanceId, out var current) && current == generation;
+        }
+
+        /// <summary>可见性探针：注入时走注入实现，否则走真实实现。</summary>
+        private bool ProbeVisible(string instanceId)
+        {
+            var probe = VisibilityProbe;
+            return probe != null ? probe(instanceId) : IsPluginVisible(instanceId);
+        }
+
+        /// <summary>执行探针：注入时走注入实现，否则走真实执行器。</summary>
+        private Task<bool> ProbeExecute(PluginInstanceConfig inst, PluginTemplate tmpl, System.Threading.CancellationToken token)
+        {
+            var probe = ExecutionProbe;
+            return probe != null ? probe(inst, tmpl, token) : _executor.ExecuteInstanceAsync(inst, tmpl, token);
+        }
+
+        /// <summary>创建调度计时器：注入工厂时走注入实现，否则走生产计时器。</summary>
+        private IPluginTimer CreateTimer(double intervalMs, Func<IPluginTimer, Task> onTick)
+        {
+            var factory = TimerFactory;
+            return factory != null ? factory(intervalMs, onTick) : CreateProductionTimer(intervalMs, onTick);
+        }
+
+        /// <summary>
+        /// 生产计时器：<see cref="System.Timers.Timer"/> 的 AutoReset=false（Stop-Wait）包装。
+        /// <para>
+        /// ★ <c>Elapsed</c> 是 <c>async void</c> 事件处理器：其中抛出的异常会逃逸到线程池，
+        /// 在 .NET Core 上会直接终止进程。这里显式吞掉异常，保证调度异常不会变成未观察异常（T7）。
+        /// </para>
+        /// </summary>
+        internal static IPluginTimer CreateProductionTimer(double intervalMs, Func<IPluginTimer, Task> onTick)
+        {
+            var wrapper = new SystemPluginTimer(intervalMs);
+            wrapper.Inner.Elapsed += async (s, e) =>
+            {
+                try
+                {
+                    await onTick(wrapper).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Timer execution failed: {ex.Message}");
-                    
-                    // 异常逻辑：同样应用退避
-                    int fails = _consecutiveFailures.AddOrUpdate(inst.Id, 1, (k, v) => v + 1);
-                    int backoff = Math.Min(fails * PluginConstants.RETRY_INTERVAL_MS, 60000);// 最大 60s
-                    newTimer.Interval = backoff;
-                }
-                finally 
-                {
-                    if (_timers.ContainsKey(inst.Id) && inst.Enabled && !cts.IsCancellationRequested)
-                    {
-                        try { newTimer.Start(); } catch {} 
-                    }
+                    System.Diagnostics.Debug.WriteLine($"[PluginManager] Timer tick failed: {ex.Message}");
                 }
             };
-            
-            newTimer.Start();
-            _timers[inst.Id] = newTimer;
-            
-            // ★★★ Inject Initial Loading State ★★★
-            InitDefaultValues(inst, tmpl);
+            return wrapper;
         }
 
         private void InitDefaultValues(PluginInstanceConfig inst, PluginTemplate tmpl)
