@@ -226,6 +226,122 @@ namespace LiteMonitor.Tests
         }
 
         // ==========================================================
+        // 4b. 三种计数口径的边界（S3.4：步骤数按目标计）
+        // ==========================================================
+
+        /// <summary>
+        /// 步骤数**按目标计**：每个目标拥有独立的步骤预算（≤ 16）。
+        /// <para>边界：第 16 步通过、第 17 步以 <c>LM009_STEP_LIMIT</c> 失败；
+        /// 一个目标用满预算**不影响**其它目标（这正是"跨目标不累计"的含义）。</para>
+        /// </summary>
+        [Fact]
+        public void 步骤数_按目标计_每个目标独立预算_第16步通过第17步失败()
+        {
+            using var scope = new PluginSandboxScope();
+            using var t1 = scope.BeginTarget();
+            using var t2 = scope.BeginTarget();
+
+            // 第 16 步（含）通过
+            for (int i = 0; i < PluginSandboxLimits.MaxStepsPerExecution; i++)
+            {
+                t1.EnsureStepAllowed();
+            }
+            Assert.Equal(PluginSandboxLimits.MaxStepsPerExecution, t1.StepCount);
+
+            // 第 17 步失败
+            var ex = Assert.Throws<PluginSandboxException>(() => t1.EnsureStepAllowed());
+            Assert.Equal(PluginSandboxReasons.StepLimit, ex.Reason);
+            Assert.Contains(PluginSandboxLimits.MaxStepsPerExecution.ToString(), ex.Message);
+
+            // t2 的预算完全独立：仍可走满 16 步（第 17 步才失败）
+            for (int i = 0; i < PluginSandboxLimits.MaxStepsPerExecution; i++)
+            {
+                t2.EnsureStepAllowed();
+            }
+            Assert.Equal(PluginSandboxLimits.MaxStepsPerExecution, t2.StepCount);
+            Assert.Equal(
+                PluginSandboxReasons.StepLimit,
+                Assert.Throws<PluginSandboxException>(() => t2.EnsureStepAllowed()).Reason);
+        }
+
+        /// <summary>
+        /// 目标展开数**按实例计**：目标级作用域上的计数累加到**实例级作用域**上，
+        /// 一次执行内跨目标累计；单次展开超过上限仍报 <c>LM009_TARGET_LIMIT</c>。
+        /// </summary>
+        [Fact]
+        public void 目标展开数_按实例计_跨目标累计到实例作用域()
+        {
+            using var scope = new PluginSandboxScope();
+            using var t1 = scope.BeginTarget();
+            using var t2 = scope.BeginTarget();
+
+            scope.EnsureTargetsAllowed(40);
+            t2.EnsureTargetsAllowed(30);
+
+            // 实例级累计值（目标级作用域的调用也计入其中）
+            Assert.Equal(70, scope.TargetCount);
+            Assert.Equal(70, t1.TargetCount);
+
+            // 单次展开超过上限 → 目标数上限（与步骤数上限互不掩盖）
+            var ex = Assert.Throws<PluginSandboxException>(
+                () => scope.EnsureTargetsAllowed(PluginSandboxLimits.MaxTargetsPerStep + 1));
+            Assert.Equal(PluginSandboxReasons.TargetLimit, ex.Reason);
+            Assert.NotEqual(PluginSandboxReasons.StepLimit, ex.Reason);
+        }
+
+        /// <summary>
+        /// 总时长**按实例计**：目标级作用域与实例级作用域**共用同一个截止时刻与取消令牌**
+        /// ⇒ 总时长在一次执行内跨目标累计（而不是每个目标各算一份）。
+        /// </summary>
+        [Fact]
+        public void 总时长_按实例计_跨目标共享同一截止时刻与令牌()
+        {
+            using var scope = new PluginSandboxScope(
+                CancellationToken.None,
+                TimeSpan.FromMilliseconds(150),
+                PluginSandboxLimits.MaxStepsPerExecution,
+                PluginSandboxLimits.MaxTargetsPerStep);
+
+            using var t1 = scope.BeginTarget();
+            using var t2 = scope.BeginTarget();
+
+            // 同一截止时刻、同一令牌（⇒ 一个 target 结束不会释放整次执行的令牌）
+            Assert.Equal(scope.DeadlineUtc, t1.DeadlineUtc);
+            Assert.Equal(scope.DeadlineUtc, t2.DeadlineUtc);
+            Assert.Equal(scope.Token, t1.Token);
+            Assert.Equal(scope.Token, t2.Token);
+            Assert.Same(scope, t1.Owner);
+            Assert.Same(scope, t2.Owner);
+
+            Thread.Sleep(250);
+
+            // 目标级作用域也按**实例级**截止时刻判定到期
+            var ex = Assert.Throws<PluginSandboxException>(() => t2.EnsureNotExpired());
+            Assert.Equal(PluginSandboxReasons.DeadlineExceeded, ex.Reason);
+            Assert.True(scope.IsExpired);
+        }
+
+        /// <summary>
+        /// 目标级作用域被释放时，**不得**连带释放实例级作用域的取消令牌
+        /// （否则一个 target 结束就会打断其它 target 的请求）。
+        /// </summary>
+        [Fact]
+        public void 目标级作用域释放_不释放实例级作用域的令牌()
+        {
+            using var scope = new PluginSandboxScope();
+
+            var target = scope.BeginTarget();
+            target.EnsureStepAllowed();
+            target.Dispose();
+
+            Assert.False(scope.Token.IsCancellationRequested, "目标级作用域释放后实例级令牌被误释放");
+            // 实例级作用域仍然可用
+            scope.EnsureStepAllowed();
+            scope.EnsureNotExpired();
+            Assert.False(scope.Token.IsCancellationRequested);
+        }
+
+        // ==========================================================
         // 5. 目标展开数上限
         // ==========================================================
 

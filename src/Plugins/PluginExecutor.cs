@@ -180,8 +180,11 @@ namespace LiteMonitor.src.Plugins
 
         /// <summary>
         /// [LM-009] 执行一个插件实例。
-        /// <para>实例级沙箱作用域在这里创建：覆盖**整个实例执行**（所有 target、所有步骤，跨 target 累计），
-        /// 总时长上限即 <see cref="PluginSandboxLimits.MaxExecutionDurationMs"/>。</para>
+        /// <para>实例级沙箱作用域在这里创建：覆盖**整个实例执行**（所有 target、所有步骤），
+        /// 其中**总时长上限跨 target 累计**（即 <see cref="PluginSandboxLimits.MaxExecutionDurationMs"/>），
+        /// **目标展开数也按实例累计**；**步骤数上限按 target 计**（每个 target 至多
+        /// <see cref="PluginSandboxLimits.MaxStepsPerExecution"/> 步，见
+        /// <see cref="PluginSandboxScope.BeginTarget"/>）。</para>
         /// </summary>
         public async Task<bool> ExecuteInstanceAsync(PluginInstanceConfig inst, PluginTemplate tmpl, System.Threading.CancellationToken token = default)
         {
@@ -235,8 +238,14 @@ namespace LiteMonitor.src.Plugins
                     }
 
                     string keySuffix = (inst.Targets != null && inst.Targets.Count > 0) ? $".{idx}" : "";
-                    
-                    return await ExecuteSingleTargetAsync(inst, tmpl, mergedInputs, keySuffix, token, scope, declaredHosts);
+
+                    // [LM-009] 步骤数**按目标计**（S3.4）：每个 target 开一个独立的步骤计数窗口。
+                    // 目标级作用域与实例级作用域共享**总时长截止时刻 / 取消令牌 / 目标展开数累计**
+                    // （这三项仍按实例计），只有步骤计数是独立的 ⇒ 目标数 × 每目标步数
+                    // 不再互相放大，单条链的长度仍被 ≤ 16 步限制住。
+                    using var targetScope = scope.BeginTarget();
+
+                    return await ExecuteSingleTargetAsync(inst, tmpl, mergedInputs, keySuffix, token, targetScope, declaredHosts);
                 }, token));
             }
             try
@@ -251,8 +260,10 @@ namespace LiteMonitor.src.Plugins
 
         /// <summary>
         /// [LM-009] 执行单个目标（一个 target 的完整步骤链）。
-        /// <para><paramref name="scope"/> 是实例级沙箱作用域：步骤数在实例内累计，
-        /// 总时长跨 target 累计；<paramref name="declaredHosts"/> 是插件显式声明的目标主机集合
+        /// <para><paramref name="scope"/> 是**目标级**沙箱作用域（由实例级作用域
+        /// <see cref="PluginSandboxScope.BeginTarget"/> 开启）：**步骤数在该目标内累计**
+        /// （跨 target 不累计），**总时长与目标展开数仍按实例计**（与实例级作用域共享）；
+        /// <paramref name="declaredHosts"/> 是插件显式声明的目标主机集合
         /// （带凭据的请求只允许发往其中的主机）。</para>
         /// </summary>
         private async Task<bool> ExecuteSingleTargetAsync(PluginInstanceConfig inst, PluginTemplate tmpl, Dictionary<string, string> inputs, string keySuffix, System.Threading.CancellationToken token, PluginSandboxScope scope, HashSet<string> declaredHosts)
@@ -278,7 +289,7 @@ namespace LiteMonitor.src.Plugins
                         ResponseEncoding = null 
                     };
 
-                    // [LM-009] legacy 直接取数路径也算**一步**（步骤数在实例内累计）。
+                    // [LM-009] legacy 直接取数路径也算**一步**（步骤数在**该目标内**累计）。
                     scope.EnsureStepAllowed();
                     scope.EnsureNotExpired();
 
@@ -371,7 +382,7 @@ namespace LiteMonitor.src.Plugins
 
         /// <summary>
         /// [LM-009] 带沙箱作用域的单步执行（生产路径与测试共用同一条路径）。
-        /// <para>步骤数上限在这里判定（每步开始前一次，实例内累计，native:// 步骤同样计入）；
+        /// <para>步骤数上限在这里判定（每步开始前一次，**按目标计**，native:// 步骤同样计入）；
         /// 总时长到期 → 明确失败（原因码 <see cref="PluginSandboxReasons.DeadlineExceeded"/>）；
         /// 并发槽位与响应体字节上限由取数路径在作用域内完成。</para>
         /// </summary>
@@ -387,7 +398,7 @@ namespace LiteMonitor.src.Plugins
                     }
                 }
 
-                // [LM-009] 步骤数上限：每步开始前判定一次（实例内累计）。
+                // [LM-009] 步骤数上限：每步开始前判定一次（**按目标计**：目标级作用域内累计）。
                 scope.EnsureStepAllowed();
                 // [LM-009] 总时长上限：已到期则明确失败，而不是继续发请求。
                 scope.EnsureNotExpired();

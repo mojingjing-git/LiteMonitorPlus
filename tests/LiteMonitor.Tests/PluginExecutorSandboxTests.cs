@@ -180,6 +180,75 @@ namespace LiteMonitor.Tests
         }
 
         // ==========================================================
+        // 2b. 步骤数上限（按目标计 —— S3.4）
+        // ==========================================================
+
+        /// <summary>
+        /// 端到端（S3.4 新增）：<b>多目标</b>下"目标数 × 每目标步数"的乘积<b>超过 16</b>
+        /// （20 个目标 × 1 步 = 20 &gt; 16），但<b>每个目标</b>的步数都 ≤ 16 ⇒
+        /// 整次执行必须**成功**，失败原因码**不得**是 <c>LM009_STEP_LIMIT</c>。
+        /// <para>旧语义（步骤数实例内累计）下这里会以 LM009_STEP_LIMIT 失败 ——
+        /// 那正是本次要消灭的用户可见功能退化（Stock 配 9 个标的、Weather 配 6 个城市即失败）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 端到端_多目标_每目标步数未超限_乘积超16也成功()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Text("ok")));
+            using var exec = new PluginExecutor();
+
+            int targetCount = 20;   // 20 × 1 = 20 步 > 16（每个目标仍只有 1 步）
+            var inst = NewInstance("inst-multi-target");
+            inst.Targets = Enumerable.Range(0, targetCount)
+                .Select(i => new Dictionary<string, string> { ["n"] = i.ToString() })
+                .ToList();
+
+            // 每个目标请求各自的 URL（避免在途请求被合并 ⇒ 覆盖到"每个目标都真的跑了一遍"）
+            var tmpl = ChainTemplate(server.Url + "/m?n={{n}}");
+            tmpl.Inputs = new List<PluginInput> { new PluginInput { Key = "n", DefaultValue = "0" } };
+
+            PluginSandboxException failure = null;
+            bool ok = false;
+            try { ok = await exec.ExecuteInstanceAsync(inst, tmpl); }
+            catch (PluginSandboxException ex) { failure = ex; }
+
+            // 失败原因码不得是步骤数上限（也不得是任何其它上限）
+            Assert.NotEqual(PluginSandboxReasons.StepLimit, failure?.Reason);
+            Assert.Null(failure);
+            Assert.True(ok, "多目标（每目标步数 ≤ 16）时执行应当成功");
+            Assert.True(
+                server.RequestCount >= targetCount,
+                $"每个目标都应发出请求（实际 {server.RequestCount} / {targetCount}）");
+        }
+
+        /// <summary>
+        /// 端到端（S3.4 新增）：多目标下，<b>单个目标</b>的步骤链超过 16 步时
+        /// 仍以 <c>LM009_STEP_LIMIT</c> 失败 —— 步骤数上限<b>没有被放宽</b>，
+        /// 只是从"实例内累计"改成"按目标计"。
+        /// <para>两个上限互不掩盖：本例目标数（3）远低于目标上限（64），
+        /// 失败原因码必须是步骤数上限而不是目标数上限。</para>
+        /// </summary>
+        [Fact]
+        public async Task 端到端_多目标_单目标链超16步_仍按LM009_STEP_LIMIT失败()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Text("ok")));
+            using var exec = new PluginExecutor();
+
+            var inst = NewInstance("inst-multi-step-limit");
+            inst.Targets = Enumerable.Range(0, 3)
+                .Select(i => new Dictionary<string, string> { ["n"] = i.ToString() })
+                .ToList();
+
+            // 每个目标 17 步 ⇒ 单条链超限
+            var tmpl = ChainTemplate(server.Url + "/s", PluginSandboxLimits.MaxStepsPerExecution + 1);
+
+            var ex = await Assert.ThrowsAnyAsync<PluginSandboxException>(() => exec.ExecuteInstanceAsync(inst, tmpl));
+
+            Assert.Equal(PluginSandboxReasons.StepLimit, ex.Reason);
+            // 不得被目标数上限掩盖
+            Assert.NotEqual(PluginSandboxReasons.TargetLimit, ex.Reason);
+        }
+
+        // ==========================================================
         // 3. 目标展开数上限
         // ==========================================================
 
@@ -208,9 +277,10 @@ namespace LiteMonitor.Tests
 
         /// <summary>
         /// 端到端：目标数**恰好等于**上限（64）时，目标上限**不得**触发。
-        /// <para>注意两个上限的交互：64 个目标 × 1 步 = 64 步，而步骤数上限（16）是
-        /// <b>实例内累计</b>的（每个 target 的步骤链都计入同一份预算）⇒ 本次执行会以
-        /// "步骤数上限"失败。这正是"目标上限（64）没有触发"的证据。</para>
+        /// <para>S3.4 语义变更：步骤数上限**按目标计**（每个 target 至多 16 步），
+        /// 64 个目标 × 1 步 = 64 步 &gt; 16，但**每个目标都只有 1 步** ⇒ 不触达步骤数上限，
+        /// 整次执行**应当成功** —— 这正是"目标上限（64）没有触发"的证据。
+        /// （旧语义"步骤数实例内累计"下这里会以 LM009_STEP_LIMIT 失败。）</para>
         /// </summary>
         [Fact]
         public async Task 端到端_目标数恰好等于上限_目标上限不触发()
@@ -225,10 +295,16 @@ namespace LiteMonitor.Tests
 
             var tmpl = ChainTemplate(server.Url + "/t");
 
-            var ex = await Assert.ThrowsAnyAsync<PluginSandboxException>(() => exec.ExecuteInstanceAsync(inst, tmpl));
+            PluginSandboxException failure = null;
+            bool ok = false;
+            try { ok = await exec.ExecuteInstanceAsync(inst, tmpl); }
+            catch (PluginSandboxException ex) { failure = ex; }
 
-            Assert.NotEqual(PluginSandboxReasons.TargetLimit, ex.Reason);
-            Assert.Equal(PluginSandboxReasons.StepLimit, ex.Reason);
+            // 目标上限（64）不得触发
+            Assert.NotEqual(PluginSandboxReasons.TargetLimit, failure?.Reason);
+            // 步骤数按目标计 ⇒ 每个目标只有 1 步 ⇒ 整次执行成功，不得因步骤数上限失败
+            Assert.Null(failure);
+            Assert.True(ok, "目标数等于上限（每个目标仅 1 步）时执行应当成功");
             // 目标上限放行 ⇒ 请求确实发出去了（不是被目标上限挡下的）
             Assert.True(server.RequestCount > 0, "目标数等于上限时请求必须照常发出");
         }
@@ -270,6 +346,47 @@ namespace LiteMonitor.Tests
 
             var ex = await Assert.ThrowsAnyAsync<PluginSandboxException>(() => task);
             Assert.Equal(PluginSandboxReasons.DeadlineExceeded, ex.Reason);
+        }
+
+        /// <summary>
+        /// 端到端（S3.4 新增）：总时长上限**跨 target 累计** —— 一次执行共用**一个截止时刻**。
+        /// <para>场景：作用域总时长 400 ms，实例有 12 个目标；执行器按索引错峰启动目标
+        /// （第 i 个目标在 i × 50 ms 启动）⇒ 第 8 个及以后的目标在**实例截止时刻之后**才启动。
+        /// 它们必须被**实例级**截止时刻拒掉（原因码 <c>LM009_DEADLINE_EXCEEDED</c>）——
+        /// 若总时长改成"每目标各自计算"，这些后启动的目标会拿到全新的 400 ms 预算而成功执行，
+        /// 本用例随即失败。</para>
+        /// <para>注意失败原因码必须是总时长到期，**不得**是步骤数上限（12 个目标 × 1 步 = 12 步，
+        /// 按目标计与按实例计都不触达 16 步）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 端到端_总时长跨target累计_后启动的target仍按实例截止时刻判定()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Text("ok")));
+            using var exec = new PluginExecutor();
+
+            var inst = NewInstance("inst-deadline-cumulative");
+            inst.Targets = Enumerable.Range(0, 12)
+                .Select(i => new Dictionary<string, string> { ["n"] = i.ToString() })
+                .ToList();
+
+            var tmpl = ChainTemplate(server.Url + "/d");
+
+            using var scope = new PluginSandboxScope(
+                CancellationToken.None,
+                TimeSpan.FromMilliseconds(400),
+                PluginSandboxLimits.MaxStepsPerExecution,
+                PluginSandboxLimits.MaxTargetsPerStep);
+
+            var task = RunInstanceWithScopeAsync(exec, inst, tmpl, scope,
+                PluginProcessor.GetDeclaredHosts(tmpl));
+
+            var finished = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(30)));
+            Assert.True(ReferenceEquals(finished, task), "总时长上限未在预期时间内生效（用例可能挂死）");
+
+            var ex = await Assert.ThrowsAnyAsync<PluginSandboxException>(() => task);
+            Assert.Equal(PluginSandboxReasons.DeadlineExceeded, ex.Reason);
+            // 不得被步骤数上限掩盖（12 个目标 × 1 步 = 12 步 < 16）
+            Assert.NotEqual(PluginSandboxReasons.StepLimit, ex.Reason);
         }
 
         // ==========================================================
@@ -516,6 +633,91 @@ namespace LiteMonitor.Tests
 
             // 当前内置插件**没有任何**带凭据头的步骤 —— 新校验对内置插件零影响
             Assert.Equal(0, credentialStepCount);
+        }
+
+        /// <summary>
+        /// 实测全部内置插件（<c>resources/plugins/*.json</c>）在<b>多目标</b>下的沙箱行为（S3.4）。
+        /// <para>对每个内置插件：① 统计<b>每目标</b>的步骤链长度（必须 ≤ 16）；
+        /// ② 算出旧语义（步骤数实例内累计）下会被步骤数上限挡下的目标数；
+        /// ③ 用"旧语义恰好会失败"的目标数**实跑**一次，断言**不得**出现沙箱上限类失败
+        /// （尤其是 <c>LM009_STEP_LIMIT</c>）。</para>
+        /// <para>说明：为避免触公网，步骤 URL 一律改写到本地回环服务器（步骤条数不变）；
+        /// 这里测量的是<b>沙箱计数口径</b>，不是插件的业务正确性。</para>
+        /// </summary>
+        [Fact]
+        public async Task 内置插件_多目标实测_每目标步数均在上限内()
+        {
+            string dir = Path.Combine(AppContext.BaseDirectory, "resources", "plugins");
+            Assert.True(Directory.Exists(dir), $"未找到内置插件目录：{dir}");
+
+            var files = Directory.GetFiles(dir, "*.json")
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+            Assert.NotEmpty(files);
+
+            using var server = new TinyHttpServer(_ =>
+                Task.FromResult(TestResponse.Bytes(Encoding.UTF8.GetBytes("{\"data\":{\"forecast\":[]}}"))));
+            using var exec = new PluginExecutor();
+
+            var lines = new List<string>();
+
+            foreach (var file in files)
+            {
+                var tmpl = JsonSerializer.Deserialize<PluginTemplate>(File.ReadAllText(file));
+                Assert.NotNull(tmpl);
+
+                var steps = tmpl.Execution?.Steps ?? new List<PluginExecutionStep>();
+                int perTargetSteps = Math.Max(steps.Count, 1);
+
+                // ① 每目标的步骤链长度必须 ≤ 步骤数上限（步骤数按目标计）
+                Assert.True(
+                    perTargetSteps <= PluginSandboxLimits.MaxStepsPerExecution,
+                    $"内置插件 {tmpl.Id} 的每目标步骤数 {perTargetSteps} 超过上限 {PluginSandboxLimits.MaxStepsPerExecution}");
+
+                // ② 旧语义（实例内累计）下允许的最大目标数
+                int oldMaxTargets = PluginSandboxLimits.MaxStepsPerExecution / perTargetSteps;
+                int probeTargets = oldMaxTargets + 1;   // 旧语义下恰好会失败的目标数
+
+                // ③ 实跑：步骤 URL 改写到本地回环（步骤条数保持不变），并去掉
+                //    extract/process/outputs/proxy —— 目的是**隔离沙箱计数口径**（插件业务正确性不在本用例范围：
+                //    本地哑响应会让"提取值缺失即快速失败"的产品逻辑报错、ProxyLatency 的代理也不可达，
+                //    二者都会掩盖沙箱结论）。
+                foreach (var step in steps)
+                {
+                    step.Url = server.Url + "/" + step.Id;
+                    step.Extract = null;
+                    step.Process = null;
+                    step.Proxy = null;
+                }
+                tmpl.Outputs = new List<PluginOutput>();
+
+                var inst = new PluginInstanceConfig { Id = "inst-builtin-" + tmpl.Id };
+                inst.Targets = Enumerable.Range(0, probeTargets)
+                    .Select(_ => new Dictionary<string, string>())
+                    .ToList();
+
+                string outcome;
+                try
+                {
+                    bool ok = await exec.ExecuteInstanceAsync(inst, tmpl);
+                    outcome = ok ? "成功" : "失败（非沙箱上限：业务/解析/网络）";
+                }
+                catch (PluginSandboxException ex)
+                {
+                    outcome = "沙箱上限失败：" + ex.Reason;
+                }
+
+                // 沙箱的三个上限都不得触发（尤其步骤数上限）
+                Assert.DoesNotContain(PluginSandboxReasons.StepLimit, outcome);
+                Assert.DoesNotContain(PluginSandboxReasons.TargetLimit, outcome);
+                Assert.DoesNotContain(PluginSandboxReasons.DeadlineExceeded, outcome);
+
+                lines.Add(
+                    $"{tmpl.Id,-14} 每目标步数={perTargetSteps}  旧语义最大目标数={oldMaxTargets}  " +
+                    $"实跑目标数={probeTargets}  结果={outcome}");
+            }
+
+            _output.WriteLine("内置插件多目标实测（步骤数按目标计）：");
+            foreach (var line in lines) _output.WriteLine("  " + line);
         }
 
         // ==========================================================

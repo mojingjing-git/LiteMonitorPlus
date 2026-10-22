@@ -521,12 +521,41 @@ namespace LiteMonitor.src.Plugins
     /// <para>把【步骤数 / 目标展开数 / 单次执行总时长 / 并发】四个上限收在同一个对象里；
     /// 触达任何上限都抛 <see cref="PluginSandboxException"/>（明确原因码），
     /// <b>不会</b>静默截断后当作成功。</para>
+    ///
+    /// <para><b>计数口径（S3.4 裁决）</b> —— 三种口径互不重叠，各有且只有一个判定点：</para>
+    /// <list type="bullet">
+    /// <item><b>步骤数 —— 按目标计</b>：每个 target 拥有<b>独立的</b>步骤预算
+    /// （≤ <see cref="PluginSandboxLimits.MaxStepsPerExecution"/>）。
+    /// 该上限针对的是"单条链无限长"（声明式插件用超长步骤链耗尽资源），
+    /// 跨 target <b>不</b>累加：目标数来自<b>用户配置</b>（<c>PluginInstanceConfig.Targets</c>），
+    /// 插件无法自行增加目标数；且跨目标的总量放大已被"目标数 ≤ 64 × 总时长 ≤ 30 s × 并发 ≤ 8"
+    /// 三道<b>独立</b>闸门覆盖 ⇒ 改成按目标计<b>不引入新的攻击面</b>。
+    /// 判定点：<see cref="EnsureStepAllowed"/>（在<b>目标级作用域</b>上调用）。</item>
+    /// <item><b>目标展开数 —— 按实例计</b>：一次执行内所有 target 的目标数<b>累计</b>
+    /// （≤ <see cref="PluginSandboxLimits.MaxTargetsPerStep"/>）。
+    /// 判定点：<see cref="EnsureTargetsAllowed"/>（在<b>实例级作用域</b>上调用）。</item>
+    /// <item><b>单次执行总时长 —— 按实例计</b>：一次执行<b>共用一个截止时刻</b>
+    /// （≤ <see cref="PluginSandboxLimits.MaxExecutionDurationMs"/>），跨 target 累计。
+    /// 判定点：<see cref="EnsureNotExpired"/>（实例级与目标级作用域共用同一截止时刻）。</item>
+    /// <item><b>并发 —— 按进程计</b>：进程级信号量（见 <see cref="PluginSandbox"/>）。</item>
+    /// </list>
+    ///
+    /// <para><b>用法</b>：实例执行时用<b>实例级作用域</b>（<c>new PluginSandboxScope(token)</c>），
+    /// 每个 target 再用 <see cref="BeginTarget"/> 开一个<b>目标级作用域</b>：
+    /// 目标级作用域与实例级<b>共享</b>截止时刻 / 取消令牌 / 目标展开数累计，
+    /// 只有<b>步骤计数</b>是独立的。没有目标上下文的单作用域调用（直接使用原语），
+    /// 步骤数在<b>该作用域内累计</b>。</para>
     /// </summary>
     public sealed class PluginSandboxScope : IDisposable
     {
         private readonly CancellationTokenSource _cts;
+        private readonly bool _ownsCts;
         private readonly CancellationToken _outer;
         private readonly DateTime _deadlineUtc;
+
+        /// <summary>实例级作用域（非 null ⇒ 本作用域是目标级作用域，owner 为实例级作用域）。</summary>
+        private readonly PluginSandboxScope _owner;
+
         private int _stepCount;
         private int _targetCount;
         private int _disposed;
@@ -553,6 +582,7 @@ namespace LiteMonitor.src.Plugins
 
             _outer = cancellationToken;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _ownsCts = true;
             _deadlineUtc = DateTime.UtcNow + maxDuration;
             _cts.CancelAfter(maxDuration);
 
@@ -561,20 +591,58 @@ namespace LiteMonitor.src.Plugins
             MaxTargets = maxTargets;
         }
 
+        /// <summary>
+        /// 目标级作用域构造：与实例级作用域<b>共享</b>截止时刻 / 取消令牌 / 目标展开数累计，
+        /// 只有<b>步骤计数</b>是独立的（步骤数按目标计）。
+        /// </summary>
+        private PluginSandboxScope(PluginSandboxScope owner)
+        {
+            if (owner == null) throw new ArgumentNullException(nameof(owner));
+
+            _owner = owner;
+            _outer = owner._outer;
+            _cts = owner._cts;            // 共享：同一把取消令牌 ⇒ 总时长仍是"按实例计"
+            _ownsCts = false;              // 目标级作用域不拥有 CTS，释放时不连带释放实例级的
+            _deadlineUtc = owner._deadlineUtc;
+
+            MaxDuration = owner.MaxDuration;
+            MaxSteps = owner.MaxSteps;
+            MaxTargets = owner.MaxTargets;
+        }
+
+        /// <summary>
+        /// [LM-009] 为一个 target 开启<b>独立的步骤计数窗口</b>（步骤数按目标计）。
+        /// <para>返回的目标级作用域与本作用域共享<b>总时长截止时刻</b>、<b>取消令牌</b>、
+        /// <b>目标展开数累计</b>（都按实例计），只有<b>步骤计数</b>是独立的
+        /// ⇒ 每个 target 至多 <see cref="PluginSandboxLimits.MaxStepsPerExecution"/> 步，
+        /// 跨 target <b>不</b>累加。</para>
+        /// </summary>
+        public PluginSandboxScope BeginTarget()
+        {
+            return new PluginSandboxScope(this);
+        }
+
         /// <summary>本次执行允许的总时长。</summary>
         public TimeSpan MaxDuration { get; }
 
-        /// <summary>本次执行允许的步骤数上限。</summary>
+        /// <summary>本次执行允许的步骤数上限（<b>每个目标</b>各自的上限）。</summary>
         public int MaxSteps { get; }
 
-        /// <summary>单个步骤允许展开的目标数上限。</summary>
+        /// <summary>单个步骤允许展开的目标数上限（<b>按实例累计</b>）。</summary>
         public int MaxTargets { get; }
 
-        /// <summary>已执行的步骤数。</summary>
+        /// <summary>
+        /// 已执行的步骤数。
+        /// <para>实例级作用域 = 本作用域内累计（无目标上下文的单作用域用法）；
+        /// 目标级作用域 = <b>该目标</b>内的累计（步骤数按目标计）。</para>
+        /// </summary>
         public int StepCount => Volatile.Read(ref _stepCount);
 
-        /// <summary>已展开的目标数（累计，仅供观测）。</summary>
-        public int TargetCount => Volatile.Read(ref _targetCount);
+        /// <summary>已展开的目标数（<b>按实例累计</b>；目标级作用域读到的是实例级累计值）。</summary>
+        public int TargetCount => _owner != null ? _owner.TargetCount : Volatile.Read(ref _targetCount);
+
+        /// <summary>实例级作用域（非 null ⇒ 本作用域是目标级作用域）。</summary>
+        public PluginSandboxScope Owner => _owner;
 
         /// <summary>作用域令牌：与外部取消联动，并在总时长到期时自动取消（网络等待因此可被中止）。</summary>
         public CancellationToken Token => _cts.Token;
@@ -591,6 +659,9 @@ namespace LiteMonitor.src.Plugins
         /// <summary>
         /// 步骤数上限检查：每步开始前调用一次；超过上限抛
         /// <see cref="PluginSandboxException"/>（原因码 <see cref="PluginSandboxReasons.StepLimit"/>）。
+        /// <para><b>按目标计</b>（S3.4）：在<b>目标级作用域</b>（<see cref="BeginTarget"/>）上调用时，
+        /// 计数只覆盖<b>该目标</b>的步骤链（跨 target <b>不</b>累加）；
+        /// 在实例级作用域上直接调用时，计数覆盖<b>该作用域内</b>的步骤。</para>
         /// </summary>
         public void EnsureStepAllowed()
         {
@@ -606,10 +677,19 @@ namespace LiteMonitor.src.Plugins
         /// <summary>
         /// 目标展开数上限检查：<paramref name="targetCount"/> 为本步骤展开出的目标数；
         /// 超过上限抛 <see cref="PluginSandboxException"/>（原因码 <see cref="PluginSandboxReasons.TargetLimit"/>）。
+        /// <para><b>按实例计</b>：目标级作用域上的调用会累加到<b>实例级作用域</b>上，
+        /// 目标展开数在一次执行内跨 target 累计。</para>
         /// </summary>
         public void EnsureTargetsAllowed(int targetCount)
         {
             if (targetCount < 0) throw new ArgumentOutOfRangeException(nameof(targetCount));
+
+            // 目标展开数按实例计：目标级作用域的计数累加到实例级作用域上。
+            if (_owner != null)
+            {
+                _owner.EnsureTargetsAllowed(targetCount);
+                return;
+            }
 
             Interlocked.Add(ref _targetCount, targetCount);
 
@@ -697,6 +777,11 @@ namespace LiteMonitor.src.Plugins
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
+            // 目标级作用域与实例级作用域**共享** CTS ⇒ 只有拥有者才能释放它，
+            // 否则一个 target 结束就会把整次执行的取消令牌一并释放掉。
+            if (!_ownsCts) return;
+
             try { _cts.Dispose(); } catch (ObjectDisposedException) { }
         }
     }
