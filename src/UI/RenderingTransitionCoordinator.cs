@@ -721,9 +721,14 @@ namespace LiteMonitor
         /// 用回退样式生成一份**派生**主题副本（源主题**不被修改**）。
         /// <para>★ 复制策略：逐个 public 可写属性做**浅拷贝**，只把 <c>Color</c> 换成派生副本 ——
         /// 其余子配置按引用共享（与既有运行时副本口径一致：Layout 已经是缩放后的同一份）。</para>
-        /// <para>★ <c>Accent</c> 落点：<see cref="ColorConfig"/> **没有** accent 色槽，
-        /// 而 <c>ValueSafe/ValueWarn/ValueCrit</c> 是告警语义色（合同 §4.6 明确"保留告警语义和进度值"）
-        /// ⇒ accent **不**落到任何既有色槽（落点见交付报告，需主审裁决）。</para>
+        /// <para>★ <c>Accent</c> 落点（**主审裁决 D-H**，见计划 §4.5.11）⇒
+        /// <see cref="ColorConfig"/> 没有 accent 色槽，裁决落点是
+        /// <see cref="ColorConfig.TextTitle"/>（标题 / 强调前景色）。
+        /// <para>★ **不得**占用 <c>ValueSafe/ValueWarn/ValueCrit</c>（告警语义色）与
+        /// <c>BarLow/BarMid/BarHigh</c>（进度条分段色）—— 合同 §4.6 明文要求
+        /// "保留告警语义和进度值"。</para>
+        /// <para>★ 也不占用 <c>TextGroup</c>：分组标题色与 <c>MutedText</c> 同源会塌陷层级。
+        /// 正文可读性对比度仍由 <c>TextPrimary</c> 承担（合同 §9.5 的对比度口径针对正文与次要文字）。</para>
         /// </summary>
         internal static Theme BuildDerivedTheme(Theme source, LegacyFallbackStyle style)
         {
@@ -736,6 +741,9 @@ namespace LiteMonitor
             colors.Border = style.Border;
             colors.TextPrimary = style.Text;
             colors.TextSecondary = style.MutedText;
+
+            // ★ 裁决 D-H：accent 落到标题前景色。
+            colors.TextTitle = style.Accent;
 
             Theme derived = DeriveConfig(source);
             derived.Color = colors;

@@ -938,6 +938,68 @@ public sealed class RenderingTransitionCoordinatorTests
     }
 
     [Fact]
+    public void 回退样式_accent按裁决DH落到标题色且不侵占告警色与进度条色()
+    {
+        // ★ 主审裁决 D-H（计划 §4.5.11）：`LegacyFallbackStyle.Accent` 在 `ColorConfig` 里
+        //   没有同名列 ⇒ 裁决落到 `TextTitle`（标题 / 强调前景色）。
+        // ★ **不得**占用告警语义色（ValueSafe/ValueWarn/ValueCrit）与进度条分段色
+        //   （BarLow/BarMid/BarHigh）—— 合同 §4.6 明文"保留告警语义和进度值"。
+        // ★ 变体（把 `colors.TextTitle = style.Accent;` 删掉）必须让本用例变红。
+        Theme source = new()
+        {
+            Name = "T03AccentProbe",
+            Color = new ColorConfig
+            {
+                Background = "#111111",
+                GroupBackground = "#222222",
+                Border = "#333333",
+                TextPrimary = "#444444",
+                TextSecondary = "#555555",
+                TextTitle = "#666666",
+                TextGroup = "#777777",
+                ValueSafe = "#00FF00",
+                ValueWarn = "#FFAA00",
+                ValueCrit = "#FF0000",
+                BarLow = "#001122",
+                BarMid = "#334455",
+                BarHigh = "#667788",
+            }
+        };
+
+        LegacyFallbackStyle style = new(
+            Background: "#AABBCC",
+            PanelBackground: "#DDEEFF",
+            Border: "#112233",
+            Text: "#FFEEDD",
+            MutedText: "#AABBCC",
+            Accent: "#8FB4D9",
+            Diagnostics: Array.Empty<string>());
+
+        Theme derived = LegacyFallbackStyleBridge.BuildDerivedTheme(source, style);
+
+        // ★ 裁决落点：accent ⇒ 标题前景色。
+        Assert.Equal("#8FB4D9", derived.Color.TextTitle);
+
+        // ★ 告警语义色**不得**被 accent 覆盖。
+        Assert.Equal("#00FF00", derived.Color.ValueSafe);
+        Assert.Equal("#FFAA00", derived.Color.ValueWarn);
+        Assert.Equal("#FF0000", derived.Color.ValueCrit);
+
+        // ★ 进度条分段色**不得**被 accent 覆盖。
+        Assert.Equal("#001122", derived.Color.BarLow);
+        Assert.Equal("#334455", derived.Color.BarMid);
+        Assert.Equal("#667788", derived.Color.BarHigh);
+
+        // ★ 分组标题色不在裁决范围内 ⇒ 保持源值（不得与 MutedText 塌陷成同一层）。
+        Assert.Equal("#777777", derived.Color.TextGroup);
+
+        // ★ 源主题**不被修改**。
+        Assert.Equal("#666666", source.Color.TextTitle);
+        Assert.Equal("#00FF00", source.Color.ValueSafe);
+        Assert.Equal("#001122", source.Color.BarLow);
+    }
+
+    [Fact]
     public void 回退样式_解析器缺省与非法值都给出可诊断结果且不抛异常()
     {
         LegacyFallbackStyle defaults = LegacyFallbackStyleBridge.Resolve(null, out IReadOnlyList<string> none);
