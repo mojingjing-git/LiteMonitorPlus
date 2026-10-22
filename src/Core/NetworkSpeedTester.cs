@@ -29,6 +29,70 @@ namespace LiteMonitor
         private static readonly Random _rng = new Random();
         private static string Rand() { lock (_rng) return _rng.NextDouble().ToString("0.0000000000"); }
 
+        // ======================================================
+        // 0. HTTP 期限口径（LM-003c / 契约 H5）
+        // ======================================================
+        //
+        // ★ HttpClient.Timeout 在 ResponseHeadersRead 模式下**只覆盖到响应头**：
+        //   响应头一到，HttpClient 内部的超时 CTS 就被释放，之后的正文读取不再受它约束。
+        //   所以正文阶段必须自建期限，否则"只发响应头、正文永远不来"的镜像
+        //   能把测速线程一直挂住（客户端级 25s 超时在这里帮不上忙）。
+        //
+        // ★ 三段期限分别是：
+        //   ① 连接与响应头期限：竞速阶段 = 竞速窗口 + 2s（保持既有预算）；
+        //      工作线程 = 20s（保持既有"单个请求 20 秒"预算）。
+        //   ② 正文读取期限：**无进展期限** —— 连续多久一个字节都没读到就判定镜像已死。
+        //      这里刻意不用"正文总期限"：测速正文是持续流，总期限会把正常的长测速一起砍掉；
+        //      真要防的是"响应头来了、正文不来"这种挂死，所以盯的是**进展**而不是时长。
+        //   ③ 总期限：竞速阶段 = 竞速窗口 + 2s（一次尝试的整段预算）；
+        //      工作线程 = 整次测速的结束期限（既有 cts）。
+        internal static readonly TimeSpan RaceBodyStallTimeout = TimeSpan.FromSeconds(2);
+        internal static readonly TimeSpan DownloadHeadersTimeout = TimeSpan.FromSeconds(20);
+        internal static readonly TimeSpan DownloadBodyStallTimeout = TimeSpan.FromSeconds(5);
+
+        /// <summary>
+        /// 在"无进展期限"下读取正文。
+        /// </summary>
+        /// <param name="stream">正文流。</param>
+        /// <param name="buffer">读缓冲。</param>
+        /// <param name="stallTimeout">无进展期限：连续这么久没读到任何字节就中断本次读取。</param>
+        /// <param name="shouldContinue">是否继续读（竞速窗口 / 测速时长）。</param>
+        /// <param name="outerToken">外层取消信号（整次尝试 / 整次测速的总期限）。</param>
+        /// <param name="onChunk">每读到一块数据的回调（用于累计字节与上报进度）。</param>
+        /// <returns>本次读到的字节数。</returns>
+        /// <remarks>
+        /// ★ 这个方法是"正文读取有独立取消期限"的落点：期限从**正文阶段开始**起算，
+        ///   与"连接与响应头期限"彼此独立 —— 响应头慢不会把正文的预算吃掉。
+        /// ★ 每次读到数据都会重置无进展计时，因此正常的持续流不会被误杀。
+        /// </remarks>
+        internal static async Task<long> ReadBodyWithStallDeadlineAsync(
+            Stream stream,
+            byte[] buffer,
+            TimeSpan stallTimeout,
+            Func<bool> shouldContinue,
+            CancellationToken outerToken,
+            Action<int>? onChunk = null)
+        {
+            long total = 0;
+
+            using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(outerToken);
+            stallCts.CancelAfter(stallTimeout);
+
+            while (shouldContinue())
+            {
+                int n = await stream.ReadAsync(buffer, 0, buffer.Length, stallCts.Token);
+                if (n <= 0) break;                    // 正文结束（EOF）
+
+                total += n;
+                onChunk?.Invoke(n);
+
+                // 有进展 → 重置无进展期限
+                stallCts.CancelAfter(stallTimeout);
+            }
+
+            return total;
+        }
+
         // 优化的下载源列表 - 按地区分组 (已包含所有优质节点)
         private static readonly string[] DownloadSources =
         {
@@ -88,8 +152,21 @@ namespace LiteMonitor
         // ======================================================
         // 1. 优化的竞速逻辑
         // ======================================================
-        private static async Task<string> PickFastestAsync(string[] urls, int raceTimeMs, bool isDownload = true)
+        internal static async Task<string> PickFastestAsync(
+            string[] urls,
+            int raceTimeMs,
+            bool isDownload = true,
+            TimeSpan? headersTimeout = null,
+            TimeSpan? bodyStallTimeout = null,
+            TimeSpan? totalTimeout = null)
         {
+            // ① 连接与响应头期限：默认保持既有预算（竞速窗口 + 2s 容错）
+            TimeSpan headerBudget = headersTimeout ?? TimeSpan.FromMilliseconds(raceTimeMs + 2000);
+            // ② 正文读取期限：无进展期限
+            TimeSpan stallBudget = bodyStallTimeout ?? RaceBodyStallTimeout;
+            // ③ 总期限：一次尝试的整段预算
+            TimeSpan totalBudget = totalTimeout ?? TimeSpan.FromMilliseconds(raceTimeMs + 2000);
+
             var tasks = new List<Task<(string url, long bytes, bool success)>>();
 
             foreach (var url in urls)
@@ -110,15 +187,22 @@ namespace LiteMonitor
                         {
                             try
                             {
-                                // 每次尝试都创建新的 cts
-                                using var cts = new CancellationTokenSource(raceTimeMs + 2000); // 额外2秒容错
+                                // ③ 总期限：覆盖"连接+响应头+正文"整段
+                                using var attemptCts = new CancellationTokenSource(totalBudget);
+
+                                // ① 连接与响应头期限：与正文期限彼此独立
+                                using var headerCts = CancellationTokenSource.CreateLinkedTokenSource(attemptCts.Token);
+                                headerCts.CancelAfter(headerBudget);
+
+                                // 请求消息与响应消息都要释放：ResponseHeadersRead 之后
+                                // 响应一直攥着底层连接与响应流
                                 using var req = new HttpRequestMessage(HttpMethod.Get, url + Rand());
                                 
                                 // 设置请求头，模仿浏览器行为，可能提高国内节点成功率
                                 req.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
                                 req.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true, NoStore = true };
 
-                                using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                                using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, headerCts.Token);
                                 
                                 if (!resp.IsSuccessStatusCode)
                                 {
@@ -130,13 +214,14 @@ namespace LiteMonitor
                                 using var stream = await resp.Content.ReadAsStreamAsync();
                                 var sw = Stopwatch.StartNew();
                                 
-                                // 持续读取直到竞速时间结束
-                                while (sw.ElapsedMilliseconds < raceTimeMs)
-                                {
-                                    int n = await stream.ReadAsync(buf, 0, buf.Length, cts.Token);
-                                    if (n <= 0) break;
-                                    bytes += n;
-                                }
+                                // ② 正文读取：从响应头到达那一刻起算的独立无进展期限
+                                await ReadBodyWithStallDeadlineAsync(
+                                    stream,
+                                    buf,
+                                    stallBudget,
+                                    () => sw.ElapsedMilliseconds < raceTimeMs,
+                                    attemptCts.Token,
+                                    n => bytes += n);
 
                                 Log($"{url} - Success: {bytes / 1024.0 / 1024.0:F2} MB in {sw.ElapsedMilliseconds}ms");
                                 return (url, bytes, true);
@@ -181,13 +266,33 @@ namespace LiteMonitor
         // ======================================================
         // 2. 优化的下载测速 (提高并发，增加竞速频率)
         // ======================================================
-        public static async Task<double> TestDownloadAsync(
+        public static Task<double> TestDownloadAsync(
             int durationSec = 15,
             int threads = 16, // 优化点1：增加线程数以跑满带宽
             Action<double>? progress = null)
+            => TestDownloadAsyncCore(
+                DownloadSources, durationSec, threads, progress,
+                headersTimeout: null, bodyStallTimeout: null, totalTimeout: null);
+
+        /// <summary>
+        /// 下载测速的实现（源列表与各段期限可注入，生产路径走默认值）。
+        /// </summary>
+        internal static async Task<double> TestDownloadAsyncCore(
+            string[] sources,
+            int durationSec,
+            int threads,
+            Action<double>? progress,
+            TimeSpan? headersTimeout,
+            TimeSpan? bodyStallTimeout,
+            TimeSpan? totalTimeout)
         {
             Log("Starting download test...");
-            Interlocked.Exchange(ref currentBestDownloadUrl, DownloadSources[0]);
+            Interlocked.Exchange(ref currentBestDownloadUrl, sources[0]);
+
+            // ① 连接与响应头期限：保持既有"单个请求 20 秒"预算
+            TimeSpan headerBudget = headersTimeout ?? DownloadHeadersTimeout;
+            // ② 正文读取期限：无进展期限
+            TimeSpan stallBudget = bodyStallTimeout ?? DownloadBodyStallTimeout;
 
             long totalBytes = 0;
             var sw = Stopwatch.StartNew();
@@ -202,7 +307,11 @@ namespace LiteMonitor
                     try
                     {
                         // 优化点2：缩短竞速评估间隔，更快切换到最佳节点
-                        string best = await PickFastestAsync(DownloadSources, raceTimeMs: 2000, isDownload: true);
+                        string best = await PickFastestAsync(
+                            sources, raceTimeMs: 2000, isDownload: true,
+                            headersTimeout: headersTimeout,
+                            bodyStallTimeout: bodyStallTimeout,
+                            totalTimeout: totalTimeout);
                         Interlocked.Exchange(ref currentBestDownloadUrl, best);
                         
                         // 每 1.5 秒重新评估一次
@@ -237,32 +346,41 @@ namespace LiteMonitor
                             using var req = new HttpRequestMessage(HttpMethod.Get, dynamicUrl + Rand());
                             req.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true, NoStore = true };
 
-                            // 设置单个请求超时 (20秒)
-                            using var workerCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, new CancellationTokenSource(20000).Token);
+                            // ① 连接与响应头期限（保持既有 20 秒单请求预算）
+                            using var headerCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+                            headerCts.CancelAfter(headerBudget);
                             
-                            using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, workerCts.Token);
+                            using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, headerCts.Token);
                             resp.EnsureSuccessStatusCode();
 
                             using var stream = await resp.Content.ReadAsStreamAsync();
 
-                            while (sw.Elapsed.TotalSeconds < durationSec && !cts.Token.IsCancellationRequested)
-                            {
-                                int n = await stream.ReadAsync(buf, 0, buf.Length, cts.Token);
-                                if (n <= 0) break;
-
-                                long now = Interlocked.Add(ref totalBytes, n);
-                                double speedMbps = (now * 8.0 / 1_000_000) / Math.Max(sw.Elapsed.TotalSeconds, 0.1);
-                                progress?.Invoke(speedMbps);
-                            }
+                            // ② 正文读取期限：独立的无进展期限
+                            //    ③ 总期限：整次测速的结束期限（既有 cts）
+                            await ReadBodyWithStallDeadlineAsync(
+                                stream,
+                                buf,
+                                stallBudget,
+                                () => sw.Elapsed.TotalSeconds < durationSec && !cts.Token.IsCancellationRequested,
+                                cts.Token,
+                                n =>
+                                {
+                                    long now = Interlocked.Add(ref totalBytes, n);
+                                    double speedMbps = (now * 8.0 / 1_000_000) / Math.Max(sw.Elapsed.TotalSeconds, 0.1);
+                                    progress?.Invoke(speedMbps);
+                                });
                         }
-                        catch (TaskCanceledException)
+                        catch (OperationCanceledException) when (cts.IsCancellationRequested)
                         {
+                            // ③ 总期限到了 → 结束这个工作线程
                             break;
                         }
                         catch (Exception ex)
                         {
+                            // 正文无进展期限到了也走这里：镜像已死，换一个再试，而不是把线程挂到测速结束
                             Log($"Worker error: {ex.Message}");
-                            await Task.Delay(500, cts.Token); // 错误后短暂延迟
+                            try { await Task.Delay(500, cts.Token); } // 错误后短暂延迟
+                            catch (OperationCanceledException) { break; }
                         }
                     }
                 }));
@@ -363,7 +481,8 @@ namespace LiteMonitor
                         string url = currentBestUploadUrl + Rand();
                         try
                         {
-                            var content = new ByteArrayContent(payload);
+                            // ★ 请求体也必须释放：ByteArrayContent 持有底层缓冲与流
+                            using var content = new ByteArrayContent(payload);
                             content.Headers.ContentType = contentType;
                             
                             // 使用联合 Token

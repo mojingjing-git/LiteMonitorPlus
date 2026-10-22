@@ -39,6 +39,36 @@ namespace LiteMonitor
         };
 
         // ========================================================
+        // 【0.5】更新元数据的 HTTP 期限与字节上限（LM-003b / 契约 H3–H4）
+        // ========================================================
+        //
+        // ★ 三段期限必须分开定，不能拿一个超时糊弄过去：
+        //
+        //   ① 连接与响应头期限（MetadataHeadersTimeout = 3s）
+        //      覆盖 DNS/TCP/TLS/发送/等待响应头。响应头之前正文一个字节都还没到，
+        //      这一段必须有自己的预算，否则"连上了却不回响应头"的服务器能挂死调用方。
+        //      选 3s：沿用改造前"连接超时 3 秒"的既有预算，不改变用户可见的等待节奏。
+        //
+        //   ② 正文读取期限（MetadataBodyTimeout = 3s）
+        //      ★ HttpClient.Timeout 在 ResponseHeadersRead 模式下**只覆盖到响应头**：
+        //        响应头一到，HttpClient 内部的超时 CTS 就被释放，之后的正文读取不再受它约束。
+        //        所以正文阶段必须自建一份"从拿到响应头重新起算"的取消期限。
+        //      选 3s：与①同量级。version.json 只有几 KB，正常是一个 TCP 段就到；
+        //        3s 足够覆盖跨境抖动，又不至于让用户对着转圈等太久。
+        //
+        //   ③ 总期限（MetadataTotalTimeout = 8s）
+        //      覆盖"连接+响应头+正文"整段，是兜底：任何一段边界之外的挂起
+        //      （调度延迟、GC、连接池排队）由它收口。取 ①+② 再加 2s 余量，
+        //      保证正常路径下先触发的是**阶段期限**而不是总期限。
+        //
+        // ★ 字节上限（MetadataMaxBodyBytes = 256 KiB）：更新元数据是几 KB 的 JSON，
+        //   256 KiB 已经是天文数字；超限一律判定失败，绝不"读一半照样解析"。
+        internal static readonly TimeSpan MetadataHeadersTimeout = TimeSpan.FromSeconds(3);
+        internal static readonly TimeSpan MetadataBodyTimeout = TimeSpan.FromSeconds(3);
+        internal static readonly TimeSpan MetadataTotalTimeout = TimeSpan.FromSeconds(8);
+        internal const int MetadataMaxBodyBytes = 256 * 1024;
+
+        // ========================================================
         // 【1】两个 version.json 源（自动 fallback）
         // ========================================================
         private static readonly string[] VersionJsonUrls =
@@ -212,6 +242,16 @@ namespace LiteMonitor
         /// </remarks>
         public static UpdateCheckFailure LastFailure { get; private set; } = UpdateCheckFailure.None;
 
+        /// <summary>
+        /// 最近一次"取元数据失败"的详细原因（网络 / 解析 / 超时 / 超限）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 只覆盖网络与解析类失败。签名失败是另一条语义（来源不可信），
+        ///   那条路径按契约不得改动，因此不参与本属性。
+        /// ★ 存在的意义：把"连不上"和"连上了但正文超限"分开 —— 二者的处置完全不同。
+        /// </remarks>
+        internal static string? LastFailureDetail { get; private set; }
+
         /// <summary>检查更新的失败类型。</summary>
         public enum UpdateCheckFailure
         {
@@ -359,33 +399,78 @@ namespace LiteMonitor
         // 【4】version.json 自动 fallback
         // ========================================================
        private static async Task<(string latest, string changelog, string releaseDate, string sha256)?> GetVersionInfo()
+            => await GetVersionInfoAsync(VersionJsonUrls);
+
+        /// <summary>
+        /// 逐个源取回 version.json 并做来源认证。
+        /// </summary>
+        /// <remarks>
+        /// ★ 期限分三段且彼此独立：连接与响应头期限 / 正文读取期限 / 总期限（见上面的常量注释）。
+        ///   正文读取另有字节上限，超限明确失败。
+        /// ★ 资源释放：<see cref="HttpRequestMessage"/>、<see cref="HttpResponseMessage"/>、
+        ///   <see cref="JsonDocument"/> 三者都必须释放 —— 响应在 ResponseHeadersRead 模式下
+        ///   持有底层连接与响应流，JsonDocument 持有从 ArrayPool 租来的缓冲区。
+        /// ★ <paramref name="client"/> 与各期限参数只为测试可注入；生产路径全部使用默认值。
+        /// </remarks>
+        internal static async Task<(string latest, string changelog, string releaseDate, string sha256)?> GetVersionInfoAsync(
+            string[] urls,
+            HttpClient? client = null,
+            TimeSpan? headersTimeout = null,
+            TimeSpan? bodyTimeout = null,
+            TimeSpan? totalTimeout = null,
+            int maxBodyBytes = MetadataMaxBodyBytes)
         {
-            foreach (var url in VersionJsonUrls)
+            HttpClient httpClient = client ?? http;
+            TimeSpan headerBudget = headersTimeout ?? MetadataHeadersTimeout;
+            TimeSpan bodyBudget = bodyTimeout ?? MetadataBodyTimeout;
+            TimeSpan totalBudget = totalTimeout ?? MetadataTotalTimeout;
+
+            foreach (var url in urls)
             {
+                // 每次尝试各自计时：换源不等于把上一源的预算带过来
+                LastFailureDetail = null;
+
+                // ③ 总期限：覆盖"连接+响应头+正文"整段
+                using var totalCts = new CancellationTokenSource(totalBudget);
+
                 try
                 {
-                    using var cts = new CancellationTokenSource();
-                    cts.CancelAfter(3000); // 最大等待 3 秒（连接+读取全部）
+                    // ★ 请求消息必须释放
+                    using var request = new HttpRequestMessage(HttpMethod.Get, url);
 
-                    // 构造真正带连接超时的 HttpRequest
-                    var request = new HttpRequestMessage(HttpMethod.Get, url);
+                    // ① 连接与响应头期限：与正文期限彼此独立
+                    using var headerCts = CancellationTokenSource.CreateLinkedTokenSource(totalCts.Token);
+                    headerCts.CancelAfter(headerBudget);
 
-                    var task = http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-
-                    // 这里我们用 WhenAny 避免 HttpClient 自身的内部卡顿
-                    var finished = await Task.WhenAny(task, Task.Delay(3000, cts.Token));
-
-                    if (finished != task)
-                        throw new TimeoutException("Connection timeout");
-
-                    var resp = await task;
+                    // ★ 响应消息必须释放
+                    using var resp = await SendForMetadataAsync(
+                        httpClient, request, headerCts, totalCts, headerBudget, totalBudget, url);
 
                     if (!resp.IsSuccessStatusCode)
                         throw new Exception("Bad status");
 
-                    string json = await resp.Content.ReadAsStringAsync(cts.Token);
+                    // ---- 第二段：正文读取（独立期限 + 字节上限）----
+                    using var bodyCts = CancellationTokenSource.CreateLinkedTokenSource(totalCts.Token);
+                    bodyCts.CancelAfter(bodyBudget);
 
-                    var doc = JsonDocument.Parse(json);
+                    byte[] body;
+                    try
+                    {
+                        body = await ReadBodyWithLimitAsync(resp.Content, maxBodyBytes, bodyCts.Token);
+                    }
+                    catch (OperationCanceledException) when (totalCts.IsCancellationRequested)
+                    {
+                        throw new TimeoutException($"更新元数据总期限超时（{totalBudget.TotalSeconds:0.#}s）：{url}");
+                    }
+                    catch (OperationCanceledException) when (bodyCts.IsCancellationRequested)
+                    {
+                        throw new TimeoutException($"正文读取阶段超时（{bodyBudget.TotalSeconds:0.#}s）：{url}");
+                    }
+
+                    string json = DecodeBody(resp.Content.Headers.ContentType?.CharSet, body);
+
+                    // ★ JsonDocument 必须释放（它持有从 ArrayPool 租来的缓冲区）
+                    using var doc = JsonDocument.Parse(json);
 
                     string latest = doc.RootElement.GetProperty("version").GetString()!;
                     string log = doc.RootElement.GetProperty("changelog").GetString()!;
@@ -418,11 +503,100 @@ namespace LiteMonitor
                 {
                     Debug.WriteLine($"[Update] 源失败：{url} -> {ex.Message}");
                     LastFailure = UpdateCheckFailure.Network;
+                    LastFailureDetail = ex.Message;
                     continue; // 换下一个源
                 }
             }
 
             return null; // 两个源都失败
+        }
+
+        /// <summary>
+        /// 取回响应头（连接与响应头期限内），并把超时翻译成可诊断的失败。
+        /// </summary>
+        private static async Task<HttpResponseMessage> SendForMetadataAsync(
+            HttpClient client,
+            HttpRequestMessage request,
+            CancellationTokenSource headerCts,
+            CancellationTokenSource totalCts,
+            TimeSpan headerBudget,
+            TimeSpan totalBudget,
+            string url)
+        {
+            try
+            {
+                return await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headerCts.Token);
+            }
+            catch (OperationCanceledException) when (totalCts.IsCancellationRequested)
+            {
+                throw new TimeoutException($"更新元数据总期限超时（{totalBudget.TotalSeconds:0.#}s）：{url}");
+            }
+            catch (OperationCanceledException) when (headerCts.IsCancellationRequested)
+            {
+                throw new TimeoutException($"连接/响应头阶段超时（{headerBudget.TotalSeconds:0.#}s）：{url}");
+            }
+        }
+
+        /// <summary>
+        /// 按字节上限读取正文。
+        /// </summary>
+        /// <remarks>
+        /// ★ 不用 <c>ReadAsStringAsync</c>：它会把整个响应体无上限地读进内存，
+        ///   而更新源是外部不可信输入。这里边读边计数，超限立刻失败。
+        /// ★ 读取受传入的取消令牌约束（正文读取期限）。
+        /// </remarks>
+        internal static async Task<byte[]> ReadBodyWithLimitAsync(HttpContent content, int maxBytes, CancellationToken token)
+        {
+            using Stream stream = await content.ReadAsStreamAsync(token);
+            using var buffer = new MemoryStream();
+
+            byte[] chunk = new byte[16 * 1024];
+            int total = 0;
+            while (true)
+            {
+                int n = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), token);
+                if (n <= 0) break;      // 正文结束
+
+                total += n;
+                if (total > maxBytes)
+                    throw new InvalidDataException($"更新元数据正文超过字节上限（{maxBytes} 字节）");
+
+                await buffer.WriteAsync(chunk.AsMemory(0, n), token);
+            }
+
+            return buffer.ToArray();
+        }
+
+        /// <summary>
+        /// 最多读满 <paramref name="buffer"/>（或读到 EOF），受取消令牌约束。
+        /// </summary>
+        private static async Task<int> ReadUpToAsync(Stream stream, byte[] buffer, CancellationToken token)
+        {
+            int total = 0;
+            while (total < buffer.Length)
+            {
+                int n = await stream.ReadAsync(buffer.AsMemory(total), token);
+                if (n <= 0) break;   // EOF
+                total += n;
+            }
+            return total;
+        }
+
+        /// <summary>把响应体字节解码成字符串（尊重 Content-Type 里的 charset，去掉 UTF-8 BOM）。</summary>
+        private static string DecodeBody(string? charset, byte[] bytes)
+        {
+            // JsonDocument.Parse 见到 BOM 字符（U+FEFF）会直接抛异常，先剥掉
+            int offset = 0;
+            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) offset = 3;
+
+            return ResolveEncoding(charset).GetString(bytes, offset, bytes.Length - offset);
+        }
+
+        private static Encoding ResolveEncoding(string? charset)
+        {
+            if (string.IsNullOrWhiteSpace(charset)) return Encoding.UTF8;
+            try { return Encoding.GetEncoding(charset.Trim().Trim('"')); }
+            catch (ArgumentException) { return Encoding.UTF8; }
         }
 
 
@@ -461,34 +635,68 @@ namespace LiteMonitor
         // ========================================================
         // 【6】轻量测速（读取 32KB 换算下载速度）
         // ========================================================
+        //
+        // ★ 同样要把期限分成两段：响应头一段、正文一段。
+        //   HttpClient.Timeout 在 ResponseHeadersRead 模式下只覆盖到响应头，
+        //   正文读取必须自建期限，否则"只发响应头不发正文"的镜像能把测速挂死。
+        internal static readonly TimeSpan MirrorHeadersTimeout = TimeSpan.FromSeconds(5);
+        internal static readonly TimeSpan MirrorBodyTimeout = TimeSpan.FromSeconds(5);
+
         private static async Task<(string url, long speed)> TestMirrorSpeed(string url)
         {
+            var (speed, error) = await TestMirrorSpeedAsync(url);
+            // ★ 失败必须可诊断：不能把超时/超限吞成一个"速度 0"就完事
+            if (error != null) Debug.WriteLine($"[UpdateChecker] 测速失败：{url} -> {error}");
+            return (url, speed);
+        }
+
+        /// <summary>
+        /// 轻量测速：取响应头后读最多 32KB，换算下载速度。
+        /// </summary>
+        /// <returns>速度（字节/秒）与失败原因；失败时速度为 0 且 <c>error</c> 非空。</returns>
+        internal static async Task<(long speed, string? error)> TestMirrorSpeedAsync(
+            string url,
+            HttpClient? client = null,
+            TimeSpan? headersTimeout = null,
+            TimeSpan? bodyTimeout = null)
+        {
+            HttpClient httpClient = client ?? http;
+            TimeSpan headerBudget = headersTimeout ?? MirrorHeadersTimeout;
+            TimeSpan bodyBudget = bodyTimeout ?? MirrorBodyTimeout;
+
             try
             {
                 var sw = Stopwatch.StartNew();
 
-                using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+                // ① 连接与响应头期限
+                using var headerCts = new CancellationTokenSource(headerBudget);
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                using var resp = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headerCts.Token);
                 if (!resp.IsSuccessStatusCode)
-                    return (url, 0);
+                    return (0, $"HTTP {(int)resp.StatusCode}");
 
-                using var stream = await resp.Content.ReadAsStreamAsync();
+                // ② 正文读取期限：从响应头到达那一刻重新起算，与①彼此独立
+                using var bodyCts = new CancellationTokenSource(bodyBudget);
+                using var stream = await resp.Content.ReadAsStreamAsync(bodyCts.Token);
 
                 byte[] testBuf = new byte[32 * 1024];
-                int read = await stream.ReadAsync(testBuf, 0, testBuf.Length);
+                // ★ 循环读满 32KB（或读到 EOF）：单次 ReadAsync 可能只带回一个 TCP 段，
+                //   用它换算出来的"速度"既不准，也让正文期限形同虚设（读一次就返回了）。
+                int read = await ReadUpToAsync(stream, testBuf, bodyCts.Token);
 
                 sw.Stop();
 
                 if (read <= 0)
-                    return (url, 0);
+                    return (0, "空响应体");
 
                 // Bytes per second
                 long speed = (long)(read * 1000.0 / Math.Max(sw.ElapsedMilliseconds, 1));
 
-                return (url, speed);
+                return (speed, null);
             }
-            catch
+            catch (Exception ex)
             {
-                return (url, 0);
+                return (0, ex.Message);
             }
         }
 
