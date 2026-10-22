@@ -1294,6 +1294,14 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | **S3.6** | 修 **LM-040~LM-044**（目标数累计未强制 / 500 ms 未钉住 / 请求数断言过弱 / 空转断言 / 30 s 生产入口未钉住） | 隔离 worktree `.artifacts/wt-lm040` | `d588440`：`src/Plugins/PluginProcessor.cs`、两个测试文件 | ✅ 已闭环（2 条新增 / 3 条期望反转） |
 | **主审集成** | 裁决 **D-E**：把 S3.6 的进程级登记表换成实例级 `CreateScope` 缝隙，并补测 S3.6 未能实测的变体 | 隔离 worktree `.artifacts/wt-integ` | `6310dbf` | ✅ 3 变异全捕获 |
 | **GPU T01** | HWND 重建 A/B 对照（仅停止 vs 重建）+ GDI 桌面像素观察 ⇒ 判定 `Control.RecreateHandle()` 是否可安全使用 | 主工作区（`tools/GpuHostLifecycleProbe/`） | `2c8915b`：探针工程 + `docs/superpowers/plans/2026-10-23-gpu-transition-t01-report.md` | ✅ **`RECREATE_HANDLE_SAFE`**（4 组独立运行一致） |
+| **LM-045** | 修 **LM-045**（P1，重定向绕过"允许目标"导致凭据外泄与响应注入）+ **LM-053**（native 侧同构缺口，主审巡检扩围） | 隔离 worktree `.artifacts/wt-lm045` | `198a9d4`：`src/Plugins/PluginExecutor.cs`、`src/Plugins/Native/CryptoNative.cs`、`src/Plugins/PluginProcessor.cs`、新建 `tests/LiteMonitor.Tests/PluginRedirectSandboxTests.cs` + 测试服务器 | ✅ 已闭环（22 条新用例 / 7 变异全捕获；**独立复核 PASS_WITH_NOTES**） |
+| **owner A 物化 + 裁决 D-G** | 物化 T02 合同序 1/2/3；纠正"两份句柄代次 holder" | 主审直接做（合同 §12.4：不能外包） | `e874e2a` + `28c6805` | ✅ 13 条用例 / 4 变异全捕获；**D-G**：唯一实例由类型自身持有 |
+| **GPU T04** | 清理责任**转交** + `PresentationSession` R1–R6 + §6.4 退避 | 隔离 worktree `.artifacts/wt-gpu-t04` | `4ade856` | ✅ 14 条用例 / 5 变异全捕获（**GPU-001 根因**） |
+| **GPU T05** | legacy 回退样式块 + 纯函数 resolver + 编辑器保留路径 | 隔离 worktree `.artifacts/wt-gpu-t05` | `07a1b03` | ✅ 13 条用例 / 4 变异全捕获 |
+| **owner A 接线** | `IGpuStartupAttemptAbandon` 下移 + 保留 pending 的终结路径（GPU-005 / 裁决 D6） | 集成 worktree `.artifacts/wt-integ` | `03a925a` | ✅ 5 条用例 / 3 变异全捕获 |
+| **GPU T03** | 切换协调器 + 受控重建 + HandleCreated 判别位（owner B） | 隔离 worktree `.artifacts/wt-gpu-t03` | `5a1eeb7` | ✅ 44 条用例；★ 主审巡检发现并纠正**移交事件未订阅**的阻断级缺口 |
+| **主审裁决 D-H** | 回退样式 `Accent` 落点 = `ColorConfig.TextTitle` | 主审直接做 | `f4f3b2a` | ✅ 1 条钉住用例 + 变异自证（红 → SHA-256 一致 → 绿） |
+| **CI 门禁** | 阈值与被推送分支实测总数对齐 | 主审直接做 | `b1a8b42` → `fe57544` | ✅ 1316 → **1349** → **1394**；`39834352321` 的一次红灯是**门禁正确报红**（阈值误用集成分支数字），非门禁缺陷 |
 
 ### 11.2 收尾动作序列（按序执行）
 
@@ -1303,11 +1311,12 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 4. ✅ **回写 §8 已知基线**与 **§7 追踪矩阵**（LM-039~044 转 `✅ 已闭环`），并在 §4.4 台账补上 S3.5 / S3.6 / 主审集成 / GPU T01 四行。
 5. ✅ **独立 verifier 复核**（S3.5 + S3.6 + 主审集成的合并结果）—— **不得由实现者自审**；复核在隔离 worktree 内自做变异。**VERDICT: PASS_WITH_NOTES**（10 轮自设计变异全部变红；契约 6 常量未改；CI 阈值恰等于实测总数；LM-045 被独立实证为真实 P1；发现 LM-047~LM-052 共 6 项）。归档见 §4.3.5。
 5b. ✅ **LM-047 修复**（`46f3f9d`）：字节上限在原语层夹到契约天花板（2 MiB 从"约定"变"强制"），新增护栏用例并以变异自证。
-6. ⏳ **推送** `fix/audit-remediation-v3` 到 origin（已授权），等待 CI 全绿（当前基线：6 次 push 运行全部 success）。
-7. ⏳ **提出 master 合并评估**（用户已定：门禁全绿且本批收敛后再评估）。就绪度事实已备齐：merge-base 即 master `9ffb4219` ⇒ **可快进、零冲突**；`A=287 / M=29 / D=0`（零删除）；生产代码仅 **13 个 `src/` 文件**（+5750/−586）。
+6. ✅ **推送** `fix/audit-remediation-v3` 到 origin（已授权）⇒ 本轮最新 `cf1c8ee`；CI `39844039100` @`9e384e0` = **success**（`39836128969` @`61465ba` 亦 success）。★ **阈值纪律**：阈值**必须**等于「**被推送分支**」的实测总数，**不得**取集成分支的数字，也**不得**为求绿下调 —— `39834352321` @`b1a8b42` 即是把集成分支的 1316 写进了只含 `b1a8b42` 的分支（该分支实测仅 **1295**）⇒ 门禁**正确**报红。
+7. ⏳ **master 合并评估**：**本批尚未合并到 master**（`master` 仍为 `23a6c5c`）。合并的前置条件是「本批收敛 + CI 全绿 + 独立复核通过」—— 前两项已达成，**第三项（GPU 部分独立复核）进行中** ⇒ 合并**暂缓**，等复核结论落地再评估。
 8. ✅ **GPU T01 结论落地**：判定 **`RECREATE_HANDLE_SAFE`** ⇒ 走 GPU 计划 §4.1 主线，**不启用** §9 备用路线；判别位重建分支**保留**，`RecreateWindow` **采用**。回填 GPU 计划 §12.7。
-9. ⏳ **GPU C 期（T03–T08）启动条件**：T01 路线结论落地 **且** `src/Rendering/**` **重新冻结哈希** **且** M2/M3 门禁确认 ⇒ 三者齐备才启动。**注意**：T01 已实测 `src/Rendering/**` 与 `src/UI/**` 的 T00 哈希**全程未变** ⇒ 重新冻结的**内容**不变，但**记录**须更新（含 T01 更正的物理分辨率事实）。
-10. ⏳ **LM-045（重定向绕过允许目标，P1 未关闭）**：需要"禁自动重定向 + 逐跳复核主机"的口径变更（与 LM-007 市场逻辑同构）⇒ 属独立步骤，**不得**在收尾阶段顺手改 `AllowAutoRedirect`。
+9. ✅ **GPU C 期（T03–T08）启动条件**已齐备并**已启动**：T01 路线结论落地 **且** `src/Rendering/**` 哈希**全程未变**（T01 已实测）**且** M2/M3 门禁确认 ⇒ T03 / T04 / T05 已落地；**T06–T08 与实机验收（G01–G12）仍未完成**。
+10. ✅ **LM-045（重定向绕过允许目标，P1）已修并经独立复核闭环**：`198a9d4`（HTTP 步骤路径 + `native://` 路径**两侧**都禁自动重定向 + 逐跳复核目标主机）；**范围由主审集成巡检扩大**（native 侧同构缺口 ⇒ 新登记 LM-053，随本提交一并修掉）。独立复核 **PASS_WITH_NOTES**（§4.5.10）。
+11. ⏳ **GPU 部分独立复核**（T03 / T04 / T05 + owner A 接线 + 裁决 D-H）：进行中。★ **过程留痕**：复核方第一轮把基线选到**已被取代的中间提交** `aafe949`（与最终提交 `a498583` 同父兄弟，缺 ledger 订阅与 resolver 接线）⇒ 由主审纠正后改用主分支 HEAD 重做；旧基线上的结论**作废**，详见复核报告。
 
 ### 11.3 需要人工到场 / 外部确认的事项（**不可由 agent 代替**）
 
