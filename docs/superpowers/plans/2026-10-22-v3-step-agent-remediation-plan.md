@@ -164,10 +164,34 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | LM-021 | 主程序 `requireAdministrator`，插件/Web/更新器同处高权限令牌 | P3 | `CONFIRMED` | S7（独立） |
 | LM-023 | 凭据加密与旧备份明文冲突；DPAPI 作用域未定义 | P2 | `CONFIRMED` | S2.2 |
 | LM-024 | `NOTICE` 写 System.Text.Json 9.0.10，项目实际引用 10.0.3；产物清单未按实际解析生成 | P1 | `CONFIRMED` | S5.3 |
+| LM-030 | LM-009 的 6 个上限在 `cb460b5` 上仍未接入端到端执行路径（5 个在生产完全不生效） | P2 | `CONFIRMED` | S3.3 |
+| LM-031 | `ExtractJsonValue` 宽泛 `catch { return STATUS_UNKNOWN; }` | P2 | `CONFIRMED` | 待清理 |
+| LM-032 | `PluginMarketPolicyTests.cs:420` 用例名与断言不符（只断言终态不直接断言顺序） | P2 | `CONFIRMED` | 待清理 |
+| LM-033 | 门禁基线描述陈旧（任务书下限与仓库 CI 自述不一致） | P3 | `CONFIRMED` | S3 |
+| LM-034 | 被拒绝的 WebSocket 握手不关闭连接（**实为套接字泄漏**，危害描述见 §4.5.4） | P2 | `CONFIRMED` | S4.2b |
+| LM-035 | `Handshake` 的 `catch { return false; }` 宽泛吞异常 | P2 | `CONFIRMED` | 待清理 |
+| LM-036 | `dfe0fff` 无必要地删除一条断言（违反契约 §5.2「不得放宽断言」形式要求） | P2 | `CONFIRMED` | S2.4 |
+| LM-037 | Host 缺失的拒绝存在三层冗余 ⇒ 该具体行号无独立回归护栏 | P3 | `CONFIRMED` | 信息项，不阻断 |
+| LM-038 | 包内更新器的「内嵌构建提交」指向错误提交，使 LM-024 产物来源护栏**永久失效** | P2 | `CONFIRMED` | S4.2c |
+| LM-039 | `native://` 步骤绕过沙箱的三道闸门（并发/字节上限/凭据目标/截止时刻） | P1 | `CONFIRMED` | **S3.5（进行中）** |
+| LM-040 | 「目标展开数按实例累计」未被实现强制（比较入参而非累计值），类文档与实现不符 | P2 | `CONFIRMED` | **S3.6（进行中）** |
+| LM-041 | 端到端正则用例不锁定 500 ms 数值 | P2 | `CONFIRMED` | **S3.6（进行中）** |
+| LM-042 | `端到端_目标数恰好等于上限` 的请求数断言过弱（实测 61 vs 64） | P2 | `CONFIRMED` | **S3.6（进行中）** |
+| LM-043 | `Assert.NotEqual(TargetLimit, failure?.Reason)` 在 `failure == null` 时恒真（空转断言） | P3 | `CONFIRMED` | **S3.6（进行中）** |
+| LM-044 | 生产入口的 30 s 契约值未被测试钉住 | P2 | `CONFIRMED` | **S3.6（进行中）** |
+| GPU-001 | WDA 恢复失败后 GPU 呈现**永久不可重启**（进程生命周期内不可用） | P1 | `CONFIRMED` | GPU T03/T04（B 期只冻合同，不写生产代码） |
+| GPU-002 | `PresentationSession._originalAffinity` 跨 HWND 代次不可复用 | P2 | `CONFIRMED` | GPU T02/T04 |
+| GPU-003 | 鼠标穿透关闭后 `WS_EX_LAYERED` 永久残留，与 WDA 互斥 | P2 | `CONFIRMED` | GPU T02/T03（**待 T01/T09 实测确认**） |
+| GPU-004 | `IsWindow` 无法区分「旧 HWND 已销毁」与「句柄值被复用」 | P2 | `CONFIRMED` | GPU T04 |
+| GPU-005 | `GpuStartupGuard` 的 pending 语义比计划 §4.4 描述更弱 | P2 | `CONFIRMED` | GPU T02（合同澄清） |
+| ENV-003 | `LITEMONITOR_PLUGIN_REPO` 未设置 ⇒ 6 条市场契约测试被跳过 | P1 | `CONFIRMED`（已闭环，`a8fb2fc`） | S4.1 |
+| ENV-004 | `LITEMONITOR_E2E` 未设置 ⇒ 1 条联网 E2E 被跳过 | P2 | `CONFIRMED`（`BLOCKED_ENV`，**不计入通过**） | S4.1（联网 E2E 单独运行，不进 PR 门禁） |
 
 **当前无 P0。** 若任一执行步骤新发现 P0，立即挂起其他任务优先处理。
 
-**编号规则：** `LM-` 缺陷 / `SEC-` 安全 / `BASE-` 基线 / `ENV-` 环境事实。第三方评审使用的 `LM-018`、`LM-019` 与 `LM-003b`、`LM-003c` 指同一处代码，已合并并保留别名以便交叉引用；`LM-005/006` 为同一协议缺陷的两个侧面。**新增缺陷从 `LM-030` 起顺延，不得复用已关闭编号。**
+**编号规则：** `LM-` 缺陷 / `SEC-` 安全 / `BASE-` 基线 / `ENV-` 环境事实 / `GPU-` GPU 切换专项。第三方评审使用的 `LM-018`、`LM-019` 与 `LM-003b`、`LM-003c` 指同一处代码，已合并并保留别名以便交叉引用；`LM-005/006` 为同一协议缺陷的两个侧面。
+
+> **编号占用现状（2026-10-23 核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-044`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-045` 起顺延，不得复用已关闭编号。** GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
 
 ### 4.1 根因更正记录 · LM-001（原"永久停摆"前提已证伪）
 
@@ -927,31 +951,56 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 
 ## 7. 缺陷 → 步骤 追踪矩阵
 
-| 缺陷 | 步骤 | 优先级 | 门禁阶段 |
-|---|---|---|---|
-| BASE-002 | S0.1 | P1 | M0 |
-| BASE-003 | S0.2 | P1 | M0 |
-| BASE-004 | S0.3 | P1 | M0 |
-| BASE-005 | S0.0 | P1 | M0 |
-| LM-001 | S1.1 | **P2**（原 P1，根因更正见 §4.1） | M1 |
-| LM-002 | S1.2 | **P1** | M1 |
-| LM-003a | S1.2 | P2 | M1 |
-| LM-003b / LM-018 | S1.3 | P2 | M1 |
-| LM-003c / LM-019 | S1.3 | P2 | M1 || SEC-001 | S2.2 | **P1** | M2 |
-| SEC-002 | S2.2 | **P1** | M2 |
-| LM-004 | S2.1 | **P1** | M2 |
-| LM-005/006 | S2.0 + S2.2 | **P1** | M2 |
-| LM-023 | S2.2 | P2 | M2 |
-| LM-007 | S3.1 | P2 | M3 |
-| LM-008 | S3.1 | P2 | M3 |
-| LM-009 | S3.2 | P2 | M3 |
-| LM-010~014 | S6.2 | P2 | M6 |
-| LM-015 | S5.1 + S5.2 | **P1** | M5 |
-| LM-016 | S4.2 | **P1** | M4 |
-| LM-017 | S5.1 | **P1** | M5 |
-| LM-020 | S6.2 | P2 | M6 |
-| LM-021 | S7 | P3 | M7（可延期） |
-| LM-024 | S5.3 | **P1** | M5 |
+| 缺陷 | 步骤 | 优先级 | 门禁阶段 | 状态 | 依据 |
+|---|---|---|---|---|---|
+| BASE-002 | S0.1 | P1 | M0 | ✅ 已闭环 | `0366268`；484/522 口径已在 §8 标注 |
+| BASE-003 | S0.2 | P1 | M0 | ✅ 已闭环 | `0366268`（`.gitignore` 修正 + tests/scripts/docs 入库 + `.sln` 加 3 个测试工程）⇒ 解决「测试发现 0」 |
+| BASE-004 | S0.3 | P1 | M0 | ✅ 已闭环 | `d84b40f`（CI + `assert-test-counts.ps1`） |
+| BASE-005 | S0.0 | P1 | M0 | ✅ 已闭环 | ENV-001：实例自行退出，Release 构建在 CI 内成功（§8） |
+| LM-001 | S1.1 | **P2**（原 P1，根因更正见 §4.1） | M1 | ✅ 已闭环 | `ac652f8` + `afb0869` + `6609543`；根因已更正（§4.1），提交信息勘误见 §4.5.6 |
+| LM-002 | S1.2 | **P1** | M1 | ✅ 已闭环 | `d437283`（租约模型 + SHA-256 请求身份，21 用例） |
+| LM-003a | S1.2 | P2 | M1 | ✅ 已闭环 | `d437283`（响应释放 + 8 MiB 上限） |
+| LM-003b / LM-018 | S1.3 | P2 | M1 | ✅ 已闭环 | `2bbb4cd`（三段期限 + 资源释放） |
+| LM-003c / LM-019 | S1.3 | P2 | M1 | ✅ 已闭环 | `2bbb4cd`（测速无进展期限） |
+| SEC-001 | S2.2 | **P1** | M2 | ✅ 已闭环 | `4be1a8c`；M2 重核 PASS（§4.2.6） |
+| SEC-002 | S2.2 | **P1** | M2 | ✅ 已闭环 | `4be1a8c`；M2 重核 PASS（§4.2.6） |
+| LM-004 | S2.1 | **P1** | M2 | ✅ 已闭环 | `0484177`（DOM 文本化 + 前端协议迁移，12 用例） |
+| LM-005/006 | S2.0 + S2.2 | **P1** | M2 | ✅ 已闭环 | `4be1a8c` + `e893faf`/`dfe0fff`（C1/C2/C3 护栏）；M2 **放行 PASS** |
+| LM-023 | S2.2 | P2 | M2 | ✅ 已闭环 | `4be1a8c`（PBKDF2/DPAPI）；残留 F-08（DPAPI 失败明文回写）登记为独立信息项 |
+| LM-007 | S3.1 | P2 | M3 | ✅ 已闭环 | `14542f3`（URL 精确校验 + 逐跳重定向 + 8 MiB，53 用例 / 11 变异全捕获） |
+| LM-008 | S3.1 | P2 | M3 | ✅ 已闭环 | `14542f3`（强制摘要 + 事务化安装）+ `cb460b5`（本地化） |
+| LM-009 | S3.2 | P2 | M3 | 🟡 **部分闭环** | `ebe1c38`/`bc7b479` + 联合专项复核 **PASS**（§4.3.4）。**口径限定**：仅「经 `PluginExecutor` **HTTP 步骤路径**的 6 个上限」已闭环；`native://` 出口未覆盖 ⇒ **LM-039 未修前不得表述为「插件一切网络出口受沙箱约束」** |
+| LM-010~014 | S6.2 | P2 | M6 | ⏳ 未开始 | GPU/采样/资源恢复实机验收 **G01–G12 全部未跑**（G08 所需异 DPI 环境本机不存在） |
+| LM-015 | S5.1 + S5.2 | **P1** | M5 | ⏸ **延后** | 用户已定本批只做 S5.3 ⇒ 正式签名未就绪 ⇒ **阻断发布准入条件 4** |
+| LM-016 | S4.2 | **P1** | M4 | ✅ 已闭环 | `1a904d5`（字节绑定 + `FileShare.Read`，58 用例）+ `e1bd587`（重建包内更新器） |
+| LM-017 | S5.1 | **P1** | M5 | ⏸ **延后** | 发布顺序未执行 ⇒ **阻断发布准入条件 8** |
+| LM-020 | S6.2 | P2 | M6 | ⏳ 未开始 | GC/工作集裁剪策略未经实测 |
+| LM-021 | S7 | P3 | M7（可延期） | ⏸ 延后 | 权限架构独立阶段，默认延期 |
+| LM-024 | S5.3 | **P1** | M5 | ✅ 已闭环 | `217102d` + `e452097`（21 个传递依赖）+ `600a18c`（CI 门禁）+ `e1bd587`（产物来源判定由 `NOT_VERIFIED` 翻转为「与本次源码构建一致」） |
+| LM-030 | S3.3 | P2 | M3 | ✅ 已闭环 | `ebe1c38`；§4.3.4 判定 **LM-030 闭环成立** |
+| LM-031 | 待清理 | P2 | — | 📌 登记待清理 | §4.3.2；宽泛 catch，属**基线既有**行为，不判本轮失败 |
+| LM-032 | 待清理 | P2 | — | 📌 登记待清理 | §4.3.2；用例名与断言不符 |
+| LM-033 | S3 | P3 | — | ✅ 已闭环 | §8 基线数字已按实测更新 |
+| LM-034 | S4.2b | P2 | M4 | ✅ 已闭环 | `6d993d7`；危害描述经实测更正为「套接字泄漏」（§4.5.4） |
+| LM-035 | 待清理 | P2 | — | 📌 登记待清理 | `Handshake` 宽泛 catch，与 LM-031 同类 |
+| LM-036 | S2.4 | P2 | M2 | ✅ 已闭环 | `366bf9c`（恢复被删断言，复跑 35/35 通过）⇒ M2 放行条件 ① 满足 |
+| LM-037 | 信息项 | P3 | — | 📌 信息项 | §4.2.7；行为级护栏已存在（V5b），**不阻断** |
+| LM-038 | S4.2c | P2 | M4 | ✅ 已闭环 | `e1bd587`（按流水线口径在 `366bf9c` 重建并刷新仓库副本，内嵌 SHA 对齐） |
+| LM-039 | **S3.5** | **P1** | M3 | 🔄 进行中 | **必须修复**，不得仅登记：直接违反 S3.2 明文验收条款（§4.3.4） |
+| LM-040 | **S3.6** | P2 | M3 | 🔄 进行中 | 改为比较累计值而非入参；同步调整自证式单元测试期望 |
+| LM-041 | **S3.6** | P2 | M3 | 🔄 进行中 | 端到端用例补「耗时 < 2 s」或断言实际传入的超时值 |
+| LM-042 | **S3.6** | P2 | M3 | 🔄 进行中 | URL 改目标专属 + 收紧为 `Assert.Equal(MaxTargetsPerStep, server.RequestCount)` |
+| LM-043 | **S3.6** | P3 | M3 | 🔄 进行中 | 删去空转断言，或先断言 `failure` 非空再判原因码 |
+| LM-044 | **S3.6** | P2 | M3 | 🔄 进行中 | 补一条经 `ExecuteInstanceAsync` 的用例，断言实际 `MaxDuration == MaxExecutionDurationMs` |
+| GPU-001 | GPU T03/T04 | **P1** | GPU B→C | 🟡 合同已冻结 | GPU T02 合同（`26e3f40`）给出处置：新增 `WindowCapturePolicyCleanup` + `CapturePolicyCleanupLedger`，宿主恢复失败时**移交清理责任并释放自己**，`StopGpuPresentation()` **无条件置 null** ⇒ 三条重启路径重新可达。**B 期不写生产代码** |
+| GPU-002 | GPU T02/T04 | P2 | GPU B→C | 🟡 合同已冻结 | 正式采用 `PresentationSession.RecreateWindow`，补齐 R1–R6 |
+| GPU-003 | GPU T02/T03 | P2 | GPU B→C | 🟡 合同已冻结，**待实测** | `WS_EX_LAYERED` 与 WDA 互斥；期望状态由 `CreateParams` 决定且重建后不继承残留。**外部权威已多源交叉确认**（微软社区支持 + StackOverflow `ERROR_NOT_ENOUGH_MEMORY`）；**本仓库实测仍未做**（T01/T09） |
+| GPU-004 | GPU T04 | P2 | GPU B→C | 🟡 合同已冻结 | 代次判据**先于** `IsWindow`；代次合并为同一真相源 `WindowHandleGeneration` |
+| GPU-005 | GPU T02 | P2 | GPU B→C | 🟡 合同已冻结 | pending 仅在「首帧成功」或「受控放弃且停止流程干净」时清除 |
+| ENV-003 | S4.1 | P1 | M4 | ✅ 已闭环 | `a8fb2fc`：跳过 7→1；CI 门禁收紧（`MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS`） |
+| ENV-004 | S4.1 | P2 | M4 | ⏳ `BLOCKED_ENV` | 联网 E2E 单独运行，**不进 PR 门禁**；**不计入通过**（§9） |
+
+> **发布准入现状（§9 对当前状态的判定）：`NO_RELEASE`。** 条件 4 不满足（LM-015/LM-017 延后 ⇒ 正式签名未就绪）、条件 7 不满足（LM-015/LM-017 仍为未关闭 P1）、条件 8 不满足（发布顺序未执行）。**合并到 master 与发布是两件事**：合并（快进、零冲突）可进行，发布不可。
 
 ---
 
@@ -960,17 +1009,25 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 | 指标 | 数值 | 复现命令 | 核实状态 |
 |---|---|---|---|
 | 主测试工程（**初始基线**） | 通过 983 / 失败 0 / 跳过 7 / 共 990 | `dotnet test tests/LiteMonitor.Tests -c Debug` | 已实测，连续两次一致 |
-| 主测试工程（**当前实测**） | 通过 **1152** / 失败 0 / 跳过 **1** / 共 **1153** | 同上 | M3 门禁 @`cb460b5` 实测；S4.1 接入夹具后跳过由 **7 → 1**（唯一剩余为联网 E2E） |
-| 更新器测试工程 | 通过 13 / 失败 0 / 跳过 0 / 共 13 | `dotnet test tests/LiteMonitor.Updater.Tests -c Debug` | 已实测 |
-| GPU 非性能测试工程 | 通过 19 / 失败 0 / 跳过 0 / 共 19 | `dotnet test tests/LiteMonitor.GpuNonperformance.Tests -c Debug` | 已实测 |
-| **三工程合计（当前）** | **1185**（1153 + 13 + 19） | `dotnet test LiteMonitor.sln -c Debug -v minimal` | M3 门禁两次独立复跑，退出码 **0** |
-| 主测试源码文件 | 64 个 `.cs` | `Get-ChildItem tests/LiteMonitor.Tests -Filter *.cs` | 已实测 |
-| 解决方案测试发现 | **0（静默空跑，退出码 0）** | `dotnet test LiteMonitor.sln` | 已实测——S0.2 目标 |
-| 两点 / 三点分支差异 | 484 / 522，共同祖先 `169e90a2…` | `git diff --name-only master branch` / `master...branch` | 已实测 |
-| Release 构建 | **失败**（ENV-001 锁定） | `dotnet build LiteMonitor.sln -c Release` | 已实测 |
-| 远端 Actions / Release | 均无 | `gh run list` / `gh release list` | 已实测 |
+| 主测试工程（**CI 口径实测** @`366bf9c`） | 通过 **1192** / 失败 0 / 跳过 **1** / 共 **1193** | 设 `LITEMONITOR_PLUGIN_REPO=tests/fixtures/plugin-repo` 后 `dotnet test tests/LiteMonitor.Tests -c Debug` | M2 放行条件 #4 实测（§4.2.8）；跳过 1 = 唯一剩余联网 E2E（ENV-004） |
+| 主测试工程（**本地口径实测** @`366bf9c`） | 通过 **1186** / 失败 0 / 跳过 **7** / 共 **1193** | **不设** `LITEMONITOR_PLUGIN_REPO` 的同一条命令 | 已实测；与上一行的差值恰为 6 条市场契约用例（ENV-003） |
+| 更新器测试工程 | 通过 **58** / 失败 0 / 跳过 0 / 共 **58** | `dotnet test tests/LiteMonitor.Updater.Tests -c Debug` | 已实测（S4.2 扩展后由 13 增至 58） |
+| GPU 非性能测试工程 | 通过 **19** / 失败 0 / 跳过 0 / 共 **19** | `dotnet test tests/LiteMonitor.GpuNonperformance.Tests -c Debug` | 已实测 |
+| **三工程合计（当前）** | **1270**（1193 + 58 + 19） | `dotnet test LiteMonitor.sln -c Debug -v minimal` | M2 放行条件 #4 实测（§4.2.8），退出码 **0**；三道门禁（`dotnet test` / `assert-test-counts.ps1` / `generate-dependency-manifest.ps1 -Mode Check`）退出码全 **0** |
+| 主测试源码文件 | 顶层 **74** 个 / 含子目录 **80** 个 `.cs` | `Get-ChildItem tests/LiteMonitor.Tests -Filter *.cs -Recurse` | 已实测（原台账「64 个」已过时） |
+| 更新器 / GPU 测试源码文件 | 更新器 顶层 3 / 递归 9；GPU 顶层 0 / 递归 6 | 同上 | 已实测 |
+| 解决方案测试发现 | **1270**（CI 口径）／本地口径 1193 | `dotnet test LiteMonitor.sln` | **不再是 0** —— BASE-003 已闭环（`0366268` 三个测试工程入 `.sln`）；`assert-test-counts.ps1` 把「发现 0」变红 |
+| 两点 / 三点分支差异 | 484 / 522，共同祖先 `169e90a2…` | `git diff --name-only master branch` / `master...branch` | 已实测（BASE-002 起点；**本轮未重测**） |
+| Release 构建 | **成功** | `dotnet build LiteMonitor.sln -c Release` | 6 次 CI 全部 success（CI 内含 `dotnet build LiteMonitor.sln -c Release`，`.github/workflows/ci.yml:159`）。本地曾被运行中的 `LiteMonitor++.exe` 锁住输出目录（ENV-001，**非代码缺陷**，实例已自行退出） |
+| 远端 GitHub Actions | **6 次 push 运行，全部 `completed success`** | `gh run list --repo mojingjing-git/LiteMonitorPlus --limit 8` | 最新 `39816781583` @`18d5fab`；运行号 `39802630699`/`39804354003`/`39808904819`/`39811554270`/`39814447849`/`39816781583` |
+| 远端 Release | **仍为 0**（本批不发布） | `gh release list` | 已实测；发布准入见 §9 |
+| 本地 HEAD vs 远端 `origin/fix/audit-remediation-v3` | 本地领先 2 个提交（`7214135`、`26e3f40`） | `git log --oneline origin/fix/audit-remediation-v3..HEAD` | 已实测；`master` 本地与远端恒为 `9ffb4219`（**不得变更**） |
 
-**基线纪律：** 任何步骤完成后，上述**当前实测值**（主工程 通过 **1152** / 跳过 **1** / 总 **1153**，更新器 通过 **13**，GPU 非性能 通过 **19**，三工程合计 **1185**）**不得下降**；主工程**总数只增不减**。下降即为回归，必须在同一步骤内修复，不得记为"已知问题"后放行。CI 侧的对应门禁为 `MIN_TEST_TOTAL: 1150`、`MAX_SKIPPED_TESTS: 1`、`MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests (≥6)`（`.github/workflows/ci.yml`）—— 跳过数**有上限**、契约类**不许被跳过**，两者均为 S4.1 引入的收紧。
+**基线纪律：** 任何步骤完成后，上述**当前实测值**（CI 口径：主工程 共 **1193**（通过 **1192** / 跳过 **1**），更新器 通过 **58**，GPU 非性能 通过 **19**，三工程合计 **1270**）**不得下降**；主工程**总数只增不减**。下降即为回归，必须在同一步骤内修复，不得记为"已知问题"后放行。CI 侧的对应门禁为 `MIN_TEST_TOTAL: 1150`、`MAX_SKIPPED_TESTS: 1`、`MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests (≥6)`（`.github/workflows/ci.yml`）—— 跳过数**有上限**、契约类**不许被跳过**，两者均为 S4.1 引入的收紧。
+
+> **本行的重测义务：** 上表数字测于**最终发布提交点 `366bf9c`**（§4.2.8）。其后的 `e1bd587` / `18d5fab` / `7214135` / `26e3f40` 四个提交**只含文档与更新器二进制**，未触及测试源码；但 **S3.5 / S3.6 合入后主工程总数必然上升**（新增用例），届时**必须**在最终提交点重跑全量并回写本表，同时**上调** `MIN_TEST_TOTAL`（门禁只收紧不放宽）。在此之前，本表数字**不得**被引用为「当前最新」。
+>
+> **本地口径 vs CI 口径的差异（已解释，非回归）：** 不设 `LITEMONITOR_PLUGIN_REPO` 时，主工程为 1193 / 通过 1186 / 跳过 **7**；设了（指向 `tests/fixtures/plugin-repo`）后跳过降为 **1**，通过升为 1192 ⇒ 差值恰为 **6** 条市场契约用例（ENV-003），与 §4.2.8 完全吻合。
 
 ---
 
@@ -1016,9 +1073,35 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 
 ## 11. 立即可执行的下一步
 
-1. **S0.0**：确认是否停止运行中的 `LiteMonitor++.exe`，或改用独立发布目录（ENV-001 阻断 Release 构建）。
-2. **S0.2**（mule）与 **S0.1**（explore）可同时派发。
-3. S0.2 完成后派发 **S0.3**（worker，建立最小 CI）。
-4. M0 门禁通过后，进入 **S1.0**（mavis 冻结在途租约契约），再并行派发 S1.1 / S1.2 / S1.3。
+> **状态（2026-10-23）：本计划已进入实施阶段，不是待执行文档。** M0 / M1 / M2 / M3 四个门禁已全部归档（M1 PASS、M2 **PASS 并放行**、M3 `PASS_WITH_NOTES`），S0–S5.3b 各步骤均已产出提交并登记于 §4.4。以下为**当前**的收尾动作。
 
-**注意：** 本计划是待执行文档，尚未开始实施。任何"PASS"都必须附带 §10 的完整字段与真实命令输出。
+### 11.1 正在进行（不得抢占其文件所有权）
+
+| 编号 | 内容 | 隔离方式 | 产出物 |
+|---|---|---|---|
+| **S3.5** | 修 **LM-039**（`native://` 绕过并发槽 / 2 MiB 上限 / 凭据目标校验 / 30 s 截止时刻）—— **P1，必须修**，直接违反 S3.2 明文验收条款 | 隔离 worktree `.artifacts/wt-lm039`（分支 `task/lm039-native-gates`） | `src/Plugins/PluginExecutor.cs`、`src/Plugins/Native/CryptoNative.cs`、`src/Plugins/Native/CityCodeResolver.cs`、新建 `tests/LiteMonitor.Tests/PluginNativeSandboxTests.cs` |
+| **S3.6** | 修 **LM-040~LM-044**（目标数累计未强制 / 500 ms 未钉住 / 请求数断言过弱 / 空转断言 / 30 s 生产入口未钉住） | 隔离 worktree `.artifacts/wt-lm040`（分支 `task/lm040-contract-pinning`） | `src/Plugins/PluginProcessor.cs`、`tests/LiteMonitor.Tests/PluginExecutorSandboxTests.cs`、`tests/LiteMonitor.Tests/PluginSandboxLimitsTests.cs` |
+| **GPU T01** | HWND 重建 A/B 对照（仅停止 vs 重建）+ GDI 桌面像素观察 ⇒ 判定 `Control.RecreateHandle()` 是否可安全使用 | 主工作区（`tools/GpuHostLifecycleProbe/`） | 探针工程 + 实测证据；结论回填 GPU 计划 §12.7 |
+
+### 11.2 收尾动作序列（按序执行）
+
+1. **合入 S3.5 / S3.6**：由编排方在主工作区 `cherry-pick` 两个 worker 提交（**不 rebase、不改写其历史**）；文件所有权不重叠，可顺序合入。
+2. **重跑全量回归（CI 口径）**：`LITEMONITOR_PLUGIN_REPO=$PWD\tests/fixtures/plugin-repo` + `dotnet test LiteMonitor.sln -c Debug` + `assert-test-counts.ps1` + `generate-dependency-manifest.ps1 -Mode Check` ⇒ **三道门禁退出码必须全 0**，且主工程**总数只增不减**。
+3. **上调 `MIN_TEST_TOTAL`**：`.github/workflows/ci.yml` 的 `MIN_TEST_TOTAL: 1150` 相对新总数已偏松 ⇒ 按「门禁只收紧不放宽」原则上调到新总数附近（**不放宽**）。
+4. **回写 §8 已知基线**与 **§7 追踪矩阵**（LM-039~044 转 `✅ 已闭环`），并把 §4.4 台账补上 S3.5 / S3.6 两行。
+5. **推送** `fix/audit-remediation-v3` 到 origin（已授权），等待 CI 全绿（当前基线：6 次 push 运行全部 success）。
+6. **提出 master 合并评估**（用户已定：门禁全绿且本批收敛后再评估）。就绪度事实已备齐：merge-base 即 master `9ffb4219` ⇒ **可快进、零冲突**；`A=287 / M=29 / D=0`（零删除）；生产代码仅 **13 个 `src/` 文件**（+5750/−586）。
+7. **GPU T01 结论落地**：回填 GPU 计划 §12.7；若判定「`RecreateHandle` 不可安全使用」⇒ 步 4 删除、判别位重建分支作废、`RecreateWindow` 不采用、U02/U03/U06b 改判。**在此之前不得物化 T02 合同到 `src/`。**
+8. **GPU C 期（T03–T08）启动条件**：T01 路线结论落地 **且** `src/Rendering/**` **重新冻结哈希** **且** M2/M3 门禁确认 ⇒ 三者齐备才启动。
+
+### 11.3 需要人工到场 / 外部确认的事项（**不可由 agent 代替**）
+
+| 事项 | 原因 | 状态 |
+|---|---|---|
+| **M6 GPU 与硬件实机验收 G01–G12** | G05 / G09 需**管理员**；**G08（不同 DPI 屏幕）环境本机不存在**（两屏均 96 dpi） | 全部未跑；G08 记 `BLOCKED` + 人工步骤，**不得用夹具冒充** |
+| **真实浏览器跨源读取 / 端到端登录与 WS 握手** | 无浏览器驱动 | 2 条 `BLOCKED_ENV`，**不计入通过** |
+| **法律三项复核** | `amd64/msdia140.dll`（VS EULA 再分发条款）、`Mono.Posix.NETStandard 1.0.0`（nuspec 无 SPDX 表达式）、`HidSharp 2.6.4`（`type="file"`，Apache-2.0 由正文识别） | 已如实登记进 NOTICE，**未替主人下结论** |
+| **S5.1 / S5.2 真实签名** | 用户已定延后 | 需明确授权后才启动；未启动 ⇒ 发布准入 `NO_RELEASE` |
+| **S7 权限架构（LM-021）** | 计划默认延期 | 待授权 |
+
+**注意：** 任何"PASS"都必须附带 §10 的完整字段与真实命令输出。`DEFERRED` / `NOT_VERIFIED` / `BLOCKED_ENV` **一律不计入**"已关闭"。
