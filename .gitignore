@@ -22,6 +22,10 @@ TrafficHistory.json.bak
 tests/**/output/
 tests/**/Capture/
 
+# Test run artifacts
+TestResults/
+*.trx
+
 # Release output
 /dist/
 
