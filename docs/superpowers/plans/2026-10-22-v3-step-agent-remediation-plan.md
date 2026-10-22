@@ -206,12 +206,37 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | LM-062 | 既有 public 方法 `NotifyGpuHandleChanged()` 的**无参重载被删除且未保留**（`src/UI/UIController.cs:325`） | P3 | `CONFIRMED`（**GPU 独立复核实测**，§4.5.12） | 登记知悉（**主审裁决 D-I**，§4.5.12）：内部 WinForms 类、非对外库 API、全仓仅 1 处调用点且已同步更新；补一个转发到 `(false, gen)` 的重载会**改变原语义**（原方法尝试拉起 GPU，新签名下 `controlled=false` 明确禁止）⇒ **不修**，保留复核方建议备查 |
 | LM-063 | `finally` 内 `_captureCleanup.Add(...)` 排在 `_gpuPresentation = null;` **之前** ⇒ 理论上登记异常会跳过置 null | P3 | `CONFIRMED`（**GPU 独立复核指出**，§4.5.12；当前 `Add` 无抛出路径 ⇒ **实际不可达**） | ✅ **已修复**（`48de1a8`）：改为**嵌套 `try`/`finally`**，置 null 位于**最内层** `finally` 体内；新增可执行 IL 护栏；**主审变异自证**：恢复单层 `finally` ⇒ 红 ⇒ 字节还原 SHA-256 一致（还原后 SHA 与修复前原值完全相同）⇒ 绿 47/47 |
 | LM-064 | ledger `Pump` 预填 `Attempts=2` 并覆盖 `LastErrorCode` ⇒ ledger 与 policy 两份实现存在语义漂移窗口 | P3 | `CONFIRMED`（**GPU 独立复核观察**，§4.5.12；生产移交路径恒为 2 ⇒ **实际不触发**） | 登记，不修（属**诊断保真观察**，抽取显式常量属**美化**而非修复 ⇒ 禁止无关重构） |
+| LM-065 | **R01 · 启动阻断**：`MainForm` 构造期 `_winHelper` 的赋值**晚于** `new UIController(...)`，而 `UIController..ctor → ApplyTheme → ApplyGpuRenderingRoute → MainForm.IsWindowLayered()` 会解引用它 ⇒ **主程序启动即抛 `NullReferenceException`**（与主题/GPU 开关/安全模式**全部无关**） | **P1** | `CONFIRMED`（**主审独立复核 + 实机复现**：探针 `mainform` 场景产出 `.artifacts/r01-repro/mainform-construction-error.log`，堆栈 `MainForm.IsWindowLayered → UIController.ApplyGpuRenderingRoute → ApplyTheme → UIController..ctor → MainForm..ctor`） | ✅ **已修复**（`a157c1b`）：`_winHelper` 赋值前移到 `new UIController` 之前（`MainFormWinHelper` 构造只存窗体引用，无依赖）。**新增 4 条 IL 护栏**（顺序 / 读前必赋值 / 必须转发给助手 / 必须实时读句柄）。**主审变异自证**（`.artifacts/r01-mutate.ps1`）：变异 ⇒ 红 1/4（偏移 304 vs 248）⇒ 字节还原 SHA-256 一致 ⇒ 绿 4/4 ⇒ `RESULT=PASS`；**启动检查负向自证**（`.artifacts/r01-startup-mutate.ps1`）：变异 ⇒ 退出码 1 + `NullReferenceException@IsWindowLayered` ⇒ 字节还原 ⇒ 退出码 0 ⇒ `RESULT=PASS`。**并新增生产主窗体启动检查场景**（探针 `--scenario=startup`）并接入 `ci.yml` |
+| LM-066 | **R02 · GPU 故障回退**：运行故障/启动失败路径只做 `StopGpuPresentation` + `Invalidate`（`UIController.cs:1575`、`GpuPresentationHostController.OnRenderFailure`），**不进入** `RunGpuToLegacyTransition` ⇒ 与"手动关闭 GPU"的受控 HWND 重建路径**不对称** | **P1** | `CONFIRMED`（**主审逐行复核**：唯一调用点 `UIController.cs:1206` 在 `ApplyGpuRenderingRoute` 内，故障路径完全绕开） | 🔧 **修复中**（派发独立 worker，文件所有权：`src/UI/UIController.cs` + `src/Rendering/Presentation/**` + `src/UI/RenderingTransitionCoordinator.cs` + `src/UI/CapturePolicyCleanupLedger.cs`） |
+| LM-067 | **R03 · 网页口令策略**：运行中清除口令只清哈希+盐+明文，而 `ApplyWebServer`（`AppActions.cs:255`）**只比较明文**口令 ⇒ 判定"无需重启" ⇒ LAN 监听继续；而 `HandleLoginAsync`（`WebSessionManager.cs:1283`）读**单例** `Settings.Load()` 且 `:1290` `HasWebPasswordConfigured()` 为假 ⇒ 直接签发 **L0 无口令主会话** | **P1** | `CONFIRMED`（**主审逐行复核**：单例语义 `Settings.cs:311-314`；`Settings.cs:485`） | 🔧 **修复中**（派发独立 worker，文件所有权：`src/UI/Settings/MainPanelPage.cs` + `src/Core/Actions/AppActions.cs` + `src/Core/Settings.cs` + `src/System/WebServer/**`） |
+| LM-068 | **R04 · 插件恢复日志路径边界**：恢复日志的 `Target`/`Stage`/`Backup` 直接进 `Path.Combine`（`PluginMarket.cs:965-967`）⇒ 绝对路径会**顶掉**插件目录、`..` 会**越出**目录；随后 `SafeDelete`（`:978`/`:979`/`:1001`）与 `File.Move(..., overwrite: true)`（`:997`）⇒ 任意文件删除/覆盖 | **P1** | `CONFIRMED`（**主审逐行复核**；触发前提为**可篡改本地事务日志**，非远程可利用） | 🔧 **修复中**（派发独立 worker，文件所有权：`src/Plugins/PluginMarket.cs`） |
+| LM-069 | **R05 · 旧客户端升级桥接缺失**：基线旧客户端用**单参数**启动更新器并 `Application.Exit()`，而新更新器（`LiteMonitor.Updater/Program.cs:128`）**有意拒绝**单参数（退出码 6）⇒ 旧客户端装上新更新器后**静默失败**、用户只剩旧版本且反复重试 | **P1** | `CONFIRMED`（**主审核对基线 `0f1177e` 的 `UpdateDialog` 实测**：单参数 + `Process.Start` 后立即 `Application.Exit()`） | 🔧 **修复中**（派发独立 worker，文件所有权：`LiteMonitor.Updater/**` + `src/UI/UpdateDialog.cs` + `src/System/UpdateChecker.cs`）。**★ 已查明**：基线旧客户端**已有 ECDSA 验签**（内嵌公钥指纹 `25E6659D…`）且 `UpdateContext.ExpectedSha256` **已带**已验签摘要 ⇒ 桥接存在**不削弱完整性**的实现路径；最终发布策略待主人拍板（见 §4.6） |
+| LM-070 | R06 · 原生旧主题被错误套用 GPU 回退配色（`UIController.cs:1397` 无条件 `Resolve` 目标主题 fallback ⇒ 覆盖背景/分组/正文/标题） | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（GPU/外观批次） |
+| LM-071 | R07 · 派生主题只复制 public 属性，漏掉 `Theme` 的 `FontTitle/FontGroup/FontItem/FontValue` **字段** ⇒ 运行期字体/字号/高 DPI 缩放丢失 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（GPU/外观批次） |
+| LM-072 | R08 · 受控重建后未按配置恢复旧 M2 实时玻璃（`LiveGlassController` 只 `RefreshRequest`，服务为 null 即返回） | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（GPU/外观批次） |
+| LM-073 | R09 · `TryReconfigure` 取得 WDA 所有权时**绕过** pending 清理检查（只有 `Start` 查 pending） | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（GPU/外观批次） |
+| LM-074 | R10 · 恢复重试耗尽被记为 `Failed` 后 `HasPendingForGeneration` 返回 false ⇒ 同 HWND 可再取新 WDA 所有权，原策略却未恢复 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（GPU/外观批次） |
+| LM-075 | R11 · 修改监听范围（Loopback/LAN）不重绑服务；界面"实际监听地址"读**草稿** `BindMode` 而非真实端点 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（网页批次；与 LM-067 同模块） |
+| LM-076 | R12 · WS 连接只保存服务代次、**不绑定会话** ⇒ 注销/过期后已建立的 WS 继续收到数据 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（网页批次） |
+| LM-077 | R13 · 口令迁移 `EnsureWebPasswordMigrated` 调 `Save` 后直接返回 true，而 `Save` 在禁止保存时**直接返回**、遇 IO 错误**吞异常** ⇒ 旧明文可能仍在磁盘 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（网页批次） |
+| LM-078 | R14 · 请求合并键只有请求摘要，**不含允许目标/凭据策略** ⇒ 不同白名单的调用者可能复用他人的响应 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（插件沙箱批次） |
+| LM-079 | R15 · `StripPort`（`PluginExecutor.cs:847`）对 IPv6 字面量按**最后一个冒号**截断 ⇒ `[fd00::1]` 与 `[fd00::2]` 都化成 `[fd00:` ⇒ **地址碰撞** | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**；与 LM-058 是**同一类缺陷的另一处**，LM-058 当时判为"偏严方向"） | 排队（插件沙箱批次） |
+| LM-080 | R16 · `AddDeclaredHost`（`PluginProcessor.cs:421`）只按 `/` 截 authority，**不处理 `?`/`#`** ⇒ 无路径 URL 的查询串被当作主机名 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（插件沙箱批次） |
+| LM-081 | R17 · 手动重定向按状态码**无条件**把方法设为 GET（`PluginExecutor.cs:1006`）⇒ HEAD 语义丢失 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（插件沙箱批次） |
+| LM-082 | R18 · 原生 Crypto 请求按**实例 ID** 而非**执行作用域**合并；旧任务未收尾即被新执行复用 ⇒ 跨代次取消相互影响 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（插件沙箱批次） |
+| LM-083 | R19 · 插件事务恢复晚于首次加载与调度 ⇒ 磁盘回滚了但**内存仍运行新版本** | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（市场批次；与 LM-068 同模块） |
+| LM-084 | R20 · 市场改用 `ResponseHeadersRead` 后，30 秒超时只约束到**响应头**；正文读取用调用方 `ct` ⇒ "头成功、正文停滞"可无限等待 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（市场批次） |
+| LM-085 | R21 · 旧配置首存时主文件被加密，但 `AtomicWrite` 把旧主文件**原样**复制成 `settings.json.bak` ⇒ 备份里仍有插件密钥**明文** | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（凭据批次） |
+| LM-086 | R22 · T01 探针 `PumpScene` 在 `Task.Run` 内调用需 UI 线程的 `UpdateScene` ⇒ 抛 `InvalidOperationException` 且任务未等待 ⇒ 持续送帧失败未被报告 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（验证工具批次） |
+| LM-087 | R23 · 真实 MainForm 隔离门在 `OnShown` 启动服务**之前**检查 ⇒ 生产 `OnShown` 开启监听的副作用未被约束 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（验证工具批次） |
+| LM-088 | R24 · 探针找不到源码时 `guard` 为 null，但 `unchanged` 初值为 true ⇒ 仍输出"源码未漂移" | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（验证工具批次） |
+| LM-089 | R25 · `release.yml` **没有**接入 `generate-dependency-manifest.ps1 -Mode Check` 门禁 ⇒ 依赖漏列时 CI 会红而**发布流水线仍会**构建/签名/上传草稿 | P2 | `REPORTED`（审查报告静态分析；**主审未逐条复核**） | 排队（发布门禁批次） |
 
 **当前无 P0。** 若任一执行步骤新发现 P0，立即挂起其他任务优先处理。
 
 **编号规则：** `LM-` 缺陷 / `SEC-` 安全 / `BASE-` 基线 / `ENV-` 环境事实 / `GPU-` GPU 切换专项。第三方评审使用的 `LM-018`、`LM-019` 与 `LM-003b`、`LM-003c` 指同一处代码，已合并并保留别名以便交叉引用；`LM-005/006` 为同一协议缺陷的两个侧面。
 
-> **编号占用现状（2026-10-23 第五次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-064`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-065` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用，`LM-057`–`LM-059` 由 LM-045 独立复核产出，`LM-060` 由 GPU T03 变异自证过程实测产出，`LM-061`–`LM-064` 由 GPU 独立复核产出）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
+> **编号占用现状（2026-10-23 第六次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-089`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-090` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用，`LM-057`–`LM-059` 由 LM-045 独立复核产出，`LM-060` 由 GPU T03 变异自证过程实测产出，`LM-061`–`LM-064` 由 GPU 独立复核产出，**`LM-065`–`LM-089` 由 2026-10-23 独立审查报告产出**，对应报告编号 R01–R25）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
 
 ### 4.1 根因更正记录 · LM-001（原"永久停摆"前提已证伪）
 
@@ -836,6 +861,78 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 - `BLOCKED_ENV`：① GPU 实机行为（真实 DXGI 呈现 / 真实 HWND 重建 / 真实 WDA 排除与恢复 / 异 DPI 显示器）⇒ 需真实 GPU + 双屏 + 管理员；② 计划 §7.2 的 **G01–G12** 实际窗口与画面矩阵。
 - `NOT_VERIFIED`：① `WS_EX_LAYERED` 窗口上 `SetWindowDisplayAffinity` 是否**确实**失败（合同 §14 第 3 项）；② 重建后 `Form.Opacity` 分层 alpha 是否自动恢复（第 1 项）；③ `MakeWindowAssociation` 残留是否清除（第 2 项）；④ 清理预算 6 次 / 退避 250→2000 ms 是否覆盖**真实**窗口存活时间（第 5 项，本轮只验了退避表数值与重试逻辑）；⑤ "新代次独立取得所有权"在实机上无 WDA 副作用（第 8 项）；⑥ 继承 T01 报告的 **N1–N10**。
 - **已验证且明确不列入未验**：合同 §14 第 10 项（`WindowIsLayered` 落在 `Decide` 的位置是否影响既有单测期望）—— 既有单测全绿，且变异 M8/M13/M14 仍能精准打红相关用例 ⇒ 该落点确实被覆盖。
+
+---
+
+## 4.6 独立审查报告的登记与处置（2026-10-23）
+
+### 4.6.1 登记口径
+
+2026-10-23 收到一份独立审查报告（`docs/reviews/2026-10-23-recent-changes-independent-review.md`，范围 `0f1177e → 3b81b59`，62 提交 / 103 文件），登记 **25 项：5 项 P1、20 项 P2**（报告编号 R01–R25）。
+
+**主审的独立复核口径**（不采信报告结论，逐条回源码核对）：
+
+| 范围 | 主审动作 | 台账状态 |
+|---|---|---|
+| **R01–R05（5 项 P1）** | **逐行回源码核对调用链与状态推导**；R01 另做**实机复现**（探针真实构造生产 `MainForm`）⇒ **5/5 全部成立** | `CONFIRMED` |
+| **R06–R25（20 项 P2）** | **未逐条复核**（本轮只做 P1 闭环） | `REPORTED`（待复核，**不得**据此宣称已确认） |
+
+> ★ **口径纪律**：报告是**外部输入**，不是证据。P1 的"成立"由主审**自己**读源码 + 自己的实机复现支撑；P2 只登记为"报告提出、待复核"，**不计入**任何"已修复"或"已确认"统计。
+
+### 4.6.2 R01（LM-065）：主程序在审查所指的分支上**根本起不来**
+
+**这是本轮最重要的发现，且它推翻了一个此前已经写进台账的结论。**
+
+- **实证（修复前）**：`tools/GpuHostLifecycleProbe` 的 `mainform` 场景**真的构造生产 `MainForm`**，产出 `.artifacts/r01-repro/mainform-construction-error.log`：
+
+  ```
+  System.NullReferenceException: Object reference not set to an instance of an object.
+     at LiteMonitor.MainForm.IsWindowLayered()
+     at LiteMonitor.UIController.ApplyGpuRenderingRoute(Theme theme)
+     at LiteMonitor.UIController.ApplyTheme(String name, Boolean retainData)
+     at LiteMonitor.UIController..ctor(Settings cfg, Form form)
+     at LiteMonitor.MainForm..ctor()
+  ```
+
+- **静态链路**：`MainForm..ctor` → `new UIController(_cfg, this)`（`_winHelper` 尚未赋值）→ `UIController..ctor` → `ApplyTheme(_cfg.Skin)` → `ApplyGpuRenderingRoute(t)`（**无条件**）→ 求值 `WindowIsLayered: MainForm.IsWindowLayered()` → `MainForm_Transparent.cs:89` `_winHelper.IsWindowLayered()` ⇒ **null 解引用**。
+  与**主题、GPU 开关、安全模式全部无关**（该调用无条件求值，且发生在协调器自身的 catch 之前）。
+- **引入点**：GPU T03 集成（`5a1eeb7`）新增了 `MainForm.IsWindowLayered()` 这条读路径；T01 的实机探针跑在 T03 **之前**，因此**从未**用真实启动验证过它。
+
+**修复（`a157c1b`）**：把 `_winHelper = new MainFormWinHelper(this);` 前移到 `new UIController(...)` **之前**（`MainFormWinHelper` 构造只保存窗体引用，不触碰 HWND、不依赖 `_ui` ⇒ 提前赋值无副作用；`IsWindowLayered()` 本身在句柄未创建时安全返回 `false`）。
+
+**两道自证**（脚本在 `.artifacts/`，未入库）：
+
+| 自证 | 脚本 | 结果 |
+|---|---|---|
+| **IL 护栏能杀变异** | `r01-mutate.ps1` | 变异（把赋值还原到 `new UIController` 之后）⇒ **红 1/4**（`初始化顺序错误：_winHelper 的赋值在 IL 偏移 304，而 new UIController(...) 在偏移 248`）⇒ 字节还原 SHA-256 一致（`3C84A169…`）⇒ **绿 4/4** ⇒ `RESULT=PASS` |
+| **启动检查能杀变异** | `r01-startup-mutate.ps1` | 变异 ⇒ **退出码 1** + `startup-error.log` 命中 `NullReferenceException@IsWindowLayered` ⇒ 字节还原 SHA-256 一致 ⇒ **退出码 0** ⇒ `RESULT=PASS` |
+
+**新增护栏**（`tests/LiteMonitor.Tests/MainFormStartupOrderTests.cs`，4 条）：① 窗口助手赋值必须早于 UIController 构造；② 构造函数里每次读 `_winHelper` 前必须已赋值；③ 分层窗口查询**必须转发**给助手（禁止"直接返回 false"式假修 —— 那会静默破坏 GPU-003 的真实读数）；④ 助手的分层查询必须**实时**读句柄（禁止把 null 当"非 layered"永久缓存）。
+
+### 4.6.3 新增 CI 门禁：**生产主窗体启动检查**
+
+R01 一路穿过了全部 1396 条用例与**连续 8 次绿色 CI** ⇒ 证明"单测全绿"**不能**推出"主程序能启动"。
+
+⇒ `ci.yml` 新增步骤「**生产主窗体启动检查（R01：真实构造 MainForm）**」：构建 `tools/GpuHostLifecycleProbe` → 运行 `--scenario=startup` → **退出码非 0 即流水线红**。该场景刻意**不跑消息循环**（不触发 `OnShown`）⇒ 网页服务不会开始监听；产物 `ci-artifacts/startup-check/**` 一并上传。
+
+### 4.6.4 ★ 对此前结论的更正（留痕）
+
+§8 与 §11 曾把 `0f1177e → 3b81b59` 记为"**本批收敛 + CI 全绿 + 独立复核通过**"。**该结论只对"组件层"成立，对"可运行"不成立**：主线程序在该区间**构造即崩**。
+
+⇒ **教训（写进台账，避免再犯）**：**组件级单测与 IL 护栏无法覆盖"构造顺序/对象可用性"这一类缺陷**。凡是需要"对象在某个时刻已经可用"的契约，都必须补**真实启动**或**真实构造**的检查，不能用"调用存在"类护栏代替。
+
+### 4.6.5 R05（LM-069）：发布策略待主人拍板
+
+主审核对基线 `0f1177e` 实测查明：旧客户端**本来就有 ECDSA 验签**（内嵌公钥 SPKI 指纹 `25E6659D…`），且 `UpdateContext.ExpectedSha256` **已经带着**来自**已验签** `version.json` 的摘要 —— **只是没有把它传给更新器**。因此存在**不削弱完整性**的桥接路径。三个候选方案（自引用循环论证、完整性影响、发布流程影响）见 `docs/plans/2026-10-23-updater-legacy-bridge-design.md`（由本轮 worker 产出）。
+
+| 方案 | 信任锚 | 与旧客户端信任级别对比 | 前提 |
+|---|---|---|---|
+| (A) 过渡发布 + 钉住摘要 | 摘要钉在更新器二进制里 | **等于** | **自引用循环**（更新器在包内，钉住自己所在包的摘要不可行） |
+| (B) 更新器自行验签 `version.json` | 内嵌 ECDSA 公钥 | **等于**（同一把钥匙） | 发布真的签名 ⇒ 与 **S5.1/S5.2 真实签名**绑定（当前**未授权**） |
+| (C) 仅支持手动升级 | 无 | **降低**（旧客户端失去自动升级） | 无（可立即执行） |
+
+**主审建议**：先落地"**失败可见**"部分（更新器写机器可读标记 + 新客户端启动时明确提示"自动升级通道不兼容，请手动下载"），该部分**与策略选择无关**且立即改善用户体验；桥接本体待 (A)/(B)/(C) 拍板后再开。
+
 
 ---
 
