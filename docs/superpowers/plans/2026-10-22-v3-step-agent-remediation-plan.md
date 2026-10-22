@@ -371,6 +371,73 @@ M5 另做独立佐证：`^(a+)+$`（40×a + `!`）无 timeout 时 **180 s 未完
 
 ---
 
+### 4.5 裁决更正与偏离登记
+
+本节登记两类必须留痕的事：**编排方（mavis）给出的事实或裁决被实测推翻**，以及 **worker 对指令的有意偏离**。两者都不得静默生效。
+
+#### 4.5.1 编排方 brief 的事实错误（以实测为准，已更正）
+
+S5.3b（`e452097`）在实测中推翻了编排方在 S5.3 简报里给出的三处数据：
+
+| 编排方原述 | 实测结论 | 影响 |
+|---|---|---|
+| "`Microsoft.Diagnostics.FastSerialization`（TraceEvent 附带）是传递依赖" | **它不是独立 NuGet 包** —— NuGet 缓存中不存在 `microsoft.diagnostics.fastserialization`，它是 TraceEvent 4.0.0 包内的程序集（`lib/netstandard2.0/Microsoft.Diagnostics.FastSerialization.dll`，`AssemblyVersion 4.0.0.0`）。故不单列为传递依赖，改为在 NOTICE 传递依赖章节开头以说明段披露（连同 `Dia2Lib.dll`、`TraceReloggerLib.dll`、`amd64/KernelTraceControl.dll`、`amd64/msdia140.dll`） | NOTICE 章节结构变更 |
+| "随包分发的传递依赖是 6 个" | 实测是 **21 个**（另 23 个不随包分发）。编排方漏列了 LHM 的配套库（BlackSharp.Core / DiskInfoToolkit / HidSharp / Mono.Posix.NETStandard / RAMSPDToolkit-NDD）与多个 `System.*` 平台库 | NOTICE 补全 21 条 |
+| TraceEvent 的传递依赖是 FastSerialization | 真正随包分发的是 **`Microsoft.Diagnostics.NETCore.Client 0.2.661903`** | 清单条目更名 |
+
+**更重要的更正：S5.3 的"随包分发"粗判据是错的。** 原判据（"包内是否有 `lib/<tfm>/*.dll`"）会**多算 5 个包** —— NuGet/MSBuild 会把"与 .NET 共享框架同名且框架版本 ≥ 包内版本"的程序集判为**框架提供**，该文件**不**进发布目录。多算的 5 个是 `Microsoft.Win32.Registry 5.0.0`、`System.Security.AccessControl 5.0.0`、`System.Security.Principal.Windows 5.0.0`、`System.Reflection.TypeExtensions 4.7.0`、`System.Runtime.CompilerServices.Unsafe 6.1.2`。
+
+S5.3b 改用的判据（还原图 `runtime`/`runtimeTargets`/`native` → 排除 `_._` → 只接受 win-x64/win RID → 剔除被 targeting pack 以不低于版本提供的程序集）经**三方交叉验证**：
+
+| 真值来源 | 结果 |
+|---|---|
+| **A** 实际产物：`dotnet publish -c Release -r win-x64 --self-contained false` 的输出目录 + `LiteMonitor++.deps.json` 的 `targets[".NETCoreApp,Version=v8.0/win-x64"]` 归属 | 26 个包（5 直接 + 21 传递） |
+| **B** 脚本判据 `Get-DistributionMap` | 26 个包 |
+| **C** MSBuild 自身：`dotnet msbuild -t:ResolveReferences -getItem:ReferenceCopyLocalPaths`（含框架冲突消解） | 26 个包 |
+
+**A ≡ B ≡ C**；且 RID 无关还原与 RID 专项还原两条路径结果一致。
+
+#### 4.5.2 worker 对指令的有意偏离（均已批准）
+
+| 步骤 | 偏离 | 裁决 |
+|---|---|---|
+| S3.3 | 未使用 `scope.RunStepAsync` 取数，改为在作用域内组合 `AcquireRequestSlotAsync` + 限字节读取 | **批准**。`RunStepAsync` 内部会再调一次 `EnsureStepAllowed()`，会把冻结契约的 16 步上限**重复计数**成 8 步；且它只抛 `PluginSandboxException`，会破坏既有 `PluginRequestIdentityTests.cs:649-652` 的**精确类型**断言（该测试不归 S3.3 所有）。四项语义（并发闸门 / 字节上限 / 总时长取消 / 原因码）与原裁决一致，且既有 LM-003a 行为不破 |
+| S4.2 | 重建 `resources/LiteMonitor++.Updater.exe` 时用 `--self-contained false` 而非编排方指定的 `true` | **批准**。仓库发布流水线 `scripts/pack-release.ps1:125` 用的就是 `--self-contained false`（原受跟踪产物 178 738 字节亦为框架依赖单文件）；`true` 会产出 **67 536 024 字节（64 MB）** 的 blob 且与流水线产物形态不一致。自包含变体已一并产出于 `.artifacts/upd-lm016/publish-sc/`（SHA-256 `F45C5E72…`），如需改用可替换后重提交 |
+
+#### 4.5.3 编排方裁决的变更（S3.4）
+
+S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在实例内累计）的未预见后果：单实例总步骤 = 目标数 × 每目标步骤数 > 16 即 `LM009_STEP_LIMIT` 失败 ⇒ **Stock 配 9 只股票、Weather 配 6 个城市就会失败**（常见用法）。
+
+**裁决变更（2026-10-23）：步骤数上限改为「每目标 ≤ 16 步」。** 理由：
+
+1. **安全意图不变** —— LM-009 的步骤数上限针对"单条链无限长"，无论累计口径如何，**单链长度都被限死**；
+2. **跨目标放大已有三道独立闸门** —— 目标展开数 ≤ 64（实例内累计）、单次执行总时长 ≤ 30 000 ms（跨 target 累计）、并发 ≤ 8（进程级），**均不变**；
+3. **不引入新的攻击面** —— 目标数来自**用户配置**（`PluginInstanceConfig.Targets`），恶意插件**无法自行增加目标数**；
+4. **消除真实功能退化** —— LM-009 的目标是安全加固，**不应限制用户配置的目标数量**。
+
+落地归属 **S3.4**；四种计数口径的最终定义（步骤数按目标 / 目标数按实例 / 总时长按实例 / 并发按进程）须在 S3.4 完成后写入 `PluginSandboxScope` 的类文档。
+
+#### 4.5.4 本轮新发现的缺陷
+
+| ID | 级别 | 摘要 | 归属 |
+|---|---|---|---|
+| **LM-034** | 🟡 低~中 | **被拒绝的 WebSocket 握手不关闭连接** —— `WebSessionManager` 的 `client.Close()` 只在 HTTP 分支，WS 握手被拒后连接**悬挂**到服务停止（不发 FIN）。而 `LiteWebServer.MaxConcurrentConnections = 64` ⇒ **64 次被拒握手即可占满连接额度**，使网页服务对该端点不可用 | **S4.2b**（修复中） |
+| LM-035 | 🟡 低 | `PluginMarketPolicyTests.cs:420` 的用例名只断言终态、不直接断言顺序（见 §4.3.2 LM-032） | 登记待清理 |
+
+#### 4.5.5 LM-016 的不变式与残余窗口（S4.2）
+
+> **高权限更新器所使用的每一个字节，都必须是主程序已经验证过的那批字节。**
+
+由两条机制共同保证：**①更新器独立验证**（期望摘要随参数交接，更新器在**任何解压/标记/临时目录之前**用**它自己打开的**文件流重算 SHA-256 并比对；缺失/畸形/不匹配一律拒绝）+ **②字节钉住**（主程序与更新器均以 `FileShare.Read` 打开更新包，摘要与解压**同一句柄**完成）。
+
+- **改动前**：主程序按路径算摘要 → 只把路径交给更新器 → 更新器按路径重开并解压，**无任何字节约束**，窗口横跨"主程序退出等待 + 1 s 缓冲 + 解压"全过程。
+- **改动后**：主程序自校验起即持有 deny-write/delete 句柄；更新器自开句柄、独立重算、同一句柄解压。
+- **残余窗口**：主程序释放句柄 → 更新器打开文件之间的毫秒级缝隙。该缝隙内若被替换，结果是**更新被拒绝**（退出码 6、不解压），**不再是"未验证字节被安装"**。
+- **方案 B（受保护暂存区）未实现**：同用户低权限进程与主程序**共享同一 SID**（提权不换身份），`%LOCALAPPDATA%`/`%TEMP%`/安装目录对本用户非提权进程同样可写 —— 换目录**不能**隔离该威胁模型；内容绑定严格强于路径绑定，且不引入 ACL 加固与残留清理等新失败模式。
+- **NOT_VERIFIED**：安装目录 `resources/` 的 ACL 未实测 ⇒ **不主张**此前存在可利用提权漏洞，也**不主张**已"彻底消除提权风险"。本次消除的是"校验与使用之间无字节约束"这一缺口本身。
+
+---
+
 ## 5. 执行步骤
 
 ### M0 · 基线与可复现
