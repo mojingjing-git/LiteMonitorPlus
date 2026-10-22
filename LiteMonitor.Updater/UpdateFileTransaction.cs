@@ -72,12 +72,14 @@ namespace LiteMonitor.Updater
             UpdateApplyOutcome outcome,
             string? failureReason,
             IReadOnlyList<UpdateFileRecord> records,
-            UpdateRollbackResult? rollback)
+            UpdateRollbackResult? rollback,
+            IReadOnlyList<string>? skippedPaths = null)
         {
             Outcome = outcome;
             FailureReason = failureReason;
             Records = records;
             Rollback = rollback;
+            SkippedPaths = skippedPaths ?? Array.Empty<string>();
         }
 
         public UpdateApplyOutcome Outcome { get; }
@@ -85,6 +87,14 @@ namespace LiteMonitor.Updater
         public IReadOnlyList<UpdateFileRecord> Records { get; }
         public UpdateRollbackResult? Rollback { get; }
         public bool Succeeded => Outcome == UpdateApplyOutcome.Succeeded;
+
+        /// <summary>
+        /// 被保护而没有覆盖的路径（用户数据 / 更新器自身）。
+        /// </summary>
+        /// <remarks>
+        /// 这些路径**没有**被删除、也没有被覆盖：更新对它们完全不做任何写操作。
+        /// </remarks>
+        public IReadOnlyList<string> SkippedPaths { get; }
     }
 
     internal interface IUpdateFileOperations
@@ -122,12 +132,81 @@ namespace LiteMonitor.Updater
 
     internal sealed class UpdateFileTransaction
     {
+        /// <summary>
+        /// 用户数据文件（相对安装目录）。更新**不得**覆盖它们。
+        /// </summary>
+        /// <remarks>
+        /// ★ 这些文件都住在安装目录里（便携版布局），不在 %APPDATA%：
+        ///   · settings.json —— 用户配置（含 Web 口令哈希）与它的备份/临时文件
+        ///   · HardwareHistory.json / TrafficHistory.json —— 历史数据与它们的备份/临时文件
+        /// ★ 主题与插件单独按目录保护，见 <see cref="UserOwnedDirectory"/>。
+        /// </remarks>
+        private static readonly string[] UserOwnedFiles =
+        {
+            "settings.json",
+            "settings.json.bak",
+            "settings.json.tmp",
+            "HardwareHistory.json",
+            "HardwareHistory.json.bak",
+            "HardwareHistory.json.tmp",
+            "TrafficHistory.json",
+            "TrafficHistory.json.bak",
+            "TrafficHistory.json.tmp"
+        };
+
+        /// <summary>
+        /// 用户数据目录（相对安装目录）。更新**不得**覆盖其下的任何文件。
+        /// </summary>
+        /// <remarks>
+        /// ★ resources\themes —— 主题编辑器直接写回这个目录，用户改过的主题就在这里；
+        ///   发布包本身带着同名内置主题，直接覆盖等于每次更新都把用户主题退回默认。
+        /// ★ resources\plugins —— 插件市场把插件装到同一个目录，市场安装/更新过的插件
+        ///   与内置插件同名，覆盖会退回内置版本并丢掉市场侧的版本标记。
+        /// ★ 有意的取舍：这样"自动更新"不再刷新内置主题/内置插件资源；
+        ///   需要新版内置资源时走全新安装。用户数据优先于内置资源的自动刷新。
+        /// </remarks>
+        private static readonly string[] UserOwnedDirectory =
+        {
+            "resources\\themes",
+            "resources\\plugins"
+        };
+
+        /// <summary>
+        /// 判断某个相对路径是不是"用户拥有的数据"，更新不得覆盖它。
+        /// </summary>
+        /// <param name="relativePath">相对安装目录的路径。</param>
+        internal static bool IsUserOwnedPath(string relativePath)
+        {
+            if (string.IsNullOrEmpty(relativePath)) return false;
+
+            string normalized = relativePath.Replace('/', '\\').TrimStart('\\');
+
+            foreach (string owned in UserOwnedFiles)
+            {
+                if (string.Equals(normalized, owned, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            foreach (string ownedDirectory in UserOwnedDirectory)
+            {
+                if (normalized.StartsWith(ownedDirectory + "\\", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private readonly string _destinationRoot;
         private readonly string _backupRoot;
         private readonly IUpdateFileOperations _operations;
         private readonly int _commitAttempts;
         private readonly TimeSpan _commitRetryDelay;
         private readonly List<UpdateFileRecord> _records = new();
+        private readonly List<string> _skippedPaths = new();
 
         public UpdateFileTransaction(
             string destinationRoot,
@@ -163,6 +242,9 @@ namespace LiteMonitor.Updater
                     string relativePath = Path.GetRelativePath(sourceRoot, sourcePath);
                     if (skip(relativePath))
                     {
+                        // ★ 被跳过的文件**完全不碰**：既不删除，也不覆盖。
+                        //   用户数据（配置 / 主题 / 插件）就靠这一条保住。
+                        _skippedPaths.Add(relativePath);
                         continue;
                     }
 
@@ -173,7 +255,8 @@ namespace LiteMonitor.Updater
                     UpdateApplyOutcome.Succeeded,
                     failureReason: null,
                     _records.ToArray(),
-                    rollback: null);
+                    rollback: null,
+                    skippedPaths: _skippedPaths.ToArray());
             }
             catch (Exception ex)
             {
@@ -233,7 +316,8 @@ namespace LiteMonitor.Updater
                 outcome,
                 failureReason,
                 _records.ToArray(),
-                rollback);
+                rollback,
+                skippedPaths: _skippedPaths.ToArray());
         }
 
         private void ApplyFile(string sourcePath, string relativePath)

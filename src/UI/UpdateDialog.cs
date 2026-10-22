@@ -25,6 +25,85 @@ namespace LiteMonitor
         public UpdateIntegrityException(string message) : base(message) { }
     }
 
+    /// <summary>
+    /// 更新包字节绑定（LM-016）。
+    /// </summary>
+    /// <remarks>
+    /// ★ 要解决的问题：主程序校验完安装包摘要后，只把**路径**交给以高权限运行的更新器，
+    ///   更新器再按路径把文件读一遍 —— 两者之间没有"字节必须保持不变"的约束。
+    /// ★ 这里的做法：摘要从**钉住的句柄**上算，且这个句柄一直保持到更新器进程启动。
+    ///   <see cref="FileShare.Read"/> 的含义是：别的进程仍然可以**读**这个文件，
+    ///   但不能**写入、替换或删除**它（这些操作需要写/删除访问权）。
+    ///   于是"算摘要的字节"、"预解压新版更新器读的字节"、"交给更新器的字节"
+    ///   必然是同一批字节。
+    /// ★ 摘要口径与 <c>UpdateChecker.ComputeFileSha256</c> 一致：SHA-256 + 十六进制。
+    ///   比对大小写不敏感；对外输出（交给更新器的参数、日志）统一用小写。
+    /// </remarks>
+    public static class UpdatePackageBinder
+    {
+        /// <summary>
+        /// 打开并"钉住"更新包：别的进程仍可读，但不能写入、替换或删除它。
+        /// </summary>
+        public static FileStream OpenPinned(string path) =>
+            new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        /// <summary>
+        /// 从流上计算 SHA-256（大写十六进制，与 UpdateChecker.ComputeFileSha256 同口径）。
+        /// </summary>
+        public static string ComputeSha256Hex(Stream stream)
+        {
+            stream.Position = 0;
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            byte[] hash = sha.ComputeHash(stream);
+            stream.Position = 0;
+            return Convert.ToHexString(hash);
+        }
+
+        /// <summary>
+        /// 期望摘要形态是否合法（64 位十六进制）。空值/畸形值一律不合法。
+        /// </summary>
+        public static bool IsWellFormedDigest(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return false;
+
+            string trimmed = value.Trim();
+            if (trimmed.Length != 64) return false;
+
+            foreach (char c in trimmed)
+            {
+                if (!Uri.IsHexDigit(c)) return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 摘要是否一致（大小写不敏感）。
+        /// </summary>
+        public static bool Matches(string actual, string expected) =>
+            string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 构造交给更新器的命令行参数：更新包路径 + 期望摘要。
+        /// </summary>
+        /// <remarks>
+        /// ★ 只传路径的旧交接方式已经被移除 —— 那正是"校验与使用之间没有字节约束"的缺口。
+        ///   更新器拿到摘要后会用**它自己打开的**文件流重算并比对；不匹配就拒绝解压。
+        /// ★ 摘要形态不合法时直接抛错（失败即不启动），不允许"没有摘要也照样传路径"。
+        /// </remarks>
+        public static string BuildUpdaterArguments(string packagePath, string verifiedSha256)
+        {
+            if (!IsWellFormedDigest(verifiedSha256))
+            {
+                throw new ArgumentException(
+                    "交给更新器的期望摘要必须是非空的 64 位十六进制。",
+                    nameof(verifiedSha256));
+            }
+
+            return "\"" + packagePath + "\" \"" + verifiedSha256.Trim().ToLowerInvariant() + "\"";
+        }
+    }
+
     public class DownloadContext
     {
         public string Title { get; set; } = "";
@@ -61,7 +140,15 @@ namespace LiteMonitor
         private readonly List<string> _sortedUrls;
         private readonly DownloadContext _context;
         private readonly Settings _settings;
-        
+
+        // ★ LM-016：钉住更新包的文件句柄。
+        //   FileShare.Read ⇒ 别的进程仍可读，但**不能**写入/替换/删除这个文件。
+        //   从摘要校验一直保持到更新器进程启动，保证"校验过的字节"就是"交出去的字节"。
+        private FileStream? _pinnedPackage;
+
+        // ★ LM-016：已验证的摘要（小写十六进制），随更新器参数一起交接。
+        private string _verifiedSha256 = "";
+
         private CancellationTokenSource? _cts;
         private Stopwatch _speedWatch;
         private bool IsChinese => _settings?.Language?.ToLower() == "zh";
@@ -346,27 +433,30 @@ namespace LiteMonitor
                 _cts = null; 
                 ctsToDispose?.Dispose();
 
-                // ---- 7.5 产物摘要校验（W1.2）----
+                // ---- 7.5 产物摘要校验 + 字节绑定（W1.2 / LM-016）----
                 // ★ 为什么必须在这里、在 StartUpdater 之前：
                 //   更新器会以管理员令牌替换程序文件，等它跑起来再发现内容不对就已经太晚
                 //   （旧文件可能已被覆盖）。这里是唯一还能"什么都不做"的时间点。
                 // ★ 更新模式下摘要为空 = 直接失败。"没提供摘要"不能被解释成"不需要校验"，
                 //   否则只需把 version.json 的 sha256 删掉就能绕过整条认证链路。
+                // ★ LM-016：摘要必须从**钉住的句柄**上算，且句柄一直保持到更新器启动。
+                //   以前这里只算一次摘要就把**路径**交出去，更新器再按路径自己读一遍 ——
+                //   校验与使用之间没有任何"字节必须保持不变"的约束。
                 if (_context.AutoExitOnSuccess)
                 {
                     string? expected = _context.ExpectedSha256;
-                    if (string.IsNullOrWhiteSpace(expected))
+                    if (!UpdatePackageBinder.IsWellFormedDigest(expected))
                     {
                         throw new UpdateIntegrityException(
                             IsChinese
-                                ? "更新元数据里没有校验摘要，无法确认这个安装包的来源。"
-                                : "The update metadata carries no checksum, so this package's origin cannot be confirmed.");
+                                ? "更新元数据里没有可用的校验摘要，无法确认这个安装包的来源。"
+                                : "The update metadata carries no usable checksum, so this package's origin cannot be confirmed.");
                     }
 
-                    string actual;
+                    FileStream pinned;
                     try
                     {
-                        actual = UpdateChecker.ComputeFileSha256(_context.SavePath);
+                        pinned = UpdatePackageBinder.OpenPinned(_context.SavePath);
                     }
                     catch (Exception ex)
                     {
@@ -376,15 +466,34 @@ namespace LiteMonitor
                                 : $"Could not read the downloaded package: {ex.Message}");
                     }
 
-                    if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                    string actual;
+                    try
                     {
+                        actual = UpdatePackageBinder.ComputeSha256Hex(pinned);
+                    }
+                    catch (Exception ex)
+                    {
+                        pinned.Dispose();
                         throw new UpdateIntegrityException(
                             IsChinese
-                                ? $"期望 SHA-256：{expected}\n实际 SHA-256：{actual}"
-                                : $"Expected SHA-256: {expected}\nActual SHA-256: {actual}");
+                                ? $"无法读取已下载的安装包：{ex.Message}"
+                                : $"Could not read the downloaded package: {ex.Message}");
                     }
 
-                    Debug.WriteLine($"[Update] 安装包摘要校验通过：{actual}");
+                    if (!UpdatePackageBinder.Matches(actual, expected!))
+                    {
+                        pinned.Dispose();
+                        throw new UpdateIntegrityException(
+                            IsChinese
+                                ? $"期望 SHA-256：{expected.Trim().ToLowerInvariant()}\n实际 SHA-256：{actual.ToLowerInvariant()}"
+                                : $"Expected SHA-256: {expected.Trim().ToLowerInvariant()}\nActual SHA-256: {actual.ToLowerInvariant()}");
+                    }
+
+                    // ★ 句柄保持打开：直到更新器进程启动，这个文件的内容不可被替换。
+                    _pinnedPackage = pinned;
+                    _verifiedSha256 = actual.ToLowerInvariant();
+
+                    Debug.WriteLine($"[Update] 安装包摘要校验通过：{_verifiedSha256}");
                 }
 
                 if (_context.AutoExitOnSuccess)
@@ -401,6 +510,7 @@ namespace LiteMonitor
             catch (OperationCanceledException)
             {
                 // 用户取消，清理残留文件
+                ReleasePinnedPackage();
                 CleanupPartialFile();
                 bool isZh = _settings?.Language?.ToLower() == "zh";
                 lblStatus.Text = isZh ? "已取消下载" : "Download Canceled";
@@ -415,6 +525,9 @@ namespace LiteMonitor
             }
             catch (Exception ex)
             {
+                // ★ LM-016：先释放钉住句柄，否则下面删不掉这个坏包
+                //   （钉住的句柄对其他进程 denies 删除访问）。
+                ReleasePinnedPackage();
                 CleanupPartialFile();
                 bool isZh = _settings?.Language?.ToLower() == "zh";
 
@@ -503,9 +616,27 @@ namespace LiteMonitor
             string resourcesDir = Path.Combine(AppContext.BaseDirectory, "resources");
             string updater = "";
 
+            // ★★ LM-016：失败即不启动 ★★
+            // 没有钉住的句柄 / 没有已验证的摘要 ⇒ 没有"已验证的字节"，
+            // 这种情况下绝不能让更新器按路径自己去读那个文件（那正是要消除的缺口）。
+            if (_pinnedPackage == null || string.IsNullOrEmpty(_verifiedSha256))
+            {
+                bool isZhGuard = _settings?.Language?.ToLower() == "zh";
+                MessageBox.Show(
+                    isZhGuard
+                        ? "安装包尚未通过完整性校验，已中止更新。"
+                        : "The package did not pass integrity verification, so the update was canceled.",
+                    isZhGuard ? "安装包校验失败" : "Package Verification Failed",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return;
+            }
+
             // ★★★ 1. 主程序抢先更新 Updater.exe ★★★
             // 防止 Updater 运行时无法自我覆盖
             // 返回解压后的 Updater 路径 (优先取 ZIP 里的新版)
+            // ★ LM-016：这个读取发生在摘要校验**之后**，而且 _pinnedPackage 还钉着这个文件
+            //   （别的进程此刻无法替换它），所以解出来的更新器一定来自"被校验过的那批字节"。
             string? preparedPath = UpdateChecker.PreUpdateUpdater(_context.SavePath);
 
             // ★★★ 2. 决策使用哪个 Updater ★★★
@@ -538,7 +669,14 @@ namespace LiteMonitor
             var psi = new ProcessStartInfo
             {
                 FileName = updater,
-                Arguments = $"\"{_context.SavePath}\"", // 传递 ZIP 路径
+                // ★ LM-016：把**期望摘要**一并交给更新器。
+                //   更新器会用**它自己打开的**文件流重新计算 SHA-256 并比对：
+                //   不匹配（或者根本没给摘要）就拒绝解压 —— 不写进行中标记、不建临时目录、
+                //   不替换任何文件、退出码非 0，并写明确诊断日志。
+                //   以前这里只传路径，更新器按路径自己重读，校验与使用之间没有约束。
+                Arguments = UpdatePackageBinder.BuildUpdaterArguments(
+                    _context.SavePath,
+                    _verifiedSha256),
                 WorkingDirectory = AppContext.BaseDirectory // 显式指定工作目录
             };
 
@@ -579,6 +717,32 @@ namespace LiteMonitor
                 // 恢复按钮状态
                 btnUpdate.Enabled = true;
                 btnUpdate.Text = isZh ? "重试" : "Retry";
+            }
+            finally
+            {
+                // ★ LM-016：更新器已经启动（或启动失败），钉住句柄到此可以释放。
+                //   释放之后仍有一小段"主程序尚未退出 / 更新器尚未打开文件"的窗口 ——
+                //   那段窗口由**更新器自己的摘要校验**兜住：它只使用自己校验过的字节。
+                ReleasePinnedPackage();
+            }
+        }
+
+        /// <summary>
+        /// 释放钉住更新包的句柄。
+        /// </summary>
+        private void ReleasePinnedPackage()
+        {
+            try
+            {
+                _pinnedPackage?.Dispose();
+            }
+            catch
+            {
+                // 释放失败不影响更新结论：更新器还有自己的一次独立校验。
+            }
+            finally
+            {
+                _pinnedPackage = null;
             }
         }
 

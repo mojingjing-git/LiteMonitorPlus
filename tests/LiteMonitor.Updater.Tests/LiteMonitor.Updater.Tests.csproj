@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -16,6 +17,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\LiteMonitor.Updater\LiteMonitor.Updater.csproj" />
+    <!-- 主程序侧的"字节绑定"辅助（UpdatePackageBinder）需要被直接测到，
+         所以这里引用主工程；主工程自身是 WinForms，可执行程序。 -->
+    <ProjectReference Include="..\..\LiteMonitor.csproj" />
   </ItemGroup>
 
 </Project>
