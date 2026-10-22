@@ -1,0 +1,14 @@
+{
+  "id": "invalid-host-out-of-scope",
+  "name": "反例·主机越界",
+  "name_en": "Invalid Example - Host Out Of Scope",
+  "description": "反例：download_url 指向白名单之外的主机，客户端必须拒绝。",
+  "description_en": "Invalid example: the download_url points at a host outside the allow-list and must be rejected.",
+  "author": "LiteMonitor++ Fixtures",
+  "version": "1.0.0",
+  "download_url": "https://evil.example.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/x/plugin.json",
+  "readme_url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/x/README.md",
+  "page_url": "https://github.com/mojingjing-git/awesome-litemonitor-plugins/tree/main/plugins/x",
+  "source": "mojingjing-git/awesome-litemonitor-plugins",
+  "note": "期望被拒绝：Host 精确比对 raw.githubusercontent.com 失败。"
+}

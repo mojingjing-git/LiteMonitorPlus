@@ -22,6 +22,13 @@
       4. 存在失败用例即失败
       5. 全部用例都被跳过（实际执行数为 0）即失败 —— "跑了 1000 条其实一条没执行"
          与"没发现"同样是假绿
+      6. ★ 跳过用例总数 <= -MaxSkipped（默认 1）—— 跳过必须**有上限**。
+         允许跳过的只有联网 E2E（MarketE2ETests，门控 LITEMONITOR_E2E=1）。
+         S4.1 之前这条是缺失的：插件市场的 6 条契约用例长期被记为 Skipped，
+         流水线照样是绿的（ENV-003）。
+      7. ★ -MustExecuteTestClass 指定的测试类必须**真正执行**：
+         该类在 TRX 里必须有结果、条数 >= -MustExecuteTestClassMinCount、
+         且**一条都不能是 NotExecuted**（被跳过）—— 门控失效时必须让流水线红。
 
     可见性要求：
       逐程序集的实际计数与**被跳过的用例名**一律打印到标准输出。
@@ -37,11 +44,26 @@
     必须出现的测试程序集名（不含 .dll）。支持逗号分隔的单字符串。
     默认三个测试工程：LiteMonitor.Tests / LiteMonitor.Updater.Tests / LiteMonitor.GpuNonperformance.Tests。
 
+.PARAMETER MaxSkipped
+    全部程序集合计的**跳过用例数上限**。默认 1（只剩联网 E2E）。
+    超过即失败 —— 跳过数只允许减少，不允许增加。
+
+.PARAMETER MustExecuteTestClass
+    必须真正执行的测试类名（可传多个）。默认空数组（不启用该断言）。
+    匹配方式：TRX 的 testName 中出现 ".<类名>."。
+
+.PARAMETER MustExecuteTestClassMinCount
+    上述"必须执行"的测试类至少要被发现的用例条数。默认 1。
+
 .EXAMPLE
     pwsh -File .github/workflows/assert-test-counts.ps1 -TrxRoot tests -MinTotal 1000
 
 .EXAMPLE
     pwsh -File .github/workflows/assert-test-counts.ps1 -TrxRoot tests -MinTotal 1000 -ExpectedAssembly 'A.Tests,B.Tests'
+
+.EXAMPLE
+    pwsh -File .github/workflows/assert-test-counts.ps1 -TrxRoot tests -MinTotal 1150 -MaxSkipped 1 `
+          -MustExecuteTestClass 'MarketIndexContractTests' -MustExecuteTestClassMinCount 6
 
 .NOTES
     退出码：0 全部断言通过；1 断言失败；2 用法/IO 错误（同样非零，阻断流水线）。
@@ -57,7 +79,16 @@ param(
         'LiteMonitor.Tests',
         'LiteMonitor.Updater.Tests',
         'LiteMonitor.GpuNonperformance.Tests'
-    )
+    ),
+
+    # ★ 跳过用例数上限。默认 1 = 只允许联网 E2E 被跳过。
+    [int]$MaxSkipped = 1,
+
+    # ★ 必须真正执行（不允许被跳过）的测试类。
+    [string[]]$MustExecuteTestClass = @(),
+
+    # ★ 上述测试类至少要被发现的用例条数。
+    [int]$MustExecuteTestClassMinCount = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,6 +120,22 @@ foreach ($item in $ExpectedAssembly) {
 }
 if ($expectedNames.Count -eq 0) {
     Stop-WithError -Message 'ExpectedAssembly 不能为空：必须显式声明"必须出现"的测试程序集。' -Code 2
+}
+
+# "必须真正执行"的测试类：同样支持逗号分隔的单字符串
+$mustExecClasses = New-Object System.Collections.Generic.List[string]
+foreach ($item in $MustExecuteTestClass) {
+    foreach ($part in ($item -split ',')) {
+        $t = $part.Trim()
+        if ($t) { $mustExecClasses.Add($t) }
+    }
+}
+
+if ($MaxSkipped -lt 0) {
+    Stop-WithError -Message "MaxSkipped 不能为负：$MaxSkipped" -Code 2
+}
+if ($MustExecuteTestClassMinCount -lt 1) {
+    Stop-WithError -Message "MustExecuteTestClassMinCount 必须 >= 1：$MustExecuteTestClassMinCount" -Code 2
 }
 
 # ----------------------------------------------------------------------
@@ -181,13 +228,21 @@ function Read-TrxSummary {
 
     # 被跳过的用例名（outcome=NotExecuted）—— 跳过必须可见
     $skippedTests = New-Object System.Collections.Generic.List[object]
+    # ★ 全部用例结果（名字 + 结果）—— "必须真正执行"的断言需要它
+    $allTests = New-Object System.Collections.Generic.List[object]
     foreach ($node in @($doc.SelectNodes("//*[local-name()='UnitTestResult']"))) {
-        if ($node.GetAttribute('outcome') -ne 'NotExecuted') { continue }
+        $name = $node.GetAttribute('testName')
+        $outcome = $node.GetAttribute('outcome')
+        $allTests.Add([pscustomobject]@{
+            Name    = $name
+            Outcome = $outcome
+        })
+        if ($outcome -ne 'NotExecuted') { continue }
         $reasonNode = $node.SelectSingleNode("./*[local-name()='Output']/*[local-name()='ErrorInfo']/*[local-name()='Message']")
         $reason = ''
         if ($null -ne $reasonNode) { $reason = $reasonNode.InnerText.Trim() }
         $skippedTests.Add([pscustomobject]@{
-            Name   = $node.GetAttribute('testName')
+            Name   = $name
             Reason = $reason
         })
     }
@@ -201,6 +256,7 @@ function Read-TrxSummary {
         Failed       = $bad
         Skipped      = $skipped
         SkippedTests = $skippedTests
+        AllTests     = $allTests
         LastWrite    = (Get-Item -LiteralPath $Path).LastWriteTime
     }
 }
@@ -254,8 +310,11 @@ foreach ($r in $selected) {
 Write-Host ('-' * 72)
 Write-Host ("{0,-34} {1,8} {2,8} {3,8} {4,8}" -f '合计', $sumTotal, $sumPassed, $sumFailed, $sumSkipped)
 Write-Host ''
-Write-Host ("阈值：每个期望程序集都要出现；任一程序集总计不得为 0；合计 >= $MinTotal；失败数必须为 0。")
+Write-Host ("阈值：每个期望程序集都要出现；任一程序集总计不得为 0；合计 >= $MinTotal；失败数必须为 0；跳过数 <= $MaxSkipped。")
 Write-Host ("期望程序集：{0}" -f ($expectedNames -join ', '))
+if ($mustExecClasses.Count -gt 0) {
+    Write-Host ("必须真正执行的测试类：{0}（每类至少 {1} 条，且一条都不允许被跳过）" -f ($mustExecClasses -join ', '), $MustExecuteTestClassMinCount)
+}
 
 if ($duplicated) {
     Write-Host ''
@@ -278,6 +337,29 @@ else {
             if ($t.Reason) {
                 Write-Host ("        原因：{0}" -f $t.Reason) -ForegroundColor DarkYellow
             }
+        }
+    }
+}
+
+# ★ "必须真正执行"的测试类：逐类打印实际状态
+$allTestResults = New-Object System.Collections.Generic.List[object]
+foreach ($r in $selected) {
+    foreach ($t in $r.AllTests) {
+        $allTestResults.Add($t)
+    }
+}
+
+if ($mustExecClasses.Count -gt 0) {
+    Write-Host ''
+    Write-Host '必须真正执行的测试类：' -ForegroundColor Cyan
+    foreach ($cls in $mustExecClasses) {
+        $pattern = '\.' + [regex]::Escape($cls) + '\.'
+        $hits = @($allTestResults | Where-Object { $_.Name -match $pattern })
+        $hitSkipped = @($hits | Where-Object { $_.Outcome -eq 'NotExecuted' })
+        $hitPassed = @($hits | Where-Object { $_.Outcome -eq 'Passed' })
+        Write-Host ("    {0}：发现 {1} 条，通过 {2} 条，被跳过 {3} 条" -f $cls, $hits.Count, $hitPassed.Count, $hitSkipped.Count)
+        foreach ($t in $hitSkipped) {
+            Write-Host ("        [跳过] {0}" -f $t.Name) -ForegroundColor DarkYellow
         }
     }
 }
@@ -308,6 +390,34 @@ foreach ($r in $selected) {
 
 if ($sumTotal -lt $MinTotal) {
     $problems.Add("用例总数 $sumTotal 低于阈值 $MinTotal —— 测试发现数不达标。")
+}
+
+# ★ 跳过总数上限（收紧项）。跳过数只允许减少，不允许增加。
+if ($sumSkipped -gt $MaxSkipped) {
+    $problems.Add("被跳过的用例共 $sumSkipped 条，超过上限 $MaxSkipped —— 允许跳过的只有联网 E2E（MarketE2ETests）；契约用例被跳过属于门禁失效。")
+}
+
+# ★ "必须真正执行"的测试类（收紧项）。门控失效时必须让流水线红，而不是静默跳过。
+foreach ($cls in $mustExecClasses) {
+    $pattern = '\.' + [regex]::Escape($cls) + '\.'
+    $hits = @($allTestResults | Where-Object { $_.Name -match $pattern })
+    if ($hits.Count -eq 0) {
+        $problems.Add("测试类 '$cls' 在 TRX 里一条结果都没有 —— 该类用例没有被发现（可能整个类被删掉，或被过滤掉）。")
+        continue
+    }
+    if ($hits.Count -lt $MustExecuteTestClassMinCount) {
+        $problems.Add("测试类 '$cls' 只发现 $($hits.Count) 条用例，少于要求的 $MustExecuteTestClassMinCount 条 —— 契约用例可能被删减。")
+    }
+    $hitSkipped = @($hits | Where-Object { $_.Outcome -eq 'NotExecuted' })
+    if ($hitSkipped.Count -gt 0) {
+        $names = ($hitSkipped | ForEach-Object { $_.Name }) -join ', '
+        $problems.Add("测试类 '$cls' 有 $($hitSkipped.Count) 条被跳过：$names —— 契约用例必须真正执行（ENV-003）。")
+    }
+    $hitFailed = @($hits | Where-Object { $_.Outcome -ne 'Passed' -and $_.Outcome -ne 'NotExecuted' })
+    if ($hitFailed.Count -gt 0) {
+        $names = ($hitFailed | ForEach-Object { $_.Name }) -join ', '
+        $problems.Add("测试类 '$cls' 有 $($hitFailed.Count) 条结果异常（既非通过也非跳过）：$names")
+    }
 }
 
 if ($problems.Count -gt 0) {

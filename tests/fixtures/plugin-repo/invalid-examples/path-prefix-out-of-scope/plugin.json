@@ -1,0 +1,14 @@
+{
+  "id": "invalid-path-prefix-out-of-scope",
+  "name": "反例·路径前缀越界",
+  "name_en": "Invalid Example - Path Prefix Out Of Scope",
+  "description": "反例：download_url 的路径前缀被篡改（plugins-evil），客户端必须拒绝。",
+  "description_en": "Invalid example: the download_url path prefix is tampered with (plugins-evil) and must be rejected.",
+  "author": "LiteMonitor++ Fixtures",
+  "version": "1.0.0",
+  "download_url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins-evil/x/plugin.json",
+  "readme_url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/x/README.md",
+  "page_url": "https://github.com/mojingjing-git/awesome-litemonitor-plugins/tree/main/plugins/x",
+  "source": "mojingjing-git/awesome-litemonitor-plugins",
+  "note": "期望被拒绝：原始路径未以 /mojingjing-git/awesome-litemonitor-plugins/main/plugins/ 开头。"
+}

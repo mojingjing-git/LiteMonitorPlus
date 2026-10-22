@@ -1,0 +1,14 @@
+{
+  "id": "invalid-path-traversal",
+  "name": "反例·路径穿越",
+  "name_en": "Invalid Example - Path Traversal",
+  "description": "反例：download_url 的路径里带 .. 穿越段，客户端必须拒绝。",
+  "description_en": "Invalid example: the download_url path contains a .. traversal segment and must be rejected.",
+  "author": "LiteMonitor++ Fixtures",
+  "version": "1.0.0",
+  "download_url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/../evil/plugin.json",
+  "readme_url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/x/README.md",
+  "page_url": "https://github.com/mojingjing-git/awesome-litemonitor-plugins/tree/main/plugins/x",
+  "source": "mojingjing-git/awesome-litemonitor-plugins",
+  "note": "期望被拒绝：原始路径含 .. 穿越段。"
+}

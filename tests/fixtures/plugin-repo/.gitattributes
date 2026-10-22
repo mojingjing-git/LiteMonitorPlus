@@ -1,0 +1,17 @@
+# ★ 本目录内的 JSON 一律以 LF 落盘。
+#
+#   本仓库 core.autocrlf=true 且仓库根目录没有 .gitattributes，
+#   因此 .json 文件在 Windows 检出时会被转换成 CRLF。
+#   契约测试 MarketIndexContractTests.索引里的sha256与size_与仓库文件原始字节一致
+#   是对**原始字节**求 SHA-256 与长度，CRLF 转换会让字节口径与 index.json 里的
+#   sha256 / size 对不上，测试必然失败。
+#
+#   Git 支持子目录局部生效的 .gitattributes：下面的规则只作用于
+#   tests/fixtures/plugin-repo/ 之内，不影响仓库其它任何文件。
+#   eol=lf 让 Windows 与 Linux runner 检出得到完全相同的字节，跨平台可复现。
+#
+#   （不选 -text 的理由：-text 虽也能保证字节一致，但会把这些文件变成"二进制"，
+#     失去 git diff 的逐行显示；text eol=lf 同样是字节确定的，且保留文本语义。）
+
+*.json text eol=lf
+*.md   text eol=lf

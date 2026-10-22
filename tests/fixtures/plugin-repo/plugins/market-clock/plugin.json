@@ -1,0 +1,36 @@
+{
+  "id": "market-clock",
+  "meta": {
+    "name": "市场时钟",
+    "name_en": "Market Clock",
+    "version": "1.0.0",
+    "author": "LiteMonitor++ Fixtures",
+    "description": "契约测试夹具插件：返回固定的 UTC 时间戳，用于校验客户端与插件仓库之间的索引契约。",
+    "description_en": "Contract test fixture plugin: returns a fixed UTC timestamp to validate the client-side index contract.",
+    "url": "https://github.com/mojingjing-git/awesome-litemonitor-plugins"
+  },
+  "inputs": [],
+  "execution": {
+    "type": "api_json",
+    "method": "GET",
+    "interval": 60,
+    "url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/market-clock/data.json",
+    "extract": {
+      "timestamp": "timestamp"
+    }
+  },
+  "outputs": [
+    {
+      "key": "timestamp",
+      "label": "时间戳",
+      "label_en": "Timestamp",
+      "short_label": "时间戳",
+      "format_val": "{{timestamp}}",
+      "unit": ""
+    }
+  ],
+  "display": {
+    "label": "市场时钟",
+    "short_label": "时钟"
+  }
+}

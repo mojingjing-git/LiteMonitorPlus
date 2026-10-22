@@ -1,0 +1,36 @@
+{
+  "id": "market-echo",
+  "meta": {
+    "name": "市场回声",
+    "name_en": "Market Echo",
+    "version": "1.0.0",
+    "author": "LiteMonitor++ Fixtures",
+    "description": "契约测试夹具插件：回显一段固定文本，用于校验客户端与插件仓库之间的索引契约。",
+    "description_en": "Contract test fixture plugin: echoes a fixed string to validate the client-side index contract.",
+    "url": "https://github.com/mojingjing-git/awesome-litemonitor-plugins"
+  },
+  "inputs": [],
+  "execution": {
+    "type": "api_json",
+    "method": "GET",
+    "interval": 60,
+    "url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/market-echo/data.json",
+    "extract": {
+      "message": "message"
+    }
+  },
+  "outputs": [
+    {
+      "key": "message",
+      "label": "回声",
+      "label_en": "Echo",
+      "short_label": "回声",
+      "format_val": "{{message}}",
+      "unit": ""
+    }
+  ],
+  "display": {
+    "label": "市场回声",
+    "short_label": "回声"
+  }
+}

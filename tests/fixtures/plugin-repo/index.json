@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "updated_at": "2026-01-01T00:00:00Z",
+  "repo": "mojingjing-git/awesome-litemonitor-plugins",
+  "total": 2,
+  "plugins": [
+    {
+      "id": "market-echo",
+      "original_id": "market-echo",
+      "renamed": false,
+      "name": "市场回声",
+      "name_en": "Market Echo",
+      "description": "契约测试夹具插件：回显一段固定文本，用于校验客户端与插件仓库之间的索引契约。",
+      "description_en": "Contract test fixture plugin: echoes a fixed string to validate the client-side index contract.",
+      "author": "LiteMonitor++ Fixtures",
+      "version": "1.0.0",
+      "file": "market-echo.json",
+      "download_url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/market-echo/plugin.json",
+      "readme_url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/market-echo/README.md",
+      "page_url": "https://github.com/mojingjing-git/awesome-litemonitor-plugins/tree/main/plugins/market-echo",
+      "sha256": "42e7ea95c58091a0c661654d44ecb79bbf62ad8a0c8d7c7e603a344376a8dfd8",
+      "size": 1044,
+      "status": "ok",
+      "requires": [],
+      "note": "契约测试夹具，不含任何真实凭据。",
+      "source": "mojingjing-git/awesome-litemonitor-plugins",
+      "verified": true
+    },
+    {
+      "id": "market-clock",
+      "original_id": "market-clock",
+      "renamed": false,
+      "name": "市场时钟",
+      "name_en": "Market Clock",
+      "description": "契约测试夹具插件：返回固定的 UTC 时间戳，用于校验客户端与插件仓库之间的索引契约。",
+      "description_en": "Contract test fixture plugin: returns a fixed UTC timestamp to validate the client-side index contract.",
+      "author": "LiteMonitor++ Fixtures",
+      "version": "1.0.0",
+      "file": "market-clock.json",
+      "download_url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/market-clock/plugin.json",
+      "readme_url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/market-clock/README.md",
+      "page_url": "https://github.com/mojingjing-git/awesome-litemonitor-plugins/tree/main/plugins/market-clock",
+      "sha256": "4395bd9e69b9268a73ecb70deb309499c55552cb0e9a9085fc60852980895ab5",
+      "size": 1079,
+      "status": "ok",
+      "requires": [],
+      "note": "契约测试夹具，不含任何真实凭据。",
+      "source": "mojingjing-git/awesome-litemonitor-plugins",
+      "verified": true
+    }
+  ]
+}
