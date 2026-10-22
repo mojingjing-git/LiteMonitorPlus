@@ -498,7 +498,7 @@ namespace LiteMonitor.src.Plugins
     /// <summary>
     /// [LM-009] 沙箱失败异常：带机器可读的原因码（<see cref="Reason"/>）。
     /// </summary>
-    public sealed class PluginSandboxException : Exception
+    public class PluginSandboxException : Exception
     {
         /// <summary>原因码，取值见 <see cref="PluginSandboxReasons"/>。</summary>
         public string Reason { get; }

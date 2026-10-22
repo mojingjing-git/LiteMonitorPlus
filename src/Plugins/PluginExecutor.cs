@@ -178,11 +178,34 @@ namespace LiteMonitor.src.Plugins
             }
         }
 
+        /// <summary>
+        /// [LM-009] 执行一个插件实例。
+        /// <para>实例级沙箱作用域在这里创建：覆盖**整个实例执行**（所有 target、所有步骤，跨 target 累计），
+        /// 总时长上限即 <see cref="PluginSandboxLimits.MaxExecutionDurationMs"/>。</para>
+        /// </summary>
         public async Task<bool> ExecuteInstanceAsync(PluginInstanceConfig inst, PluginTemplate tmpl, System.Threading.CancellationToken token = default)
         {
             if (inst == null || tmpl == null) return false;
 
+            // [LM-009] 实例级沙箱作用域：步骤数 / 目标展开数 / 单次执行总时长 / 并发槽位都收在这里。
+            using var scope = new PluginSandboxScope(token);
+
+            // 声明主机集合：同一实例的模板固定，入口算一次，向下逐层传递（避免每一步重复计算）。
+            var declaredHosts = PluginProcessor.GetDeclaredHosts(tmpl);
+
+            return await ExecuteInstanceWithScopeAsync(inst, tmpl, token, scope, declaredHosts).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// [LM-009] 带沙箱作用域的实例执行体（生产入口与测试走**同一条**路径：
+        /// 作用域、上限判定、凭据校验都在这里生效）。
+        /// </summary>
+        private async Task<bool> ExecuteInstanceWithScopeAsync(PluginInstanceConfig inst, PluginTemplate tmpl, System.Threading.CancellationToken token, PluginSandboxScope scope, HashSet<string> declaredHosts)
+        {
             var targets = inst.Targets != null && inst.Targets.Count > 0 ? inst.Targets : new List<Dictionary<string, string>> { new Dictionary<string, string>() };
+
+            // [LM-009] 目标展开数上限：在发起任何请求之前判定，超限即明确失败（原因码 LM009_TARGET_LIMIT）。
+            scope.EnsureTargetsAllowed(targets.Count);
 
             var tasks = new List<Task<bool>>();
             for (int i = 0; i < targets.Count; i++)
@@ -213,7 +236,7 @@ namespace LiteMonitor.src.Plugins
 
                     string keySuffix = (inst.Targets != null && inst.Targets.Count > 0) ? $".{idx}" : "";
                     
-                    return await ExecuteSingleTargetAsync(inst, tmpl, mergedInputs, keySuffix, token);
+                    return await ExecuteSingleTargetAsync(inst, tmpl, mergedInputs, keySuffix, token, scope, declaredHosts);
                 }, token));
             }
             try
@@ -226,7 +249,13 @@ namespace LiteMonitor.src.Plugins
             catch (OperationCanceledException) { return false; }
         }
 
-        private async Task<bool> ExecuteSingleTargetAsync(PluginInstanceConfig inst, PluginTemplate tmpl, Dictionary<string, string> inputs, string keySuffix, System.Threading.CancellationToken token)
+        /// <summary>
+        /// [LM-009] 执行单个目标（一个 target 的完整步骤链）。
+        /// <para><paramref name="scope"/> 是实例级沙箱作用域：步骤数在实例内累计，
+        /// 总时长跨 target 累计；<paramref name="declaredHosts"/> 是插件显式声明的目标主机集合
+        /// （带凭据的请求只允许发往其中的主机）。</para>
+        /// </summary>
+        private async Task<bool> ExecuteSingleTargetAsync(PluginInstanceConfig inst, PluginTemplate tmpl, Dictionary<string, string> inputs, string keySuffix, System.Threading.CancellationToken token, PluginSandboxScope scope, HashSet<string> declaredHosts)
         {
             try
             {
@@ -249,11 +278,15 @@ namespace LiteMonitor.src.Plugins
                         ResponseEncoding = null 
                     };
 
+                    // [LM-009] legacy 直接取数路径也算**一步**（步骤数在实例内累计）。
+                    scope.EnsureStepAllowed();
+                    scope.EnsureNotExpired();
+
                     // Direct fetch (no caching logic for legacy root level yet, or use step logic?)
                     // For simplicity and backward compatibility, we execute directly here but reuse Fetch helper
                     var sw = System.Diagnostics.Stopwatch.StartNew();
                     var resolvedHeaders = ResolveHeaders(step.Headers, inputs);
-                    resultRaw = await FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, token);
+                    resultRaw = await FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, token, null, scope, declaredHosts);
                     sw.Stop();
                     inputs["__latency__"] = sw.ElapsedMilliseconds.ToString();
                 }
@@ -267,7 +300,7 @@ namespace LiteMonitor.src.Plugins
                             foreach (var step in tmpl.Execution.Steps)
                             {
                                 if (token.IsCancellationRequested) return false;
-                                await ExecuteStepAsync(inst, step, inputs, keySuffix, token);
+                                await ExecuteStepWithScopeAsync(inst, step, inputs, keySuffix, token, scope, declaredHosts);
                             }
                         }
                     }
@@ -277,7 +310,8 @@ namespace LiteMonitor.src.Plugins
                         ParseAndExtract(resultRaw, tmpl.Execution.Extract, inputs, "json");
                     }
 
-                    PluginProcessor.ApplyTransforms(tmpl.Execution.Process, inputs);
+                    // [LM-009] 变换循环必须能被总时长上限打断（改用带 CancellationToken 的重载）。
+                    PluginProcessor.ApplyTransforms(tmpl.Execution.Process, inputs, scope.Token);
                     
                     if (tmpl.Outputs != null)
                     {
@@ -303,11 +337,45 @@ namespace LiteMonitor.src.Plugins
             catch (Exception ex)
             {
                  HandleExecutionError(inst, tmpl, inputs, keySuffix, ex);
+
+                 // [LM-009] 沙箱失败必须**可判定地传播**：原因码不得被宽泛 catch 吞掉后
+                 // 变成"看不出原因的普通失败"。失败语义不变（仍是失败，界面照旧显示错误状态），
+                 // 只是把带原因码的异常继续往上抛，让调用方能区分"沙箱上限"与"网络故障"。
+                 if (ex is PluginSandboxException) throw;
+
                  return false;
             }
         }
 
+        /// <summary>
+        /// 执行单一步骤（不带实例作用域的入口）。
+        /// <para>[LM-009] 没有模板上下文时取不到"插件显式声明的目标主机集合"，
+        /// 这里用**步骤自身的字面量 URL** 作为声明集合 —— 与生产路径同口径：
+        /// 主机来自模板（<c>{{...}}</c>）时<b>不</b>构成声明。</para>
+        /// </summary>
         private async Task ExecuteStepAsync(PluginInstanceConfig inst, PluginExecutionStep step, Dictionary<string, string> context, string keySuffix, System.Threading.CancellationToken token)
+        {
+            using var scope = new PluginSandboxScope(token);
+
+            var declaredHosts = PluginProcessor.GetDeclaredHosts(new PluginTemplate
+            {
+                Execution = new PluginExecution
+                {
+                    Url = step?.Url ?? "",
+                    Steps = new List<PluginExecutionStep> { step }
+                }
+            });
+
+            await ExecuteStepWithScopeAsync(inst, step, context, keySuffix, token, scope, declaredHosts);
+        }
+
+        /// <summary>
+        /// [LM-009] 带沙箱作用域的单步执行（生产路径与测试共用同一条路径）。
+        /// <para>步骤数上限在这里判定（每步开始前一次，实例内累计，native:// 步骤同样计入）；
+        /// 总时长到期 → 明确失败（原因码 <see cref="PluginSandboxReasons.DeadlineExceeded"/>）；
+        /// 并发槽位与响应体字节上限由取数路径在作用域内完成。</para>
+        /// </summary>
+        private async Task ExecuteStepWithScopeAsync(PluginInstanceConfig inst, PluginExecutionStep step, Dictionary<string, string> context, string keySuffix, System.Threading.CancellationToken token, PluginSandboxScope scope, HashSet<string> declaredHosts)
         {
             try {
                 // 0. Check Skip Condition
@@ -318,6 +386,11 @@ namespace LiteMonitor.src.Plugins
                         return; // Skip this step
                     }
                 }
+
+                // [LM-009] 步骤数上限：每步开始前判定一次（实例内累计）。
+                scope.EnsureStepAllowed();
+                // [LM-009] 总时长上限：已到期则明确失败，而不是继续发请求。
+                scope.EnsureNotExpired();
 
                 string url = PluginProcessor.ResolveTemplate(step.Url, context);
 
@@ -382,18 +455,33 @@ namespace LiteMonitor.src.Plugins
                         // valueFactory 只创建未求值的 Lazy，不在这里启动 HTTP 请求；
                         // 共享请求以 CancellationToken.None 启动 —— 取消单个等待者
                         // 不会取消共享任务，也不影响其他等待者。
+                        // [LM-009] 共享请求**不**绑定实例作用域令牌：C1 契约要求"取消一个等待者
+                        // 不得取消共享任务"，若把 scope.Token 绑进去，一个实例的到期会连带
+                        // 打断其他等待者正在复用的请求。总时长改由**等待者侧**监听 scope.Token 约束。
                         var task = GetOrStartInflight(inflightKey, () =>
-                            FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, System.Threading.CancellationToken.None, proxy));
+                            FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, System.Threading.CancellationToken.None, proxy, scope, declaredHosts, scopeCancelsRequest: false));
 
                         // 等待者取消只释放自己：不触碰在途条目、不取消共享任务。
                         // 条目的移除由共享任务终结时的延续驱动（见 ReleaseInflight），
                         // 等待者的 finally 一律不参与移除。
+                        // [LM-009] 等待者同时监听作用域令牌：总时长到期时**本等待者**立即放弃
+                        // （共享请求继续跑完，不影响其他等待者）。
                         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
                         using (token.Register(() => tcs.TrySetCanceled()))
+                        using (scope.Token.Register(() => tcs.TrySetCanceled()))
                         {
                             var sw = System.Diagnostics.Stopwatch.StartNew();
                             var finishedTask = await Task.WhenAny(task, tcs.Task);
-                            if (finishedTask == tcs.Task) throw new OperationCanceledException(token);
+                            if (finishedTask == tcs.Task)
+                            {
+                                // 调用方主动取消：保持取消语义原样上抛。
+                                if (token.IsCancellationRequested) throw new OperationCanceledException(token);
+
+                                // [LM-009] 总时长到期 → 明确失败（带原因码），不是普通取消。
+                                throw new PluginSandboxException(
+                                    PluginSandboxReasons.DeadlineExceeded,
+                                    $"单次执行总时长超过上限（{PluginSandboxLimits.MaxExecutionDurationMs} ms）");
+                            }
                             resultRaw = await task;
                             sw.Stop();
                             context["__latency__"] = sw.ElapsedMilliseconds.ToString();
@@ -405,7 +493,8 @@ namespace LiteMonitor.src.Plugins
                 ParseAndExtract(resultRaw, step.Extract, context, step.ResponseFormat);
                 
                 // Process
-                PluginProcessor.ApplyTransforms(step.Process, context);
+                // [LM-009] 变换循环必须能被总时长上限打断（改用带 CancellationToken 的重载）。
+                PluginProcessor.ApplyTransforms(step.Process, context, scope.Token);
 
                 // [Fix] Validate extracted data before caching
                 // If critical data is missing (Unknown/Error), THROW exception to prevent downstream steps from executing with bad data
@@ -455,6 +544,15 @@ namespace LiteMonitor.src.Plugins
                         };
                     }
                 }
+            }
+            catch (OperationCanceledException) when (scope != null && scope.Token.IsCancellationRequested && !token.IsCancellationRequested)
+            {
+                // [LM-009] 总时长到期导致的中止 → 明确失败（带原因码），不是普通取消。
+                // 判据用**令牌状态**而不是墙钟（scope.IsExpired）：令牌定时器可能比墙钟 deadline
+                // 早一瞬触发，用墙钟会漏判、把"明确的失败"降级成普通取消。
+                throw new PluginSandboxException(
+                    PluginSandboxReasons.DeadlineExceeded,
+                    $"单次执行总时长超过上限（{PluginSandboxLimits.MaxExecutionDurationMs} ms）");
             }
             catch (OperationCanceledException)
             {
@@ -541,7 +639,23 @@ namespace LiteMonitor.src.Plugins
         /// </summary>
         private int _maxResponseBytes = DefaultMaxResponseBytes;
 
-        private async Task<string> FetchRawAsync(string methodStr, string url, string body, Dictionary<string, string> headers, string encoding, System.Threading.CancellationToken token, string proxy = null)
+        /// <summary>
+        /// 唯一的 HTTP 出网点。
+        /// <para>[LM-009] 这里接入沙箱：</para>
+        /// <list type="bullet">
+        /// <item><b>凭据目标校验</b>：带凭据的请求只允许发往插件**显式声明**的主机，
+        /// 校验发生在**请求发出之前** —— 不通过时请求根本不会被发出，凭据不会外泄。</item>
+        /// <item><b>并发闸门</b>：占用进程级槽位（<see cref="PluginSandboxLimits.MaxConcurrentRequests"/>），
+        /// 槽位在请求发出**之前**占用，因此闸门限的是"在途请求数"。</item>
+        /// <item><b>总时长</b>：网络等待受作用域令牌约束（到期可中止 HTTP 等待）。</item>
+        /// <item><b>响应体字节上限</b>：见 <see cref="EffectiveMaxResponseBytes"/>。</item>
+        /// </list>
+        /// </summary>
+        /// <param name="scope">沙箱作用域；为 null 表示不在沙箱内（仅兼容旧的直调路径）。</param>
+        /// <param name="allowedHosts">插件显式声明的目标主机集合；为 null 表示无声明上下文（不做凭据校验）。</param>
+        /// <param name="scopeCancelsRequest">是否让作用域令牌中止本请求。
+        /// 共享在途请求必须传 false（C1 契约：取消一个等待者不得取消共享任务）。</param>
+        private async Task<string> FetchRawAsync(string methodStr, string url, string body, Dictionary<string, string> headers, string encoding, System.Threading.CancellationToken token, string proxy = null, PluginSandboxScope scope = null, HashSet<string> allowedHosts = null, bool scopeCancelsRequest = true)
         {
             HttpMethod method = HttpMethod.Get;
             if (methodStr?.ToUpper() == "POST") method = HttpMethod.Post;
@@ -559,6 +673,13 @@ namespace LiteMonitor.src.Plugins
                 foreach (var h in headers) request.Headers.TryAddWithoutValidation(h.Key, h.Value);
             }
 
+            // [LM-009] 凭据目标校验：**必须在请求发出之前**。
+            // 目标主机不在插件显式声明集合内 ⇒ 直接拒绝，请求不会被发出，凭据不会发送。
+            if (allowedHosts != null)
+            {
+                PluginSandbox.EnsureCredentialTargetAllowed(url, headers, allowedHosts);
+            }
+
             var client = GetClient(proxy);
             int generation = GetClientGeneration();
             try
@@ -568,23 +689,53 @@ namespace LiteMonitor.src.Plugins
                 // （HttpClient.Timeout 只覆盖到响应头，因此这里用同长的链接令牌补齐总期限，
                 //  用户可见的超时语义不变）。
                 using var deadline = new CancellationTokenSource(client.Timeout);
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
-                using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linked.Token);
-                // Log($"[End] {url} Status:{response.StatusCode}");
 
-                // [Fix] Enforce success status code to prevent caching error pages (e.g. 404/500 HTML)
-                response.EnsureSuccessStatusCode();
-                
-                // [Optimization] HEAD request optimization
-                if (method == HttpMethod.Head) return "";
+                // [LM-009] 作用域令牌：单次执行总时长到期时可中止 HTTP 等待
+                // （不再只受 client.Timeout 的 10 s 约束）。
+                // 共享在途请求不绑定作用域令牌（C1 契约），由等待者侧负责放弃等待。
+                var scopeToken = (scope != null && scopeCancelsRequest) ? scope.Token : System.Threading.CancellationToken.None;
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token, scopeToken);
 
-                byte[] bytes = await ReadBodyWithLimitAsync(response, linked.Token);
-                
-                if (encoding?.ToLower() == "gbk")
+                // [LM-009] 并发槽位：只占**一个**槽位（作用域内的闸门），不在外层重复占用。
+                IDisposable slot = null;
+                try
                 {
-                    return Encoding.GetEncoding("GBK").GetString(bytes);
+                    if (scope != null)
+                    {
+                        var slotToken = scopeCancelsRequest ? scope.Token : System.Threading.CancellationToken.None;
+                        slot = await PluginSandbox.AcquireRequestSlotAsync(slotToken);
+                    }
+
+                    using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linked.Token);
+                    // Log($"[End] {url} Status:{response.StatusCode}");
+
+                    // [Fix] Enforce success status code to prevent caching error pages (e.g. 404/500 HTML)
+                    response.EnsureSuccessStatusCode();
+                    
+                    // [Optimization] HEAD request optimization
+                    if (method == HttpMethod.Head) return "";
+
+                    byte[] bytes = await ReadBodyWithLimitAsync(response, linked.Token);
+                    
+                    if (encoding?.ToLower() == "gbk")
+                    {
+                        return Encoding.GetEncoding("GBK").GetString(bytes);
+                    }
+                    return Encoding.UTF8.GetString(bytes);
                 }
-                return Encoding.UTF8.GetString(bytes);
+                finally
+                {
+                    slot?.Dispose();
+                }
+            }
+            catch (OperationCanceledException) when (scope != null && scopeCancelsRequest && scope.Token.IsCancellationRequested && !token.IsCancellationRequested)
+            {
+                // [LM-009] 单次执行总时长到期 → 明确失败（带原因码），不是普通取消。
+                // 判据用**令牌状态**而不是墙钟（scope.IsExpired）：令牌定时器可能比墙钟 deadline
+                // 早一瞬触发，用墙钟会漏判。共享在途请求不绑作用域令牌，由等待者侧判定。
+                throw new PluginSandboxException(
+                    PluginSandboxReasons.DeadlineExceeded,
+                    $"单次执行总时长超过上限（{PluginSandboxLimits.MaxExecutionDurationMs} ms）");
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -608,16 +759,34 @@ namespace LiteMonitor.src.Plugins
         }
 
         /// <summary>
+        /// [LM-009] **生效**的响应体字节上限 = min(实例级上限, 沙箱硬天花板)。
+        /// <para>沙箱是硬天花板：实例级配置可以更严（如 1024 字节），但**不能突破**
+        /// <see cref="PluginSandboxLimits.MaxResponseBytes"/>（2 MiB）。
+        /// 实例级上限（LM-003a，用户可配）先触发时仍抛
+        /// <see cref="PluginResponseTooLargeException"/>，沙箱上限触发时抛同一个异常类型
+        /// （它继承自 <see cref="PluginSandboxException"/>），两条路径的原因码口径一致。</para>
+        /// </summary>
+        private int EffectiveMaxResponseBytes
+        {
+            get
+            {
+                int instanceLimit = _maxResponseBytes > 0 ? _maxResponseBytes : DefaultMaxResponseBytes;
+                return Math.Min(instanceLimit, PluginSandboxLimits.MaxResponseBytes);
+            }
+        }
+
+        /// <summary>
         /// [LM-003a] 带**字节上限**的正文读取。
         /// <list type="bullet">
         /// <item>声明长度已知且超限 → 立即明确失败（不截断、不静默丢数据）。</item>
         /// <item>边读边计数，实际字节数超限 → 同样明确失败。</item>
         /// <item>超限时 <see cref="HttpResponseMessage"/> 仍由 using 释放 → 连接被归还，不会泄漏。</item>
         /// </list>
+        /// <para>[LM-009] 上限取 <see cref="EffectiveMaxResponseBytes"/>（实例级与沙箱取 min）。</para>
         /// </summary>
         private async Task<byte[]> ReadBodyWithLimitAsync(HttpResponseMessage response, CancellationToken token)
         {
-            int limit = _maxResponseBytes > 0 ? _maxResponseBytes : DefaultMaxResponseBytes;
+            int limit = EffectiveMaxResponseBytes;
             string url = response?.RequestMessage?.RequestUri?.ToString();
 
             long? declared = response?.Content?.Headers?.ContentLength;
@@ -848,7 +1017,13 @@ namespace LiteMonitor.src.Plugins
                     }
                 }
             }
-            System.Diagnostics.Debug.WriteLine($"Plugin exec error ({inst.Id}): {ex.Message}");
+            // [LM-009] 沙箱失败的原因码必须**可观测**：错误记录里带上原因码，
+            // 调用方才能区分"触达沙箱上限"与"普通网络故障"。
+            // 原因码是常量字符串，异常消息里也只有主机名/上限数值 —— **绝不包含凭据值**。
+            string reason = ex is PluginSandboxException sandboxEx ? sandboxEx.Reason : "";
+            System.Diagnostics.Debug.WriteLine(reason.Length > 0
+                ? $"Plugin exec error ({inst.Id}) [{reason}]: {ex.Message}"
+                : $"Plugin exec error ({inst.Id}): {ex.Message}");
         }
 
         private Dictionary<string, string> ResolveHeaders(Dictionary<string, string> headers, Dictionary<string, string> context)
@@ -1039,8 +1214,12 @@ namespace LiteMonitor.src.Plugins
     /// <summary>
     /// [LM-003a] 插件响应体超过字节上限时抛出：**明确失败**，不截断、不静默丢数据。
     /// 抛出时响应仍会被释放，连接随之归还。
+    /// <para>[LM-009] 它继承自 <see cref="PluginSandboxException"/>：响应体超限的两条路径
+    /// （实例级上限 / 沙箱硬天花板）由此**统一**到同一个异常族，
+    /// <c>catch (PluginSandboxException)</c> 能一并兜住；原因码统一为
+    /// <see cref="PluginSandboxReasons.ResponseTooLarge"/>。</para>
     /// </summary>
-    public sealed class PluginResponseTooLargeException : Exception
+    public sealed class PluginResponseTooLargeException : PluginSandboxException
     {
         /// <summary>服务端声明的响应体长度（字节）；未知时为 null。</summary>
         public long? DeclaredLength { get; }
@@ -1048,7 +1227,8 @@ namespace LiteMonitor.src.Plugins
         public int Limit { get; }
 
         public PluginResponseTooLargeException(string url, long? declaredLength, int limit)
-            : base($"Plugin response exceeded the {limit} byte limit (declared={declaredLength?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}, url={url})")
+            : base(PluginSandboxReasons.ResponseTooLarge,
+                   $"Plugin response exceeded the {limit} byte limit (declared={declaredLength?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}, url={url})")
         {
             DeclaredLength = declaredLength;
             Limit = limit;
