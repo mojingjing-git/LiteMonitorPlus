@@ -782,6 +782,73 @@ public sealed class RenderingTransitionCoordinatorTests
     }
 
     [Fact]
+    public void 护栏_方法枚举必须覆盖实例构造函数()
+    {
+        // ★【LM-061 · 主审补修】`Type.GetMethods(...)` **不返回**实例 `.ctor`，
+        //   而 `TypeInitializer` 只是**静态** `.cctor`
+        //   ⇒ 原 `EnumerateMethods` 漏掉了**构造函数体**里的 `newobj`
+        //   ⇒ "生产代码不得新建第二个句柄代次实例"这道 D-G 护栏在构造函数路径上**不承重**
+        //   （已被独立复核用变异 M7 实测：构造函数里 `new WindowHandleGeneration()`
+        //     ⇒ 实现者护栏**未变红**）。
+        //   本用例直接钉住**前提本身**："枚举器必须含实例构造函数"。
+        List<MethodBase> methods = EnumerateMethods(typeof(GpuPresentationHostController)).ToList();
+
+        Assert.Contains(
+            methods,
+            m => m is ConstructorInfo ctor
+                 && !ctor.IsStatic
+                 && ctor.DeclaringType == typeof(GpuPresentationHostController));
+    }
+
+    [Fact]
+    public void 护栏_停止呈现必须把释放宿主引用放在最内层finally里()
+    {
+        // ★【LM-063 · 主审补修】即便"把清理责任登记进 ledger"这一句抛异常，
+        //   宿主引用也**必须**已经被释放（合同 §6.2 INV-2 的核心保证，
+        //   独立复核 LM-063 指出原实现把 `_captureCleanup.Add(...)` 排在
+        //   `_gpuPresentation = null;` **之前** ⇒ 存在理论缝隙）。
+        //   判据（可执行、不依赖真实异常路径）：
+        //   ① `StopGpuPresentation` 的 IL 里 `endfinally` 必须出现 **≥ 2** 次
+        //      ⇒ 证明存在**嵌套** finally；
+        //   ② 最后一次"置 null"（`stfld _gpuPresentation`）之后**仍有** `endfinally`
+        //      ⇒ 证明该置空位于**最内层** finally 体内，不被任何登记异常旁路。
+        MethodBase? stop = FindMethodByName(typeof(UIController), "StopGpuPresentation");
+        Assert.NotNull(stop);
+
+        List<IlInspector.IlInstruction> instructions = IlInspector.Disassemble(stop!).Instructions;
+
+        int endFinallyCount = instructions.Count(i => i.OpCode == OpCodes.Endfinally);
+        Assert.True(
+            endFinallyCount >= 2,
+            $"StopGpuPresentation 必须用**嵌套** finally 包裹「登记清理责任」，" +
+            $"使「无条件释放宿主引用」位于最内层（合同 §6.2 INV-2）；" +
+            $"实测 endfinally 次数 = {endFinallyCount}（应 ≥ 2）");
+
+        int lastStore = -1;
+        int lastEndFinally = -1;
+        for (int i = 0; i < instructions.Count; i++)
+        {
+            if (instructions[i].OpCode == OpCodes.Stfld &&
+                instructions[i].Field?.Name == "_gpuPresentation")
+            {
+                lastStore = i;
+            }
+
+            if (instructions[i].OpCode == OpCodes.Endfinally)
+            {
+                lastEndFinally = i;
+            }
+        }
+
+        Assert.True(lastStore >= 0, "StopGpuPresentation 的 IL 里找不到 stfld _gpuPresentation");
+        Assert.True(
+            lastEndFinally > lastStore,
+            "释放宿主引用（stfld _gpuPresentation）必须位于**最内层** finally 体内" +
+            "（其后再有 endfinally）；实测 lastStore=" + lastStore +
+            " / lastEndFinally=" + lastEndFinally);
+    }
+
+    [Fact]
     public void 护栏_仓库不得再存在SharedWindowHandleGeneration这个类型名()
     {
         Assembly production = typeof(UIController).Assembly;
@@ -1056,8 +1123,31 @@ public sealed class RenderingTransitionCoordinatorTests
             yield return method;
         }
 
+        // ★【LM-061 · 主审补修】必须同时枚举**实例构造函数**。
+        //   `Type.GetMethods(...)` **不返回**实例 `.ctor`；而 `TypeInitializer` 只是**静态** `.cctor`
+        //   ⇒ 原实现漏掉了构造函数体里的 `newobj` ⇒ "生产代码不得新建第二个句柄代次实例"
+        //   这道 D-G 护栏在**构造函数里新建实例**时**不会变红**（盲区，已被独立复核用变异 M7 实测）。
+        //   `GetConstructors` 只返回**实例**构造函数（静态类返回空）⇒ 不会与下面的 `.cctor` 重复。
+        foreach (ConstructorInfo constructor in type.GetConstructors(flags))
+        {
+            yield return constructor;
+        }
+
         ConstructorInfo? cctor = type.TypeInitializer;
         if (cctor != null) yield return cctor;
+    }
+
+    private static MethodBase? FindMethodByName(Type type, string methodName)
+    {
+        foreach (MethodBase method in EnumerateMethods(type))
+        {
+            if (string.Equals(method.Name, methodName, StringComparison.Ordinal))
+            {
+                return method;
+            }
+        }
+
+        return null;
     }
 
     private static MethodBase? FindMethodCalling(Type declaringType, string methodName)

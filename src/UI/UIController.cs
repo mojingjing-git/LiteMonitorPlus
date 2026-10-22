@@ -514,15 +514,22 @@ namespace LiteMonitor
             }
             finally
             {
-                // ★ 兜底：事件可能因订阅者异常而未送达 ⇒ 这里再取一次宿主记录的最后一次移交。
-                WindowCapturePolicyCleanup? handedOff = host.LastCapturePolicyCleanup;
-                if (handedOff is not null)
+                try
                 {
-                    _captureCleanup.Add(handedOff);
+                    // ★ 兜底：事件可能因订阅者异常而未送达 ⇒ 这里再取一次宿主记录的最后一次移交。
+                    WindowCapturePolicyCleanup? handedOff = host.LastCapturePolicyCleanup;
+                    if (handedOff is not null)
+                    {
+                        _captureCleanup.Add(handedOff);
+                    }
                 }
-
-                // ★ 合同 §6.2 INV-2：无条件置 null —— 清理责任在 ledger，不在宿主引用上。
-                _gpuPresentation = null;
+                finally
+                {
+                    // ★ 合同 §6.2 INV-2：无条件置 null —— 清理责任在 ledger，不在宿主引用上。
+                    //   ★【LM-063 · 主审补修】放在**最内层 finally** ⇒ 即便上面的登记抛异常，
+                    //   宿主引用也**一定**被释放（"释放引用"是 INV-2 的核心保证，不允许被旁路）。
+                    _gpuPresentation = null;
+                }
             }
 
             _transition.RecordCleanupState(
