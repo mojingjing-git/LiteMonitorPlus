@@ -110,6 +110,32 @@ jobs:
       - name: 构建（Debug）
         run: dotnet build LiteMonitor.sln -c Debug --nologo
 
+      # ★ 生产主窗体启动检查（R01 引入）★
+      #   纯单测**证明不了**主程序能不能启动。R01 就是一条"主窗体构造即抛
+      #   NullReferenceException"的**启动阻断**缺陷：它一路穿过了全部单测与
+      #   连续 8 次绿色 CI，因为没有任何用例真的构造过生产 MainForm。
+      #   ⇒ 这里真的把生产 MainForm 构造出来（探针场景 `startup`）。
+      #   退出码契约（tools/GpuHostLifecycleProbe）：
+      #     0 = 构造成功；1 = 构造抛异常（**真实缺陷 ⇒ 本步骤红**）。
+      #   该场景刻意**不跑消息循环**（不触发 OnShown）⇒ 网页服务不会开始监听。
+      - name: 生产主窗体启动检查（R01：真实构造 MainForm）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet build tools/GpuHostLifecycleProbe/GpuHostLifecycleProbe.csproj -c Debug --nologo -v quiet
+          if ($LASTEXITCODE -ne 0) { throw "探针构建失败（退出码 $LASTEXITCODE）" }
+          $out = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\startup-check'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $probe = 'tools\GpuHostLifecycleProbe\bin\Debug\net8.0-windows\GpuHostLifecycleProbe.exe'
+          & $probe --scenario=startup $out
+          $code = $LASTEXITCODE
+          Write-Host "生产主窗体启动检查退出码: $code"
+          if ($code -ne 0) {
+            $err = Join-Path $out 'startup-error.log'
+            if (Test-Path -LiteralPath $err) { Write-Host '--- startup-error.log ---'; Get-Content -LiteralPath $err }
+            throw "生产主窗体启动检查失败（退出码 $code）—— MainForm 构造期抛异常"
+          }
+
       # ★ 第三方组件声明与实际依赖一致（LM-024 护栏，S5.3/S5.3b 引入）★
       #   脚本以**实际解析**的依赖为真值（还原图 + 目标框架冲突消解），
       #   核对 NOTICE 里声明的组件清单：
@@ -206,6 +232,7 @@ jobs:
           path: |
             tests/**/TestResults/*.trx
             ci-artifacts/test-console.log
+            ci-artifacts/startup-check/**
           if-no-files-found: error
           retention-days: 14
 
