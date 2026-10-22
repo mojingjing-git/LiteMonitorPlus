@@ -56,6 +56,17 @@ namespace LiteMonitor.src.Plugins
             System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
         }
 
+        /// <summary>
+        /// 创建一次执行所用的<b>实例级沙箱作用域</b>。
+        /// <para>[LM-044] 这是<b>生产入口唯一</b>的沙箱作用域创建点 ⇒ 回归测试可通过覆写本方法
+        /// 观测"生产路径实际使用的上限"，而无需在生产代码里保留进程级全局状态。</para>
+        /// <para>默认实现使用<b>默认构造</b> ⇒ 时长取 <see cref="PluginSandboxScope.DefaultExecutionDuration"/>
+        /// （= 契约值 <see cref="PluginSandboxLimits.MaxExecutionDurationMs"/>）。
+        /// 覆写本方法时必须保持与生产默认<b>同口径</b>，否则该覆写即等价于改变生产语义。</para>
+        /// </summary>
+        protected virtual PluginSandboxScope CreateScope(System.Threading.CancellationToken token) =>
+            new PluginSandboxScope(token);
+
         private void InitializeDefaultClient()
         {
             lock (_httpLock)
@@ -191,7 +202,8 @@ namespace LiteMonitor.src.Plugins
             if (inst == null || tmpl == null) return false;
 
             // [LM-009] 实例级沙箱作用域：步骤数 / 目标展开数 / 单次执行总时长 / 并发槽位都收在这里。
-            using var scope = new PluginSandboxScope(token);
+            // [LM-044] 经 CreateScope 创建 ⇒ 生产入口实际使用的上限可被回归测试直接观测。
+            using var scope = CreateScope(token);
 
             // 声明主机集合：同一实例的模板固定，入口算一次，向下逐层传递（避免每一步重复计算）。
             var declaredHosts = PluginProcessor.GetDeclaredHosts(tmpl);
@@ -366,7 +378,7 @@ namespace LiteMonitor.src.Plugins
         /// </summary>
         private async Task ExecuteStepAsync(PluginInstanceConfig inst, PluginExecutionStep step, Dictionary<string, string> context, string keySuffix, System.Threading.CancellationToken token)
         {
-            using var scope = new PluginSandboxScope(token);
+            using var scope = CreateScope(token);
 
             var declaredHosts = PluginProcessor.GetDeclaredHosts(new PluginTemplate
             {

@@ -564,39 +564,14 @@ namespace LiteMonitor.src.Plugins
         /// <summary>
         /// 生产入口（实例级作用域）默认使用的<b>单次执行总时长</b>。
         /// <para>取值来自 <see cref="PluginSandboxLimits.MaxExecutionDurationMs"/>（契约值，不得改动）；
-        /// 生产入口 <c>PluginExecutor.ExecuteInstanceAsync</c> 通过<b>默认构造</b>使用它
-        /// ⇒ 生产默认时长只有这一个出处，不会出现"入口硬编码 5 分钟"这类漂移。</para>
+        /// 生产入口 <c>PluginExecutor.ExecuteInstanceAsync</c> 经 <c>PluginExecutor.CreateScope</c>
+        /// 用<b>默认构造</b>取到它 ⇒ 生产默认时长只有这一个出处，
+        /// 不会出现"入口硬编码 5 分钟"这类漂移。</para>
         /// </summary>
         public static TimeSpan DefaultExecutionDuration =>
             TimeSpan.FromMilliseconds(PluginSandboxLimits.MaxExecutionDurationMs);
 
-        /// <summary>
-        /// [LM-044] 实例级作用域的创建记录（诊断用）。
-        /// <para>用途：让回归测试能断言生产入口 <c>PluginExecutor.ExecuteInstanceAsync</c>
-        /// <b>实际使用</b>的总时长 == <see cref="PluginSandboxLimits.MaxExecutionDurationMs"/>
-        /// —— 否则只能证明"测试自建作用域"的时长（那正是 LM-044 的缺口：
-        /// 把生产入口的默认时长改成 5 分钟，3 条总时长用例仍然全绿）。</para>
-        /// <para>按<b>外部取消令牌</b>索引 ⇒ 不同用例之间互不干扰；
-        /// 记录条数有上限 ⇒ 不会无界增长。</para>
-        /// </summary>
-        private static readonly ConcurrentQueue<(CancellationToken Outer, PluginSandboxScope Scope)> _createdInstanceScopes = new();
 
-        /// <summary>实例级作用域创建记录的条数上限（诊断用；防止无界增长）。</summary>
-        private const int MaxCreatedInstanceScopeRecords = 32;
-
-        /// <summary>
-        /// 诊断：查找"用给定外部取消令牌创建"的实例级作用域（<b>最近创建</b>的那个优先）。
-        /// <para>找不到返回 <c>null</c>（该令牌从未创建过实例级作用域）。</para>
-        /// </summary>
-        public static PluginSandboxScope FindCreatedInstanceScope(CancellationToken outerToken)
-        {
-            PluginSandboxScope found = null;
-            foreach (var record in _createdInstanceScopes)
-            {
-                if (record.Outer == outerToken) found = record.Scope;
-            }
-            return found;
-        }
 
         /// <summary>
         /// 用默认上限创建作用域（<see cref="PluginSandboxLimits"/> 里的全部数值）。
@@ -628,18 +603,6 @@ namespace LiteMonitor.src.Plugins
             MaxDuration = maxDuration;
             MaxSteps = maxSteps;
             MaxTargets = maxTargets;
-
-            RecordInstanceScopeCreation(cancellationToken, this);
-        }
-
-        /// <summary>登记实例级作用域的创建（诊断用；见 <see cref="FindCreatedInstanceScope"/>）。</summary>
-        private static void RecordInstanceScopeCreation(CancellationToken outerToken, PluginSandboxScope scope)
-        {
-            _createdInstanceScopes.Enqueue((outerToken, scope));
-            while (_createdInstanceScopes.Count > MaxCreatedInstanceScopeRecords)
-            {
-                _createdInstanceScopes.TryDequeue(out _);
-            }
         }
 
         /// <summary>

@@ -411,18 +411,17 @@ namespace LiteMonitor.Tests
         public async Task 端到端_生产入口实际使用的总时长_等于契约值30秒()
         {
             using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Text("ok")));
-            using var exec = new PluginExecutor();
+            using var exec = new RecordingPluginExecutor();
 
             var inst = NewInstance("inst-prod-duration");
             var tmpl = ChainTemplate(server.Url + "/dur");
 
-            // 本次执行独有的取消令牌 ⇒ 能把"生产入口创建的作用域"与其它作用域区分开
             using var cts = new CancellationTokenSource();
 
             Assert.True(await exec.ExecuteInstanceAsync(inst, tmpl, cts.Token));
 
-            // 生产入口实际创建的实例级作用域
-            var scope = PluginSandboxScope.FindCreatedInstanceScope(cts.Token);
+            // 生产入口实际创建的实例级作用域（经 CreateScope 观测，不依赖进程级全局状态）
+            var scope = exec.CapturedScope;
             Assert.NotNull(scope);
 
             // 契约值（字面量 + 常量双重钉死）
@@ -907,6 +906,24 @@ namespace LiteMonitor.Tests
                 await Task.Delay(25);
             }
             return predicate();
+        }
+
+        /// <summary>
+        /// [LM-044] 记录生产入口实际创建的实例级沙箱作用域。
+        /// <para>覆写 <see cref="CreateScope"/> 并<b>调用基类实现</b>
+        /// ⇒ 观测到的就是生产路径真正使用的那份作用域：若生产入口改成硬编码时长
+        /// （例如 5 分钟）或绕开本方法直接 new，观测结果随之改变 ⇒ 断言必然变红。</para>
+        /// </summary>
+        private sealed class RecordingPluginExecutor : PluginExecutor
+        {
+            /// <summary>生产入口本次实际创建的实例级作用域（未创建过时为 null）。</summary>
+            public PluginSandboxScope CapturedScope { get; private set; }
+
+            protected override PluginSandboxScope CreateScope(System.Threading.CancellationToken token)
+            {
+                CapturedScope = base.CreateScope(token);
+                return CapturedScope;
+            }
         }
 
         // ---------------------------------------------------------------
