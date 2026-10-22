@@ -99,6 +99,21 @@ jobs:
       - name: 构建（Debug）
         run: dotnet build LiteMonitor.sln -c Debug --nologo
 
+      # ★ 第三方组件声明与实际依赖一致（LM-024 护栏，S5.3/S5.3b 引入）★
+      #   脚本以**实际解析**的依赖为真值（还原图 + 目标框架冲突消解），
+      #   核对 NOTICE 里声明的组件清单：
+      #     · 直接依赖漏列 / 版本不符   ⇒ 退出码 1（流水线红）
+      #     · 传递依赖漏列 / 版本不符   ⇒ 退出码 1（流水线红）
+      #     · 环境受阻（取不到还原图等）⇒ 退出码 3（流水线红，结论不可信时不放行）
+      #   LM-024 的根因就是"手工维护的清单必然漂移"——本步骤把一次性修正
+      #   变成可持续的门禁：以后新增依赖而忘记改 NOTICE，会在这里被挡住。
+      - name: 校验第三方组件声明与实际依赖一致（LM-024 护栏）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & pwsh -NoProfile -File 'scripts/generate-dependency-manifest.ps1' -Mode Check
+          if ($LASTEXITCODE -ne 0) { throw "依赖清单核对失败（退出码 $LASTEXITCODE）" }
+
       - name: 清理历史测试结果
         shell: pwsh
         run: |
