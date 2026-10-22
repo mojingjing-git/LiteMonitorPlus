@@ -42,9 +42,19 @@ jobs:
       contents: write
 
     env:
-      # 与 ci.yml 完全一致的防假绿阈值，改动必须两处同步
-      MIN_TEST_TOTAL: 1000
+      # 与 ci.yml 完全一致的防假绿阈值，改动必须两处同步。
+      # ★ 2026-10-23 主审更正（LM-056）：本文件原先写着 1000，而 ci.yml 是 1281 ——
+      #   注释声称"完全一致"但**实际不一致** ⇒ 删掉 281 条用例时 CI 会红、**发布流水线却会绿**。
+      #   现按 ci.yml 同步到 1316（1239 + 58 + 19），并把跳过数上限与"必须真正执行的测试类"
+      #   也一并同步（原先本文件连 -MaxSkipped / -MustExecuteTestClass 都没传，
+      #   只依赖脚本默认值 1）。门禁**只收紧不放宽**。
+      MIN_TEST_TOTAL: 1316
       EXPECTED_TEST_ASSEMBLIES: 'LiteMonitor.Tests, LiteMonitor.Updater.Tests, LiteMonitor.GpuNonperformance.Tests'
+      # ★ 跳过用例数上限（与 ci.yml 一致）：只允许联网 E2E 被跳过。
+      MAX_SKIPPED_TESTS: 1
+      # ★ 必须真正执行的测试类（与 ci.yml 一致）：插件市场契约用例不得被跳过。
+      MUST_EXECUTE_TEST_CLASS: 'MarketIndexContractTests'
+      MUST_EXECUTE_TEST_CLASS_MIN_COUNT: 6
       LITEMONITOR_PLUGIN_REPO: ${{ github.workspace }}/tests/fixtures/plugin-repo
       # 故意不设置 LITEMONITOR_E2E=1
       DOTNET_NOLOGO: 'true'
@@ -104,7 +114,10 @@ jobs:
             '-File', '.github/workflows/assert-test-counts.ps1',
             '-TrxRoot', 'tests',
             '-MinTotal', $env:MIN_TEST_TOTAL,
-            '-ExpectedAssembly', $env:EXPECTED_TEST_ASSEMBLIES
+            '-ExpectedAssembly', $env:EXPECTED_TEST_ASSEMBLIES,
+            '-MaxSkipped', $env:MAX_SKIPPED_TESTS,
+            '-MustExecuteTestClass', $env:MUST_EXECUTE_TEST_CLASS,
+            '-MustExecuteTestClassMinCount', $env:MUST_EXECUTE_TEST_CLASS_MIN_COUNT
           )
           & pwsh @assertArgs
           if ($LASTEXITCODE -ne 0) { throw "测试发现数断言失败（退出码 $LASTEXITCODE）" }
