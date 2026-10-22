@@ -4,6 +4,7 @@ using System.Windows.Forms;
 using System.Linq;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.UI.Controls;
+using LiteMonitor.src.WebServer;
 using System.Diagnostics;
 using LiteMonitor.src.SystemServices;
 
@@ -364,7 +365,38 @@ namespace LiteMonitor.src.UI.SettingsPage
                 60
             );
 
-            
+            bool isChinese = !string.IsNullOrEmpty(Config.Language) && 
+                                     Config.Language.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+
+            // ★ 监听范围（SEC-001 / 契约 W12）
+            //   新安装默认「仅本机」；存量配置（WebServerEnabled=true 且旧版本没有该字段）
+            //   会被保留为「局域网」，并在下面提示用户收敛。
+            group.AddComboIndex(this,
+                isChinese ? "监听范围" : "Bind scope",
+                isChinese
+                    ? new[] { "仅本机 (127.0.0.1)", "局域网（必须设置口令）" }
+                    : new[] { "Loopback only (127.0.0.1)", "LAN (password required)" },
+                () => Config.WebServerBindMode == WebServerBindMode.Lan ? 1 : 0,
+                idx => Config.WebServerBindMode = idx == 1 ? WebServerBindMode.Lan : WebServerBindMode.Loopback);
+
+            // ★ 局域网模式下额外允许的主机名 / IP（进入 Host / Origin 白名单）
+            group.AddInput(this,
+                isChinese ? "允许的局域网地址" : "Allowed LAN addresses",
+                () => Config.WebServerLanAddresses,
+                v => Config.WebServerLanAddresses = v,
+                isChinese ? "例如 192.168.1.20；留空表示只允许本机访问" : "e.g. 192.168.1.20 (empty = loopback only)",
+                160);
+
+            // ★ 明文传输告警（契约 W11）：局域网模式下 HTTP / WebSocket 都是明文。
+            group.AddHint(isChinese
+                ? "⚠ 局域网模式下 HTTP 与 WebSocket 均为**明文传输**，局域网内可被嗅探：请自行部署反向代理提供 TLS，或只在可信网络中使用。"
+                : "⚠ In LAN mode both HTTP and WebSocket are transported in **clear text** and can be sniffed on the LAN: deploy a TLS reverse proxy yourself, or use it on a trusted network only.");
+
+            // ★ 实际监听地址与端口（契约 W11：设置界面必须显示实际监听地址）
+            var listenInfo = new LiteLink("", () => { });
+            group.AddAction(isChinese ? "实际监听地址" : "Listening address", listenInfo);
+            listenInfo.Text = BuildListenAddressText(isChinese);
+            RegisterRefresh(() => listenInfo.Text = BuildListenAddressText(isChinese));
 
             // Password
             group.AddInput(this, "Menu.WebServerPassword",
@@ -373,15 +405,54 @@ namespace LiteMonitor.src.UI.SettingsPage
                 LanguageManager.T("Menu.WebServerPasswordTip"),
                 100, HorizontalAlignment.Center);
 
+            group.AddHint(isChinese
+                ? "口令只以 PBKDF2 哈希 + 盐保存（不再回显明文，也不会写进 settings.json）；留空表示不修改。局域网模式必须设置口令，否则服务拒绝启动。"
+                : "The password is stored as a PBKDF2 hash + salt (never in clear text, never in settings.json); leave it empty to keep it unchanged. LAN mode requires a password, otherwise the service refuses to start.");
+
+            // ★ 清除口令：哈希与盐要一起清掉（只清明文字段是不够的）
+            group.AddButton(
+                isChinese ? "清除访问口令" : "Clear access password",
+                isChinese ? "清除" : "Clear",
+                () =>
+                {
+                    Config.WebServerPassword = "";
+                    Config.WebServerPasswordHash = "";
+                    Config.WebServerPasswordSalt = "";
+                    OnShow();   // 立即刷新界面（口令框回到空）
+                });
+
+            // ★ 存量配置提示：旧版本没有「监听范围」这一项，升级后仍保持旧的局域网行为，
+            //   这里明确告诉用户可以收敛到「仅本机」。
+            if (Config.WebServerBindModeNeedsConvergence)
+            {
+                group.AddHint(isChinese
+                    ? "ℹ 升级自旧版本：监听范围已保留为「局域网」以免远程访问突然中断。建议在确认其它设备不再需要访问后改回「仅本机」。"
+                    : "ℹ Upgraded from an older version: the bind scope stays on LAN so remote access does not break unexpectedly. Consider switching back to loopback once no other device needs access.");
+            }
+
             // C. API Link
-            bool isChinese = !string.IsNullOrEmpty(Config.Language) && 
-                                     Config.Language.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
-            
-            group.AddLink("API (JSON): http://<IP>:<Port>/api/snapshot?pwd=123456 ", 
-                isChinese ? "内网无法连接？" : "Connection Issue?", 
+            //   ★ 旧的 "…/api/snapshot?pwd=123456" 链接已移除（契约 W13：口令不得进 URL）。
+            //     网页版现在走「登录 → 主会话 Cookie → 一次性票据」的协议。
+            group.AddLink(isChinese ? "网页版入口（需登录）" : "Web page (sign-in required)",
+                isChinese ? "http://<本机地址>:<端口>/" : "http://<host>:<port>/",
                 () => ShowFirewallHelp(isChinese));
 
             AddGroupToPage(group);
+        }
+
+        /// <summary>
+        /// 构造"实际监听地址"的显示文本（契约 W11：必须显示真实监听地址与端口）。
+        /// </summary>
+        private string BuildListenAddressText(bool isChinese)
+        {
+            var server = LiteWebServer.Instance;
+            bool running = server != null && server.IsRunning;
+            int port = running ? server.CurrentRunningPort : Config.WebServerPort;
+            string scope = Config.WebServerBindMode == WebServerBindMode.Lan ? "0.0.0.0" : "127.0.0.1";
+            string state = running
+                ? (isChinese ? "运行中" : "running")
+                : (isChinese ? "未运行" : "not running");
+            return $"{scope}:{port} ({state})";
         }
 
         private void ShowFirewallHelp(bool isChinese)

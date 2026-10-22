@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using LiteMonitor.src.Core;
@@ -33,16 +34,22 @@ namespace LiteMonitor.Tests
     {
         private readonly Settings _cfg;
         private readonly string _oldPassword;
+        private readonly string _oldHash;
+        private readonly string _oldSalt;
 
         public WebAuthHardeningTests()
         {
             _cfg = Settings.Load();
             _oldPassword = _cfg.WebServerPassword;
+            _oldHash = _cfg.WebServerPasswordHash;
+            _oldSalt = _cfg.WebServerPasswordSalt;
         }
 
         public void Dispose()
         {
             _cfg.WebServerPassword = _oldPassword;
+            _cfg.WebServerPasswordHash = _oldHash;
+            _cfg.WebServerPasswordSalt = _oldSalt;
         }
 
         // ================================================================
@@ -54,7 +61,7 @@ namespace LiteMonitor.Tests
         /// 所以含空格的口令在线上是 <c>%20</c>。修复前服务端拿 <c>a%20b</c> 去比对 <c>a b</c>，永远失败。
         /// </summary>
         [Fact]
-        public async Task 口令含空格时经URL编码后仍能通过鉴权()
+        public async Task 口令含空格时仍能通过鉴权()
         {
             await AssertPasswordAcceptedAsync("pa ss word");
         }
@@ -64,13 +71,13 @@ namespace LiteMonitor.Tests
         /// <c>&amp;</c> 会被正则的值捕获截断、<c>%</c> 会造成二次解码歧义、<c>#</c> 若不编码会被当片段分隔符。
         /// </summary>
         [Fact]
-        public async Task 口令含URL保留字符时经URL编码后仍能通过鉴权()
+        public async Task 口令含URL保留字符时仍能通过鉴权()
         {
             await AssertPasswordAcceptedAsync("a&b=c%d+e#f?g/h");
         }
 
         [Fact]
-        public async Task 口令含中文时经URL编码后仍能通过鉴权()
+        public async Task 口令含中文时仍能通过鉴权()
         {
             await AssertPasswordAcceptedAsync("口令密码✓");
         }
@@ -82,20 +89,30 @@ namespace LiteMonitor.Tests
         public async Task 错误口令仍被拒绝()
         {
             const string real = "correct-password";
-            _cfg.WebServerPassword = real;
+            SetPassword(real);
 
             await WithServerAsync(async (port, _) =>
             {
-                string wrong = await SendHttpAsync(port, "/api/snapshot?pwd=" + Uri.EscapeDataString("correct-passworX"));
+                string wrong = await SendHttpAsync(port, "/api/auth/login", method: "POST",
+                    body: "{\"password\":\"correct-passworX\"}", contentType: "application/json");
                 Assert.Contains("401", FirstLine(wrong));
+                Assert.DoesNotContain("Set-Cookie", wrong);
 
                 // 少一个字符（长度不同）
-                string shorter = await SendHttpAsync(port, "/api/snapshot?pwd=" + Uri.EscapeDataString("correct-passwor"));
+                string shorter = await SendHttpAsync(port, "/api/auth/login", method: "POST",
+                    body: "{\"password\":\"correct-passwor\"}", contentType: "application/json");
                 Assert.Contains("401", FirstLine(shorter));
+                Assert.DoesNotContain("Set-Cookie", shorter);
 
-                // 完全不带 pwd
-                string missing = await SendHttpAsync(port, "/api/snapshot");
-                Assert.Contains("401", FirstLine(missing));
+                // 完全不带口令字段 ⇒ 请求体不合规
+                string missing = await SendHttpAsync(port, "/api/auth/login", method: "POST",
+                    body: "{}", contentType: "application/json");
+                Assert.Contains("400", FirstLine(missing));
+                Assert.DoesNotContain("Set-Cookie", missing);
+
+                // 反证：正确口令仍然能登录
+                var ok = await LoginAsync(port, real);
+                Assert.False(string.IsNullOrEmpty(ok.SessionId));
             });
         }
 
@@ -103,47 +120,60 @@ namespace LiteMonitor.Tests
         /// 裸 <c>+</c> 必须按字面量处理，**不能**当成空格。
         /// </summary>
         /// <remarks>
-        /// ★ 这条用例是"选对解码器"的护栏：
-        ///   <c>WebUtility.UrlDecode</c> 会把 <c>a+b</c> 解成 <c>a b</c>（表单编码语义），
-        ///   于是口令 <c>a+b</c> 的裸加号请求会被判错。
-        ///   而 <c>encodeURIComponent</c> 从不产生裸 <c>+</c>（它编成 <c>%2B</c>），
-        ///   所以正确实现是 <c>Uri.UnescapeDataString</c>（只解 %XX、不动 +）。
-        /// ★ 两条断言一起看才有意义：编码形态 <c>%2B</c> 与裸形态 <c>+</c> 都必须匹配同一份口令。
+        /// ★ 这条用例是"口令必须被逐字比较"的护栏：
+        ///   配置的口令是 <c>a+b</c>，那么 <c>a b</c>（真空格）与 <c>a%20b</c>（字面量）都必须匹配不上。
+        ///   旧实现里这条护栏防的是 <c>WebUtility.UrlDecode</c> 把裸 <c>+</c> 当空格；
+        ///   新协议口令走 JSON 请求体、不再 URL 编码，但"逐字比较"这条性质必须继续锁住。
         /// </remarks>
         [Fact]
         public async Task 口令里的加号不被当成空格()
         {
             const string real = "a+b";
-            _cfg.WebServerPassword = real;
+            SetPassword(real);
 
             await WithServerAsync(async (port, _) =>
             {
-                // ① encodeURIComponent 的产物
-                string encoded = await SendHttpAsync(port, "/api/snapshot?pwd=" + Uri.EscapeDataString(real));
-                Assert.Contains("200", FirstLine(encoded));
+                // ① 原样的加号（字面量）必须匹配
+                var login = await LoginAsync(port, real);
+                Assert.False(string.IsNullOrEmpty(login.SessionId));
 
-                // ② 手输的裸加号（RFC 3986 里 '+' 就是字面量）
-                string bare = await SendHttpAsync(port, "/api/snapshot?pwd=a+b");
-                Assert.Contains("200", FirstLine(bare));
-
-                // ③ 反证：若把 '+' 当空格解，则"真的是空格"的口令才该匹配 —— 这里必须**不**匹配
-                string asSpace = await SendHttpAsync(port, "/api/snapshot?pwd=a%20b");
+                // ② 真空格 ⇒ 匹配不上
+                string asSpace = await SendHttpAsync(port, "/api/auth/login", method: "POST",
+                    body: "{\"password\":\"a b\"}", contentType: "application/json");
                 Assert.Contains("401", FirstLine(asSpace));
+
+                // ③ 字面的 "%20"（不做任何解码）⇒ 同样匹配不上
+                string percent = await SendHttpAsync(port, "/api/auth/login", method: "POST",
+                    body: "{\"password\":\"a%20b\"}", contentType: "application/json");
+                Assert.Contains("401", FirstLine(percent));
             });
         }
 
         /// <summary>
-        /// 没设口令时保持既有行为：不需要 pwd 参数就能取快照。
+        /// 没设口令时：登录（空口令）仍然换取主会话，HTTP API 仍走同一套会话口径。
         /// </summary>
+        /// <remarks>
+        /// ★ L0（未配置口令）下没有可校验的凭据，但**协议口径保持统一**：
+        ///   登录照样签发会话与 CSRF 令牌，HTTP API 照样要求会话 ——
+        ///   否则就会多出"第二套鉴权口径"。
+        /// </remarks>
         [Fact]
-        public async Task 未设置口令时不需要参数()
+        public async Task 未设置口令时登录仍可换取会话()
         {
-            _cfg.WebServerPassword = "";
+            SetPassword(null);
 
             await WithServerAsync(async (port, _) =>
             {
-                string resp = await SendHttpAsync(port, "/api/snapshot");
+                var login = await LoginAsync(port, "");
+                Assert.False(string.IsNullOrEmpty(login.SessionId));
+
+                // 带会话 ⇒ 200
+                string resp = await SendHttpAsync(port, "/api/snapshot", cookie: login.SessionId);
                 Assert.Contains("200", FirstLine(resp));
+
+                // 不带会话 ⇒ 401（L0 也不开"无会话直通"的后门）
+                string noSession = await SendHttpAsync(port, "/api/snapshot");
+                Assert.Contains("401", FirstLine(noSession));
             });
         }
 
@@ -163,7 +193,7 @@ namespace LiteMonitor.Tests
         [Fact]
         public async Task 慢速连接超过请求头期限被断开()
         {
-            _cfg.WebServerPassword = "";
+            SetPassword(null);
             var timeout = TimeSpan.FromMilliseconds(400);
 
             await WithServerAsync(async (port, server) =>
@@ -199,16 +229,18 @@ namespace LiteMonitor.Tests
         [Fact]
         public async Task 正常请求不受请求头期限影响()
         {
-            _cfg.WebServerPassword = "";
+            SetPassword(null);
 
             await WithServerAsync(async (port, server) =>
             {
                 SetHeaderReadTimeout(server, TimeSpan.FromMilliseconds(400));
 
+                var login = await LoginAsync(port, "");
+
                 // 连发 5 条：期限是每连接独立的，不该因为前一条而影响后面
                 for (int i = 0; i < 5; i++)
                 {
-                    string resp = await SendHttpAsync(port, "/api/snapshot");
+                    string resp = await SendHttpAsync(port, "/api/snapshot", cookie: login.SessionId);
                     Assert.Contains("200", FirstLine(resp));
                 }
             });
@@ -230,7 +262,7 @@ namespace LiteMonitor.Tests
         [Fact]
         public async Task 并发连接触顶后新连接被断开()
         {
-            _cfg.WebServerPassword = "";
+            SetPassword(null);
 
             await WithServerAsync(async (port, server) =>
             {
@@ -279,49 +311,59 @@ namespace LiteMonitor.Tests
         [Fact]
         public async Task 连接结束后并发名额被归还()
         {
-            _cfg.WebServerPassword = "";
+            SetPassword(null);
 
             await WithServerAsync(async (port, server) =>
             {
                 SetMaxConcurrentConnections(server, 1);
 
+                var login = await LoginAsync(port, "");
+
                 // 用满再放空，重复三轮：若名额泄漏，第二轮之后就会全部被拒
                 for (int round = 0; round < 3; round++)
                 {
-                    string resp = await SendHttpAsync(port, "/api/snapshot");
+                    string resp = await SendHttpAsync(port, "/api/snapshot", cookie: login.SessionId);
                     Assert.Contains("200", FirstLine(resp));
                 }
             });
         }
 
         // ================================================================
-        // 参数污染 —— 重复的 pwd
+        // 参数污染 —— 重复的会话 Cookie
         // ================================================================
 
         /// <summary>
-        /// 同一请求行里出现两次 <c>pwd</c> 时必须拒绝 —— **即使两个值都正确**。
+        /// 同一请求里出现两次 <c>lmsid</c> 时必须拒绝 —— **即使两个值都正确**。
         /// </summary>
         /// <remarks>
-        /// ★ 原先 <c>PwdQueryRegex.Match</c> 只取第一个命中，第二个被静默忽略。
-        ///   参数污染的风险不在"多写一个参数"，而在于校验环节与使用环节若取了不同的那一个，
-        ///   就会变成"用一个口令过校验、用另一个口令干活"。正确做法是拒绝歧义本身。
-        /// ★ 用例里同时断言"单个 pwd 仍然通过"：否则 401 可能来自别的原因，测不出真实行为。
+        /// ★ 新协议下凭据走 Cookie（<c>?pwd=</c> 已移除），参数污染的载体随之变成
+        ///   <c>Cookie: lmsid=…; lmsid=…</c>。
+        ///   风险形态不变：校验环节与使用环节若取了不同的那一个，就会出现
+        ///   "用一个会话过校验、用另一个会话干活"。正确做法是**拒绝歧义本身**。
+        /// ★ 用例里同时断言"单个 lmsid 仍然通过"：否则 401 可能来自别的原因，测不出真实行为。
+        /// ★ 这条对应契约 W2 与验收矩阵 A10。
         /// </remarks>
         [Fact]
-        public async Task 重复的pwd参数被拒绝()
+        public async Task 重复的lmsidCookie被拒绝()
         {
-            _cfg.WebServerPassword = "dup-pwd";
+            SetPassword("dup-pwd");
 
             await WithServerAsync(async (port, _) =>
             {
-                string single = await SendHttpAsync(port, "/api/snapshot?pwd=dup-pwd");
+                var login = await LoginAsync(port, "dup-pwd");
+
+                // 单个 lmsid 仍然可用
+                string single = await SendHttpAsync(port, "/api/snapshot", cookie: login.SessionId);
                 Assert.Contains("200", FirstLine(single));
 
-                string duplicated = await SendHttpAsync(port, "/api/snapshot?pwd=dup-pwd&pwd=dup-pwd");
+                // 重复的 lmsid ⇒ 一律拒绝
+                string duplicated = await SendHttpAsync(port, "/api/snapshot",
+                    cookie: login.SessionId + "; lmsid=" + login.SessionId);
                 Assert.Contains("401", FirstLine(duplicated));
 
-                // 干扰形态：第二个才是对的
-                string mixed = await SendHttpAsync(port, "/api/snapshot?pwd=wrong&pwd=dup-pwd");
+                // 干扰形态：第一个是错的、第二个是对的 ⇒ 仍然拒绝
+                string mixed = await SendHttpAsync(port, "/api/snapshot",
+                    cookie: "wrong-session; lmsid=" + login.SessionId);
                 Assert.Contains("401", FirstLine(mixed));
             });
         }
@@ -340,12 +382,15 @@ namespace LiteMonitor.Tests
         [Fact]
         public async Task 合法WebSocket握手返回101且Accept正确()
         {
-            _cfg.WebServerPassword = "";
+            SetPassword(null);   // L0：没有口令也要走"登录 → 票据"的同一套流程
 
             await WithServerAsync(async (port, _) =>
             {
+                var login = await LoginAsync(port, "");
+                string ticket = await RequestTicketAsync(port, login.SessionId, login.Csrf);
+
                 string resp = await SendRawAsync(port,
-                    WsHandshake(port, "Sec-WebSocket-Key: " + RfcWsKey + "\r\n"));
+                    WsHandshake(port, ticket, "Sec-WebSocket-Key: " + RfcWsKey + "\r\n"));
 
                 Assert.Contains("101", FirstLine(resp));
                 Assert.Contains(RfcWsAccept, resp);
@@ -358,12 +403,15 @@ namespace LiteMonitor.Tests
         [Fact]
         public async Task WebSocketKey头名大小写不敏感()
         {
-            _cfg.WebServerPassword = "";
+            SetPassword(null);
 
             await WithServerAsync(async (port, _) =>
             {
+                var login = await LoginAsync(port, "");
+                string ticket = await RequestTicketAsync(port, login.SessionId, login.Csrf);
+
                 string resp = await SendRawAsync(port,
-                    WsHandshake(port, "sec-websocket-key: " + RfcWsKey + "\r\n"));
+                    WsHandshake(port, ticket, "sec-websocket-key: " + RfcWsKey + "\r\n"));
 
                 Assert.Contains("101", FirstLine(resp));
                 Assert.Contains(RfcWsAccept, resp);
@@ -377,12 +425,15 @@ namespace LiteMonitor.Tests
         [Fact]
         public async Task 重复的SecWebSocketKey被拒绝()
         {
-            _cfg.WebServerPassword = "";
+            SetPassword(null);
 
             await WithServerAsync(async (port, _) =>
             {
+                var login = await LoginAsync(port, "");
+                string ticket = await RequestTicketAsync(port, login.SessionId, login.Csrf);
+
                 string resp = await SendRawAsync(port,
-                    WsHandshake(port,
+                    WsHandshake(port, ticket,
                         "Sec-WebSocket-Key: " + RfcWsKey + "\r\n" +
                         "Sec-WebSocket-Key: " + RfcWsKey + "\r\n"));
 
@@ -400,12 +451,15 @@ namespace LiteMonitor.Tests
         [InlineData("AAAA")]                               // 合法 Base64，但只有 3 字节
         public async Task 非法SecWebSocketKey被拒绝(string value)
         {
-            _cfg.WebServerPassword = "";
+            SetPassword(null);
 
             await WithServerAsync(async (port, _) =>
             {
+                var login = await LoginAsync(port, "");
+                string ticket = await RequestTicketAsync(port, login.SessionId, login.Csrf);
+
                 string resp = await SendRawAsync(port,
-                    WsHandshake(port, "Sec-WebSocket-Key: " + value + "\r\n"));
+                    WsHandshake(port, ticket, "Sec-WebSocket-Key: " + value + "\r\n"));
 
                 Assert.DoesNotContain("101", resp);
             });
@@ -415,12 +469,36 @@ namespace LiteMonitor.Tests
         [Fact]
         public async Task 缺失SecWebSocketKey被拒绝()
         {
-            _cfg.WebServerPassword = "";
+            SetPassword(null);
 
             await WithServerAsync(async (port, _) =>
             {
-                string resp = await SendRawAsync(port, WsHandshake(port, ""));
+                var login = await LoginAsync(port, "");
+                string ticket = await RequestTicketAsync(port, login.SessionId, login.Csrf);
+
+                string resp = await SendRawAsync(port, WsHandshake(port, ticket, ""));
                 Assert.DoesNotContain("101", resp);
+            });
+        }
+
+        /// <summary>
+        /// 票据缺失 / 无效时握手必须被拒（凭据口径与 HTTP 一致）。
+        /// </summary>
+        [Fact]
+        public async Task 无票据的WebSocket握手被拒绝()
+        {
+            SetPassword(null);
+
+            await WithServerAsync(async (port, _) =>
+            {
+                string resp = await SendRawAsync(port,
+                    "GET /ws HTTP/1.1\r\n" +
+                    $"Host: 127.0.0.1:{port}\r\n" +
+                    "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    "Sec-WebSocket-Key: " + RfcWsKey + "\r\n\r\n");
+
+                Assert.DoesNotContain("101", resp);
+                Assert.Contains("401", FirstLine(resp));
             });
         }
 
@@ -456,19 +534,139 @@ namespace LiteMonitor.Tests
             }
         }
 
-        /// <summary>把口令设成给定值，断言 <c>encodeURIComponent</c> 编码后的请求能取到 200。</summary>
+        /// <summary>
+        /// 设置访问口令（按**生产形态**：只写哈希 + 盐，内存里不留明文）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 之所以不直接写明文：迁移后的生产状态就是"只有哈希 + 盐"，
+        ///   用例必须跑在真实形态上（顺带避免登录时触发惰性迁移去写磁盘）。
+        /// ★ 传 null ⇒ 不配置口令（L0）。
+        /// </remarks>
+        private void SetPassword(string password)
+        {
+            if (string.IsNullOrEmpty(password))
+            {
+                _cfg.WebServerPassword = "";
+                _cfg.WebServerPasswordHash = "";
+                _cfg.WebServerPasswordSalt = "";
+                return;
+            }
+            _cfg.WebServerPasswordSalt = Settings.CreateWebPasswordSalt();
+            _cfg.WebServerPasswordHash = Settings.ComputeWebPasswordHash(password, _cfg.WebServerPasswordSalt);
+            _cfg.WebServerPassword = "";
+        }
+
+        /// <summary>
+        /// 按新协议登录：<c>POST /api/auth/login</c> ⇒ (会话 ID, CSRF 令牌)。
+        /// </summary>
+        private async Task<(string SessionId, string Csrf)> LoginAsync(int port, string password)
+        {
+            string body = "{\"password\":\"" + JsonEscape(password) + "\"}";
+            string resp = await SendHttpAsync(port, "/api/auth/login", method: "POST", body: body, contentType: "application/json");
+            Assert.Contains("200", FirstLine(resp));
+
+            string setCookie = FindHeader(resp, "Set-Cookie");
+            Assert.False(string.IsNullOrEmpty(setCookie), "登录响应必须下发 lmsid Cookie");
+
+            string sessionId = "";
+            int eq = setCookie.IndexOf('=');
+            int semi = setCookie.IndexOf(';');
+            if (eq > 0 && semi > eq) sessionId = setCookie.Substring(eq + 1, semi - eq - 1);
+            Assert.False(string.IsNullOrEmpty(sessionId), "登录响应必须下发 lmsid Cookie");
+
+            string csrf = "";
+            int idx = resp.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (idx >= 0)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(resp.Substring(idx + 4));
+                    if (doc.RootElement.TryGetProperty("csrf", out var el)) csrf = el.GetString() ?? "";
+                }
+                catch (JsonException) { }
+            }
+            Assert.False(string.IsNullOrEmpty(csrf), "登录响应必须下发 csrf 令牌");
+            return (sessionId, csrf);
+        }
+
+        /// <summary>申请一次性票据（需要会话 Cookie + CSRF 头）。</summary>
+        private async Task<string> RequestTicketAsync(int port, string sessionId, string csrf)
+        {
+            string resp = await SendHttpAsync(port, "/api/auth/ticket", method: "POST", cookie: sessionId, csrf: csrf);
+            Assert.Contains("200", FirstLine(resp));
+
+            int idx = resp.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            using var doc = JsonDocument.Parse(resp.Substring(idx + 4));
+            string ticket = doc.RootElement.TryGetProperty("ticket", out var el) ? (el.GetString() ?? "") : "";
+            Assert.False(string.IsNullOrEmpty(ticket), "票据端点必须返回 ticket");
+            return ticket;
+        }
+
+        /// <summary>JSON 字符串转义（口令里的引号 / 反斜杠 / 控制字符不能破坏报文）。</summary>
+        private static string JsonEscape(string value)
+        {
+            var sb = new StringBuilder();
+            foreach (char c in value ?? "")
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else sb.Append(c);
+                        break;
+                }
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>取某个响应头的值（找不到返回空串）。</summary>
+        private static string FindHeader(string response, string name)
+        {
+            foreach (string line in (response ?? "").Split('\n'))
+            {
+                string t = line.Trim();
+                if (t.StartsWith(name + ":", StringComparison.OrdinalIgnoreCase))
+                {
+                    return t.Substring(name.Length + 1).Trim();
+                }
+            }
+            return "";
+        }
+
+        /// <summary>
+        /// 把口令设成给定值，断言"用**原样**口令登录能取到会话与快照，
+        /// 而一个不一样的口令取不到。
+        /// </summary>
+        /// <remarks>
+        /// ★ 新协议里口令走 JSON 请求体（不再进 URL），因此**不存在** URL 编码错配；
+        ///   但"口令必须被逐字比较"这条性质仍然要锁住 ——
+        ///   所以这里同时断言：原样口令通过、字形相近但不同的口令被拒。
+        /// </remarks>
         private async Task AssertPasswordAcceptedAsync(string password)
         {
-            _cfg.WebServerPassword = password;
-            string encoded = Uri.EscapeDataString(password);
-
-            // ★ 前提自检：这些口令必须真的被编码过，否则用例会因为"原文与编码串恰好相同"而假绿
-            Assert.NotEqual(password, encoded);
+            SetPassword(password);
 
             await WithServerAsync(async (port, _) =>
             {
-                string resp = await SendHttpAsync(port, "/api/snapshot?pwd=" + encoded);
+                // ① 原样口令 ⇒ 登录成功并拿到会话
+                var login = await LoginAsync(port, password);
+                Assert.False(string.IsNullOrEmpty(login.SessionId));
+
+                // ② 用它取快照 ⇒ 200
+                string resp = await SendHttpAsync(port, "/api/snapshot", cookie: login.SessionId);
                 Assert.Contains("200", FirstLine(resp));
+
+                // ③ 反证：字形相近但不同的口令必须被拒（否则"能登进去"可能只是校验被放行）
+                string wrong = await SendHttpAsync(port, "/api/auth/login", method: "POST",
+                    body: "{\"password\":\"" + JsonEscape(password + "x") + "\"}",
+                    contentType: "application/json");
+                Assert.Contains("401", FirstLine(wrong));
+                Assert.DoesNotContain("Set-Cookie", wrong);
             });
         }
 
@@ -479,14 +677,25 @@ namespace LiteMonitor.Tests
             return idx < 0 ? httpResponse : httpResponse.Substring(0, idx);
         }
 
-        private static async Task<string> SendHttpAsync(int port, string pathAndQuery)
+        private static async Task<string> SendHttpAsync(int port, string pathAndQuery,
+            string cookie = null, string csrf = null, string method = "GET",
+            string body = null, string contentType = null)
         {
             using var client = new TcpClient();
             await client.ConnectAsync(IPAddress.Loopback, port);
             using var stream = client.GetStream();
 
-            byte[] req = Encoding.ASCII.GetBytes(
-                $"GET {pathAndQuery} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+            var head = new StringBuilder();
+            head.Append(method).Append(' ').Append(pathAndQuery).Append(" HTTP/1.1\r\n");
+            head.Append($"Host: 127.0.0.1:{port}\r\n");
+            if (!string.IsNullOrEmpty(cookie)) head.Append($"Cookie: lmsid={cookie}\r\n");
+            if (!string.IsNullOrEmpty(csrf)) head.Append($"X-LiteMonitor-CSRF: {csrf}\r\n");
+            if (!string.IsNullOrEmpty(contentType)) head.Append($"Content-Type: {contentType}\r\n");
+            if (body != null) head.Append($"Content-Length: {Encoding.UTF8.GetByteCount(body)}\r\n");
+            head.Append("Connection: close\r\n\r\n");
+            if (body != null) head.Append(body);
+
+            byte[] req = Encoding.UTF8.GetBytes(head.ToString());
             await stream.WriteAsync(req, 0, req.Length);
             await stream.FlushAsync();
 
@@ -624,9 +833,13 @@ namespace LiteMonitor.Tests
         }
 
         /// <summary>拼一段 WebSocket 升级请求；<paramref name="keyHeader"/> 允许为空或写多行。</summary>
-        private static string WsHandshake(int port, string keyHeader)
+        /// <remarks>
+        /// ★ 凭据是**一次性票据**（<c>?ticket=</c>）：浏览器 WebSocket API 不能自定义
+        ///   Authorization 头，票据短 TTL + 一次性 + 仅限 WS 三者叠加。
+        /// </remarks>
+        private static string WsHandshake(int port, string ticket, string keyHeader)
         {
-            return "GET / HTTP/1.1\r\n" +
+            return $"GET /ws?ticket={ticket} HTTP/1.1\r\n" +
                    $"Host: 127.0.0.1:{port}\r\n" +
                    "Upgrade: websocket\r\n" +
                    "Connection: Upgrade\r\n" +

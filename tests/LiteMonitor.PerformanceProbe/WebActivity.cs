@@ -14,6 +14,7 @@ namespace LiteMonitor.PerformanceProbe;
 internal sealed class WebActivity : IDisposable
 {
     private readonly List<WebSocketProbeClient> _sockets = new();
+    private readonly WebProbeAuth _auth;
     private CancellationTokenSource? _cts;
     private Task? _httpTask;
     private int _httpSnapshotOk;
@@ -46,6 +47,7 @@ internal sealed class WebActivity : IDisposable
     {
         Port = port;
         Password = password;
+        _auth = new WebProbeAuth(port, password);
     }
 
     /// <summary>建立 N 个已鉴权的 WebSocket 连接（合法网页）。</summary>
@@ -56,7 +58,11 @@ internal sealed class WebActivity : IDisposable
         {
             try
             {
-                var client = new WebSocketProbeClient(Port, Password);
+                // ★ 新协议（S2.2 契约 W3 / W13.5）：WS 握手凭据是**一次性票据**
+                //   （TTL 30 秒、用过即废、仅限 WS），票据由主会话换得 ——
+                //   所以每个连接都要单独取一张票据，口令不再进 URL。
+                string ticket = _auth.RequestTicket();
+                var client = new WebSocketProbeClient(Port, ticket);
                 if (client.Handshake()) { _sockets.Add(client); opened++; }
                 else client.Dispose();
             }
@@ -79,7 +85,17 @@ internal sealed class WebActivity : IDisposable
             {
                 try
                 {
-                    if (await HttpSnapshotProbe.GetAsync(Port, Password)) Interlocked.Increment(ref _httpSnapshotOk);
+                    // ★ 新协议：快照接口一律要求**主会话 Cookie**（口令不再进 URL）
+                    _auth.EnsureSession();
+                    int status = await HttpSnapshotProbe.GetAsync(Port, _auth.SessionId);
+                    if (status == 401)
+                    {
+                        // 会话可能已过期（空闲 2 分钟 / 绝对 30 分钟）⇒ 重新登录再试一次
+                        _auth.ResetSession();
+                        _auth.EnsureSession();
+                        status = await HttpSnapshotProbe.GetAsync(Port, _auth.SessionId);
+                    }
+                    if (status == 200) Interlocked.Increment(ref _httpSnapshotOk);
                     else Interlocked.Increment(ref _httpSnapshotFailed);
                 }
                 catch
@@ -144,12 +160,12 @@ internal sealed class WebSocketProbeClient : IDisposable
     private byte[] _pending = Array.Empty<byte>();
     private int _pendingLen;
 
-    public WebSocketProbeClient(int port, string password)
+    public WebSocketProbeClient(int port, string ticket)
     {
         _client.Connect("127.0.0.1", port);
         _stream = _client.GetStream();
         _stream.ReadTimeout = 5000;
-        SendHandshake(port, password);
+        SendHandshake(port, ticket);
     }
 
     /// <summary>收到的文本帧数量（服务端每秒广播一次快照）。</summary>
@@ -161,10 +177,11 @@ internal sealed class WebSocketProbeClient : IDisposable
     /// <summary>帧解析失步次数；正常情况恒为 0，非 0 说明帧计数不可信。</summary>
     public int Desyncs => Volatile.Read(ref _desyncs);
 
-    private void SendHandshake(int port, string password)
+    private void SendHandshake(int port, string ticket)
     {
         byte[] key = RandomNumberGenerator.GetBytes(16);
-        string request = $"GET /?pwd={password} HTTP/1.1\r\n" +
+        // ★ 新协议：凭据是**一次性票据**（?ticket=），旧的 ?pwd= 已被服务端移除。
+        string request = $"GET /ws?ticket={Uri.EscapeDataString(ticket ?? "")} HTTP/1.1\r\n" +
                         $"Host: 127.0.0.1:{port}\r\n" +
                         "Upgrade: websocket\r\n" +
                         "Connection: Upgrade\r\n" +
@@ -322,17 +339,27 @@ internal sealed class WebSocketProbeClient : IDisposable
     }
 }
 
-/// <summary>最小 HTTP 快照请求。</summary>
+/// <summary>
+/// 最小 HTTP 快照请求。
+/// </summary>
+/// <remarks>
+/// ★ 新协议（S2.2 契约 W13.5）：凭据是**主会话 Cookie**（<c>lmsid</c>），口令不再进 URL。
+/// </remarks>
 internal static class HttpSnapshotProbe
 {
-    public static async Task<bool> GetAsync(int port, string password)
+    /// <summary>
+    /// 发起一次快照请求。
+    /// </summary>
+    /// <returns>HTTP 状态码；连接失败返回 0。</returns>
+    public static async Task<int> GetAsync(int port, string sessionId)
     {
         using var client = new TcpClient();
         await client.ConnectAsync("127.0.0.1", port);
         using var stream = client.GetStream();
         stream.ReadTimeout = 5000;
-        string request = $"GET /api/snapshot?pwd={password} HTTP/1.1\r\n" +
+        string request = "GET /api/snapshot HTTP/1.1\r\n" +
                         $"Host: 127.0.0.1:{port}\r\n" +
+                        $"Cookie: lmsid={sessionId}\r\n" +
                         "Connection: close\r\n\r\n";
         byte[] bytes = Encoding.ASCII.GetBytes(request);
         await stream.WriteAsync(bytes);
@@ -347,6 +374,209 @@ internal static class HttpSnapshotProbe
             sb.Append(Encoding.ASCII.GetString(buffer, 0, n));
             if (sb.Length > 1 << 20) break; // 防御：不让异常响应撑爆内存
         }
-        return sb.ToString().StartsWith("HTTP/1.1 200", StringComparison.OrdinalIgnoreCase);
+        return StatusCodeOf(sb.ToString());
+    }
+
+    /// <summary>从原始响应里取 HTTP 状态码（解析不出返回 0）。</summary>
+    public static int StatusCodeOf(string response)
+    {
+        if (string.IsNullOrEmpty(response)) return 0;
+        int sp = response.IndexOf(' ');
+        if (sp < 0) return 0;
+        int start = sp + 1;
+        int end = start;
+        while (end < response.Length && char.IsDigit(response[end])) end++;
+        if (end == start) return 0;
+        return int.TryParse(response.Substring(start, end - start), out int code) ? code : 0;
+    }
+}
+
+/// <summary>
+/// 新协议下的探针侧认证：登录换主会话（<c>lmsid</c> + CSRF 令牌），再按需换一次性票据。
+/// </summary>
+/// <remarks>
+/// ★ 只依赖 BCL（探针的既有约束）：不引用主工程类型，自己按契约发报文。
+/// ★ L0（未配置口令）同样要登录（空口令登录成功）—— 协议口径与服务端一致。
+/// </remarks>
+internal sealed class WebProbeAuth
+{
+    private readonly int _port;
+    private readonly string _password;
+
+    /// <summary>主会话 Cookie 值（HttpOnly，服务端会话表里的不透明 ID）。</summary>
+    public string SessionId { get; private set; } = "";
+
+    /// <summary>CSRF 令牌（登录响应体下发，只存在内存里）。</summary>
+    public string Csrf { get; private set; } = "";
+
+    public WebProbeAuth(int port, string password)
+    {
+        _port = port;
+        _password = password ?? "";
+    }
+
+    /// <summary>确保手上有一份有效主会话（没有就登录一次）。</summary>
+    public void EnsureSession()
+    {
+        if (!string.IsNullOrEmpty(SessionId)) return;
+        Login();
+    }
+
+    /// <summary>丢弃当前会话（用于会话过期后重新登录）。</summary>
+    public void ResetSession()
+    {
+        SessionId = "";
+        Csrf = "";
+    }
+
+    /// <summary>换一张一次性票据（WS 握手用；用过即废 ⇒ 每次都要新取）。</summary>
+    public string RequestTicket()
+    {
+        EnsureSession();
+
+        string resp = WebProbeHttp.Send(_port, "POST", "/api/auth/ticket", "", SessionId, Csrf, null);
+        if (HttpSnapshotProbe.StatusCodeOf(resp) == 401)
+        {
+            // 会话可能已过期（空闲 2 分钟 / 绝对 30 分钟）⇒ 重新登录再试一次
+            ResetSession();
+            EnsureSession();
+            resp = WebProbeHttp.Send(_port, "POST", "/api/auth/ticket", "", SessionId, Csrf, null);
+        }
+
+        if (HttpSnapshotProbe.StatusCodeOf(resp) != 200)
+            throw new InvalidOperationException("取票失败: " + FirstLine(resp));
+
+        string ticket = JsonStringValue(WebProbeHttp.BodyOf(resp), "ticket");
+        if (string.IsNullOrEmpty(ticket)) throw new InvalidOperationException("取票响应缺少 ticket");
+        return ticket;
+    }
+
+    private void Login()
+    {
+        string body = "{\"password\":\"" + JsonEscape(_password) + "\"}";
+        string resp = WebProbeHttp.Send(_port, "POST", "/api/auth/login", body, null, null, "application/json");
+        if (HttpSnapshotProbe.StatusCodeOf(resp) != 200)
+            throw new InvalidOperationException("探针登录失败: " + FirstLine(resp));
+
+        string setCookie = WebProbeHttp.HeaderValue(resp, "Set-Cookie");
+        int eq = setCookie.IndexOf('=');
+        int semi = setCookie.IndexOf(';');
+        SessionId = (eq >= 0 && semi > eq) ? setCookie.Substring(eq + 1, semi - eq - 1) : "";
+        Csrf = JsonStringValue(WebProbeHttp.BodyOf(resp), "csrf");
+
+        if (string.IsNullOrEmpty(SessionId)) throw new InvalidOperationException("登录响应缺少 lmsid Cookie");
+    }
+
+    private static string JsonEscape(string value)
+    {
+        var sb = new StringBuilder();
+        foreach (char c in value)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
+                    else sb.Append(c);
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>从 JSON 文本里取一个字符串字段（取不到返回空串）。</summary>
+    private static string JsonStringValue(string json, string name)
+    {
+        if (string.IsNullOrEmpty(json)) return "";
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty(name, out var el) && el.ValueKind == System.Text.Json.JsonValueKind.String)
+                return el.GetString() ?? "";
+        }
+        catch (System.Text.Json.JsonException) { }
+        return "";
+    }
+
+    private static string FirstLine(string response)
+    {
+        int idx = (response ?? "").IndexOf('\n');
+        return idx >= 0 ? response.Substring(0, idx).Trim() : (response ?? "").Trim();
+    }
+}
+
+/// <summary>最小同步 HTTP 客户端（探针用；只依赖 BCL）。</summary>
+internal static class WebProbeHttp
+{
+    /// <summary>发一次请求并把响应读回来（服务器读完会关闭连接）。</summary>
+    public static string Send(int port, string method, string path, string body,
+        string cookie, string csrf, string contentType)
+    {
+        using var client = new TcpClient();
+        client.Connect("127.0.0.1", port);
+        using var stream = client.GetStream();
+        stream.ReadTimeout = 10000;
+        stream.WriteTimeout = 10000;
+
+        var head = new StringBuilder();
+        head.Append($"{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
+        if (!string.IsNullOrEmpty(cookie)) head.Append($"Cookie: lmsid={cookie}\r\n");
+        if (!string.IsNullOrEmpty(csrf)) head.Append($"X-LiteMonitor-CSRF: {csrf}\r\n");
+        if (!string.IsNullOrEmpty(contentType)) head.Append($"Content-Type: {contentType}\r\n");
+        head.Append($"Content-Length: {Encoding.UTF8.GetByteCount(body ?? "")}\r\n");
+        head.Append("Connection: close\r\n\r\n");
+        if (!string.IsNullOrEmpty(body)) head.Append(body);
+
+        byte[] req = Encoding.UTF8.GetBytes(head.ToString());
+        try
+        {
+            stream.Write(req, 0, req.Length);
+            stream.Flush();
+        }
+        catch (IOException)
+        {
+            // 服务端可能已读完请求头就回了响应并关闭连接（L0 分支不读 body）——
+            //   写失败不影响我们把响应读回来。
+        }
+
+        var sb = new StringBuilder();
+        var buffer = new byte[16 * 1024];
+        try
+        {
+            while (true)
+            {
+                int n = stream.Read(buffer, 0, buffer.Length);
+                if (n <= 0) break;
+                sb.Append(Encoding.UTF8.GetString(buffer, 0, n));
+                if (sb.Length > 1 << 20) break; // 防御：不让异常响应撑爆内存
+            }
+        }
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
+
+        return sb.ToString();
+    }
+
+    /// <summary>取某个响应头的值（找不到返回空串）。</summary>
+    public static string HeaderValue(string response, string name)
+    {
+        foreach (string line in (response ?? "").Split('\n'))
+        {
+            string t = line.Trim();
+            if (t.StartsWith(name + ":", StringComparison.OrdinalIgnoreCase))
+                return t.Substring(name.Length + 1).Trim();
+        }
+        return "";
+    }
+
+    /// <summary>取响应正文（没有正文返回空串）。</summary>
+    public static string BodyOf(string response)
+    {
+        int idx = (response ?? "").IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        return idx < 0 ? "" : response.Substring(idx + 4);
     }
 }

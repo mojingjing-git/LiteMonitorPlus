@@ -33,17 +33,31 @@ namespace LiteMonitor.Tests
 
         private readonly Settings _cfg;
         private readonly string _oldPassword;
+        private readonly string _oldHash;
+        private readonly string _oldSalt;
 
         public WebDemandTests()
         {
             _cfg = Settings.Load();
             _oldPassword = _cfg.WebServerPassword;
-            _cfg.WebServerPassword = "";   // 默认无密码，个别用例再单独打开
+            _oldHash = _cfg.WebServerPasswordHash;
+            _oldSalt = _cfg.WebServerPasswordSalt;
+
+            // ★ 默认无口令（L0）；**哈希与盐也要清掉** ——
+            //   验证材料是"哈希 + 盐"，只清明文字段会留下上一条用例的哈希，
+            //   于是服务端会以为配置了口令（L1），与用例的前提不符。
+            _cfg.WebServerPassword = "";
+            _cfg.WebServerPasswordHash = "";
+            _cfg.WebServerPasswordSalt = "";
+            _sessions.Clear();
         }
 
         public void Dispose()
         {
             _cfg.WebServerPassword = _oldPassword;
+            _cfg.WebServerPasswordHash = _oldHash;
+            _cfg.WebServerPasswordSalt = _oldSalt;
+            _sessions.Clear();
         }
 
         // ================================================================
@@ -112,7 +126,11 @@ namespace LiteMonitor.Tests
         /// 请求的发送延迟：服务器此时已经进入 HandleClientAsync 并阻塞在读请求头上，
         /// 用来制造"请求跨越 Stop 边界"的时间窗。
         /// </param>
-        private static async Task<string> SendHttpAsync(int port, string pathAndQuery, int sendDelayMs = 0)
+        /// <param name="authenticate">
+        /// 是否自动带上**主会话 Cookie**（新协议下 HTTP API 一律要求会话）。
+        /// 验证"未鉴权请求"的行为时传 false。
+        /// </param>
+        private static async Task<string> SendHttpAsync(int port, string pathAndQuery, int sendDelayMs = 0, bool authenticate = true)
         {
             using var client = new TcpClient();
             await client.ConnectAsync(IPAddress.Loopback, port);
@@ -120,8 +138,16 @@ namespace LiteMonitor.Tests
 
             if (sendDelayMs > 0) await Task.Delay(sendDelayMs);
 
-            var req = Encoding.ASCII.GetBytes(
-                $"GET {pathAndQuery} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+            var head = new StringBuilder();
+            head.Append($"GET {pathAndQuery} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
+            if (authenticate)
+            {
+                string cookie = await EnsureSessionCookieAsync(port);
+                if (!string.IsNullOrEmpty(cookie)) head.Append($"Cookie: lmsid={cookie}\r\n");
+            }
+            head.Append("Connection: close\r\n\r\n");
+
+            var req = Encoding.ASCII.GetBytes(head.ToString());
             await stream.WriteAsync(req, 0, req.Length);
             await stream.FlushAsync();
 
@@ -144,6 +170,125 @@ namespace LiteMonitor.Tests
             return sb.ToString();
         }
 
+        /// <summary>
+        /// 按端口缓存的登录会话（票据是一次性的，**不能**缓存）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 新协议下 HTTP API 一律要求主会话、WS 握手一律要求一次性票据；
+        ///   这些用例关注的是"需求 / 租期"行为，鉴权由本辅助方法按真实协议走一遍。
+        /// </remarks>
+        private static readonly Dictionary<int, (string SessionId, string Csrf)> _sessions = new Dictionary<int, (string, string)>();
+
+        /// <summary>取（必要时先登录）该端口上的主会话 Cookie 值。</summary>
+        private static async Task<string> EnsureSessionCookieAsync(int port)
+        {
+            if (_sessions.TryGetValue(port, out var cached)) return cached.SessionId;
+
+            // ★ 口令取当前配置：L0（未配置口令）时是空串 —— 空口令登录同样能换取会话。
+            string password = Settings.Load().WebServerPassword ?? "";
+            var login = await LoginAsync(port, password);
+            _sessions[port] = login;
+            return login.SessionId;
+        }
+
+        /// <summary>
+        /// 按新协议登录：<c>POST /api/auth/login</c> ⇒ (会话 ID, CSRF 令牌)。
+        /// </summary>
+        private static async Task<(string SessionId, string Csrf)> LoginAsync(int port, string password)
+        {
+            string body = "{\"password\":\"" + (password ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"}";
+            string resp = await SendPostAsync(port, "/api/auth/login", body);
+            Assert.True(resp.Contains("200"), "登录失败: " + resp);
+
+            string setCookie = FindHeader(resp, "Set-Cookie");
+            Assert.False(string.IsNullOrEmpty(setCookie), "登录响应必须下发 lmsid Cookie");
+            int eq = setCookie.IndexOf('=');
+            int semi = setCookie.IndexOf(';');
+            string sessionId = (eq > 0 && semi > eq) ? setCookie.Substring(eq + 1, semi - eq - 1) : "";
+            Assert.False(string.IsNullOrEmpty(sessionId), "登录响应必须下发 lmsid Cookie");
+
+            string csrf = "";
+            int idx = resp.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (idx >= 0)
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(resp.Substring(idx + 4));
+                    if (doc.RootElement.TryGetProperty("csrf", out var el)) csrf = el.GetString() ?? "";
+                }
+                catch (System.Text.Json.JsonException) { }
+            }
+            Assert.False(string.IsNullOrEmpty(csrf), "登录响应必须下发 csrf 令牌");
+            return (sessionId, csrf);
+        }
+
+        /// <summary>申请一次性票据（会话 Cookie + CSRF 头）。</summary>
+        private static async Task<string> RequestTicketAsync(int port, string sessionId, string csrf)
+        {
+            string resp = await SendPostAsync(port, "/api/auth/ticket", "", sessionId, csrf);
+            Assert.True(resp.Contains("200"), "票据申请失败: " + resp);
+
+            int idx = resp.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            using var doc = System.Text.Json.JsonDocument.Parse(resp.Substring(idx + 4));
+            string ticket = doc.RootElement.TryGetProperty("ticket", out var el) ? (el.GetString() ?? "") : "";
+            Assert.False(string.IsNullOrEmpty(ticket), "票据端点必须返回 ticket");
+            return ticket;
+        }
+
+        /// <summary>发一个 POST 请求（可带请求体 / Cookie / CSRF 头）。</summary>
+        private static async Task<string> SendPostAsync(int port, string path, string body,
+            string cookie = null, string csrf = null, string contentType = "application/json")
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, port);
+            using var stream = client.GetStream();
+
+            var head = new StringBuilder();
+            head.Append($"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
+            if (!string.IsNullOrEmpty(cookie)) head.Append($"Cookie: lmsid={cookie}\r\n");
+            if (!string.IsNullOrEmpty(csrf)) head.Append($"X-LiteMonitor-CSRF: {csrf}\r\n");
+            if (!string.IsNullOrEmpty(contentType)) head.Append($"Content-Type: {contentType}\r\n");
+            head.Append($"Content-Length: {Encoding.UTF8.GetByteCount(body ?? "")}\r\n");
+            head.Append("Connection: close\r\n\r\n");
+            if (!string.IsNullOrEmpty(body)) head.Append(body);
+
+            var req = Encoding.UTF8.GetBytes(head.ToString());
+            await stream.WriteAsync(req, 0, req.Length);
+            await stream.FlushAsync();
+
+            var sb = new StringBuilder();
+            var buf = new byte[4096];
+            using var cts = new CancellationTokenSource(10000);
+            try
+            {
+                while (true)
+                {
+                    int n = await stream.ReadAsync(buf.AsMemory(0, buf.Length), cts.Token);
+                    if (n <= 0) break;
+                    sb.Append(Encoding.UTF8.GetString(buf, 0, n));
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (IOException) { }
+            catch (ObjectDisposedException) { }
+
+            return sb.ToString();
+        }
+
+        /// <summary>取某个响应头的值（找不到返回空串）。</summary>
+        private static string FindHeader(string response, string name)
+        {
+            foreach (string line in (response ?? "").Split('\n'))
+            {
+                string t = line.Trim();
+                if (t.StartsWith(name + ":", StringComparison.OrdinalIgnoreCase))
+                {
+                    return t.Substring(name.Length + 1).Trim();
+                }
+            }
+            return "";
+        }
+
         /// <summary>完成一次 WebSocket 握手，返回保持连接的客户端</summary>
         /// <param name="sendDelayMs">
         /// 握手请求的发送延迟：服务器此时已经进入 HandleClientAsync 并阻塞在读请求头上，
@@ -162,8 +307,18 @@ namespace LiteMonitor.Tests
 
             if (sendDelayMs > 0) await Task.Delay(sendDelayMs);
 
+            // ★ 新协议下 WS 握手必须带**一次性票据**；没显式给就现换一张（票据用过即废）。
+            string target = query ?? "";
+            if (!target.Contains("ticket="))
+            {
+                string sessionId = await EnsureSessionCookieAsync(port);
+                string csrf = _sessions.TryGetValue(port, out var cached) ? cached.Csrf : "";
+                string ticket = await RequestTicketAsync(port, sessionId, csrf);
+                target = "?ticket=" + ticket;
+            }
+
             var req = Encoding.ASCII.GetBytes(
-                $"GET /{query} HTTP/1.1\r\n" +
+                $"GET /{target} HTTP/1.1\r\n" +
                 $"Host: 127.0.0.1:{port}\r\n" +
                 "Upgrade: websocket\r\n" +
                 "Connection: Upgrade\r\n" +
@@ -267,6 +422,10 @@ namespace LiteMonitor.Tests
                 Assert.False(manager.HasWebDataDemand);
 
                 manager.HttpLeaseCheckTestHook = null;
+
+                // ★ Stop 会清空全部主会话（契约 W2：服务重启即全部失效）⇒
+                //   重启后的请求必须**重新登录**拿新会话，旧 Cookie 已被撤销。
+                _sessions.Remove(host.Port);
                 string newResponse = await SendHttpAsync(host.Port, "/api/snapshot");
 
                 Assert.Contains("200", newResponse);
@@ -564,7 +723,7 @@ namespace LiteMonitor.Tests
             manager.Start();
             using var host = new LoopbackHost(manager);
 
-            string resp = await SendHttpAsync(host.Port, "/api/snapshot");
+            string resp = await SendHttpAsync(host.Port, "/api/snapshot", authenticate: false);
             Assert.Contains("401", resp);
 
             Assert.False(manager.HasHttpLease);

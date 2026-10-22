@@ -2,6 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Drawing;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.Plugins;
@@ -167,7 +174,88 @@ namespace LiteMonitor
 
         public bool WebServerEnabled { get; set; } = false;
         public int WebServerPort { get; set; } = 5000; // 默认端口
-        public string WebServerPassword { get; set; } = ""; // 访问密码
+
+        // ================================================================
+        // Web 凭据与监听范围（SEC-001 / SEC-002 / LM-005 / LM-006 / LM-023）
+        // ================================================================
+
+        /// <summary>
+        /// 访问口令（**明文**）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 这个字段**只用于读取旧配置**与"当前会话内的编辑"，**永不落盘**：
+        ///   写盘时由 <see cref="WebPasswordJsonConverter"/> 强制写成空串，
+        ///   真正用来校验的是 <see cref="WebServerPasswordHash"/> + <see cref="WebServerPasswordSalt"/>。
+        /// ★ 之所以保留明文字段：设置界面要显示/编辑它，
+        ///   并且 <c>AppActions.ApplyWebServer</c> 用它与
+        ///   <c>LiteWebServer.CurrentPassword</c> 比较来判断"口令是否变了"（变了要重启服务）。
+        /// </remarks>
+        [JsonConverter(typeof(WebPasswordJsonConverter))]
+        public string WebServerPassword { get; set; } = ""; // 访问密码（内存态）
+
+        /// <summary>
+        /// 访问口令的 PBKDF2-SHA256 哈希（base64）—— 落盘的验证材料。
+        /// </summary>
+        /// <remarks>
+        /// getter 返回的是**生效**哈希：内存里还有明文时按明文现算（带缓存），
+        /// 否则用落盘的那份。这样"用户刚在设置里改了口令、还没保存"也能立刻生效，
+        /// 而旧配置（只有明文）在首次校验时会走惰性迁移把哈希写进磁盘。
+        /// </remarks>
+        public string WebServerPasswordHash
+        {
+            get => GetEffectiveWebPasswordHash();
+            set => _webPasswordHash = value ?? "";
+        }
+
+        /// <summary>访问口令的盐（base64）。</summary>
+        public string WebServerPasswordSalt { get; set; } = "";
+
+        /// <summary>
+        /// 监听范围（契约 W12）。
+        /// </summary>
+        /// <remarks>
+        /// ★ <see cref="WebServerBindMode.Unset"/> 是"旧配置占位"：
+        ///   老版本没有这个字段，反序列化后就是 Unset，由 <see cref="Load"/> 按 W12 的规则解析：
+        ///   <list type="bullet">
+        ///   <item>存量配置（WebServerEnabled=true 且此前版本没有该字段）⇒ <b>Lan</b>（保持旧行为，不静默变更监听范围），并由设置界面提示收敛；</item>
+        ///   <item>其余（未启用 / 新安装）⇒ <b>Loopback</b>（仅本机）。</item>
+        ///   </list>
+        /// ★ 解析结果会在下一次保存时落盘 ⇒ 之后不再反复解析（一次性、可回退）。
+        /// </remarks>
+        [JsonConverter(typeof(JsonStringEnumConverter))]
+        public WebServerBindMode WebServerBindMode { get; set; } = WebServerBindMode.Unset;
+
+        /// <summary>
+        /// 局域网模式下额外允许的主机名 / IP（逗号或分号分隔）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 这些地址进入 Host / Origin 白名单；为空时局域网模式只放行本机地址。
+        /// </remarks>
+        public string WebServerLanAddresses { get; set; } = "";
+
+        /// <summary>
+        /// 显式允许的跨源 Origin（逗号分隔）。为空 ⇒ **不返回任何 CORS 响应头**（默认同源）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 只回显**匹配的具体源**，绝不使用 <c>*</c>；带凭据时同时给
+        /// <c>Access-Control-Allow-Credentials: true</c>。
+        /// </remarks>
+        public string WebServerAllowedOrigins { get; set; } = "";
+
+        /// <summary>
+        /// 是否信任 <c>X-Forwarded-For</c> / <c>X-Real-IP</c> / <c>Forwarded</c>。
+        /// </summary>
+        /// <remarks>
+        /// ★ **默认不信任**（这是降级开关：打开它等于信任任意来源伪造的转发头）。
+        ///   只有用户明确知道自己前面有可信反向代理时才打开。
+        /// </remarks>
+        public bool WebServerTrustProxyHeaders { get; set; } = false;
+
+        /// <summary>
+        /// 运行时标记：监听范围是"为兼容存量配置而保留的 Lan"，设置界面据此提示用户收敛到仅本机。
+        /// </summary>
+        [JsonIgnore]
+        public bool WebServerBindModeNeedsConvergence { get; internal set; } = false;
 
         // ★★★ [新增] 网页版是否显示帧率 (FPS) ★★★
         // 网页版默认**不**采集 FPS：帧率需要额外的外部采集服务，开着会带来额外采集开销。
@@ -240,8 +328,107 @@ namespace LiteMonitor
                 _instance.MarketPlugins = new List<MarketPluginRecord>();
             }
 
+            // ★ W12：解析监听范围（存量配置保持旧行为，新装默认仅环回）
+            _instance.ResolveWebServerBindMode();
+
+            // ★ W9：插件凭据解密失败的显式处理（禁用受影响实例 + 记录错误，绝不静默变空）
+            _instance.ApplyPluginCredentialState();
+
             return _instance;
         }
+
+        /// <summary>
+        /// 解析监听范围（契约 W12）。只在 <see cref="WebServerBindMode.Unset"/> 时生效一次。
+        /// </summary>
+        /// <remarks>
+        /// ★ 存量配置（WebServerEnabled=true 且此前版本没有该字段）⇒ <b>Lan</b>：
+        ///   保持旧行为，**不静默变更监听范围**；设置界面会提示用户收敛到「仅本机」。
+        /// ★ 未启用 / 新安装 ⇒ <b>Loopback</b>：默认仅监听 127.0.0.1。
+        /// ★ 解析结果随下一次保存落盘 ⇒ 之后不再反复解析（一次性、可回退：用户随时能改回来）。
+        /// </remarks>
+        private void ResolveWebServerBindMode()
+        {
+            if (WebServerBindMode != WebServerBindMode.Unset) return;
+
+            if (WebServerEnabled)
+            {
+                WebServerBindMode = WebServerBindMode.Lan;
+                WebServerBindModeNeedsConvergence = true;
+            }
+            else
+            {
+                WebServerBindMode = WebServerBindMode.Loopback;
+            }
+        }
+
+        /// <summary>
+        /// 插件凭据的显式失败处理（契约 W9 / LM-023）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 触发条件：某个受 DPAPI 保护的凭据**解不开**（换机器 / 换用户 / 数据损坏）。
+        /// ★ 处置：<b>停用该插件实例</b> + 记录一条**明确错误**（设置界面可见）。
+        ///   绝**不**把凭据静默变成空值、绝**不**删除磁盘上的原密文。
+        /// ★ 与监听范围无关：凭据解密失败**不会**让 Web 服务"因为没口令"而扩大监听范围。
+        /// </remarks>
+        private void ApplyPluginCredentialState()
+        {
+            _credentialErrors.Clear();
+
+            // ① 转换器在读取阶段记下的解密失败
+            foreach (string failure in PluginCredentialState.TakeFailures())
+            {
+                _credentialErrors.Add(failure);
+            }
+
+            if (PluginInstances == null) return;
+
+            // ② 仍然是"受保护形态"的值 = 解密失败（转换器已把失败的密文原样留下）
+            foreach (var inst in PluginInstances)
+            {
+                if (inst == null) continue;
+
+                bool failed = false;
+                if (inst.InputValues != null)
+                {
+                    foreach (var kv in inst.InputValues)
+                    {
+                        if (ProtectedSecret.IsProtected(kv.Value)) { failed = true; break; }
+                    }
+                }
+                if (!failed && inst.Targets != null)
+                {
+                    foreach (var target in inst.Targets)
+                    {
+                        if (target == null) continue;
+                        foreach (var kv in target)
+                        {
+                            if (ProtectedSecret.IsProtected(kv.Value)) { failed = true; break; }
+                        }
+                        if (failed) break;
+                    }
+                }
+
+                if (!failed) continue;
+
+                inst.Enabled = false;
+                _credentialErrors.Add(
+                    $"插件实例 {inst.Id}（模板 {inst.TemplateId}）的受保护凭据无法解密" +
+                    "（可能换了机器或换了 Windows 用户）；该实例已停用，原凭据未被删除，请重新填写。");
+            }
+
+            foreach (string err in _credentialErrors)
+            {
+                Debug.WriteLine("[Settings] 插件凭据错误：" + err);
+            }
+        }
+
+        /// <summary>
+        /// 本次加载发现的凭据错误（明文、可在设置界面展示）。
+        /// </summary>
+        [JsonIgnore]
+        public IReadOnlyList<string> CredentialErrors => _credentialErrors;
+
+        private readonly List<string> _credentialErrors = new List<string>();
 
         // Helper method to get taskbar style moved to SettingsHelper
 
@@ -249,6 +436,185 @@ namespace LiteMonitor
         {
             var json = System.Text.Json.JsonSerializer.Serialize(this);
             return System.Text.Json.JsonSerializer.Deserialize<Settings>(json) ?? new Settings();
+        }
+
+        // ================================================================
+        // Web 凭据：哈希 / 校验 / 惰性迁移（契约 W9）
+        // ================================================================
+
+        /// <summary>PBKDF2-SHA256 的迭代次数。</summary>
+        /// <remarks>
+        /// ★ 100k 次是"本地口令"的合理量级：单次校验约几十毫秒（登录是低频操作），
+        ///   离线爆破成本被显著抬高。**不要**为了界面流畅把它降到几千次 ——
+        ///   哈希只在"口令真的变了"时重算，界面输入路径不受影响（见 ResolveWebServerBindMode 注释）。
+        /// </remarks>
+        private const int WebPasswordIterations = 100_000;
+        private const int WebPasswordSaltBytes = 16;
+        private const int WebPasswordHashBytes = 32;
+
+        private string _webPasswordHash = "";        // 落盘的那份哈希
+        private string _webPasswordHashCache = "";   // 按明文现算的缓存
+        private string _webPasswordHashCacheKey = "";
+        private static readonly object _webPasswordGate = new object();
+
+        /// <summary>备份文件路径（与 SettingsHelper 内部保持一致）。</summary>
+        private static string BackupFilePath =>
+            Path.Combine(AppContext.BaseDirectory, "settings.json.bak");
+
+        /// <summary>
+        /// 当前生效的口令哈希：内存里还有明文时按明文现算（带缓存），否则用落盘的那份。
+        /// </summary>
+        private string GetEffectiveWebPasswordHash()
+        {
+            string plain = WebServerPassword ?? "";
+            if (string.IsNullOrEmpty(plain)) return _webPasswordHash ?? "";
+
+            // 明文在场 ⇒ 需要一份盐（落盘的盐来自旧配置；没有就现生成一份）
+            if (string.IsNullOrEmpty(WebServerPasswordSalt)) WebServerPasswordSalt = CreateWebPasswordSalt();
+
+            string key = WebServerPasswordSalt + "\u0001" + plain;
+            if (!string.Equals(_webPasswordHashCacheKey, key, StringComparison.Ordinal))
+            {
+                _webPasswordHashCache = ComputeWebPasswordHash(plain, WebServerPasswordSalt);
+                _webPasswordHashCacheKey = key;
+            }
+            return _webPasswordHashCache;
+        }
+
+        /// <summary>是否已经配置了访问口令。</summary>
+        public bool HasWebPasswordConfigured() => !string.IsNullOrEmpty(GetEffectiveWebPasswordHash());
+
+        /// <summary>
+        /// 校验候选口令（恒时比较）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 未配置口令时**一律返回 false**：调用方据此进入 L0（无凭据）分支，
+        ///   绝不能因为"没有口令"就把任何候选口令判成正确。
+        /// </remarks>
+        public bool VerifyWebPassword(string candidate)
+        {
+            string expected = GetEffectiveWebPasswordHash();
+            if (string.IsNullOrEmpty(expected)) return false;
+            if (candidate == null) return false;
+
+            string actual = ComputeWebPasswordHash(candidate, WebServerPasswordSalt);
+            return CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(actual),
+                Encoding.UTF8.GetBytes(expected));
+        }
+
+        /// <summary>
+        /// 口令指纹：口令一变它就变（会话表用它发现"改密 ⇒ 全部会话与票据撤销"）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 只用一次 SHA-256（不是 PBKDF2）—— 它在**每个请求**上都会被计算，
+        ///   必须便宜。它不需要抗爆破（攻击者拿不到它）。
+        /// </remarks>
+        public string GetWebPasswordFingerprint()
+        {
+            string hash = GetEffectiveWebPasswordHash();
+            if (string.IsNullOrEmpty(hash)) return "";
+            byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("liteMonitor-pwd-fp-v1|" + hash));
+            return Convert.ToBase64String(digest);
+        }
+
+        /// <summary>
+        /// 惰性迁移：把仍以明文存在的旧口令转成"哈希 + 盐"落盘，并清掉备份里的明文。
+        /// </summary>
+        /// <remarks>
+        /// ★ 触发时机：<b>首次需要校验口令时</b>（而不是启动时）——
+        ///   启动就写盘会在"配置暂时读不到"时把默认值写回磁盘。
+        /// ★ 迁移失败（写盘失败）<b>不</b>静默降级成"空口令"：
+        ///   返回 false，调用方据此**拒绝登录**（见 WebSessionManager 的登录路径）。
+        /// </remarks>
+        public bool EnsureWebPasswordMigrated()
+        {
+            lock (_webPasswordGate)
+            {
+                if (string.IsNullOrEmpty(WebServerPassword)) return false;   // 没有明文 ⇒ 无需迁移
+
+                try
+                {
+                    if (string.IsNullOrEmpty(WebServerPasswordSalt))
+                        WebServerPasswordSalt = CreateWebPasswordSalt();
+
+                    // 触发一次哈希计算（缓存住）
+                    string hash = GetEffectiveWebPasswordHash();
+                    if (string.IsNullOrEmpty(hash)) return false;
+
+                    // 落盘：写盘时明文被转换器强制写成 ""（只有哈希 + 盐进磁盘）
+                    SettingsHelper.Save(this);
+
+                    // 备份里同样有明文 ⇒ 一并处理（契约 W9 / P2）
+                    SanitizeBackupFile();
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("[Settings] Web 口令迁移失败: " + ex.Message);
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 清理备份文件（settings.json.bak）里的明文口令。
+        /// </summary>
+        /// <remarks>
+        /// ★ 备份是"上一份有效内容"，它同样含明文 —— 只清主文件等于没清。
+        /// ★ 处理策略：能解析 ⇒ 删掉 <c>WebServerPassword</c> 字段后写回；
+        ///   解析不了（已损坏）⇒ 这份备份已经不能作为回滚材料，直接删除，
+        ///   避免明文继续留在磁盘上（契约允许"重新生成或删除"）。
+        /// </remarks>
+        private static void SanitizeBackupFile()
+        {
+            string path = BackupFilePath;
+            try
+            {
+                if (!File.Exists(path)) return;
+                string text = File.ReadAllText(path);
+                if (!text.Contains("WebServerPassword")) return;   // 没有该字段 ⇒ 无需处理
+
+                JsonNode root = JsonNode.Parse(text);
+                if (root is JsonObject obj)
+                {
+                    if (obj.ContainsKey("WebServerPassword")) obj.Remove("WebServerPassword");
+                    File.WriteAllText(path, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                }
+                else
+                {
+                    File.Delete(path);   // 不是 JSON 对象 ⇒ 不可用 ⇒ 删除
+                }
+            }
+            catch (JsonException)
+            {
+                try { File.Delete(path); } catch { }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        /// <summary>生成一份随机的盐（base64）。</summary>
+        internal static string CreateWebPasswordSalt()
+        {
+            byte[] salt = RandomNumberGenerator.GetBytes(WebPasswordSaltBytes);
+            return Convert.ToBase64String(salt);
+        }
+
+        /// <summary>PBKDF2-SHA256（固定迭代次数，输出定长 base64）。</summary>
+        internal static string ComputeWebPasswordHash(string plain, string salt)
+        {
+            byte[] saltBytes;
+            try { saltBytes = string.IsNullOrEmpty(salt) ? Array.Empty<byte>() : Convert.FromBase64String(salt); }
+            catch (FormatException) { saltBytes = Array.Empty<byte>(); }
+
+            byte[] hash = Rfc2898DeriveBytes.Pbkdf2(
+                Encoding.UTF8.GetBytes(plain ?? ""),
+                saltBytes,
+                WebPasswordIterations,
+                HashAlgorithmName.SHA256,
+                WebPasswordHashBytes);
+            return Convert.ToBase64String(hash);
         }
     }
 
@@ -418,15 +784,404 @@ namespace LiteMonitor
         public int CustomInterval { get; set; } = 0; // 自定义刷新频率 (0 = 使用模版默认)
         
         // 全局参数 (Scope="global")
+        // ★ 转换器负责把"必须恢复原文"的凭据（API Key / Token / 口令…）落盘成 DPAPI 密文，
+        //   读取时再解开 —— 内存里始终是明文，插件执行路径完全不受影响。
+        [JsonConverter(typeof(PluginSecretDictionaryConverter))]
         public Dictionary<string, string> InputValues { get; set; } = new Dictionary<string, string>();
         
         // 目标列表 (Scope="target")
         // 每个元素是一个 Dictionary，存储该目标的所有 target 参数
+        [JsonConverter(typeof(PluginSecretListConverter))]
         public List<Dictionary<string, string>> Targets { get; set; } = new List<Dictionary<string, string>>();
 
         // [Optimization] Runtime key cache to avoid redundant string generation in PluginExecutor
         // Map: TargetIndex_OutputKey -> KeysBundle
         [JsonIgnore] 
         public ConcurrentDictionary<string, PluginOutputKeys> KeyCache { get; } = new ConcurrentDictionary<string, PluginOutputKeys>();
+    }
+
+    // ==================================================================
+    //  Web 服务的监听范围模式（契约 W12）
+    // ==================================================================
+
+    /// <summary>
+    /// Web 服务的监听范围。
+    /// </summary>
+    public enum WebServerBindMode
+    {
+        /// <summary>
+        /// 旧配置占位：<c>settings.json</c> 里没有该字段时反序列化得到它，
+        /// 由 <see cref="Settings.Load"/> 按 W12 规则解析成 <see cref="Loopback"/> 或 <see cref="Lan"/>。
+        /// </summary>
+        Unset = 0,
+
+        /// <summary>仅本机：只监听 127.0.0.1（默认，新安装一律如此）。</summary>
+        Loopback = 1,
+
+        /// <summary>局域网：监听全部网卡，**必须**配置非空访问口令。</summary>
+        Lan = 2,
+    }
+
+    // ==================================================================
+    //  口令字段的落盘转换器（明文永不落盘）
+    // ==================================================================
+
+    /// <summary>
+    /// 访问口令字段的 JSON 转换器：<b>读</b>得到旧配置里的明文（供惰性迁移），<b>写</b>永远只写空串。
+    /// </summary>
+    /// <remarks>
+    /// ★ 这是"明文不得再写回 settings.json"的**结构性**保证：
+    ///   无论调用方怎么设置 <c>WebServerPassword</c>，序列化出来的永远是 <c>""</c>。
+    /// ★ 反序列化仍然读得到明文 —— 否则旧配置升级后口令直接丢失（用户登不进去）。
+    /// </remarks>
+    internal sealed class WebPasswordJsonConverter : JsonConverter<string>
+    {
+        public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.Null) return "";
+            if (reader.TokenType != JsonTokenType.String) return "";   // 形态不对 ⇒ 当作没有口令（不抛，避免整份配置被判损坏）
+            return reader.GetString() ?? "";
+        }
+
+        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
+        {
+            // ★ 明文永不落盘
+            writer.WriteStringValue("");
+        }
+    }
+
+    // ==================================================================
+    //  DPAPI 保护的凭据（契约 W9 / LM-023）
+    // ==================================================================
+
+    /// <summary>
+    /// 需要**恢复原文**的凭据的容器：DPAPI **CurrentUser** 作用域。
+    /// </summary>
+    /// <remarks>
+    /// ★ 作用域定义（LM-023 要求的"DPAPI 作用域未定义"在此闭合）：
+    ///   <list type="bullet">
+    ///   <item><b>CurrentUser</b>（本实现）：密文只能用**当前 Windows 用户**解开；
+    ///         换用户 / 换机器都解不开 —— 这正是我们要的用户隔离。</item>
+    ///   <item><b>LocalMachine</b>（禁止使用）：任何本机用户都能解开 ⇒ 等于没有隔离。</item>
+    ///   </list>
+    ///   实现上对应 Win32 <c>CryptProtectData</c> 且**不**置 <c>CRYPTPROTECT_LOCAL_MACHINE</c>。
+    /// ★ 解密失败（换机器 / 换用户 / 数据损坏）必须**明确报错**：
+    ///   调用方拿到 false + 错误文本，**不得**静默变成空值、不得删除原凭据。
+    /// </remarks>
+    public static class ProtectedSecret
+    {
+        /// <summary>受保护值的前缀（用于识别与版本演进）。</summary>
+        public const string Prefix = "dpapi:v1:";
+
+        /// <summary>CRYPTPROTECT_UI_FORBIDDEN：不弹 UI（无人值守场景必须）。</summary>
+        private const int CryptProtectUiForbidden = 0x1;
+
+        // ★ 刻意**不**使用 CRYPTPROTECT_LOCAL_MACHINE（0x4）：那会让任何本机用户都能解密。
+        private const int CryptProtectLocalMachine = 0x4;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct DataBlob
+        {
+            public int cbData;
+            public IntPtr pbData;
+        }
+
+        [DllImport("crypt32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool CryptProtectData(
+            ref DataBlob pDataIn, string szDataDescr, IntPtr pOptionalEntropy,
+            IntPtr pvReserved, IntPtr pPromptStruct, int dwFlags, out DataBlob pDataOut);
+
+        [DllImport("crypt32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool CryptUnprotectData(
+            ref DataBlob pDataIn, IntPtr ppszDataDescr, IntPtr pOptionalEntropy,
+            IntPtr pvReserved, IntPtr pPromptStruct, int dwFlags, out DataBlob pDataOut);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr LocalFree(IntPtr hMem);
+
+        /// <summary>明文 → 密文（CurrentUser 作用域）。</summary>
+        public static string Protect(string plaintext)
+        {
+            if (plaintext == null) return "";
+            byte[] data = Encoding.UTF8.GetBytes(plaintext);
+
+            IntPtr inBuf = Marshal.AllocHGlobal(Math.Max(data.Length, 1));
+            try
+            {
+                Marshal.Copy(data, 0, inBuf, data.Length);
+                var inBlob = new DataBlob { cbData = data.Length, pbData = inBuf };
+
+                // ★ 作用域：只给 UI_FORBIDDEN，**不给** LOCAL_MACHINE ⇒ CurrentUser。
+                int flags = CryptProtectUiForbidden;
+                if ((flags & CryptProtectLocalMachine) != 0)
+                    throw new InvalidOperationException("DPAPI 作用域必须是 CurrentUser（禁止 LocalMachine）");
+
+                if (!CryptProtectData(ref inBlob, "LiteMonitor", IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, flags, out var outBlob))
+                    throw new CryptographicException("DPAPI 保护失败（Win32 " + Marshal.GetLastWin32Error() + "）");
+
+                try
+                {
+                    byte[] cipher = new byte[outBlob.cbData];
+                    Marshal.Copy(outBlob.pbData, cipher, 0, outBlob.cbData);
+                    return Prefix + Convert.ToBase64String(cipher);
+                }
+                finally { FreeBlob(outBlob); }
+            }
+            finally { Marshal.FreeHGlobal(inBuf); }
+        }
+
+        /// <summary>
+        /// 密文 → 明文。失败时返回 false 并给出**明确**错误原因。
+        /// </summary>
+        /// <remarks>
+        /// ★ 调用方**不得**在失败时把凭据当成空值继续用，也**不得**删掉原文：
+        ///   必须把错误显式暴露给用户（换机器 / 换用户 → 需要重新填写）。
+        /// </remarks>
+        public static bool TryUnprotect(string value, out string plaintext, out string error)
+        {
+            plaintext = "";
+            error = "";
+
+            if (!IsProtected(value))
+            {
+                error = "该值不是受 DPAPI 保护的凭据";
+                return false;
+            }
+
+            byte[] cipher;
+            try
+            {
+                cipher = Convert.FromBase64String(value.Substring(Prefix.Length));
+            }
+            catch (FormatException ex)
+            {
+                error = "受保护的凭据已损坏（不是合法 Base64）：" + ex.Message;
+                return false;
+            }
+
+            IntPtr inBuf = Marshal.AllocHGlobal(Math.Max(cipher.Length, 1));
+            try
+            {
+                Marshal.Copy(cipher, 0, inBuf, cipher.Length);
+                var inBlob = new DataBlob { cbData = cipher.Length, pbData = inBuf };
+
+                if (!CryptUnprotectData(ref inBlob, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero,
+                                       CryptProtectUiForbidden, out var outBlob))
+                {
+                    int win32 = Marshal.GetLastWin32Error();
+                    error = "无法解密受保护的凭据（可能换了机器或换了 Windows 用户，Win32 " + win32 + "）";
+                    return false;
+                }
+
+                try
+                {
+                    byte[] plain = new byte[outBlob.cbData];
+                    Marshal.Copy(outBlob.pbData, plain, 0, outBlob.cbData);
+                    plaintext = Encoding.UTF8.GetString(plain);
+                    return true;
+                }
+                finally { FreeBlob(outBlob); }
+            }
+            catch (Exception ex)
+            {
+                error = "无法解密受保护的凭据：" + ex.Message;
+                return false;
+            }
+            finally { Marshal.FreeHGlobal(inBuf); }
+        }
+
+        /// <summary>该值是否是受保护的凭据。</summary>
+        public static bool IsProtected(string value) =>
+            !string.IsNullOrEmpty(value) && value.StartsWith(Prefix, StringComparison.Ordinal);
+
+        private static void FreeBlob(DataBlob blob)
+        {
+            if (blob.pbData != IntPtr.Zero)
+            {
+                try { LocalFree(blob.pbData); } catch { }
+            }
+        }
+    }
+
+    // ==================================================================
+    //  插件凭据的落盘转换器（透明加解密）
+    // ==================================================================
+
+    /// <summary>
+    /// 插件参数字典的转换器：把"看起来是凭据"的参数用 DPAPI（CurrentUser）加密后落盘。
+    /// </summary>
+    /// <remarks>
+    /// ★ 内存里的值**始终是明文**（读的时候解、写的过程中加），
+    ///   插件执行路径（<c>PluginExecutor</c>）完全不受影响。
+    /// ★ 解密失败时**保留原密文**并向上层暴露（由 <c>Settings.ApplyPluginCredentialState</c>
+    ///   停用该实例并报错），绝不静默变成空值。
+    /// </remarks>
+    internal sealed class PluginSecretDictionaryConverter : JsonConverter<Dictionary<string, string>>
+    {
+        /// <summary>会被当作凭据加密的参数名（小写比较）。</summary>
+        internal static readonly string[] SecretKeyNames =
+        {
+            "api_key", "apikey", "api-key", "access_key", "accesskey", "access-token", "access_token",
+            "accesstoken", "token", "secret", "client_secret", "clientsecret", "password", "passwd",
+            "authorization", "auth_token", "authtoken", "private_key", "privatekey", "credential"
+        };
+
+        /// <summary>参数名是否属于"必须恢复原文的凭据"。</summary>
+        internal static bool IsSecretKey(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            string n = name.Trim().ToLowerInvariant();
+            foreach (var k in SecretKeyNames)
+            {
+                if (n == k) return true;
+            }
+            return false;
+        }
+
+        public override Dictionary<string, string> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            return ReadDict(ref reader);
+        }
+
+        /// <summary>读取一个参数字典（供列表转换器复用）。</summary>
+        internal static Dictionary<string, string> ReadDict(ref Utf8JsonReader reader)
+        {
+            var result = new Dictionary<string, string>();
+            if (reader.TokenType == JsonTokenType.Null) return result;
+            if (reader.TokenType != JsonTokenType.StartObject)
+                throw new JsonException("插件参数必须是 JSON 对象");
+
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndObject) return result;
+                if (reader.TokenType != JsonTokenType.PropertyName)
+                    throw new JsonException("插件参数 JSON 结构非法");
+
+                string name = reader.GetString() ?? "";
+                if (!reader.Read()) throw new JsonException("插件参数 JSON 结构非法");
+
+                string raw = ReadScalar(ref reader);
+                string value = raw;
+
+                if (ProtectedSecret.IsProtected(raw))
+                {
+                    if (ProtectedSecret.TryUnprotect(raw, out string plain, out string err))
+                    {
+                        value = plain;
+                    }
+                    else
+                    {
+                        // ★ 解密失败：保留密文原样（不删除原凭据），把错误暴露给上层
+                        value = raw;
+                        PluginCredentialState.RecordDecryptFailure(name, err);
+                    }
+                }
+
+                result[name] = value;
+            }
+
+            throw new JsonException("插件参数 JSON 结构非法");
+        }
+
+        public override void Write(Utf8JsonWriter writer, Dictionary<string, string> value, JsonSerializerOptions options)
+        {
+            WriteDict(writer, value);
+        }
+
+        /// <summary>写出一个参数字典（供列表转换器复用）。</summary>
+        internal static void WriteDict(Utf8JsonWriter writer, Dictionary<string, string> value)
+        {
+            writer.WriteStartObject();
+            if (value != null)
+            {
+                foreach (var kv in value)
+                {
+                    writer.WritePropertyName(kv.Key);
+                    string v = kv.Value ?? "";
+                    if (IsSecretKey(kv.Key) && !ProtectedSecret.IsProtected(v) && v.Length > 0)
+                    {
+                        try { writer.WriteStringValue(ProtectedSecret.Protect(v)); }
+                        catch (Exception) { writer.WriteStringValue(v); }   // DPAPI 失败 ⇒ 原样写（不丢数据）
+                    }
+                    else
+                    {
+                        writer.WriteStringValue(v);
+                    }
+                }
+            }
+            writer.WriteEndObject();
+        }
+
+        /// <summary>读取一个标量值（其它类型按原始文本保留）。</summary>
+        internal static string ReadScalar(ref Utf8JsonReader reader)
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.String: return reader.GetString() ?? "";
+                case JsonTokenType.Null: return "";
+                case JsonTokenType.True: return "true";
+                case JsonTokenType.False: return "false";
+                case JsonTokenType.Number: return reader.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture);
+                default: return "";
+            }
+        }
+    }
+
+    /// <summary>插件目标列表的转换器（逐项交给字典转换器处理）。</summary>
+    internal sealed class PluginSecretListConverter : JsonConverter<List<Dictionary<string, string>>>
+    {
+        public override List<Dictionary<string, string>> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            var list = new List<Dictionary<string, string>>();
+            if (reader.TokenType == JsonTokenType.Null) return list;
+            if (reader.TokenType != JsonTokenType.StartArray)
+                throw new JsonException("插件目标列表必须是 JSON 数组");
+
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndArray) return list;
+                list.Add(PluginSecretDictionaryConverter.ReadDict(ref reader));
+            }
+
+            throw new JsonException("插件目标列表 JSON 结构非法");
+        }
+
+        public override void Write(Utf8JsonWriter writer, List<Dictionary<string, string>> value, JsonSerializerOptions options)
+        {
+            writer.WriteStartArray();
+            if (value != null)
+            {
+                foreach (var d in value)
+                {
+                    PluginSecretDictionaryConverter.WriteDict(writer, d);
+                }
+            }
+            writer.WriteEndArray();
+        }
+    }
+
+    /// <summary>插件凭据解密失败的收集处（进程内，仅用于把错误显式暴露出来）。</summary>
+    internal static class PluginCredentialState
+    {
+        private static readonly List<string> _failures = new List<string>();
+        private static readonly object _gate = new object();
+
+        internal static void RecordDecryptFailure(string name, string error)
+        {
+            lock (_gate)
+            {
+                _failures.Add((string.IsNullOrEmpty(name) ? "(未命名参数)" : name) + "：" + error);
+            }
+        }
+
+        internal static string[] TakeFailures()
+        {
+            lock (_gate)
+            {
+                var copy = _failures.ToArray();
+                _failures.Clear();
+                return copy;
+            }
+        }
     }
 }

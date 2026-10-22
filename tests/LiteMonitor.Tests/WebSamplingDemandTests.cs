@@ -52,20 +52,41 @@ namespace LiteMonitor.Tests
     {
         private readonly Settings _cfg;
         private readonly string _oldPassword;
+        private readonly string _oldHash;
+        private readonly string _oldSalt;
         private readonly bool _oldWebFpsEnabled;
+
+        /// <summary>当前配置对应的口令明文（**只**用于测试内登录；生产态只有哈希 + 盐）。</summary>
+        private string _loginPassword = "";
+
+        /// <summary>按端口缓存的登录会话（票据是一次性的，**不能**缓存）。</summary>
+        private readonly Dictionary<int, (string SessionId, string Csrf)> _sessions = new Dictionary<int, (string, string)>();
 
         public WebSamplingDemandTests()
         {
             _cfg = Settings.Load();
             _oldPassword = _cfg.WebServerPassword;
+            _oldHash = _cfg.WebServerPasswordHash;
+            _oldSalt = _cfg.WebServerPasswordSalt;
             _oldWebFpsEnabled = _cfg.WebFpsEnabled;
-            _cfg.WebServerPassword = "";   // 默认无密码，个别用例再单独打开
+
+            // ★ 默认无口令（L0）：明文 / 哈希 / 盐**都要**清掉 ——
+            //   验证材料是"哈希 + 盐"，只清明文会留下上一条用例留下的哈希，
+            //   服务端就会以为配置了口令（L1），L0 用例的登录直接 401。
+            _cfg.WebServerPassword = "";
+            _cfg.WebServerPasswordHash = "";
+            _cfg.WebServerPasswordSalt = "";
+            _loginPassword = "";
         }
 
         public void Dispose()
         {
             _cfg.WebServerPassword = _oldPassword;
+            _cfg.WebServerPasswordHash = _oldHash;
+            _cfg.WebServerPasswordSalt = _oldSalt;
             _cfg.WebFpsEnabled = _oldWebFpsEnabled;
+            _loginPassword = "";
+            _sessions.Clear();
         }
 
         // ================================================================
@@ -271,14 +292,26 @@ namespace LiteMonitor.Tests
         }
 
         /// <summary>发一个普通 HTTP 请求并把响应读回来（服务器读完会关闭连接）。</summary>
-        private static async Task<string> SendHttpAsync(int port, string pathAndQuery)
+        /// <param name="authenticate">
+        /// 是否自动带上**主会话 Cookie**（新协议下 HTTP API 一律要求会话）。
+        /// 需要验证"未鉴权请求"的行为时传 false。
+        /// </param>
+        private async Task<string> SendHttpAsync(int port, string pathAndQuery, bool authenticate = true)
         {
             using var client = new TcpClient();
             await client.ConnectAsync(IPAddress.Loopback, port);
             using var stream = client.GetStream();
 
-            var req = Encoding.ASCII.GetBytes(
-                $"GET {pathAndQuery} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+            var head = new StringBuilder();
+            head.Append($"GET {pathAndQuery} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
+            if (authenticate)
+            {
+                string cookie = await EnsureSessionCookieAsync(port);
+                if (!string.IsNullOrEmpty(cookie)) head.Append($"Cookie: lmsid={cookie}\r\n");
+            }
+            head.Append("Connection: close\r\n\r\n");
+
+            var req = Encoding.ASCII.GetBytes(head.ToString());
             await stream.WriteAsync(req, 0, req.Length);
             await stream.FlushAsync();
 
@@ -301,15 +334,176 @@ namespace LiteMonitor.Tests
             return sb.ToString();
         }
 
+        /// <summary>
+        /// 取（必要时先登录）该端口上的主会话 Cookie 值。
+        /// </summary>
+        /// <remarks>
+        /// ★ 新协议下 HTTP API 一律要求主会话、WS 握手一律要求一次性票据；
+        ///   这些用例关注的是"需求 / 采样"行为，鉴权由本辅助方法按真实协议走一遍。
+        /// </remarks>
+        private async Task<string> EnsureSessionCookieAsync(int port)
+        {
+            if (_sessions.TryGetValue(port, out var cached)) return cached.SessionId;
+
+            // ★ 口令取当前配置的明文副本（L0 时是空串 —— 空口令登录同样能换取会话）。
+            //   生产态只有哈希 + 盐，所以明文由 SetWebPassword 一并记在这里。
+            string password = _loginPassword ?? "";
+            var login = await LoginAsync(port, password);
+            _sessions[port] = login;
+            return login.SessionId;
+        }
+
+        /// <summary>
+        /// 按新协议登录：<c>POST /api/auth/login</c> ⇒ (会话 ID, CSRF 令牌)。
+        /// </summary>
+        /// <remarks>
+        /// ★ 口令走 JSON 请求体（不再进 URL）：这是 SEC-002 的直接修复，
+        ///   旧协议里口令会出现在请求行 / 访问日志 / Referer 里。
+        /// </remarks>
+        private static async Task<(string SessionId, string Csrf)> LoginAsync(int port, string password)
+        {
+            string body = "{\"password\":\"" + password.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"}";
+            string resp = await SendPostAsync(port, "/api/auth/login", body);
+            Assert.True(resp.Contains("200"), "登录失败: " + resp);
+
+            string setCookie = FindHeader(resp, "Set-Cookie");
+            Assert.False(string.IsNullOrEmpty(setCookie), "登录响应必须下发 lmsid Cookie");
+            int eq = setCookie.IndexOf('=');
+            int semi = setCookie.IndexOf(';');
+            string sessionId = (eq > 0 && semi > eq) ? setCookie.Substring(eq + 1, semi - eq - 1) : "";
+            Assert.False(string.IsNullOrEmpty(sessionId), "登录响应必须下发 lmsid Cookie");
+
+            string csrf = "";
+            int idx = resp.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (idx >= 0)
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(resp.Substring(idx + 4));
+                    if (doc.RootElement.TryGetProperty("csrf", out var el)) csrf = el.GetString() ?? "";
+                }
+                catch (System.Text.Json.JsonException) { }
+            }
+            Assert.False(string.IsNullOrEmpty(csrf), "登录响应必须下发 csrf 令牌");
+            return (sessionId, csrf);
+        }
+
+        /// <summary>申请一次性票据（会话 Cookie + CSRF 头）。</summary>
+        private static async Task<string> RequestTicketAsync(int port, string sessionId, string csrf)
+        {
+            string resp = await SendPostAsync(port, "/api/auth/ticket", "", sessionId, csrf);
+            Assert.True(resp.Contains("200"), "票据申请失败: " + resp);
+
+            int idx = resp.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            using var doc = System.Text.Json.JsonDocument.Parse(resp.Substring(idx + 4));
+            string ticket = doc.RootElement.TryGetProperty("ticket", out var el) ? (el.GetString() ?? "") : "";
+            Assert.False(string.IsNullOrEmpty(ticket), "票据端点必须返回 ticket");
+            return ticket;
+        }
+
+        /// <summary>发一个 POST 请求（可带请求体 / Cookie / CSRF 头）。</summary>
+        private static async Task<string> SendPostAsync(int port, string path, string body,
+            string cookie = null, string csrf = null, string contentType = "application/json")
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, port);
+            using var stream = client.GetStream();
+
+            var head = new StringBuilder();
+            head.Append($"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
+            if (!string.IsNullOrEmpty(cookie)) head.Append($"Cookie: lmsid={cookie}\r\n");
+            if (!string.IsNullOrEmpty(csrf)) head.Append($"X-LiteMonitor-CSRF: {csrf}\r\n");
+            if (!string.IsNullOrEmpty(contentType)) head.Append($"Content-Type: {contentType}\r\n");
+            head.Append($"Content-Length: {Encoding.UTF8.GetByteCount(body ?? "")}\r\n");
+            head.Append("Connection: close\r\n\r\n");
+            if (!string.IsNullOrEmpty(body)) head.Append(body);
+
+            var req = Encoding.UTF8.GetBytes(head.ToString());
+            await stream.WriteAsync(req, 0, req.Length);
+            await stream.FlushAsync();
+
+            var sb = new StringBuilder();
+            var buf = new byte[4096];
+            using var cts = new CancellationTokenSource(10000);
+            try
+            {
+                while (true)
+                {
+                    int n = await stream.ReadAsync(buf.AsMemory(0, buf.Length), cts.Token);
+                    if (n <= 0) break;
+                    sb.Append(Encoding.UTF8.GetString(buf, 0, n));
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (IOException) { }
+            catch (ObjectDisposedException) { }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 设置访问口令（按**生产形态**：只写哈希 + 盐，内存里不留明文）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 迁移后的生产状态就是"只有哈希 + 盐"；用例必须跑在真实形态上，
+        ///   顺带避免登录时触发惰性迁移去写磁盘。
+        /// </remarks>
+        private void SetWebPassword(string password)
+        {
+            _sessions.Clear();   // 凭据变了 ⇒ 旧会话（按口令指纹绑定）一律作废
+            if (string.IsNullOrEmpty(password))
+            {
+                _cfg.WebServerPassword = "";
+                _cfg.WebServerPasswordHash = "";
+                _cfg.WebServerPasswordSalt = "";
+                _loginPassword = "";
+                return;
+            }
+            _cfg.WebServerPasswordSalt = Settings.CreateWebPasswordSalt();
+            _cfg.WebServerPasswordHash = Settings.ComputeWebPasswordHash(password, _cfg.WebServerPasswordSalt);
+            _cfg.WebServerPassword = "";
+            // ★ 明文只留在测试进程内存里（供登录用）——生产态磁盘上只有哈希 + 盐。
+            _loginPassword = password;
+        }
+
+        /// <summary>取某个响应头的值（找不到返回空串）。</summary>
+        private static string FindHeader(string response, string name)
+        {
+            foreach (string line in (response ?? "").Split('\n'))
+            {
+                string t = line.Trim();
+                if (t.StartsWith(name + ":", StringComparison.OrdinalIgnoreCase))
+                {
+                    return t.Substring(name.Length + 1).Trim();
+                }
+            }
+            return "";
+        }
+
         /// <summary>完成一次 WebSocket 握手，返回保持连接的客户端。</summary>
-        private static async Task<TcpClient> OpenWebSocketAsync(int port, string query = "")
+        /// <remarks>
+        /// ★ 新协议下 WS 握手必须带**一次性票据**（<c>?ticket=</c>）：
+        ///   浏览器 WebSocket API 不能自定义 Authorization 头，
+        ///   票据"短 TTL + 一次性 + 仅限 WS"三者叠加才安全。
+        ///   没有显式给票据时，这里用主会话现换一张（票据不能缓存 —— 用过即废）。
+        /// </remarks>
+        private async Task<TcpClient> OpenWebSocketAsync(int port, string query = "")
         {
             var client = new TcpClient();
             await client.ConnectAsync(IPAddress.Loopback, port);
             var stream = client.GetStream();
 
+            string target = query ?? "";
+            if (!target.Contains("ticket="))
+            {
+                string sessionId = await EnsureSessionCookieAsync(port);
+                string csrf = _sessions.TryGetValue(port, out var cached) ? cached.Csrf : "";
+                string ticket = await RequestTicketAsync(port, sessionId, csrf);
+                target = "?ticket=" + ticket;
+            }
+
             var req = Encoding.ASCII.GetBytes(
-                $"GET /{query} HTTP/1.1\r\n" +
+                $"GET /{target} HTTP/1.1\r\n" +
                 $"Host: 127.0.0.1:{port}\r\n" +
                 "Upgrade: websocket\r\n" +
                 "Connection: Upgrade\r\n" +
@@ -952,7 +1146,7 @@ namespace LiteMonitor.Tests
         [Fact]
         public async Task 未鉴权请求不计入需求_不产生采样()
         {
-            _cfg.WebServerPassword = "s3cret";
+            SetWebPassword("s3cret");
 
             int samplingCalls = 0;
             var manager = NewManager(
@@ -960,7 +1154,8 @@ namespace LiteMonitor.Tests
             manager.Start();
 
             using var host = new LoopbackHost(manager);
-            string resp = await SendHttpAsync(host.Port, "/api/snapshot");
+            // ★ 未鉴权：不能带主会话 Cookie（否则测的就不是"未鉴权"了）
+            string resp = await SendHttpAsync(host.Port, "/api/snapshot", authenticate: false);
 
             Assert.Contains("401", resp);
             Assert.False(manager.HasWebDataDemand);
@@ -1538,10 +1733,12 @@ namespace LiteMonitor.Tests
             bool oldEnabled = _cfg.WebServerEnabled;
             int oldPort = _cfg.WebServerPort;
             string oldPassword = _cfg.WebServerPassword;
+            string oldHash = _cfg.WebServerPasswordHash;
+            string oldSalt = _cfg.WebServerPasswordSalt;
             string localPassword = NewStrongPassword();
             _cfg.WebServerEnabled = true;
             _cfg.WebServerPort = port;
-            _cfg.WebServerPassword = localPassword;
+            SetWebPassword(localPassword);
             try
             {
                 using var server = new LiteWebServer(
@@ -1557,7 +1754,11 @@ namespace LiteMonitor.Tests
                 Assert.True(sink.Count >= 1, "启动后必须至少同步过一次需求");
                 Assert.False(sink.Last, "没有 Web 需求时，采集层必须收到 false（applier 收到的值本身）");
 
-                using (var client = await OpenWebSocketAsync(port, "?pwd=" + localPassword))
+                // ★ WebSocket 握手用**一次性票据**（浏览器无法自定义 Authorization 头）
+                var login = await LoginAsync(port, localPassword);
+                string ticket = await RequestTicketAsync(port, login.SessionId, login.Csrf);
+
+                using (var client = await OpenWebSocketAsync(port, "?ticket=" + ticket))
                 {
                     Assert.True(await WaitUntilAsync(() => sink.Last, 5000),
                         "WebSocket 连接建立后，Web 需求必须被送达采集层（生产接线回归护栏）");
@@ -1583,6 +1784,9 @@ namespace LiteMonitor.Tests
                 _cfg.WebServerEnabled = oldEnabled;
                 _cfg.WebServerPort = oldPort;
                 _cfg.WebServerPassword = oldPassword;
+                _cfg.WebServerPasswordHash = oldHash;
+                _cfg.WebServerPasswordSalt = oldSalt;
+                _loginPassword = "";
                 ResetLiteWebServerInstance();   // ★ F7：不要把已 Dispose 的实例留在静态字段里
             }
         }
@@ -1604,10 +1808,12 @@ namespace LiteMonitor.Tests
             bool oldEnabled = _cfg.WebServerEnabled;
             int oldPort = _cfg.WebServerPort;
             string oldPassword = _cfg.WebServerPassword;
+            string oldHash = _cfg.WebServerPasswordHash;
+            string oldSalt = _cfg.WebServerPasswordSalt;
             string localPassword = NewStrongPassword();
             _cfg.WebServerEnabled = true;
             _cfg.WebServerPort = port;
-            _cfg.WebServerPassword = localPassword;
+            SetWebPassword(localPassword);
             try
             {
                 using var server = new LiteWebServer(
@@ -1623,7 +1829,10 @@ namespace LiteMonitor.Tests
                 Assert.False(sink.Last, "没有 Web 需求时，采集层必须收到 false");
 
                 // ★ HTTP-only 请求一次（不建立 WebSocket 连接）
-                string resp = await SendHttpAsync(port, "/api/snapshot?pwd=" + localPassword);
+                //   走新协议：先登录换主会话，再带 Cookie 取快照（口令不再进 URL）。
+                var login = await LoginAsync(port, localPassword);
+                _sessions[port] = login;
+                string resp = await SendHttpAsync(port, "/api/snapshot");
                 Assert.Contains("200", resp);
 
                 // 租期授予 → 采集层收到 true
@@ -1641,6 +1850,9 @@ namespace LiteMonitor.Tests
                 _cfg.WebServerEnabled = oldEnabled;
                 _cfg.WebServerPort = oldPort;
                 _cfg.WebServerPassword = oldPassword;
+                _cfg.WebServerPasswordHash = oldHash;
+                _cfg.WebServerPasswordSalt = oldSalt;
+                _loginPassword = "";
                 ResetLiteWebServerInstance();   // ★ F7
             }
         }
@@ -1810,11 +2022,17 @@ namespace LiteMonitor.Tests
             manager.Start();
 
             // 现在才发请求：服务器用的是 Stop 之前捕获的令牌
+            //   ★ 新协议下 HTTP API 一律要求主会话，而 Stop 会清空全部会话 ——
+            //     所以这里改用**登录**端点（它不依赖既有会话）：
+            //     要验的是"快速重启后这条在途连接仍然拿得到响应"，与具体端点无关。
             string resp;
             using (var stream = client.GetStream())
             {
-                var req = Encoding.ASCII.GetBytes(
-                    $"GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1:{host.Port}\r\nConnection: close\r\n\r\n");
+                string body = "{\"password\":\"\"}";
+                var req = Encoding.UTF8.GetBytes(
+                    $"POST /api/auth/login HTTP/1.1\r\nHost: 127.0.0.1:{host.Port}\r\n" +
+                    $"Content-Type: application/json\r\nContent-Length: {Encoding.UTF8.GetByteCount(body)}\r\n" +
+                    $"Connection: close\r\n\r\n{body}");
                 await stream.WriteAsync(req, 0, req.Length);
                 await stream.FlushAsync();
 

@@ -315,6 +315,88 @@ namespace LiteMonitor.src.WebServer
         }
     }
 
+    /// <summary>
+    /// 主会话记录（契约 W2）。
+    /// </summary>
+    /// <remarks>
+    /// ★ 会话 ID 是 32 字节 CSPRNG 的 base64url —— **不可预测**、**不由口令派生**。
+    /// ★ 口令指纹用于"改密 ⇒ 全部会话与票据立即撤销"：指纹一变，存量会话全部作废。
+    /// </remarks>
+    internal sealed class WebSessionRecord
+    {
+        /// <summary>会话 ID（base64url，无填充）。</summary>
+        public string Id = "";
+
+        /// <summary>创建时刻（单调时钟刻度）。</summary>
+        public long CreatedTicks;
+
+        /// <summary>最后使用时刻（单调时钟刻度）—— 空闲 TTL 依据它判定。</summary>
+        public long LastUsedTicks;
+
+        /// <summary>签发时的口令指纹。</summary>
+        public string PasswordFingerprint = "";
+
+        /// <summary>撤销标记。</summary>
+        public bool Revoked;
+    }
+
+    /// <summary>
+    /// 一次性票据记录（契约 W3）。
+    /// </summary>
+    internal sealed class WebTicketRecord
+    {
+        /// <summary>票据 ID（base64url，无填充）。</summary>
+        public string Id = "";
+
+        /// <summary>到期时刻（单调时钟刻度）。</summary>
+        public long ExpiryTicks;
+
+        /// <summary>是否已使用（一次性：用过即废）。</summary>
+        public bool Used;
+
+        /// <summary>申请该票据的主会话 ID（会话被撤销 ⇒ 票据一并作废）。</summary>
+        public string SessionId = "";
+
+        /// <summary>申请时的口令指纹（改密 ⇒ 票据立即作废）。</summary>
+        public string PasswordFingerprint = "";
+    }
+
+    /// <summary>
+    /// 解析后的 HTTP 请求（请求行 + 头）。
+    /// </summary>
+    /// <remarks>
+    /// ★ 头名统一小写；同名头**保留全部取值**（重复头要能被识别出来并拒绝，
+    ///   而不是"取第一个"—— 那正是请求走私 / 参数污染的温床）。
+    /// </remarks>
+    internal sealed class HttpRequestInfo
+    {
+        /// <summary>请求方法（GET / POST / OPTIONS …）。</summary>
+        public string Method = "";
+
+        /// <summary>请求目标（原始，含查询串）。</summary>
+        public string Target = "";
+
+        /// <summary>路径部分（不含查询串）。</summary>
+        public string Path = "";
+
+        /// <summary>查询串（不含 '?'）。</summary>
+        public string Query = "";
+
+        /// <summary>头集合：头名（小写）→ 全部取值。</summary>
+        public readonly Dictionary<string, List<string>> Headers = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>取某个头的**唯一**取值；缺失或重复都返回 null（重复即视为非法）。</summary>
+        public string GetSingleHeader(string name)
+        {
+            if (!Headers.TryGetValue(name, out var list)) return null;
+            if (list.Count != 1) return null;      // 重复头 ⇒ 不猜
+            return list[0];
+        }
+
+        /// <summary>取某个头的第一个取值（仅用于"存在性"判断，不用于鉴权取值）。</summary>
+        public bool HasHeader(string name) => Headers.ContainsKey(name);
+    }
+
     public class WebSessionManager
     {
         // ★ 值 = 该连接登记时的**运行代次**（不是无意义的 bool）：
@@ -329,6 +411,26 @@ namespace LiteMonitor.src.WebServer
 
         // 连接集合与需求计数的联动锁：保证"加入连接"与"清空全部需求"不会交错出脏状态
         private readonly object _clientsGate = new object();
+
+        // ===== 主会话 / 一次性票据（契约 W2 / W3）=====
+        // ★ 全部状态在**进程内存**里：服务重启 ⇒ 全部会话与票据立即失效（天然如此，无需额外清理）。
+        private readonly object _authGate = new object();
+        private readonly Dictionary<string, WebSessionRecord> _sessions = new Dictionary<string, WebSessionRecord>();
+        private readonly Dictionary<string, WebTicketRecord> _tickets = new Dictionary<string, WebTicketRecord>();
+
+        // TTL 以单调时钟刻度表示（TimeProvider 可注入 ⇒ TTL 用例完全确定性）
+        private readonly long _sessionAbsoluteTtlTicks;
+        private readonly long _sessionIdleTtlTicks;
+        private readonly long _ticketTtlTicks;
+
+        /// <summary>
+        /// 实际监听端口（由 <see cref="LiteWebServer"/> 在启动时写入）。
+        /// </summary>
+        /// <remarks>
+        /// ★ Host / Origin 校验需要它：<c>Host: 127.0.0.1:5000</c> 里的端口必须与真实监听端口一致。
+        ///   直接构造本类做测试时它是 null ⇒ 端口部分不做校验（主机名仍必须匹配）。
+        /// </remarks>
+        internal int? ListenPort { get; set; }
 
         private volatile bool _isRunning = false;
         private int _generation = 0;                       // Start/Stop 代次：用来区分 Stop 前后的广播任务
@@ -372,12 +474,46 @@ namespace LiteMonitor.src.WebServer
         private const int StreamWriteTimeoutMs = 5000;
 
         /// <summary>
-        /// 请求行里的访问口令参数：<c>?pwd=</c> 或 <c>&amp;pwd=</c>。
+        /// 主会话的**绝对** TTL：30 分钟（到期即失效，与是否活跃无关）。
         /// </summary>
         /// <remarks>
-        /// 静态实例而不是 <c>Regex.Match(...)</c> 静态方法：后者每次调用都要查正则缓存表。
+        /// ★ 理由：会话凭据在浏览器里最长停留 30 分钟（Cookie 的 Max-Age 同值），
+        ///   绝对上限让"被偷走的 Cookie"最多被用半小时。
         /// </remarks>
-        private static readonly Regex PwdQueryRegex = new Regex(@"[?&]pwd=([^&\s]+)");
+        internal static readonly TimeSpan SessionAbsoluteTtl = TimeSpan.FromMinutes(30);
+
+        /// <summary>
+        /// 主会话的**空闲** TTL：2 分钟（超过 2 分钟没有任何使用就失效）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 理由：网页版的正常节奏是"打开页面 → 一直看着"，快照每秒轮询一次，
+        ///   每次轮询都会刷新空闲计时 ⇒ 只要有人在看就不会掉线；
+        ///   而"登录完就走"的会话 2 分钟后就没了，缩小了凭据暴露窗口。
+        ///   它比绝对 TTL 先到 ⇒ 先到者过期。
+        /// </remarks>
+        internal static readonly TimeSpan SessionIdleTtl = TimeSpan.FromMinutes(2);
+
+        /// <summary>
+        /// 一次性票据的 TTL：30 秒。
+        /// </summary>
+        /// <remarks>
+        /// ★ 理由：票据的唯一用途是"紧接着的一次 WebSocket 握手"。
+        ///   30 秒足够浏览器在本地完成握手（毫秒级），又足够短 ——
+        ///   即使它出现在 URL / Referer / 代理日志里，也几乎不可能被复用来建第二条连接。
+        /// </remarks>
+        internal static readonly TimeSpan TicketTtl = TimeSpan.FromSeconds(30);
+
+        /// <summary>主会话 Cookie 名。</summary>
+        internal const string SessionCookieName = "lmsid";
+
+        /// <summary>CSRF 头名。</summary>
+        internal const string CsrfHeaderName = "X-LiteMonitor-CSRF";
+
+        /// <summary>CSRF 令牌的固定消息串（契约 W13.5 冻结，前后端必须一致）。</summary>
+        internal const string CsrfMessage = "liteMonitor-csrf-v1";
+
+        /// <summary>请求体大小上限：4 KB（契约 W7）。</summary>
+        internal const int MaxRequestBodyBytes = 4096;
 
         /// <summary>没有同步序列化回调时的占位实现（此时只会走可等待形态）。</summary>
         private static readonly Action<Utf8JsonWriter> NoSnapshotProvider = writer => { };
@@ -420,6 +556,22 @@ namespace LiteMonitor.src.WebServer
             _samplingRequester = samplingRequester;
             _time = timeProvider ?? TimeProvider.System;
             _demand = demandState ?? new WebDemandState(timeProvider);
+
+            // ★ TTL 换算成**单调时钟刻度**：会话 / 票据的到期判定与墙上时间无关，
+            //   测试可以注入假时钟做到完全确定性（不靠 Thread.Sleep）。
+            _sessionAbsoluteTtlTicks = ToTicks(SessionAbsoluteTtl);
+            _sessionIdleTtlTicks = ToTicks(SessionIdleTtl);
+            _ticketTtlTicks = ToTicks(TicketTtl);
+        }
+
+        /// <summary>把时长换算成当前单调时钟的刻度数。</summary>
+        private long ToTicks(TimeSpan span)
+        {
+            if (span <= TimeSpan.Zero) return 0;
+            double ticks = _time.TimestampFrequency * span.TotalSeconds;
+            if (ticks <= 0) return 0;
+            if (ticks >= long.MaxValue) return long.MaxValue;
+            return (long)ticks;
         }
 
         /// <summary>Web 有效数据需求状态（线程安全）。</summary>
@@ -530,6 +682,14 @@ namespace LiteMonitor.src.WebServer
                 _demand.Clear();
             }
 
+            // ★ 主会话与票据是**内存态**：服务停止 ⇒ 全部作废（契约 W2「服务重启即全部失效」）。
+            //   否则一次重启前的 Cookie 还能继续用 —— 那与"重启即失效"的承诺不符。
+            lock (_authGate)
+            {
+                _sessions.Clear();
+                _tickets.Clear();
+            }
+
             // 旧广播循环可能正拿着这个 token 收尾，交给下一次 Start() 释放，避免 ObjectDisposedException。
             try { _broadcastCts?.Cancel(); } catch { }
 
@@ -576,14 +736,21 @@ namespace LiteMonitor.src.WebServer
                 //   把期限挂在生命周期上会让 Stop 直接关连接，把"不该续租"错做成"不该回应"。
                 //   期限只负责对抗慢速连接，与运行代次正交。
                 int bytesRead;
+                int headerEnd;
                 using (var headerReadCts = new CancellationTokenSource(HeaderReadTimeout))
                 {
-                    bytesRead = await ReadHeaderAsync(stream, buffer, headerReadCts.Token);
+                    (bytesRead, headerEnd) = await ReadHeaderAsync(stream, buffer, headerReadCts.Token);
                 }
 
                 if (bytesRead == 0) { client.Close(); return; }
 
-                string requestStr = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                // ★ 请求头与请求体可能在**同一次读**里到达：头之后的字节属于 body，
+                //   必须留给请求体读取路径（否则 body 会被丢掉，随后读取只能等到超时）。
+                int headerLength = headerEnd > 0 ? headerEnd : bytesRead;
+                string requestStr = Encoding.UTF8.GetString(buffer, 0, headerLength);
+                byte[] leftoverBody = headerEnd > 0 && bytesRead > headerEnd
+                    ? SliceOf(buffer, headerEnd, bytesRead - headerEnd)
+                    : Array.Empty<byte>();
 
                 // 2. 协议分流
                 if (IsWebSocketUpgrade(requestStr))
@@ -598,7 +765,7 @@ namespace LiteMonitor.src.WebServer
                 else
                 {
                     // ★ HTTP 路径改成可等待：鉴权 → 授予租期 → 共享采样 → 序列化 → 响应
-                    await HandleHttpRequestAsync(stream, requestStr, connectionGeneration, lifetimeToken).ConfigureAwait(false);
+                    await HandleHttpRequestAsync(stream, requestStr, leftoverBody, connectionGeneration, lifetimeToken).ConfigureAwait(false);
                     client.Close(); // HTTP 是短连接
                 }
             }
@@ -621,6 +788,241 @@ namespace LiteMonitor.src.WebServer
             {
                 if (buffer != null) ArrayPool<byte>.Shared.Return(buffer);
             }
+        }
+
+        // ==================================================================
+        //  主会话 / 一次性票据 / CSRF（契约 W2 / W3 / W4）
+        // ==================================================================
+
+        /// <summary>
+        /// 生成 32 字节 CSPRNG 的 base64url 令牌（无填充）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 会话 ID 与票据都走这里：不可预测（不是时间戳、不是自增、不是口令派生）。
+        /// </remarks>
+        private static string GenerateSecureToken() =>
+            Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
+
+        /// <summary>base64url 编码（无填充，RFC 4648 §5）。</summary>
+        private static string Base64UrlEncode(byte[] data) =>
+            Convert.ToBase64String(data).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+        /// <summary>
+        /// 由会话 ID 派生 CSRF 令牌：HMAC-SHA256，键 = 会话 ID，消息 = 固定串。
+        /// </summary>
+        /// <remarks>
+        /// ★ 契约 W13.5 冻结的派生方式，服务端与前端必须一致。
+        ///   键就是会话 ID ⇒ 攻击者拿不到会话 ID 就算不出令牌；
+        ///   而会话 ID 在 HttpOnly Cookie 里，前端 JS 读不到 —— 所以令牌由登录响应一并下发。
+        /// </remarks>
+        internal static string ComputeCsrfToken(string sessionId)
+        {
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(sessionId ?? ""));
+            return Base64UrlEncode(hmac.ComputeHash(Encoding.UTF8.GetBytes(CsrfMessage)));
+        }
+
+        /// <summary>签发一个主会话。</summary>
+        private WebSessionRecord CreateSession(string passwordFingerprint)
+        {
+            long now = _time.GetTimestamp();
+            var record = new WebSessionRecord
+            {
+                Id = GenerateSecureToken(),
+                CreatedTicks = now,
+                LastUsedTicks = now,
+                PasswordFingerprint = passwordFingerprint ?? ""
+            };
+
+            lock (_authGate)
+            {
+                _sessions[record.Id] = record;
+                PruneSessionsLocked(now);
+            }
+            return record;
+        }
+
+        /// <summary>
+        /// 取出一个仍然有效的主会话；无效时返回 false。
+        /// </summary>
+        /// <remarks>
+        /// ★ 判定口径（HTTP 与 WS 完全一致）：撤销标记 / 绝对 TTL / 空闲 TTL / 口令指纹。
+        /// ★ 口令指纹对不上 ⇒ <b>撤销全部</b>会话与票据（契约 W2「改密 ⇒ 全部撤销」）。
+        /// </remarks>
+        private bool TryGetSession(string sessionId, string passwordFingerprint, out WebSessionRecord record)
+        {
+            record = null!;
+            if (string.IsNullOrEmpty(sessionId)) return false;
+
+            bool revokeAll = false;
+            lock (_authGate)
+            {
+                if (!_sessions.TryGetValue(sessionId, out var s)) return false;
+
+                if (s.Revoked) { _sessions.Remove(sessionId); return false; }
+
+                if (!string.Equals(s.PasswordFingerprint, passwordFingerprint ?? "", StringComparison.Ordinal))
+                {
+                    // ★ 口令变了（或被清空）⇒ 全部会话与票据立即作废
+                    revokeAll = true;
+                }
+                else
+                {
+                    long now = _time.GetTimestamp();
+                    if (_sessionAbsoluteTtlTicks > 0 && now - s.CreatedTicks >= _sessionAbsoluteTtlTicks)
+                    {
+                        _sessions.Remove(sessionId);
+                        return false;      // 绝对 TTL 到期
+                    }
+                    if (_sessionIdleTtlTicks > 0 && now - s.LastUsedTicks >= _sessionIdleTtlTicks)
+                    {
+                        _sessions.Remove(sessionId);
+                        return false;      // 空闲 TTL 到期
+                    }
+
+                    s.LastUsedTicks = now;    // 刷新空闲计时
+                    record = s;
+                }
+            }
+
+            if (revokeAll)
+            {
+                RevokeAllAuthState();
+                return false;
+            }
+            return record != null;
+        }
+
+        /// <summary>显式注销一个会话。</summary>
+        private void RevokeSession(string sessionId)
+        {
+            if (string.IsNullOrEmpty(sessionId)) return;
+            lock (_authGate)
+            {
+                if (_sessions.TryGetValue(sessionId, out var s))
+                {
+                    s.Revoked = true;
+                    _sessions.Remove(sessionId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 撤销<b>全部</b>会话与票据，并断开所有已鉴权的 WebSocket 连接。
+        /// </summary>
+        /// <remarks>
+        /// ★ 触发时机：口令变化（指纹对不上）或服务停止。
+        /// ★ WS 连接必须一起断：否则"改密"之后旧连接还能继续收数据 —— 撤销就形同虚设。
+        /// </remarks>
+        private void RevokeAllAuthState()
+        {
+            lock (_authGate)
+            {
+                _sessions.Clear();
+                _tickets.Clear();
+            }
+
+            // 断开已鉴权的 WS 连接（放在锁外：关闭 socket 可能触发回调）
+            foreach (var client in _wsClients.Keys)
+            {
+                try { client.Close(); } catch { }
+            }
+            _wsClients.Clear();
+            _demand.Clear();
+            NotifyDemandChanged();
+        }
+
+        /// <summary>清理过期 / 已撤销的会话记录。</summary>
+        private void PruneSessionsLocked(long now)
+        {
+            var expired = new List<string>();
+            foreach (var kv in _sessions)
+            {
+                if (kv.Value.Revoked) { expired.Add(kv.Key); continue; }
+                if (_sessionAbsoluteTtlTicks > 0 && now - kv.Value.CreatedTicks >= _sessionAbsoluteTtlTicks) { expired.Add(kv.Key); continue; }
+                if (_sessionIdleTtlTicks > 0 && now - kv.Value.LastUsedTicks >= _sessionIdleTtlTicks) { expired.Add(kv.Key); }
+            }
+            foreach (string id in expired) _sessions.Remove(id);
+        }
+
+        /// <summary>签发一次性票据（30 秒有效、仅限 WS 握手、用过即废）。</summary>
+        private string CreateTicket(string sessionId, string passwordFingerprint)
+        {
+            long now = _time.GetTimestamp();
+            var ticket = new WebTicketRecord
+            {
+                Id = GenerateSecureToken(),
+                ExpiryTicks = now + _ticketTtlTicks,
+                SessionId = sessionId ?? "",
+                PasswordFingerprint = passwordFingerprint ?? ""
+            };
+
+            lock (_authGate)
+            {
+                _tickets[ticket.Id] = ticket;
+
+                // 顺手清掉过期票据
+                var expired = new List<string>();
+                foreach (var kv in _tickets)
+                {
+                    if (now >= kv.Value.ExpiryTicks) expired.Add(kv.Key);
+                }
+                foreach (string id in expired) _tickets.Remove(id);
+            }
+            return ticket.Id;
+        }
+
+        /// <summary>
+        /// 消费一张票据（一次性）：有效则返回 true，并把票据<b>立即作废</b>。
+        /// </summary>
+        /// <remarks>
+        /// ★ 过期 / 已用 / 口令指纹不匹配 / 申请它的会话已失效 ⇒ 一律拒绝。
+        /// ★ 票据只用于 WS 握手；HTTP API 不接受它（路由层根本不看票据）。
+        /// </remarks>
+        private bool TryConsumeTicket(string ticketId, string passwordFingerprint)
+        {
+            if (string.IsNullOrEmpty(ticketId)) return false;
+
+            lock (_authGate)
+            {
+                if (!_tickets.TryGetValue(ticketId, out var t)) return false;
+
+                // ★ 一次性：查到即从表里移除 —— 同一个票据第二次使用必然查不到
+                _tickets.Remove(ticketId);
+
+                if (t.Used) return false;
+                if (_time.GetTimestamp() >= t.ExpiryTicks) return false;
+                if (!string.Equals(t.PasswordFingerprint, passwordFingerprint ?? "", StringComparison.Ordinal)) return false;
+
+                // 申请它的主会话必须仍然有效（会话被注销 / 过期 ⇒ 票据一并作废）
+                if (!string.IsNullOrEmpty(t.SessionId) && !SessionStillValidLocked(t.SessionId, passwordFingerprint))
+                {
+                    return false;
+                }
+                return true;
+            }
+        }
+
+        /// <summary>（调用方必须已持有 _authGate）会话是否仍然有效。</summary>
+        private bool SessionStillValidLocked(string sessionId, string passwordFingerprint)
+        {
+            if (!_sessions.TryGetValue(sessionId, out var s)) return false;
+            if (s.Revoked) return false;
+            if (!string.Equals(s.PasswordFingerprint, passwordFingerprint ?? "", StringComparison.Ordinal)) return false;
+            long now = _time.GetTimestamp();
+            if (_sessionAbsoluteTtlTicks > 0 && now - s.CreatedTicks >= _sessionAbsoluteTtlTicks) return false;
+            if (_sessionIdleTtlTicks > 0 && now - s.LastUsedTicks >= _sessionIdleTtlTicks) return false;
+            return true;
+        }
+
+        /// <summary>校验请求头里的 CSRF 令牌（恒时比较）。</summary>
+        private static bool CheckCsrfHeader(HttpRequestInfo request, string sessionId)
+        {
+            string supplied = request.GetSingleHeader(CsrfHeaderName);
+            if (string.IsNullOrEmpty(supplied)) return false;
+            string expected = ComputeCsrfToken(sessionId);
+            return CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(supplied),
+                Encoding.UTF8.GetBytes(expected));
         }
 
         // --- 连接与需求的联动管理 ---
@@ -704,9 +1106,10 @@ namespace LiteMonitor.src.WebServer
         /// 而 <c>NetworkStream.ReadTimeout</c> 对异步读没有任何作用。
         /// </param>
         /// <returns>已读到的总字节数；0 表示对端在发任何数据之前就关闭了。</returns>
-        private async Task<int> ReadHeaderAsync(NetworkStream stream, byte[] buffer, CancellationToken cancellationToken)
+        private async Task<(int BytesRead, int HeaderEnd)> ReadHeaderAsync(NetworkStream stream, byte[] buffer, CancellationToken cancellationToken)
         {
             int totalBytes = 0;
+            int headerEnd = -1;
             while (totalBytes < buffer.Length)
             {
                 int read = await stream.ReadAsync(buffer, totalBytes, buffer.Length - totalBytes, cancellationToken)
@@ -714,9 +1117,23 @@ namespace LiteMonitor.src.WebServer
                 if (read == 0) break;
 
                 totalBytes += read;
-                if (FindHeaderEnd(buffer, totalBytes) >= 0) return totalBytes;
+                int found = FindHeaderEnd(buffer, totalBytes);
+                if (found >= 0)
+                {
+                    // ★ 记录请求头长度：**头之后已经读到的字节属于请求体**，要留给 body 读取路径
+                    headerEnd = found;
+                    return (totalBytes, headerEnd);
+                }
             }
-            return totalBytes;
+            return (totalBytes, headerEnd);
+        }
+
+        /// <summary>截取一段字节（请求体残留）。</summary>
+        private static byte[] SliceOf(byte[] source, int offset, int count)
+        {
+            var result = new byte[count];
+            Buffer.BlockCopy(source, offset, result, 0, count);
+            return result;
         }
 
         private int FindHeaderEnd(byte[] buffer, int length)
@@ -735,144 +1152,763 @@ namespace LiteMonitor.src.WebServer
                    Regex.IsMatch(req, "Upgrade: websocket", RegexOptions.IgnoreCase);
         }
 
-        private async Task HandleHttpRequestAsync(NetworkStream stream, string request, int connectionGeneration, CancellationToken cancellationToken)
+        // ==================================================================
+        //  HTTP 路由（契约 W13.5 冻结的端点形态）
+        // ==================================================================
+
+        /// <summary>
+        /// 处理一个 HTTP 请求。
+        /// </summary>
+        /// <remarks>
+        /// ★ 处理顺序（契约 W8）：<b>先读完请求头 → 校验 Host/Origin → 完成鉴权 → 才决定要不要读请求体</b>。
+        ///   未鉴权的请求**绝不**触发请求体读取（否则可被当作带宽 / 内存消耗放大器）。
+        /// </remarks>
+        private async Task HandleHttpRequestAsync(NetworkStream stream, string request, byte[] leftoverBody,
+            int connectionGeneration, CancellationToken cancellationToken)
         {
-            string[] lines = request.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-            if (lines.Length == 0) return;
-            
-            string path = lines[0].Split(' ').Length > 1 ? lines[0].Split(' ')[1] : "/";
-            
+            HttpRequestInfo info = ParseRequest(request);
+            if (string.IsNullOrEmpty(info.Method)) return;
+
+            WebAccessPolicy policy = BuildAccessPolicy();
+
+            // ① 旧协议已移除：查询串里的 pwd 一律不再被接受（契约 W13 / W13.5）
+            if (HasLegacyPasswordQuery(info))
+            {
+                SendErrorResponse(stream, 401, "查询串口令（?pwd=）已移除，请改用主会话登录。", info, policy);
+                return;
+            }
+
+            // ② Host / Origin 校验（防 DNS Rebinding / 跨源读取）
+            if (!IsHostAllowed(info, policy) || !IsOriginAllowed(info, policy))
+            {
+                SendErrorResponse(stream, 403, "Host / Origin 校验未通过。", info, policy);
+                return;
+            }
+
+            // ③ OPTIONS 预检：走**同一套** Host / Origin 校验（上面已经过了）
+            if (string.Equals(info.Method, "OPTIONS", StringComparison.OrdinalIgnoreCase))
+            {
+                SendPreflightResponse(stream, info, policy);
+                return;
+            }
+
+            switch (info.Path)
+            {
+                case "/api/auth/login":
+                    await HandleLoginAsync(stream, info, policy, leftoverBody, cancellationToken).ConfigureAwait(false);
+                    return;
+
+                case "/api/auth/ticket":
+                    await HandleTicketAsync(stream, info, policy).ConfigureAwait(false);
+                    return;
+
+                case "/api/auth/logout":
+                    await HandleLogoutAsync(stream, info, policy).ConfigureAwait(false);
+                    return;
+            }
+
+            string path = info.Path;
             if (path.StartsWith("/api/snapshot"))
             {
-                if (!CheckAuth(request))
-                {
-                    // 未鉴权：不产生任何硬件需求
-                    SendHttpResponse(stream, 401, "text/plain", Encoding.UTF8.GetBytes("Unauthorized"), 12);
-                    return;
-                }
-
-                // ★ 已鉴权的快照请求获得一个短需求租期（默认 2 秒）。
-                //   连续 HTTP 轮询会不断延长租期；未鉴权请求 / HTML / favicon 都不会走到这里。
-                //   跨越 Stop 边界的在途请求不再授予租期：Stop 已经清空过全部需求，
-                //   再补一个 2 秒租期等于把已停止的服务又变成"有需求"。
-                //   ★ 授权点必须在**采样之前**：等待采样期间不能没有需求。
-                HttpLeaseCheckTestHook?.Invoke();
-
-                bool leaseGranted = false;
-                lock (_clientsGate)
-                {
-                    if (_isRunning && connectionGeneration == Volatile.Read(ref _generation))
-                    {
-                        HttpLeaseGrantTestHook?.Invoke();
-                        _demand.GrantHttpLease();
-                        leaseGranted = true;
-                    }
-                }
-
-                // Keep notifications outside the lifecycle lock.
-                if (leaseGranted) NotifyDemandChanged();
-
-                // ★ 共享采样（限频）：HTTP 轮询与网页广播走**同一条**限频采样路径，
-                //   协调器保证 1 秒 1 次 + 并发合并 → 多个网页 + 轮询不会叠加真实采集。
-                //   快照本身**不执行** hw.Update()，这里只是请求一次共享采样。
-                await RequestSharedSamplingWithTimeoutAsync(cancellationToken).ConfigureAwait(false);
-
-                using var ms = new MemoryStream();
-                using var writer = new Utf8JsonWriter(ms);
-                await WriteSnapshotAsync(writer, cancellationToken).ConfigureAwait(false);
-                writer.Flush();
-                SendHttpResponse(stream, 200, "application/json", ms.GetBuffer(), (int)ms.Length);
+                await HandleSnapshotAsync(stream, info, policy, connectionGeneration, cancellationToken).ConfigureAwait(false);
+                return;
             }
-            else if (path == "/favicon.ico")
+
+            if (path == "/favicon.ico")
             {
                 // 仅取图标：不产生硬件需求
-                SendHttpResponse(stream, 404, "text/html", Array.Empty<byte>(), 0);
+                SendHttpResponse(stream, 404, "text/html", Array.Empty<byte>(), 0, info, policy);
+                return;
+            }
+
+            // 默认返回首页（仅取 HTML：不产生硬件需求）
+            SendIndexHtml(stream, info, policy);
+        }
+
+        /// <summary>首页（登录页）：不要求鉴权，但要过 Host / Origin 校验。</summary>
+        private void SendIndexHtml(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy)
+        {
+            string iconBase64 = WebPageContent.GetAppIconBase64();
+
+            // ★ "是否需要口令"现在看**验证材料**（哈希 / 盐）而不是明文 ——
+            //   迁移之后明文已不在内存里，但口令仍然有效，页面必须照样要求登录。
+            bool authRequired = Settings.Load().HasWebPasswordConfigured();
+
+            // ★ A11 挂载点：主题颜色快照 → CSS 变量。
+            //   · 只**消费**UI 层发布的不可变快照（WebThemeColorPublisher.Current）：
+            //     这里不解析主题、不读主题文件、不碰硬件；
+            //   · 未发布快照时用写死的回退配色 → 页面外观与改造前一致；
+            //   · 刻意**不推送、不轮询**：换主题后刷新浏览器即取到新配色。
+            string themeCss = WebThemeCss.BuildCssVariables(WebThemeColorPublisher.Current);
+
+            string html = WebPageContent.IndexHtml
+                .Replace("{{FAVICON}}", !string.IsNullOrEmpty(iconBase64) ? $"<link rel='icon' type='image/png' href='data:image/png;base64,{iconBase64}'>" : "")
+                .Replace("{{AUTH_REQUIRED}}", authRequired.ToString().ToLower())
+                .Replace(WebPageContent.ThemeCssPlaceholder, themeCss);
+
+            byte[] data = Encoding.UTF8.GetBytes(html);
+            SendHttpResponse(stream, 200, "text/html; charset=utf-8", data, data.Length, info, policy);
+        }
+
+        /// <summary>
+        /// <c>POST /api/auth/login</c>：口令换主会话。
+        /// </summary>
+        /// <remarks>
+        /// ★ 成功：200 + <c>Set-Cookie: lmsid=…; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800</c>
+        ///   + 体 <c>{"csrf":"…"}</c>（CSRF 令牌由登录响应下发 —— 前端读不到 HttpOnly Cookie）。
+        /// ★ 失败：401（口令错误）/ 400（体不合规）/ 403（Host、Origin 不通过，已在上面处理）。
+        /// </remarks>
+        private async Task HandleLoginAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy, byte[] leftoverBody, CancellationToken cancellationToken)
+        {
+            if (!string.Equals(info.Method, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                SendErrorResponse(stream, 405, "只接受 POST。", info, policy);
+                return;
+            }
+
+            var cfg = Settings.Load();
+
+            // ★ L0（未配置口令）：**没有可校验的凭据**，但协议口径保持统一 ——
+            //   仍然签发主会话与 CSRF 令牌，后续的票据 / 注销流程与 L1 完全一致。
+            //   （契约所有者裁定：L0 下以 {"password":""} 登录必须成功 ——
+            //     "空口令"就是"无口令"，没有可拒绝的理由；而若 L0 让 HTTP API 无会话直通，
+            //     就会形成第二套鉴权口径。）
+            if (!cfg.HasWebPasswordConfigured())
+            {
+                WebSessionRecord l0Session = CreateSession(cfg.GetWebPasswordFingerprint());
+                SendLoginSuccess(stream, l0Session, info, policy);
+                return;
+            }
+
+            // ★ 请求体规则（契约 W7）—— 鉴权已完成（Host/Origin 通过），此时才允许读 body
+            byte[]? body = await ReadJsonBodyAsync(stream, info, leftoverBody, cancellationToken).ConfigureAwait(false);
+            if (body == null) return;   // 错误响应已发出
+
+            if (!TryParseLoginBody(body, out string password))
+            {
+                SendErrorResponse(stream, 400, "请求体不合法（必须是 {\"password\":\"…\"}）。", info, policy);
+                return;
+            }
+
+            // ★ 惰性迁移：旧配置里还有明文 ⇒ 首次校验时把哈希 + 盐写进磁盘，并清掉备份里的明文。
+            //   迁移失败 ⇒ **明确报错**，绝不降级成"空口令"（那等于把服务敞开）。
+            if (!string.IsNullOrEmpty(cfg.WebServerPassword) && !cfg.EnsureWebPasswordMigrated())
+            {
+                SendErrorResponse(stream, 500, "口令迁移失败（无法写入新配置），请检查配置目录权限。", info, policy);
+                return;
+            }
+
+            if (!cfg.VerifyWebPassword(password))
+            {
+                SendErrorResponse(stream, 401, "口令错误。", info, policy);
+                return;
+            }
+
+            WebSessionRecord session = CreateSession(cfg.GetWebPasswordFingerprint());
+            SendLoginSuccess(stream, session, info, policy);
+        }
+
+        /// <summary>
+        /// 登录成功：签发主会话 Cookie + 下发 CSRF 令牌。
+        /// </summary>
+        /// <remarks>
+        /// ★ <c>Set-Cookie: lmsid=…; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800</c>
+        ///   —— 不加 <c>Secure</c>：本机是 HTTP，加了浏览器就不回传（功能直接坏掉）。
+        /// ★ CSRF 令牌必须随登录响应下发：HttpOnly 的 Cookie 前端 JS 读不到。
+        /// </remarks>
+        private void SendLoginSuccess(NetworkStream stream, WebSessionRecord session, HttpRequestInfo info, WebAccessPolicy policy)
+        {
+            string csrf = ComputeCsrfToken(session.Id);
+            string cookie = $"{SessionCookieName}={session.Id}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SessionAbsoluteTtl.TotalSeconds:0}";
+            byte[] payload = Encoding.UTF8.GetBytes("{\"csrf\":\"" + csrf + "\"}");
+            SendHttpResponse(stream, 200, "application/json; charset=utf-8", payload, payload.Length, info, policy,
+                new List<string> { "Set-Cookie: " + cookie });
+        }
+
+        /// <summary>
+        /// <c>POST /api/auth/ticket</c>：用主会话换一次性票据（仅可用于 WS 握手）。
+        /// </summary>
+        private async Task HandleTicketAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy)
+        {
+            if (!string.Equals(info.Method, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                SendErrorResponse(stream, 405, "只接受 POST。", info, policy);
+                return;
+            }
+
+            string? sessionId = GetSessionCookie(info);
+            if (sessionId == null)
+            {
+                SendErrorResponse(stream, 401, "需要有效的主会话。", info, policy);
+                return;
+            }
+
+            if (!TryGetSession(sessionId, policy.PasswordFingerprint, out WebSessionRecord session))
+            {
+                SendErrorResponse(stream, 401, "主会话无效或已过期。", info, policy);
+                return;
+            }
+
+            if (!CheckCsrfHeader(info, session.Id))
+            {
+                SendErrorResponse(stream, 403, "CSRF 校验失败。", info, policy);
+                return;
+            }
+
+            // ★ 该端点不接受请求体：这里**不读** body（也省掉一次读期限）
+            string ticket = CreateTicket(session.Id, policy.PasswordFingerprint);
+            byte[] payload = Encoding.UTF8.GetBytes("{\"ticket\":\"" + ticket + "\"}");
+            SendHttpResponse(stream, 200, "application/json; charset=utf-8", payload, payload.Length, info, policy);
+        }
+
+        /// <summary>
+        /// <c>POST /api/auth/logout</c>：显式注销当前主会话。
+        /// </summary>
+        private async Task HandleLogoutAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy)
+        {
+            if (!string.Equals(info.Method, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                SendErrorResponse(stream, 405, "只接受 POST。", info, policy);
+                return;
+            }
+
+            string? sessionId = GetSessionCookie(info);
+            if (sessionId == null)
+            {
+                SendErrorResponse(stream, 401, "需要有效的主会话。", info, policy);
+                return;
+            }
+
+            if (!TryGetSession(sessionId, policy.PasswordFingerprint, out WebSessionRecord session))
+            {
+                SendErrorResponse(stream, 401, "主会话无效或已过期。", info, policy);
+                return;
+            }
+
+            if (!CheckCsrfHeader(info, session.Id))
+            {
+                SendErrorResponse(stream, 403, "CSRF 校验失败。", info, policy);
+                return;
+            }
+
+            RevokeSession(session.Id);
+
+            // ★ 清 Cookie：Max-Age=0 让浏览器立即丢弃（Path 必须与签发时一致）
+            string clear = $"{SessionCookieName}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict";
+            SendHttpResponse(stream, 204, "application/json; charset=utf-8", Array.Empty<byte>(), 0, info, policy,
+                new List<string> { "Set-Cookie: " + clear });
+        }
+
+        /// <summary>
+        /// <c>GET /api/snapshot</c>：需要主会话（L0 模式除外）。
+        /// </summary>
+        private async Task HandleSnapshotAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy, int connectionGeneration, CancellationToken cancellationToken)
+        {
+            if (!string.Equals(info.Method, "GET", StringComparison.OrdinalIgnoreCase))
+            {
+                SendErrorResponse(stream, 405, "只接受 GET。", info, policy);
+                return;
+            }
+
+            // ★ 主会话在**任何模式**下都是必需的（L0 也一样）：
+            //   "没有口令"不等于"没有会话" —— 否则 HTTP API 会出现第二套鉴权口径。
+            string? sessionId = GetSessionCookie(info);
+            if (sessionId == null)
+            {
+                SendErrorResponse(stream, 401, "需要有效的主会话。", info, policy);
+                return;
+            }
+            if (!TryGetSession(sessionId, policy.PasswordFingerprint, out _))
+            {
+                SendErrorResponse(stream, 401, "主会话无效或已过期。", info, policy);
+                return;
+            }
+
+            // ★ 已鉴权的快照请求获得一个短需求租期（默认 2 秒）。
+            //   连续 HTTP 轮询会不断延长租期；未鉴权请求 / HTML / favicon 都不会走到这里。
+            //   跨越 Stop 边界的在途请求不再授予租期：Stop 已经清空过全部需求，
+            //   再补一个 2 秒租期等于把已停止的服务又变成"有需求"。
+            //   ★ 授权点必须在**采样之前**：等待采样期间不能没有需求。
+            HttpLeaseCheckTestHook?.Invoke();
+
+            bool leaseGranted = false;
+            lock (_clientsGate)
+            {
+                if (_isRunning && connectionGeneration == Volatile.Read(ref _generation))
+                {
+                    HttpLeaseGrantTestHook?.Invoke();
+                    _demand.GrantHttpLease();
+                    leaseGranted = true;
+                }
+            }
+
+            // Keep notifications outside the lifecycle lock.
+            if (leaseGranted) NotifyDemandChanged();
+
+            // ★ 共享采样（限频）：HTTP 轮询与网页广播走**同一条**限频采样路径，
+            //   协调器保证 1 秒 1 次 + 并发合并 → 多个网页 + 轮询不会叠加真实采集。
+            //   快照本身**不执行** hw.Update()，这里只是请求一次共享采样。
+            await RequestSharedSamplingWithTimeoutAsync(cancellationToken).ConfigureAwait(false);
+
+            using var ms = new MemoryStream();
+            using var writer = new Utf8JsonWriter(ms);
+            await WriteSnapshotAsync(writer, cancellationToken).ConfigureAwait(false);
+            writer.Flush();
+            SendHttpResponse(stream, 200, "application/json", ms.GetBuffer(), (int)ms.Length, info, policy);
+        }
+
+        // ==================================================================
+        //  请求解析 / 访问边界（契约 W5 / W6 / W7）
+        // ==================================================================
+
+        /// <summary>
+        /// 解析请求行与请求头。
+        /// </summary>
+        private static HttpRequestInfo ParseRequest(string raw)
+        {
+            var info = new HttpRequestInfo();
+            string[] lines = raw.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+
+            string first = lines.Length > 0 ? lines[0].TrimEnd('\r') : "";
+            if (first.Length == 0) return info;
+
+            string[] parts = first.Split(' ');
+            if (parts.Length >= 2)
+            {
+                info.Method = parts[0];
+                info.Target = parts[1];
+            }
+
+            int q = info.Target.IndexOf('?');
+            if (q >= 0)
+            {
+                info.Path = info.Target.Substring(0, q);
+                info.Query = info.Target.Substring(q + 1);
             }
             else
             {
-                // 默认返回首页（仅取 HTML：不产生硬件需求）
-                string iconBase64 = WebPageContent.GetAppIconBase64();
-                bool authRequired = !string.IsNullOrEmpty(Settings.Load().WebServerPassword);
+                info.Path = info.Target;
+            }
 
-                // ★ A11 挂载点：主题颜色快照 → CSS 变量。
-                //   · 只**消费**UI 层发布的不可变快照（WebThemeColorPublisher.Current）：
-                //     这里不解析主题、不读主题文件、不碰硬件；
-                //   · 未发布快照时用写死的回退配色 → 页面外观与改造前一致；
-                //   · 刻意**不推送、不轮询**：换主题后刷新浏览器即取到新配色。
-                string themeCss = WebThemeCss.BuildCssVariables(WebThemeColorPublisher.Current);
+            for (int i = 1; i < lines.Length; i++)
+            {
+                string line = lines[i].TrimEnd('\r');
+                if (line.Length == 0) break;          // 空行 = 头块结束
+                int colon = line.IndexOf(':');
+                if (colon <= 0) continue;             // 畸形行：忽略（不猜）
 
-                string html = WebPageContent.IndexHtml
-                    .Replace("{{FAVICON}}", !string.IsNullOrEmpty(iconBase64) ? $"<link rel='icon' type='image/png' href='data:image/png;base64,{iconBase64}'>" : "")
-                    .Replace("{{AUTH_REQUIRED}}", authRequired.ToString().ToLower())
-                    .Replace(WebPageContent.ThemeCssPlaceholder, themeCss);
-                
-                byte[] data = Encoding.UTF8.GetBytes(html);
-                SendHttpResponse(stream, 200, "text/html; charset=utf-8", data, data.Length);
+                string name = lines[i].Substring(0, colon).Trim().ToLowerInvariant();
+                string value = lines[i].Substring(colon + 1).Trim();
+                if (name.Length == 0) continue;
+
+                if (!info.Headers.TryGetValue(name, out var list))
+                {
+                    list = new List<string>();
+                    info.Headers[name] = list;
+                }
+                list.Add(value);
+            }
+
+            return info;
+        }
+
+        /// <summary>查询串里是否还带着旧协议的 pwd 参数（已移除 ⇒ 一律拒绝）。</summary>
+        private static bool HasLegacyPasswordQuery(HttpRequestInfo info)
+        {
+            foreach (var pair in ParseQueryPairs(info.Query))
+            {
+                if (string.Equals(pair.Key, "pwd", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>解析查询串（键值都做 URL 解码；同名参数全部保留）。</summary>
+        private static List<KeyValuePair<string, string>> ParseQueryPairs(string query)
+        {
+            var result = new List<KeyValuePair<string, string>>();
+            if (string.IsNullOrEmpty(query)) return result;
+
+            foreach (string part in query.Split('&'))
+            {
+                if (part.Length == 0) continue;
+                int eq = part.IndexOf('=');
+                string rawName = eq >= 0 ? part.Substring(0, eq) : part;
+                string rawValue = eq >= 0 ? part.Substring(eq + 1) : "";
+                result.Add(new KeyValuePair<string, string>(UrlDecode(rawName), UrlDecode(rawValue)));
+            }
+            return result;
+        }
+
+        /// <summary>URL 解码（沿用既有约定：<c>Uri.UnescapeDataString</c>，裸 '+' 不当空格）。</summary>
+        private static string UrlDecode(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            try { return Uri.UnescapeDataString(value); }
+            catch (ArgumentException) { return ""; }
+            catch (UriFormatException) { return ""; }
+        }
+
+        /// <summary>
+        /// 取查询串里某个参数的**唯一**取值；缺失或重复都返回 null。
+        /// </summary>
+        /// <remarks>
+        /// ★ 重复参数一律拒绝（参数污染）：不猜"取第一个还是最后一个"。
+        /// </remarks>
+        private static string? GetSingleQueryValue(HttpRequestInfo info, string name)
+        {
+            string? found = null;
+            foreach (var pair in ParseQueryPairs(info.Query))
+            {
+                if (!string.Equals(pair.Key, name, StringComparison.Ordinal)) continue;
+                if (found != null) return null;      // ★ 重复 ⇒ 拒绝
+                found = pair.Value;
+            }
+            return found;
+        }
+
+        /// <summary>
+        /// 取出会话 Cookie 的值；**重复**的 lmsid 一律视为非法（返回 null）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 契约 W2：重复参数一律拒绝，不猜"取第一个还是最后一个"（参数污染）。
+        /// </remarks>
+        private static string? GetSessionCookie(HttpRequestInfo info)
+        {
+            string? cookieHeader = info.GetSingleHeader("cookie");
+            if (string.IsNullOrEmpty(cookieHeader)) return null;
+
+            string? found = null;
+            foreach (string part in cookieHeader.Split(';'))
+            {
+                string item = part.Trim();
+                if (item.Length == 0) continue;
+                int eq = item.IndexOf('=');
+                string name = eq >= 0 ? item.Substring(0, eq).Trim() : item;
+                if (!string.Equals(name, SessionCookieName, StringComparison.Ordinal)) continue;
+
+                if (found != null) return null;      // ★ 重复 lmsid ⇒ 拒绝
+                found = eq >= 0 ? item.Substring(eq + 1).Trim() : "";
+            }
+            return found;
+        }
+
+        /// <summary>
+        /// 读取并校验请求体（契约 W7）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 规则：必须有 Content-Length（没有 ⇒ chunked ⇒ 拒绝）；超过 4 KB ⇒ **直接拒绝且不读完**；
+        ///   Content-Type 必须是 application/json（charset 必须是 UTF-8）；
+        ///   读取期限**复用** 5 秒请求头期限（不是新值）。
+        /// ★ 失败时把错误响应发出并返回 null。
+        /// </remarks>
+        private async Task<byte[]?> ReadJsonBodyAsync(NetworkStream stream, HttpRequestInfo info, byte[] leftoverBody, CancellationToken cancellationToken)
+        {
+            // ① Transfer-Encoding: chunked ⇒ 不允许流式上传
+            if (info.HasHeader("transfer-encoding"))
+            {
+                SendErrorResponse(stream, 400, "不支持分块传输（必须有 Content-Length）。", info, BuildAccessPolicy());
+                return null;
+            }
+
+            string? contentLengthRaw = info.GetSingleHeader("content-length");
+            if (contentLengthRaw == null)
+            {
+                SendErrorResponse(stream, 400, "缺少 Content-Length。", info, BuildAccessPolicy());
+                return null;
+            }
+            if (!int.TryParse(contentLengthRaw, out int contentLength) || contentLength < 0)
+            {
+                SendErrorResponse(stream, 400, "Content-Length 非法。", info, BuildAccessPolicy());
+                return null;
+            }
+
+            // ② 超过上限 ⇒ 直接拒绝，**不读** body（避免被当作放大器）
+            if (contentLength > MaxRequestBodyBytes)
+            {
+                SendErrorResponse(stream, 400, $"请求体超过上限（{MaxRequestBodyBytes} 字节）。", info, BuildAccessPolicy());
+                return null;
+            }
+
+            // ③ Content-Type 必须是 application/json（charset 只能是 UTF-8）
+            string? contentType = info.GetSingleHeader("content-type");
+            if (!IsJsonContentType(contentType))
+            {
+                SendErrorResponse(stream, 400, "Content-Type 必须是 application/json（charset=utf-8）。", info, BuildAccessPolicy());
+                return null;
+            }
+
+            if (contentLength == 0)
+            {
+                SendErrorResponse(stream, 400, "请求体为空。", info, BuildAccessPolicy());
+                return null;
+            }
+
+            // ④ 读取：期限复用请求头期限（5 秒）
+            //    ★ 先用"读请求头时顺带读到的残留字节"填满开头 —— 客户端常常把头与体
+            //      一次写出去，那些字节已经在缓冲里了，不能再去 socket 里等（等不到）。
+            byte[] buffer = new byte[contentLength];
+            int total = 0;
+            if (leftoverBody != null && leftoverBody.Length > 0)
+            {
+                int take = Math.Min(leftoverBody.Length, contentLength);
+                Buffer.BlockCopy(leftoverBody, 0, buffer, 0, take);
+                total = take;
+            }
+
+            using (var readCts = new CancellationTokenSource(HeaderReadTimeout))
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(readCts.Token, cancellationToken))
+            {
+                try
+                {
+                    while (total < contentLength)
+                    {
+                        int read = await stream.ReadAsync(buffer, total, contentLength - total, linked.Token).ConfigureAwait(false);
+                        if (read == 0) break;
+                        total += read;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    SendErrorResponse(stream, 408, "读取请求体超时。", info, BuildAccessPolicy());
+                    return null;
+                }
+                catch (IOException)
+                {
+                    return null;   // 连接已断：不用再回响应
+                }
+            }
+
+            if (total != contentLength)
+            {
+                SendErrorResponse(stream, 400, "请求体长度与 Content-Length 不一致。", info, BuildAccessPolicy());
+                return null;
+            }
+
+            return buffer;
+        }
+
+        /// <summary>Content-Type 是否为 application/json（UTF-8）。</summary>
+        private static bool IsJsonContentType(string? contentType)
+        {
+            if (string.IsNullOrEmpty(contentType)) return false;
+
+            string[] parts = contentType.Split(';');
+            string media = parts[0].Trim().ToLowerInvariant();
+            if (media != "application/json") return false;
+
+            for (int i = 1; i < parts.Length; i++)
+            {
+                string param = parts[i].Trim();
+                int eq = param.IndexOf('=');
+                if (eq <= 0) continue;
+                string name = param.Substring(0, eq).Trim().ToLowerInvariant();
+                string value = param.Substring(eq + 1).Trim().Trim('"').ToLowerInvariant();
+                if (name == "charset" && value != "utf-8" && value != "utf8") return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// 严格解析登录体：只接受 <c>{"password":"…"}</c>，重复字段一律拒绝。
+        /// </summary>
+        /// <remarks>
+        /// ★ 重复 JSON 字段必须拒绝（契约 W7）：取"第一个"还是"最后一个"都会产生歧义，
+        ///   而解析器与校验器取到不同的那个，就等于"用一个口令过校验、用另一个口令干活"。
+        /// ★ 解析失败**不**把异常细节原样回给客户端。
+        /// </remarks>
+        private static bool TryParseLoginBody(byte[] body, out string password)
+        {
+            password = "";
+            try
+            {
+                var reader = new Utf8JsonReader(body);
+                if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) return false;
+
+                bool seen = false;
+                while (reader.Read())
+                {
+                    if (reader.TokenType == JsonTokenType.EndObject) return seen;
+
+                    if (reader.TokenType != JsonTokenType.PropertyName) return false;
+                    string name = reader.GetString() ?? "";
+                    if (!reader.Read()) return false;
+
+                    if (string.Equals(name, "password", StringComparison.Ordinal))
+                    {
+                        if (seen) return false;                 // ★ 重复字段 ⇒ 拒绝
+                        if (reader.TokenType != JsonTokenType.String) return false;
+                        password = reader.GetString() ?? "";
+                        seen = true;
+                    }
+                    else
+                    {
+                        // 其它字段：跳过（不猜其结构），但同名重复仍然致命
+                        if (reader.TokenType == JsonTokenType.StartObject || reader.TokenType == JsonTokenType.StartArray)
+                        {
+                            reader.Skip();
+                        }
+                    }
+                }
+                return false;
+            }
+            catch (JsonException)
+            {
+                return false;   // ★ 不把异常细节回给客户端
             }
         }
 
         /// <summary>
-        /// 校验请求行里的访问口令（<c>?pwd=</c> 或 <c>&amp;pwd=</c>）。
+        /// 构造当前的访问边界策略（Host / Origin 白名单 + 口令状态）。
         /// </summary>
-        /// <remarks>
-        /// ★ 有两处必须做对，否则要么功能坏掉、要么安全性虚设：
-        ///   <list type="number">
-        ///   <item>
-        ///   <b>先 URL 解码，再比较。</b>
-        ///   前端是把口令经 <c>encodeURIComponent</c> 编码后塞进查询串的
-        ///   （WebPageContent：<c>'/api/snapshot?pwd=' + encodeURIComponent(pwd)</c>）。
-        ///   于是含空格、<c>&amp;</c>、<c>%</c>、<c>+</c>、中文的口令在线上全都是 <c>%XX</c> 形态，
-        ///   拿编码串去比对原文必然对不上 —— 这不是"口令错了"，是口令**永远**不能含这些字符。
-        ///   这里用 <see cref="Uri.UnescapeDataString"/> 而不是 <c>WebUtility.UrlDecode</c>：
-        ///   后者会把裸 <c>+</c> 当空格，而 <c>encodeURIComponent</c> 从不产生裸 <c>+</c>
-        ///   （它把 <c>+</c> 编成 <c>%2B</c>），两者的 '+' 语义不一致，用错会把
-        ///   形如 <c>a+b</c> 的口令解成 <c>a b</c>。
-        ///   </item>
-        ///   <item>
-        ///   <b>恒时比较。</b>
-        ///   普通字符串比较在第一个不同的字符处提前返回，逐位试错可以从响应耗时差异里
-        ///   反向还原口令内容。
-        ///   </item>
-        ///   </list>
-        /// ★ 长度不同仍会快速返回（<see cref="CryptographicOperations.FixedTimeEquals"/> 的固有行为）。
-        ///   这里接受这一点：口令长度来自本机设置，不是攻击者能通过请求探测的秘密；
-        ///   为掩盖它而改走"两边先做定长哈希"只是把常数开销换个位置，收益并不真实。
-        /// </remarks>
-        private bool CheckAuth(string requestHeader)
+        private WebAccessPolicy BuildAccessPolicy()
         {
-            var pwd = Settings.Load().WebServerPassword;
-            if (string.IsNullOrEmpty(pwd)) return true;
+            Settings cfg = Settings.Load();
+            var policy = new WebAccessPolicy();
 
-            // ★ 只取请求行（第一行）：若从整段头部里捞 pwd，请求体或后续头里的同名内容也会被命中。
-            var newline = requestHeader.IndexOf('\n');
-            var firstLine = newline >= 0 ? requestHeader.Substring(0, newline) : requestHeader;
+            policy.PasswordRequired = cfg.HasWebPasswordConfigured();
+            policy.PasswordFingerprint = cfg.GetWebPasswordFingerprint();
+            policy.TrustProxyHeaders = cfg.WebServerTrustProxyHeaders;
 
-            var match = PwdQueryRegex.Match(firstLine);
-            if (!match.Success) return false;
+            // 本机地址始终允许（契约 W5）
+            policy.AllowedHosts.Add("127.0.0.1");
+            policy.AllowedHosts.Add("localhost");
+            policy.AllowedHosts.Add("::1");
 
-            // ★ 同一请求行里出现多个 pwd 参数时一律拒绝，不猜"取第一个还是最后一个"。
-            //   这是参数污染（parameter pollution）的经典形态：只要校验环节与使用环节
-            //   取了不同的那一个，就会出现"用一个口令通过校验、用另一个口令干活"。
-            //   正常客户端不会发重复参数（前端是单个 encodeURIComponent 拼接），
-            //   而合法口令里的 & 必然被编码成 %26，不会自己拼出第二个 [?&]pwd=。
-            if (match.NextMatch().Success) return false;
-
-            string supplied;
-            try
+            // 局域网模式：额外允许用户配置的地址
+            if (cfg.WebServerBindMode == WebServerBindMode.Lan)
             {
-                supplied = Uri.UnescapeDataString(match.Groups[1].Value);
-            }
-            catch (ArgumentException)
-            {
-                // 含非法转义：一律按"口令错误"处理，绝不让它抛到连接处理层
-                return false;
-            }
-            catch (UriFormatException)
-            {
-                return false;
+                foreach (string addr in SplitConfigList(cfg.WebServerLanAddresses))
+                {
+                    string host = NormalizeHost(addr);
+                    if (host.Length > 0) policy.AllowedHosts.Add(host);
+                }
             }
 
-            return FixedTimeEqualsUtf8(supplied, pwd);
+            // 显式配置的跨源（精确匹配）
+            foreach (string origin in SplitConfigList(cfg.WebServerAllowedOrigins))
+            {
+                string o = origin.Trim().TrimEnd('/');
+                if (o.Length > 0) policy.AllowedOrigins.Add(o);
+            }
+
+            return policy;
+        }
+
+        /// <summary>Host 头是否在允许集合内（防 DNS Rebinding）。</summary>
+        private bool IsHostAllowed(HttpRequestInfo info, WebAccessPolicy policy)
+        {
+            string? hostHeader = info.GetSingleHeader("host");
+            if (string.IsNullOrEmpty(hostHeader)) return false;      // 没有 Host ⇒ 拒绝
+
+            SplitHostPort(hostHeader, out string host, out int? port);
+            host = NormalizeHost(host);
+            if (host.Length == 0) return false;
+            if (!policy.AllowedHosts.Contains(host)) return false;
+
+            // 端口必须与实际监听端口一致（端口未知时不校验端口，只校验主机名）
+            if (port.HasValue && ListenPort.HasValue && port.Value != ListenPort.Value) return false;
+
+            return true;
+        }
+
+        /// <summary>Origin 头是否允许（缺失 ⇒ 允许；"null" ⇒ 拒绝；不在集合 ⇒ 拒绝）。</summary>
+        private bool IsOriginAllowed(HttpRequestInfo info, WebAccessPolicy policy)
+        {
+            string? origin = info.GetSingleHeader("origin");
+            if (string.IsNullOrEmpty(origin)) return true;      // 非浏览器客户端 ⇒ 允许（Host 仍须通过）
+            if (string.Equals(origin, "null", StringComparison.OrdinalIgnoreCase)) return false;
+
+            // 显式配置的跨源：精确匹配
+            if (policy.AllowedOrigins.Contains(origin.Trim().TrimEnd('/'))) return true;
+
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out Uri? uri)) return false;
+            string scheme = uri.Scheme.ToLowerInvariant();
+            if (scheme != "http" && scheme != "https") return false;
+
+            string host = NormalizeHost(uri.Host);
+            if (host.Length == 0) return false;
+            if (!policy.AllowedHosts.Contains(host)) return false;
+
+            if (ListenPort.HasValue && uri.Port != ListenPort.Value) return false;
+            return true;
+        }
+
+        /// <summary>拆分 Host 头的主机名与端口。</summary>
+        private static void SplitHostPort(string value, out string host, out int? port)
+        {
+            host = "";
+            port = null;
+            string v = (value ?? "").Trim();
+            if (v.Length == 0) return;
+
+            if (v.StartsWith("[", StringComparison.Ordinal))
+            {
+                int close = v.IndexOf(']');
+                if (close > 0)
+                {
+                    host = v.Substring(1, close - 1);
+                    if (close + 1 < v.Length && v[close + 1] == ':' &&
+                        int.TryParse(v.Substring(close + 2), out int p))
+                    {
+                        port = p;
+                    }
+                    return;
+                }
+            }
+
+            int colon = v.LastIndexOf(':');
+            if (colon > 0 && v.IndexOf(':') == colon)
+            {
+                host = v.Substring(0, colon);
+                if (int.TryParse(v.Substring(colon + 1), out int p2)) port = p2;
+                return;
+            }
+
+            host = v;
+        }
+
+        /// <summary>主机名归一化（小写、去 IPv6 方括号、去掉端口）。</summary>
+        private static string NormalizeHost(string host)
+        {
+            if (string.IsNullOrEmpty(host)) return "";
+            string h = host.Trim().ToLowerInvariant();
+            if (h.StartsWith("[", StringComparison.Ordinal) && h.EndsWith("]", StringComparison.Ordinal))
+            {
+                h = h.Substring(1, h.Length - 2);
+            }
+            return h.Trim();
+        }
+
+        /// <summary>按逗号 / 分号 / 换行拆分配置列表。</summary>
+        private static IEnumerable<string> SplitConfigList(string? value)
+        {
+            if (string.IsNullOrEmpty(value)) yield break;
+            foreach (string part in value.Split(new[] { ',', ';', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string p = part.Trim();
+                if (p.Length > 0) yield return p;
+            }
+        }
+
+        /// <summary>
+        /// 访问边界策略（一次请求的快照）。
+        /// </summary>
+        private sealed class WebAccessPolicy
+        {
+            /// <summary>是否配置了口令（false = L0 无凭据模式）。</summary>
+            public bool PasswordRequired;
+
+            /// <summary>当前口令指纹（改密 ⇒ 全部会话 / 票据撤销）。</summary>
+            public string PasswordFingerprint = "";
+
+            /// <summary>允许的主机名集合。</summary>
+            public readonly HashSet<string> AllowedHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>显式允许的跨源（精确匹配）。</summary>
+            public readonly HashSet<string> AllowedOrigins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>是否信任转发头（降级开关，默认 false）。</summary>
+            public bool TrustProxyHeaders;
         }
 
         /// <summary>
@@ -889,12 +1925,94 @@ namespace LiteMonitor.src.WebServer
             return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
         }
 
-        private void SendHttpResponse(NetworkStream stream, int code, string type, byte[] body, int len)
+        /// <summary>
+        /// 发送 HTTP 响应。
+        /// </summary>
+        /// <remarks>
+        /// ★ **不再**返回 <c>Access-Control-Allow-Origin: *</c>（契约 W6）：
+        ///   默认不返回任何 CORS 头；只有请求的 Origin 命中用户显式配置的跨源白名单时，
+        ///   才回显**具体的**那个源并附带 <c>Access-Control-Allow-Credentials: true</c>。
+        /// </remarks>
+        private void SendHttpResponse(NetworkStream stream, int code, string type, byte[] body, int len,
+                                      HttpRequestInfo? request = null, WebAccessPolicy? policy = null,
+                                      List<string>? extraHeaders = null)
         {
-            string headers = $"HTTP/1.1 {code} OK\r\nContent-Type: {type}\r\nContent-Length: {len}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
-            byte[] hBytes = Encoding.UTF8.GetBytes(headers);
+            var sb = new StringBuilder();
+            sb.Append("HTTP/1.1 ").Append(code).Append(' ').Append(GetReasonPhrase(code)).Append("\r\n");
+            sb.Append("Content-Type: ").Append(type).Append("\r\n");
+            sb.Append("Content-Length: ").Append(len).Append("\r\n");
+            if (extraHeaders != null)
+            {
+                foreach (string h in extraHeaders) sb.Append(h).Append("\r\n");
+            }
+            AppendCorsHeaders(sb, request, policy);
+            sb.Append("Connection: close\r\n\r\n");
+
+            byte[] hBytes = Encoding.UTF8.GetBytes(sb.ToString());
             stream.Write(hBytes, 0, hBytes.Length);
             if (len > 0) stream.Write(body, 0, len);
+        }
+
+        /// <summary>错误响应（统一形态：短文本 + 明确状态码）。</summary>
+        private void SendErrorResponse(NetworkStream stream, int code, string message,
+                                       HttpRequestInfo? request = null, WebAccessPolicy? policy = null)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(message ?? "");
+            SendHttpResponse(stream, code, "text/plain; charset=utf-8", data, data.Length, request, policy);
+        }
+
+        /// <summary>
+        /// OPTIONS 预检响应：走与普通请求**同一套** Host / Origin 校验（已在路由前完成）。
+        /// </summary>
+        private void SendPreflightResponse(NetworkStream stream, HttpRequestInfo request, WebAccessPolicy policy)
+        {
+            var extra = new List<string>
+            {
+                "Access-Control-Allow-Methods: GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers: Content-Type, X-LiteMonitor-CSRF"
+            };
+            SendHttpResponse(stream, 204, "text/plain; charset=utf-8", Array.Empty<byte>(), 0, request, policy, extra);
+        }
+
+        /// <summary>
+        /// 追加 CORS 响应头：**默认一个都不加**。
+        /// </summary>
+        /// <remarks>
+        /// ★ 只有"用户显式配置的跨源白名单"命中时才回显**具体的**源；
+        ///   绝不使用 <c>*</c>（带凭据时 <c>*</c> 本身就是非法的）。
+        /// </remarks>
+        private void AppendCorsHeaders(StringBuilder sb, HttpRequestInfo? request, WebAccessPolicy? policy)
+        {
+            if (request == null || policy == null) return;
+
+            string? origin = request.GetSingleHeader("origin");
+            if (string.IsNullOrEmpty(origin)) return;
+            if (policy.AllowedOrigins.Count == 0) return;
+
+            string normalized = origin.Trim().TrimEnd('/');
+            if (!policy.AllowedOrigins.Contains(normalized)) return;
+
+            sb.Append("Access-Control-Allow-Origin: ").Append(normalized).Append("\r\n");
+            sb.Append("Access-Control-Allow-Credentials: true\r\n");
+            sb.Append("Vary: Origin\r\n");
+        }
+
+        /// <summary>状态码对应的原因短语。</summary>
+        private static string GetReasonPhrase(int code)
+        {
+            switch (code)
+            {
+                case 200: return "OK";
+                case 204: return "No Content";
+                case 400: return "Bad Request";
+                case 401: return "Unauthorized";
+                case 403: return "Forbidden";
+                case 404: return "Not Found";
+                case 405: return "Method Not Allowed";
+                case 408: return "Request Timeout";
+                case 500: return "Internal Server Error";
+                default: return "OK";
+            }
         }
 
         // --- 共享采样（限频） ---
@@ -1228,18 +2346,50 @@ namespace LiteMonitor.src.WebServer
             }
         }
 
+        /// <summary>
+        /// WebSocket 握手（契约 W3 / W5 / W13.5）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 凭据 = <b>一次性票据</b>（<c>?ticket=</c>），不再接受 <c>?pwd=</c>：
+        ///   浏览器 WebSocket API 无法自定义 Authorization 头，票据短 TTL + 一次性 + 仅限 WS 三者叠加。
+        /// ★ Host / Origin 校验与 HTTP 完全一致（同一套判定口径）。
+        /// </remarks>
         private bool Handshake(NetworkStream stream, string request)
         {
             try
             {
-                if (!CheckAuth(request))
+                HttpRequestInfo info = ParseRequest(request);
+                WebAccessPolicy policy = BuildAccessPolicy();
+
+                // ① Host / Origin（防 DNS Rebinding / 跨源建连）
+                if (!IsHostAllowed(info, policy) || !IsOriginAllowed(info, policy))
                 {
-                    SendHttpResponse(stream, 401, "text/plain", Encoding.UTF8.GetBytes("Unauthorized"), 12);
+                    SendErrorResponse(stream, 403, "Host / Origin 校验未通过。", info, policy);
+                    return false;
+                }
+
+                // ② 旧协议已移除
+                if (HasLegacyPasswordQuery(info))
+                {
+                    SendErrorResponse(stream, 401, "查询串口令（?pwd=）已移除，请先登录换取一次性票据。", info, policy);
+                    return false;
+                }
+
+                // ③ 票据：一次性、30 秒、仅限 WS。
+                //   ★ L0 下同样必须走票据流程（协议口径统一，不开第二套口子）。
+                string? ticket = GetSingleQueryValue(info, "ticket");
+                if (ticket == null || !TryConsumeTicket(ticket, policy.PasswordFingerprint))
+                {
+                    SendErrorResponse(stream, 401, "票据无效、已过期或已被使用。", info, policy);
                     return false;
                 }
 
                 // 1. 提取 Sec-WebSocket-Key 并做 RFC 6455 形态校验
-                if (!TryGetWebSocketKey(request, out string key)) return false;
+                if (!TryGetWebSocketKey(request, out string key))
+                {
+                    SendErrorResponse(stream, 400, "Sec-WebSocket-Key 缺失 / 重复 / 形态非法。", info, policy);
+                    return false;
+                }
 
                 // 2. 生成 Accept Key (Magic String: 258EAFA5-E914-47DA-95CA-C5AB0DC85B11)
                 string magic = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

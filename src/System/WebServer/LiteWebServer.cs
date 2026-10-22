@@ -44,7 +44,9 @@ namespace LiteMonitor.src.WebServer
         /// 监听地址接缝（<c>internal</c>，**不属于公开 API**）。
         /// </summary>
         /// <remarks>
-        /// ★ null（默认）= 生产行为：<c>IPAddress.IPv6Any</c> + DualMode，系统不支持 IPv6 时回退 IPv4。
+        /// ★ null（默认）= 生产行为：由 <c>Settings.WebServerBindMode</c> 决定 ——
+        ///   <c>Loopback</c>（默认，新安装）只监听 <c>127.0.0.1</c>；
+        ///   <c>Lan</c> 才是"监听全部网卡"的旧行为（且强制要求非空口令）。
         /// ★ 单元测试把它设成 <see cref="IPAddress.Loopback"/>：测试期间**只监听回环**，
         ///   不在局域网上暴露一个带口令的服务（测试窗口里被外部扫到是不可接受的卫生问题）。
         /// ★ 默认值保持生产语义不变 —— 这是一个**只给测试用**的接缝，不改变任何生产行为。
@@ -67,6 +69,15 @@ namespace LiteMonitor.src.WebServer
 
         public bool IsRunning => _isRunning;
         public int CurrentRunningPort => _isRunning ? _currentRunningPort : -1;
+
+        /// <summary>
+        /// 当前实际监听的端点（未运行时为 null）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 供"监听范围"类断言核对**真实**绑定结果（而不是只读配置）：
+        ///   配置说"仅本机"不等于真的只监听环回 —— 端点才是事实。
+        /// </remarks>
+        internal IPEndPoint? CurrentListenEndpoint { get; private set; }
 
         /// <summary>当前是否存在合法的 Web 数据需求（已鉴权连接或未过期的 HTTP 快照租期）。</summary>
         public bool HasWebDataDemand => _sessionManager.HasWebDataDemand;
@@ -175,6 +186,19 @@ namespace LiteMonitor.src.WebServer
             {
                 int port = _cfg.WebServerPort;
 
+                // ★ 监听范围（契约 W1 / W12）：
+                //   · Lan 模式**必须**配置非空口令 —— 空口令直接拒绝启动并给出明确错误，
+                //     绝不能"先跑起来再说"（那等于把监控数据敞开给整个局域网）。
+                //   · 其余（仅本机）只监听 127.0.0.1。
+                bool lanMode = _cfg.WebServerBindMode == WebServerBindMode.Lan;
+                if (lanMode && !_cfg.HasWebPasswordConfigured())
+                {
+                    errorMsg = "局域网模式必须先设置访问口令：已拒绝启动。" +
+                               "请在【设置 → 网页服务】里填写口令，或把监听范围改为「仅本机」。";
+                    Debug.WriteLine("WebServer Start Error: " + errorMsg);
+                    return false;
+                }
+
                 IPAddress? listenAddress = ListenAddress;
                 if (listenAddress != null)
                 {
@@ -182,7 +206,7 @@ namespace LiteMonitor.src.WebServer
                     listener = new TcpListener(listenAddress, port);
                     listener.Start();
                 }
-                else
+                else if (lanMode)
                 {
                     try
                     {
@@ -198,10 +222,24 @@ namespace LiteMonitor.src.WebServer
                         listener.Start();
                     }
                 }
+                else
+                {
+                    // ★ 默认（仅本机）：只监听回环地址，**不**暴露给局域网 / 公网。
+                    //   注意这里刻意不用 IPAddress.Loopback 的"全网卡"变体：
+                    //   要的就是 127.0.0.1 这一个地址。
+                    listener = new TcpListener(IPAddress.Loopback, port);
+                    listener.Start();
+                }
 
                 _isRunning = true;
                 _currentRunningPort = port;
                 CurrentPassword = _cfg.WebServerPassword;
+
+                // ★ 记录真实监听端点（供"监听范围"断言核对事实而不是配置）
+                CurrentListenEndpoint = listener.LocalEndpoint as IPEndPoint;
+
+                // ★ Host / Origin 校验需要知道真实监听端口
+                _sessionManager.ListenPort = port;
 
                 // 2. 先启动 WebSocket 管理器 (广播循环在内部)
                 //    ★ 必须在开始监听之前：会话管理器没启动时不会登记任何连接需求，
@@ -258,7 +296,11 @@ namespace LiteMonitor.src.WebServer
 
             try { _listener?.Stop(); } catch { }
             _listener = null;
-            
+            CurrentListenEndpoint = null;
+
+            // ★ 端口未知 ⇒ Host / Origin 的端口校验不再生效（下次 Start 会重新写入）
+            _sessionManager.ListenPort = null;
+
             // 停止 WebSocket 管理器（同时清空全部 Web 需求：连接 + HTTP 租期）
             _sessionManager.Stop();
 
