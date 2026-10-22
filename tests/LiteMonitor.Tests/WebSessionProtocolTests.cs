@@ -957,10 +957,13 @@ namespace LiteMonitor.Tests
             await WithServerAsync(async (port, _) =>
             {
                 UsePassword("legacy-password");
+                LoginResult login = await LoginAsync(port, "legacy-password");
 
-                // ① 口令**正确**也一样被拒（旧路径整体移除，不是"口令错了才拒"）
+                // ① 口令**正确** + **有效的主会话**也一样被拒（旧路径整体移除，不是"口令错了才拒"）
+                //    ★ 带上有效会话 ⇒ 一旦旧路径被放行，这个请求会直接 200 ⇒ 断言具备判别力
                 string okPwd = await SendRawAsync(port,
-                    $"GET /api/snapshot?pwd=legacy-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+                    $"GET /api/snapshot?pwd=legacy-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    $"Cookie: lmsid={login!.SessionId}\r\nConnection: close\r\n\r\n");
                 Assert.Contains("401", FirstLine(okPwd));
                 Assert.DoesNotContain("Set-Cookie", okPwd);
                 Assert.DoesNotContain("csrf", okPwd, StringComparison.OrdinalIgnoreCase);
@@ -968,13 +971,16 @@ namespace LiteMonitor.Tests
 
                 // ② 口令错误 ⇒ 同样 401，同样不签发任何东西
                 string wrongPwd = await SendRawAsync(port,
-                    $"GET /api/snapshot?pwd=wrong-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+                    $"GET /api/snapshot?pwd=wrong-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    $"Cookie: lmsid={login.SessionId}\r\nConnection: close\r\n\r\n");
                 Assert.Contains("401", FirstLine(wrongPwd));
                 Assert.DoesNotContain("Set-Cookie", wrongPwd);
 
-                // ③ 票据接口同样拒绝旧路径
+                // ③ 票据接口同样拒绝旧路径（带着**有效的会话 + CSRF**：
+                //    旧路径一旦被放行，这里就会真的签发出一张票据）
                 string ticketResp = await SendRawAsync(port,
                     $"POST /api/auth/ticket?pwd=legacy-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    $"Cookie: lmsid={login.SessionId}\r\nX-LiteMonitor-CSRF: {login.Csrf}\r\n" +
                     "Content-Length: 0\r\nConnection: close\r\n\r\n");
                 Assert.Contains("401", FirstLine(ticketResp));
                 Assert.DoesNotContain("Set-Cookie", ticketResp);
@@ -1000,6 +1006,8 @@ namespace LiteMonitor.Tests
         ///   只覆盖 HTTP 分支的话，把 WS 分支改回接受 <c>?pwd=</c> 依然全绿。
         /// ★ Host 头给合法值 ⇒ 请求能走到 <c>HasLegacyPasswordQuery</c> 判定（否则会先吃 403，
         ///   那样这条用例就变成在测 Host 校验，而不是在测旧口令拒绝）。
+        /// ★ **请求里同时带上有效的票据**：只有这样，断言才真正落在"旧路径本身被移除"上 ——
+        ///   否则"因为没有票据而被拒"同样能让用例通过，删掉旧口令判定也照样绿（护栏会失效）。
         /// </remarks>
         [Fact]
         public async Task C2_查询串口令在WebSocket握手一律被拒且不签发票据()
@@ -1007,33 +1015,30 @@ namespace LiteMonitor.Tests
             await WithServerAsync(async (port, _) =>
             {
                 UsePassword("legacy-ws-password");
+                LoginResult login = await LoginAsync(port, "legacy-ws-password");
+                string ticket1 = await RequestTicketAsync(port, login!.SessionId, login.Csrf);
+                string ticket2 = await RequestTicketAsync(port, login.SessionId, login.Csrf);
+                Assert.False(string.IsNullOrEmpty(ticket1));
+                Assert.False(string.IsNullOrEmpty(ticket2));
 
-                // ① 口令**正确** ⇒ 握手依然被拒（非 101）
-                //    ★ 读取期限压到 3s：握手被拒时服务端**不关闭**这条连接
-                //      （WebSessionManager.cs:756-764 的 client.Close() 只在 HTTP 分支），
-                //      所以这里只需要等响应、不需要等连接结束 —— 不压期限会白等满 10s 超时。
+                // ① 旧路径 + **有效的票据**：必须仍然被拒（非 101）
                 string resp = await SendRawAsync(port,
-                    $"GET /ws?pwd=legacy-ws-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
-                    "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
-                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+                    BuildLegacyPwdWsRequest(port, "legacy-ws-password", ticket1),
                     timeoutMs: 3000);
 
                 Assert.DoesNotContain("101", FirstLine(resp));
                 Assert.DoesNotContain("Switching Protocols", resp);
-                Assert.Contains("401", resp);
+                Assert.Contains("401", FirstLine(resp));
                 Assert.DoesNotContain("Set-Cookie", resp);
                 Assert.DoesNotContain("csrf", resp, StringComparison.OrdinalIgnoreCase);
-                Assert.DoesNotContain("ticket", resp, StringComparison.OrdinalIgnoreCase);
 
-                // ② 口令错误 ⇒ 同样被拒
+                // ② 口令错误也一样被拒
                 string wrong = await SendRawAsync(port,
-                    $"GET /ws?pwd=wrong-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
-                    "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
-                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+                    BuildLegacyPwdWsRequest(port, "wrong-password", ticket2),
                     timeoutMs: 3000);
 
                 Assert.DoesNotContain("101", FirstLine(wrong));
-                Assert.Contains("401", wrong);
+                Assert.Contains("401", FirstLine(wrong));
                 Assert.DoesNotContain("Set-Cookie", wrong);
             });
         }
@@ -1360,6 +1365,20 @@ namespace LiteMonitor.Tests
         private static string BuildWsRequest(int port, string ticket)
         {
             return $"GET /ws?ticket={ticket} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                   "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+                   "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        }
+
+        /// <summary>
+        /// 旧协议的 WS 握手请求：**同时**带 <c>?pwd=</c> 与一张**有效的**票据。
+        /// </summary>
+        /// <remarks>
+        /// ★ 带上有效票据是关键：只有这样，"被拒"才只能归因于"旧路径已被移除"，
+        ///   而不是"票据无效" —— 否则删掉旧口令判定，这条用例依然会绿。
+        /// </remarks>
+        private static string BuildLegacyPwdWsRequest(int port, string password, string ticket)
+        {
+            return $"GET /ws?pwd={password}&ticket={ticket} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
                    "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
         }
