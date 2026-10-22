@@ -48,7 +48,7 @@ jobs:
       #   现按 ci.yml 同步到 1316（1239 + 58 + 19），并把跳过数上限与"必须真正执行的测试类"
       #   也一并同步（原先本文件连 -MaxSkipped / -MustExecuteTestClass 都没传，
       #   只依赖脚本默认值 1）。门禁**只收紧不放宽**。
-      MIN_TEST_TOTAL: 1349
+      MIN_TEST_TOTAL: 1394
       EXPECTED_TEST_ASSEMBLIES: 'LiteMonitor.Tests, LiteMonitor.Updater.Tests, LiteMonitor.GpuNonperformance.Tests'
       # ★ 跳过用例数上限（与 ci.yml 一致）：只允许联网 E2E 被跳过。
       MAX_SKIPPED_TESTS: 1
