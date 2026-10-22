@@ -28,7 +28,7 @@
 
 | 计划条目 | 计划描述 | 实测依据 | 结论 |
 |---|---|---|---|
-| Task 1.1 | 计时器 `AutoReset=false` 导致调度永久停止 | `src/Plugins/PluginManager.cs:363-364` 设 `AutoReset = false`；`:371-375` 不可见分支在 `try` 之前直接 `return`；而重启计时器的 `finally` 位于 `:417-423`。不可见路径永不进入 try/finally，计时器就此停摆 | **属实，根因描述精确** |
+| Task 1.1 | 计时器 `AutoReset=false` 导致调度永久停止 | `src/Plugins/PluginManager.cs:363-364` 设 `AutoReset = false`；`:371-375` 不可见分支在 `try` 之前直接 `return`；而重启计时器的 `finally` 位于 `:417-423`。不可见路径永不进入 try/finally，计时器就此停摆 | ⚠️ **本行结论已于 2026-10-22 被推翻，详见下方"更正记录"**（原判："属实，根因描述精确"） |
 | Task 1.2 | 合并键基于 `GetHashCode()` | `src/Plugins/PluginExecutor.cs:284` `(url + "\|" + body).GetHashCode().ToString("X")` | **部分属实**：真实缺口是方法/Header/代理未入键 + 32 位进程内非稳定哈希；但 `:285` 的键**已含** `inst.Id` 与 `step.Id`，计划把"插件实例/步骤身份"列为待加项属于误判 |
 | Task 1.3 | `HttpResponseMessage` 未释放 | `src/Plugins/PluginExecutor.cs:509` `var response = await client.SendAsync(request, token);` 无 `using` | **属实** |
 | Task 2.1 | 动态 HTML 注入入口 | `WebPageContent.cs:483` 直接插值 `${grp.name}`；`:518`、`:547`、`:581` 插值 `${item.n}` | **属实** |
@@ -39,6 +39,29 @@
 | Task 3.2 | 插件需强制 SHA-256 | `PluginMarket.cs:290` 已在校验，但条件是 `!string.IsNullOrEmpty(entry.Sha256)`——即**可选** | **已存在**，任务是"可选改必填"，不是"从无到有" |
 | Task 6.1 | 需实现签名与完整性校验 | `src/System/UpdateChecker.cs:115-160` 已实现 ECDSA P-256 验签且失败即拒，下载后比对期望摘要；`tests/LiteMonitor.Tests/UpdateSignatureTests.cs`（14 KB）已覆盖。真实缺口是 `resources/version.json` 的 `sha256` 与 `signature` **均为空字符串** | **已过时**——客户端侧无需重写，缺口在"未签署发布" |
 | Phase 7 | 主程序 `requireAdministrator` | `app.manifest` 确为 `level="requireAdministrator"` | **属实** |
+
+### 2.1 更正记录（2026-10-22）：Task 1.1 的"永久停摆"结论被推翻
+
+**本文档 §二 表格中 Task 1.1 一行原判为"属实，根因描述精确"，该判定错误，现予更正。**
+
+被推翻的断言：
+> "不可见路径永不进入 try/finally，计时器就此停摆。"
+
+**事实**：基线 `src/Plugins/PluginManager.cs:371-375` 的不可见分支在提前 `return` **之前**已经执行 `newTimer.Interval = 2000;`。`System.Timers.Timer` 在 `AutoReset = false` 时，**在处理器内被赋值 `Interval` 即重新武装**（该行为未被 .NET 文档明文保证，但实测成立）——因此基线在不可见状态下**仍按 2 秒周期持续轮询，并未停摆**。
+
+**实测证据**（PowerShell 7 + `Add-Type` 内联 C# 探针，各跑 3 秒）：
+
+| 变体 | 形状 | 触发次数 |
+|---|---|---|
+| A | `AutoReset=false`，处理器内赋值 `Interval` | **6**（@50/551/1051/1551/2051/2551 ms） |
+| B | 基线 `async` 处理器 + 提前 `return` 形状 | **6**（@51/550/1050/1560/2060/2560 ms） |
+| C | 不赋 `Interval`、不 `Start()`（纯单发） | **1**（@49 ms） |
+
+**更正后的表述**：真实缺陷不是"停摆"，而是**调度存活依赖未被文档化的 `Interval` 赋值重武装副作用**，且**缺少实例代次守卫**（停/启/重启竞态下旧回调可能重新调度或写回结果）。修复定位由"恢复停摆的轮询"更正为"**消除对未文档化副作用的依赖 + 引入实例代次守卫**"；优先级由 P1 更正为 P2。
+
+**本次更正不影响本评审其余 19 条断言**（见 `2026-10-22-v2-plan-thirdparty-review-verification.md` 的 19/20 核对结论）。
+
+**完整更正记录、证据与 F1–F8 发现台账见**：`docs/superpowers/plans/2026-10-22-v3-step-agent-remediation-plan.md` §4.1。
 
 ---
 
