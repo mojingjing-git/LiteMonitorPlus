@@ -117,6 +117,35 @@ namespace LiteMonitor.Tests
                 $"超限后仍读完了全文（读了 {counting.BytesRead} / {counting.TotalLength} 字节）");
         }
 
+        [Fact]
+        public async Task 原语层字节上限_调用方传入更大上限也不能突破契约天花板()
+        {
+            // [LM-047] 契约值 MaxResponseBytes（2 MiB）必须是**硬顶**：
+            // 调用方传入更大的上限（如实例级 8 MiB）也必须被夹回天花板以内，
+            // 否则"2 MiB"只是调用方约定、不是原语层保证 —— 任何新增调用点
+            // 只要传一个更大的数字就能绕过整个字节上限闸门。
+            int bigger = PluginSandboxLimits.MaxResponseBytes * 4;
+            var counting = new CountingStream(new byte[bigger]);
+
+            var ex = await Assert.ThrowsAsync<PluginSandboxException>(async () =>
+            {
+                await PluginSandbox.ReadResponseBodyAsync(counting, bigger, CancellationToken.None);
+            });
+
+            Assert.Equal(PluginSandboxReasons.ResponseTooLarge, ex.Reason);
+
+            // 证明是在**契约天花板**处中止的，而不是在调用方给的更大上限处：
+            // 读取量不得超过天花板 + 一个缓冲区。
+            Assert.True(
+                counting.BytesRead <= PluginSandboxLimits.MaxResponseBytes + 8192,
+                $"读取字节数 {counting.BytesRead} 突破了契约天花板 {PluginSandboxLimits.MaxResponseBytes}");
+
+            // 且没有把全文读完（不是"读满才报错"）。
+            Assert.True(
+                counting.BytesRead < counting.TotalLength,
+                $"超限后仍读完了全文（读了 {counting.BytesRead} / {counting.TotalLength} 字节）");
+        }
+
         // ==========================================================
         // 3. 正则匹配时限（灾难性回溯）
         // ==========================================================

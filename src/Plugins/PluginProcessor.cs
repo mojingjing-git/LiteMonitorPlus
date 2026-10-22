@@ -883,7 +883,14 @@ namespace LiteMonitor.src.Plugins
         {
             if (body == null) throw new ArgumentNullException(nameof(body));
 
-            int limit = maxBytes > 0 ? maxBytes : PluginSandboxLimits.MaxResponseBytes;
+            // [LM-047] 契约天花板是**硬顶**：即便调用方传入更大的上限，也不得超过
+            // PluginSandboxLimits.MaxResponseBytes（2 MiB）——否则"2 MiB"只是调用方约定、
+            // 不是原语层保证。生产调用方当前传的都是 EffectiveMaxResponseBytes
+            // （= min(实例级 8 MiB, 沙箱 2 MiB)），故本夹取对生产行为**无变化**；
+            // 它只是把契约值从"约定"变成"强制"。
+            int limit = maxBytes > 0
+                ? Math.Min(maxBytes, PluginSandboxLimits.MaxResponseBytes)
+                : PluginSandboxLimits.MaxResponseBytes;
 
             byte[] buffer = new byte[8192];
             using var ms = new MemoryStream();
