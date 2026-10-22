@@ -290,7 +290,15 @@ namespace LiteMonitor.src.Plugins
                 string newHash = GetConfigHash(inst);
                 bool needsRestart = false;
 
-                if (_timers.ContainsKey(inst.Id))
+                // ★ 读 _timers 必须在 _scheduleLock 内：计时器回调在线程池读写同一个字典，
+                //   锁外 ContainsKey 与锁内 Remove 交错会让 Dictionary 的内部状态撕裂。
+                bool exists;
+                lock (_scheduleLock)
+                {
+                    exists = _timers.ContainsKey(inst.Id);
+                }
+
+                if (exists)
                 {
                     // Exists. Check if changed.
                     if (_configSnapshots.TryGetValue(inst.Id, out var oldHash) && oldHash == newHash)
