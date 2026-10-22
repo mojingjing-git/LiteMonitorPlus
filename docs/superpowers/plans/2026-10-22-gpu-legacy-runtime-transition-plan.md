@@ -1,6 +1,19 @@
 # GPU 与旧管线运行时切换修复计划
 
-日期：2026-10-22。状态：**DRAFT / 待独立复审；未执行实现、构建或测试**。
+日期：2026-10-22。状态：**REVISION-1 / 已按独立复审修订，待复审；仍未执行实现、构建或测试**。
+
+> **修订记录（2026-10-22，独立复审第 1 轮）**：复审报告 `docs/reviews/2026-10-22-gpu-legacy-runtime-transition-plan-review.md` 判定 NEEDS-REVISION，列 4 中 + 3 低 + 2 信息共 9 项。本次已逐项落到条款：
+> - **A1（HWND 代次缺单一真相源）** → §4.1 / §4.2 新增"句柄代次的唯一真相源"段，指名既有 `LiveGlassController._handleGeneration` 与其捕获请求链；§4.3 步骤 5 加同步约束。
+> - **A2（T05 撞上既有主题硬校验）** → §4.6 新增"扩展 `rendering.fallback` 的三个硬依赖"；§5 T05 交付物补三项；§7.1 U12 补两条断言。
+> - **A3（`MainForm` 非 partial）** → §4.3 步骤 4 加约束；§4.7 路径表列出 `:14`。
+> - **A4（`HandleCreated` 两个来源未区分）** → §4.2 新增"`HandleCreated` 有两种来源"段；§4.3 步骤 4/5、§4.4、§7.1 U06/U06b 同步。
+> - **A5（`RecreateHandle` 全仓无先例）** → §4.1 新增"T01 的判定规则"（可安全 / 不可安全 / 不确定三分支，不确定则记 `NOT_VERIFIED`）。
+> - **A6（T02 应复用 `RenderingRoutePolicy`）** → §4.2 新增"必须在既有模型上扩展"段，指名 `RenderingRoutePolicy.cs:5/12/19/32` 与消费点 `UIController.cs:951`。
+> - **A7（"旧 M2 捕获"未定义）** → §4.5 补定义（= `LiveGlassController` + `src/System/Backdrop/**`）；§7.1 U14 改名。
+> - **A8（类型缺真实路径）** → §4.7 新增路径表。
+> - **A9（计划未入库）** → 已随本轮修订一并提交。
+>
+> **下一轮复审重点**：A1–A4 是否已成为可执行条款；T00 的"候选构建输入"须绑定本修订后的提交。
 
 ## 1. 目标与完成标准
 
@@ -56,11 +69,35 @@
 - 撰写时 HEAD 观测值为 `0f1177e0d005c2f5b6b68a81dfc29de9722ac263`，工作区存在并发修改。它不是固定验收基线，T00 必须重新记录。
 - `Settings.cs`、`PluginManager.cs`、网页服务、`MainPanelPage.cs` 和相关测试存在其他任务修改；不得覆盖、整体回退或顺手纳入本任务。尤其设置页接线需与当前 owner 串行交接。
 
+### 3.1 分期与启动门槛（2026-10-22 编排方裁决）
+
+本计划**不得整体等待**其它修复批次结束，也**不得整体提前**。按下列四期推进：
+
+| 期 | 内容 | 启动门槛 | 与其它批次的争用 |
+| --- | --- | --- | --- |
+| **A** | 计划修订（复审 A1–A9 落条款）+ 复审第 2 轮 | 无 | **零**：只改本计划与评审文档，不碰任何生产代码与测试工程 |
+| **B** | T00 基线与所有权清单、T01 探针对照、T02 合同冻结 | A 期通过 | **低**：只触及 `tools/GpuHostLifecycleProbe`、`tools/GpuUiProbe`、`src/Rendering/**`、`src/ThemeEditor/AppearanceFields.cs`、`resources/themes/*.json`——经实测这些路径当前**无其它任务占用**；T02 的"最小测试接口"若落 `tests/LiteMonitor.Tests` 则与其他任务共享该工程，仅有构建/测试互扰，无文件冲突 |
+| **C** | T03–T08 生产接线与新增测试 | B 期完成，且 M2/M3 门禁通过 | **高**：T08 需接线 `src/UI/Settings/**`，与在途的网页服务任务的 `MainPanelPage.cs` **直接冲突**，必须串行交接；T06/T07 往 `tests/LiteMonitor.Tests` 加文件会与其他任务争用同一测试工程 |
+| **D** | T09 实机验收 + T10 双人独立终审 | C 期完成且**候选冻结**（源码/配置/shader/二进制哈希入档） | 需人工在场 |
+
+**为什么 C 期必须等门禁通过**：门禁要求"同一候选"上复核全量回归逐程序集计数并由独立 verifier 判定；若生产改动在门禁期间落地，"同一候选"前提即破，这正是 §8 第 8 条（冻结候选哈希）要防的情况。
+
+**为什么 B 期可以提前**：B 期不写生产代码、不改既有测试，且其产出（T01 的路线结论、T02 的合同）正是 C 期的输入。**T01 尤其值得提前**——它以极低成本消除"整个方案是否成立"的不确定性，而 §9 的备用路线（独立 GPU 子 HWND）属架构变更，越晚知道代价越大。
+
+**T01 的运行影响**：T01 会启动真实窗口并产生 GPU 出帧。按 §7.3，默认**非置顶、不激活、不抢焦点**，单轮 ≤ 60 秒。执行前须知会使用者。
+
 ## 4. 技术方案
 
 ### 4.1 首选方案：保留 Form 对象，按需重建 HWND
 
-先由短时探针对比“只释放交换链”和“释放后重建 HWND”。确认有效后，将受控 HWND 重建接入统一切换流程。
+先由短时探针对比"只释放交换链"和"释放后重建 HWND"。确认有效后，将受控 HWND 重建接入统一切换流程。
+
+> **T01 的判定规则（必须产出明确结论，不得含糊）**：T01 需给出"`Control.RecreateHandle()` 在本项目 `MainForm` 上是否可安全使用"的二选一结论。
+> - **可安全使用** → 走本节主线，并在报告中说明依据（句柄销毁/创建事件序列、窗口状态恢复结果、GDI 动态画面恢复证据）。
+> - **不可安全使用** → **直接走 §9 备用路线**（独立 GPU 子 HWND），并按 §9 末尾要求重新复审与调整验收。
+> - **不确定** → 结论记为 `NOT_VERIFIED`，**不得**先落主线再打补丁。
+>
+> 背景：全仓 `src/` 与 `tools/` 搜索 `RecreateHandle` **零命中**，本项目无先例；`Control.RecreateHandle()` 为 `protected`，对 `Form` 重建顶层窗口并非官方常规路径（会销毁并重建顶层窗口，触发完整一轮 `HandleDestroyed`/`HandleCreated`，并丢失部分窗口状态）。本节对"换 BitBlt""改 `WS_EX_LAYERED`""加 `GDI_COMPATIBLE`"的克制态度，同样适用于主路线本身。
 
 重建触发依据按 HWND 代次保存，不能存放在即将 Dispose 的 renderer 内而随之丢失：
 
@@ -75,6 +112,22 @@
 ### 4.2 路由与切换状态合同
 
 由纯状态模型描述意图，具体类型名可在 T02 冻结；不要求把现有类整体重写。
+
+> **必须在既有模型上扩展，不得另立平行口径**：`src/Rendering/Configuration/RenderingRoutePolicy.cs` 已存在 `RenderingRoute` 枚举（`:5`）、`RenderingRouteRequest`（`:12`）、`RenderingRouteDecision`（`:19`，含 `:27 IsGpu`）与纯函数 `RenderingRoutePolicy.Decide(...)`（`:32`），这正是下表"期望路由：策略计算所得"的现成实现。
+> **T02 的"期望路由 / 有效路由分离"必须在 `RenderingRoutePolicy` 的现有 `Request/Decision/Decide` 基础上扩展**，不得另建第二套期望路由枚举或决策函数。现有消费点是 `src/UI/UIController.cs:951`（`if (decision.IsGpu || _gpuRoute?.IsGpu == true)`），两套口径会在那里分叉。
+
+> **句柄代次的唯一真相源（必须写死）**：仓库**已有**一套句柄代次机制，不得并行第二套：
+> - `src/UI/LiveGlassController.cs:87` `private long _handleGeneration = 1;`
+> - `src/UI/LiveGlassController.cs:295-300` `OnHandleChanged()` → `_handleGeneration++` → `RefreshRequest()` + `ReleaseHeldFrame()`
+> - 该代次贯穿捕获请求链：`src/System/Backdrop/BackdropServiceRequest.cs:121`（`HandleGeneration`）、`:143-147`（请求等价性比较）、`src/System/Backdrop/ScreenCaptureFrameSource.cs:85-87`、`:184-186`（旧请求丢弃判定）、`src/System/Backdrop/BackdropCaptureAdapters.cs:274`。
+>
+> **T02 必须明确**：下表"HWND generation"与 `LiveGlassController._handleGeneration` 的关系——是**合并为同一真相源**，还是 GPU 侧另计但**在同一次 `HandleCreated` 中同步递增**并可互相校验。**不得**出现两套各自递增、互不知情的代次。若选择新计，必须给出旧请求/旧捕获回调的丢弃判据如何跨两套代次成立（对应 §4.3 步骤 5 的"更新捕获代次"）。
+
+> **`HandleCreated` 有两种来源，必须区分（既有事实，勿忽略）**：`src/UI/UIController.cs:299-302` 注释原文记录——`Control.CreateGraphics()` 强制在 `MainForm` 构造体内创建句柄，等真正显示时句柄早已存在，`HandleCreated` 不再触发，`NotifyGpuHandleChanged` 于是永远不会被调用，GPU 宿主也就永远不会启动。
+> 因此：
+> 1. **构造期首次创建**（当前实际发生）：`HandleCreated` **不得**触发 GPU 宿主重建——这是既有设计，必须保持不变；
+> 2. **重建后创建**（本计划 §4.3 引入）：这才是期望触发原生生命周期处理的时机。
+> **受控重建入口必须携带"这是重建、不是首次创建"的判别位**（例如重建代次或一次性重建标志），`HandleCreated` 处理器据此决定是否走 GPU 重建路径。无判别位则两类来源无法区分，会同时破坏第 1 条（构造期被误拉起 GPU）与 §4.4 的"不得无条件拉起 GPU"。
 
 | 状态维度 | 最少包含内容 |
 | --- | --- |
@@ -95,7 +148,10 @@
 2. 记录必要窗口状态及本代次呈现历史；取消/隔离旧捕获和场景回调，停止 GPU 呈现调度。
 3. 停止捕获，按现有账本和租约规则归还帧、释放 renderer/交换链；策略恢复失败则转交独立清理对象，不能丢弃责任。
 4. 必要时通过 MainForm 自己提供的内部受控入口调用 HWND 重建，避免生产通过反射调用受保护方法。在 UI 队列安全点进行，不在 OnPaint、WndProc 的销毁回调或 GPU 帧绘制栈内递归执行。
+   > **`MainForm` 是非 partial 的单文件类**：`src/UI/MainForm_Transparent.cs:14` `public class MainForm : Form`，且全仓 `src/` 中**只有这一处** `MainForm` 声明（`MainFormBizHelper`、`MainFormWinHelper` 是独立类）。因此**不得**新建 `MainForm_*.cs` 作为 partial 扩展（会编译失败）：重建入口必须加在 `MainForm_Transparent.cs` 内，切换协调器另立独立类，MainForm 只保留一个薄入口。
+   > 该入口必须**携带"受控重建"判别位**（见 §4.2 末段）：`HandleCreated` 依据它区分"重建后创建"与"构造期首次创建"。
 5. 让 HandleDestroyed/HandleCreated 处理原生生命周期，切换协调器保证停止幂等、创建阶段不会启动错误后端。更新所有缓存 HWND 的组件、窗口消息注册、Region 和捕获代次。
+   > 捕获代次的更新必须与 §4.2 规定的**句柄代次唯一真相源**一致（现有 `LiveGlassController._handleGeneration`），不得另起并行计数。
 6. 在当前位置所属显示器上恢复大小与 DPI，重新求 legacy 外观和布局，重建所需画笔缓存。不要把旧显示器的已缩放像素布局直接当新布局使用。
 7. 恢复透明度、穿透、置顶、可见性等属性。隐藏窗口保持隐藏，不因切换 Show 或抢焦点；不重复启动淡入动画。
 8. 所有状态稳定后发出一次有效重绘并应用窗口轮廓。可见窗口在同一次 UI 处理流程或下一次专用 UI 调度完成首帧，不依赖普通采样刷新周期。
@@ -111,6 +167,7 @@ HWND 重建失败时保留明确 Failed 状态及可控重试入口，禁止显�
 - 设备丢失若保留现有有限恢复机制，恢复期间不得让 GDI 在同一 flip HWND 上假接管；最终失败才进入完整 legacy 切换。
 - 临时 live 捕获失败优先沿既有政策退到 GPU fixed；真正离开 GPU 时才执行 HWND 恢复流程。
 - 故障回退后，不允许普通 Tick 或 HandleCreated 无条件把 GPU 拉起来。用户显式重试或既有合同允许的有限恢复才可重试，记录次数和原因。
+  > **必须区分 `HandleCreated` 的两个来源**（见 §4.2 末段）：构造期首次创建**保持现状**（不拉起 GPU，这是既有设计）；只有携带"受控重建"判别位的重建才进入 GPU 重建路径。没有判别位时，这一条与 §4.3 步骤 5 都无法成立。
 - `GpuStartupGuard` 的 pending/完成语义保持；不得通过每次 Tick 清标记规避保护。
 
 ### 4.5 独立 WDA 清理所有权
@@ -125,11 +182,17 @@ HWND 重建失败时保留明确 Failed 状态及可控重试入口，禁止显�
 - 不能因旧 HWND 清理任务 Pending，就对新 HWND 直接沿用“已排除”的状态。
 - 同一 HWND 上清理未完成时禁止叠加新的 affinity 所有者；新代次必须独立确认原始策略并取得所有权。
 - 有效后端状态与清理告警同时可见，不覆盖故障根因；关闭时清理必须幂等。
-- GPU legacy 回退时 GPU 捕获会话归零。若旧主题明确启用旧 M2 捕获，遵守其既有合同，整体仍不得出现两个捕获所有者。
+- GPU legacy 回退时 GPU 捕获会话归零。若旧主题明确启用旧捕获，遵守其既有合同，整体仍不得出现两个捕获所有者。
+  > **术语澄清（"旧 M2 捕获"）**：本计划中"旧 M2 捕获"指仓库既有的 **live/backdrop 背景捕获**那一条链路，即 `src/UI/LiveGlassController.cs` + `src/System/Backdrop/**`（`BackdropServiceRequest`、`ScreenCaptureFrameSource`、`BackdropCaptureAdapters`）。**注意**：该缩写此前在本计划中首次出现时**没有定义**，全仓 `src/` 与其它计划文档搜索 `\bM2\b` 零命中；此处补上定义，避免实施者另作解读。
 
 ### 4.6 GPU 主题的 legacy 回退外观
 
 采用独立解析的、仅供 legacy 使用的回退样式，保留原主题对象与用户 Skin。优先扩展已有 `rendering.fallback` 的可选样式字段，由 T02 冻结字段与校验规则，避免建立主题文件名映射表。
+
+> **扩展 `rendering.fallback` 的三个硬依赖（既有约束，T05 必须同步处理）**：
+> 1. **既有校验器会拒绝**：`src/Rendering/Configuration/ThemeRenderingConfig.cs:136-141` 当前**强制** `rendering.fallback` 的 `backend`/`material` 必须是 `legacy`/`legacy`，否则整份主题报 `rendering.fallback must select legacy/legacy.`。T05 新增样式字段时**必须同步扩展 `Validate()`**，否则新字段不受校验，且实现者一旦给 `backend` 赋非 legacy 值会被校验器直接拒绝整份主题。
+> 2. **克隆路径是浅拷贝**：`ThemeRenderingConfig.cs:53-57` 的拷贝路径对 `Fallback` 走 `CopyDictionary`（字典浅拷贝）。若新增字段以 `JsonElement` 承载，克隆对象会与源 `JsonDocument` 共享生命周期，可能在源文档释放后抛 `ObjectDisposedException`——**新增字段应使用纯 CLR 类型**（如 `string`/`int`/`bool`），而非 `JsonElement`。克隆路径本身由 `src/ThemeEditor/AppearanceFields.cs:256-260` `CloneRendering` 调用。
+> 3. **未知字段保留**：`ThemeManager` 的 `PruneNode(theme.Rendering, typeof(ThemeRenderingConfig))`（`src/Core/ThemeManager.cs:563`）负责裁剪未声明字段；新增字段必须被 `ThemeRenderingConfig` 声明，否则保存时会被裁掉。
 
 - 为 `LiquidGlass_GPU`、`LiquidGlass_Toolbar_GPU`、`CyberPunk_GPU` 提供背景、分组底色、边框与必要前景色回退。
 - 回退保留指标选择、标签、字体、用户缩放、告警语义和进度值；不重新建立另一套业务布局。
@@ -143,7 +206,22 @@ HWND 重建失败时保留明确 Failed 状态及可控重试入口，禁止显�
 
 T00/T03 必须搜索真实 HWND 持有者，而不是只处理 GPU 文件。逐项确认：MainFormWinHelper、窗口 Region、透明度/穿透、任务栏消息、热键/NativeWindow/hook（如实际存在）、捕获策略、大小位置通知、显示器/DPI 通知，以及托盘菜单对 Form 的引用。
 
-每项登记“随 Form 对象保留 / 新 HWND 自动恢复 / 需显式重新绑定”，附代码位置。业务采样、插件调度和历史状态不得误绑到 HWND 销毁事件中被终止。修改仅限真实依赖，不能为了清单新增不存在的机制。
+每项登记"随 Form 对象保留 / 新 HWND 自动恢复 / 需显式重新绑定"，附代码位置。业务采样、插件调度和历史状态不得误绑到 HWND 销毁事件中被终止。修改仅限真实依赖，不能为了清单新增不存在的机制。
+
+**本计划点名的类型，其真实路径如下（避免实施者误判文件位置）**：
+
+| 类型 | 真实路径 |
+| --- | --- |
+| `MainForm`（非 partial，唯一声明） | `src/UI/MainForm_Transparent.cs:14` |
+| `MainFormWinHelper` | `src/UI/Helpers/MainFormWinHelper.cs:15` |
+| `GpuStartupGuard` | `src/Rendering/Configuration/GpuStartupGuard.cs:7` |
+| `ThemeRenderingConfig` | `src/Rendering/Configuration/ThemeRenderingConfig.cs:7` |
+| `RenderingRoutePolicy` | `src/Rendering/Configuration/RenderingRoutePolicy.cs:30` |
+| `LiveGlassController`（既有句柄代次宿主） | `src/UI/LiveGlassController.cs:87` |
+| `PresentationSession` | `src/Rendering/Presentation/PresentationSession.cs` |
+| `GpuPresentationHostController` | `src/Rendering/Presentation/GpuPresentationHostController.cs` |
+| `GpuSceneRenderer` | `src/Rendering/Presentation/GpuSceneRenderer.cs` |
+| 主题 JSON | `resources/themes/*.json`（`LiquidGlass_GPU.json`、`LiquidGlass_Toolbar_GPU.json`、`CyberPunk_GPU.json` 为 GPU 主题；`LiquidGlass.json`、`CyberPunk_Mech.json` 为对照旧主题） |
 
 ## 5. 任务拆分与完成条件
 
@@ -154,7 +232,7 @@ T00/T03 必须搜索真实 HWND 持有者，而不是只处理 GPU 文件。逐�
 | T02 | 冻结状态、转交清理、generation 和 fallback 字段合同；纯状态类型及最小测试接口 | T00；最终采用路线需 T01 | 小型 ADR、状态表、事件顺序、错误语义与字段规则；并行 Agent 可按合同工作 |
 | T03 | 生产切换协调、MainForm 受控重建、UIController 路由/重绘、Tick/HandleCreated 重入保护、显示/DPI恢复 | T01、T02；最终接线依赖 T04 | 实际 GPU→legacy→GPU 可恢复，关闭与重入安全，业务对象不重建 |
 | T04 | `PresentationSession` 与 `GpuPresentationHostController`：清理责任转交、代次、有限重试、呈现历史暴露 | T02 | 两次失败后仍持有清理责任；旧 HWND 销毁可完成；宿主资源释放；新宿主不继承旧 affinity |
-| T05 | 新增 legacy fallback resolver、`ThemeRenderingConfig` 可选字段、三份 GPU 主题回退配置及编辑器字段保留 | T02 | 回退可读，不改 Skin 或原 GPU 外观，缺省/非法/保存往返明确 |
+| T05 | 新增 legacy fallback resolver、`ThemeRenderingConfig` 可选字段、三份 GPU 主题回退配置及编辑器字段保留 | T02 | 回退可读，不改 Skin 或原 GPU 外观，缺省/非法/保存往返明确；**必须同时交付**：扩展 `ThemeRenderingConfig.Validate()`（既有 `:136-141` 强制 `rendering.fallback` 为 legacy/legacy）、扩展 `CloneRendering` 的字段保留路径（`src/ThemeEditor/AppearanceFields.cs:256-260`，注意 `ThemeRenderingConfig.cs:53-57` 为字典浅拷贝）、新增字段使用纯 CLR 类型而非 `JsonElement` |
 | T06 | 定向单测：切换状态、首帧前后失败、generation、WDA、fallback；接入正确测试项目 | T02；集成断言等 T03–05 | 确定性测试，无真实桌面依赖，覆盖 §7 |
 | T07 | `tools/GpuUiProbe` 的 runtime transition 入口、结果格式、可取消与超时；独立定向 manifest | T02；正式运行等 T03–06 | 通过生产设置/换肤入口切换；真实画面、代次、策略、资源均有断言；冷启动 legacy 不能冒充 |
 | T08 | 设置状态文案与重试接线，适配现有语言系统；协调 `MainPanelPage.cs` 并发 owner | T02；接线等 T03/T04 | 分清期望/实际/过渡/失败/清理告警；用户显式重试有效；设置不被自动改写 |
@@ -170,7 +248,7 @@ T00/T03 必须搜索真实 HWND 持有者，而不是只处理 GPU 文件。逐�
 | Owner | 独占写入范围 | 工作 |
 | --- | --- | --- |
 | A：主审/集成 | 本计划、ADR、最终报告；合同文件先集中冻结再交接 | T00/T02、集成排程、最后审查 |
-| B：窗口切换 | `src/UI/UIController.cs`、`src/UI/MainForm_Transparent.cs`、新增切换协调器 | T03；其他 owner 只提供接口，不同时写这些文件 |
+| B：窗口切换 | `src/UI/UIController.cs`、`src/UI/MainForm_Transparent.cs`、新增切换协调器（**独立类**；`MainForm` 非 partial，薄入口只能加在 `MainForm_Transparent.cs`） | T03；其他 owner 只提供接口，不同时写这些文件 |
 | C：宿主与清理 | `src/Rendering/Presentation/PresentationSession.cs`、`GpuPresentationHostController.cs`、必要的 `GpuSceneRenderer.cs` 诊断字段、清理类型 | T04、T01 的底层接口 |
 | D：回退外观 | fallback resolver、配置字段、三份主题、必要编辑器保留逻辑 | T05；对 UIController/ThemeManager 的消费接口交 B 接入 |
 | E：测试与探针 | 指定新增测试文件、两个 probe、定向 manifest、runner 必要接线 | T01/T06/T07；测试文件再按具体文件细分，防止多人改 Program.cs |
@@ -205,15 +283,16 @@ T00/T03 必须搜索真实 HWND 持有者，而不是只处理 GPU 文件。逐�
 | U03 | 首次 Present 抛错，结果不明确 | 保守执行句柄恢复，不因成功计数为零跳过 |
 | U04 | 同一 legacy 请求重复到达 | 不再次重建；返回相同稳定状态 |
 | U05 | 快速开关、换肤、DPI 通知交错 | 串行收敛到最新请求；旧回调不改变新状态 |
-| U06 | HWND 重建触发 HandleCreated/Tick | 过渡期间 GPU 启动次数为零；完成后仅按目标启动 |
+| U06 | HWND 重建触发 HandleCreated/Tick | 过渡期间 GPU 启动次数为零；完成后仅按目标启动；**构造期首次创建不被误判为重建**（无"受控重建"判别位时本条与 U05 一起失效） |
+| U06b | `HandleCreated` 两个来源分别触发 | 构造期首次创建 ⇒ 不拉起 GPU（保持既有设计）；带判别位的受控重建 ⇒ 进入 GPU 重建路径 |
 | U07 | WDA 连续恢复失败 | renderer 释放，清理对象保留，错误不丢失，无每帧重试 |
 | U08 | 原始 affinity 非零 | 恢复精确原值，不写死 WDA_NONE |
 | U09 | 旧代次销毁且 IntPtr 被复用 | 旧清理不操作新窗口；新代次独立获取所有权 |
 | U10 | 切换期间关闭、重复 Dispose | 不重新创建窗口；重复清理安全；最终资源归零 |
 | U11 | GPU 故障回退 | 走统一转换；用户开关保留；普通 Tick 不自动起 GPU |
-| U12 | 回退字段缺省、非法、未知、克隆保存取消 | 可读默认、诊断明确、未知字段保留，原 GPU 对象与文件不被污染 |
+| U12 | 回退字段缺省、非法、未知、克隆保存取消 | 可读默认、诊断明确、未知字段保留，原 GPU 对象与文件不被污染；**`Validate()` 接受新字段且仍拒绝非法 `backend`/`material`**；**克隆后访问新字段不抛 `ObjectDisposedException`**（新字段为纯 CLR 类型，不持 `JsonElement`） |
 | U13 | 已隐藏或最小化时切换 | 不 Show、不激活，恢复显示后才完成可见首帧检查 |
-| U14 | 旧 M2 与 GPU live 转换 | 捕获所有者至多一个，旧会话回调不能发布到新代次 |
+| U14 | 旧捕获（live/backdrop，即 `LiveGlassController` + `src/System/Backdrop/**`）与 GPU live 转换 | 捕获所有者至多一个，旧会话回调不能发布到新代次 |
 
 新增测试默认放在 `tests/LiteMonitor.Tests` 的独立文件；如需纳入 `LiteMonitor.GpuNonperformance.Tests`，它使用 `EnableDefaultCompileItems=false`，必须显式加入 Compile，防止“文件写了但根本没跑”。
 
