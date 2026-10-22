@@ -14,6 +14,18 @@
 > - **A9（计划未入库）** → 已随本轮修订一并提交。
 >
 > **下一轮复审重点**：A1–A4 是否已成为可执行条款；T00 的"候选构建输入"须绑定本修订后的提交。
+>
+> ---
+>
+> **复审第 2 轮结论（2026-10-22，编排方自审）：PASS（修订后可进入 A 期收尾）**
+>
+> 第 2 轮只做两件事：核对第 1 轮修订是否**逐条落地且引用准确**，以及**修订本身是否引入了新的不可执行点**。
+> - 逐条核对：A1–A9 九项**全部落地**，且引用的行号经重新比对**全部正确**（`LiveGlassController.cs:87`/`:295-300`、`BackdropServiceRequest.cs:121`/`:143-147`、`ScreenCaptureFrameSource.cs:85-87`/`:184-186`、`BackdropCaptureAdapters.cs:274`、`RenderingRoutePolicy.cs:5/12/19/27/32`、`UIController.cs:951`/`:299-302`、`ThemeRenderingConfig.cs:53-57`/`:136-141`、`AppearanceFields.cs:256-260`、`ThemeManager.cs:563`、`MainForm_Transparent.cs:14`）。
+> - **发现并修复 1 项新缺口（R2-1）**：第 1 轮的 A1/A4/A6/A2 引入了"必须修改 `LiveGlassController.cs`、`src/System/Backdrop/**`、`RenderingRoutePolicy.cs`、`ThemeRenderingConfig.cs`、`AppearanceFields.cs`、`ThemeManager.cs`"的要求，但 §6 所有权表**未授权任何 owner** 写这些文件 → 实现者必然撞越界或无人认领。**已修复**：§6 所有权表补齐四处归属（`LiveGlassController.cs` → B；`src/System/Backdrop/**` → C；`RenderingRoutePolicy.cs` + 新状态类型 → A；`ThemeRenderingConfig.cs`/`AppearanceFields.cs`/`ThemeManager.cs` → D），并加"所有权表必须覆盖条款中被修改的每一个既有文件"的完整性约束。
+> - **补充 1 项启动条件（R2-2）**：§3.1 的 B 期原写"A 期通过"即可启动，但 T01 的结论**必须绑定冻结候选**才有可比性——探针引用生产工程，源码处于中间态时 T01 跑不起来、结论不可信。**已补充**：B 期启动条件改为"其它任务代码改动已全部提交 + 工作区干净 + 全量构建通过"，并要求 T01 报告绑定候选哈希、运行中检测到源文件哈希变化则结论作废重跑。
+> - 第 2 轮**未发现**需要推翻路线的错误；§4.1 主方案、§9 备用路线、§7 验收矩阵保持不变。
+>
+> **A 期（计划修订 + 复审）至此完成。B 期（T00/T01/T02）待本批修复收敛、工作区冻结后启动。**
 
 ## 1. 目标与完成标准
 
@@ -76,13 +88,20 @@
 | 期 | 内容 | 启动门槛 | 与其它批次的争用 |
 | --- | --- | --- | --- |
 | **A** | 计划修订（复审 A1–A9 落条款）+ 复审第 2 轮 | 无 | **零**：只改本计划与评审文档，不碰任何生产代码与测试工程 |
-| **B** | T00 基线与所有权清单、T01 探针对照、T02 合同冻结 | A 期通过 | **低**：只触及 `tools/GpuHostLifecycleProbe`、`tools/GpuUiProbe`、`src/Rendering/**`、`src/ThemeEditor/AppearanceFields.cs`、`resources/themes/*.json`——经实测这些路径当前**无其它任务占用**；T02 的"最小测试接口"若落 `tests/LiteMonitor.Tests` 则与其他任务共享该工程，仅有构建/测试互扰，无文件冲突 |
+| **B** | T00 基线与所有权清单、T01 探针对照、T02 合同冻结 | A 期通过 **且** 工作区已冻结（见下方"冻结候选"要求） | **低**：只触及 `tools/GpuHostLifecycleProbe`、`tools/GpuUiProbe`、`src/Rendering/**`、`src/ThemeEditor/AppearanceFields.cs`、`resources/themes/*.json`——经实测这些路径当前**无其它任务占用**；T02 的"最小测试接口"若落 `tests/LiteMonitor.Tests` 则与其他任务共享该工程，仅有构建/测试互扰，无文件冲突 |
 | **C** | T03–T08 生产接线与新增测试 | B 期完成，且 M2/M3 门禁通过 | **高**：T08 需接线 `src/UI/Settings/**`，与在途的网页服务任务的 `MainPanelPage.cs` **直接冲突**，必须串行交接；T06/T07 往 `tests/LiteMonitor.Tests` 加文件会与其他任务争用同一测试工程 |
 | **D** | T09 实机验收 + T10 双人独立终审 | C 期完成且**候选冻结**（源码/配置/shader/二进制哈希入档） | 需人工在场 |
 
 **为什么 C 期必须等门禁通过**：门禁要求"同一候选"上复核全量回归逐程序集计数并由独立 verifier 判定；若生产改动在门禁期间落地，"同一候选"前提即破，这正是 §8 第 8 条（冻结候选哈希）要防的情况。
 
 **为什么 B 期可以提前**：B 期不写生产代码、不改既有测试，且其产出（T01 的路线结论、T02 的合同）正是 C 期的输入。**T01 尤其值得提前**——它以极低成本消除"整个方案是否成立"的不确定性，而 §9 的备用路线（独立 GPU 子 HWND）属架构变更，越晚知道代价越大。
+
+**但 B 期仍需"冻结候选"（2026-10-22 编排方补充）**：T01 的结论（`RecreateHandle` 是否安全、HWND 重建后 GDI 是否恢复）**必须绑定一个确定的候选**，否则结论不可复现、不可比较。具体要求：
+
+1. **工作区必须可编译**。T01 的探针（`tools/GpuHostLifecycleProbe`）引用生产工程 `LiteMonitor`；若其它任务正在改动 `src/` 且处于中间态（编译错误或鉴权半成品），T01 **跑不起来**，其结论也不可信。
+2. **候选哈希必须入档**（§8 第 8 条）：两个探针、生产 `src/Rendering/**`、`src/UI/**`、主题 JSON、配置与 shader 的哈希，绑定到 T01 报告。
+3. **T01 不得在"正在被修改"的源码上运行**。若探针在运行期间检测到被测源文件哈希变化，结论作废并重跑。
+4. 因此 B 期的启动条件是：**其它任务的代码改动已全部提交、工作区干净、全量构建通过**。这与"这批收敛"是同一时点。
 
 **T01 的运行影响**：T01 会启动真实窗口并产生 GPU 出帧。按 §7.3，默认**非置顶、不激活、不抢焦点**，单轮 ≤ 60 秒。执行前须知会使用者。
 
@@ -247,12 +266,17 @@ T00/T03 必须搜索真实 HWND 持有者，而不是只处理 GPU 文件。逐�
 
 | Owner | 独占写入范围 | 工作 |
 | --- | --- | --- |
-| A：主审/集成 | 本计划、ADR、最终报告；合同文件先集中冻结再交接 | T00/T02、集成排程、最后审查 |
-| B：窗口切换 | `src/UI/UIController.cs`、`src/UI/MainForm_Transparent.cs`、新增切换协调器（**独立类**；`MainForm` 非 partial，薄入口只能加在 `MainForm_Transparent.cs`） | T03；其他 owner 只提供接口，不同时写这些文件 |
-| C：宿主与清理 | `src/Rendering/Presentation/PresentationSession.cs`、`GpuPresentationHostController.cs`、必要的 `GpuSceneRenderer.cs` 诊断字段、清理类型 | T04、T01 的底层接口 |
-| D：回退外观 | fallback resolver、配置字段、三份主题、必要编辑器保留逻辑 | T05；对 UIController/ThemeManager 的消费接口交 B 接入 |
+| A：主审/集成 | 本计划、ADR、最终报告；**T02 产出的纯状态类型**（`src/Rendering/Configuration/` 下**新增**文件）、`src/Rendering/Configuration/RenderingRoutePolicy.cs` 的扩展、合同文档 | T00/T02、集成排程、最后审查；合同文件先集中冻结再交接 |
+| B：窗口切换 | `src/UI/UIController.cs`、`src/UI/MainForm_Transparent.cs`、`src/UI/Helpers/MainFormWinHelper.cs`、**`src/UI/LiveGlassController.cs`（句柄代次同步点）**、新增切换协调器（**独立类**；`MainForm` 非 partial，薄入口只能加在 `MainForm_Transparent.cs`） | T03；其他 owner 只提供接口，不同时写这些文件 |
+| C：宿主与清理 | `src/Rendering/Presentation/PresentationSession.cs`、`GpuPresentationHostController.cs`、必要的 `GpuSceneRenderer.cs` 诊断字段、清理类型、**`src/System/Backdrop/**`（捕获代次消费点，见 §4.2 唯一真相源）** | T04、T01 的底层接口 |
+| D：回退外观 | fallback resolver、**`src/Rendering/Configuration/ThemeRenderingConfig.cs`（回退样式字段）**、**`src/ThemeEditor/AppearanceFields.cs`**、**`src/Core/ThemeManager.cs`（仅 `PruneNode` 的字段保留路径；不得改 `ThemeManager.Current` 的共享已缩放对象）**、三份 GPU 主题 | T05；对 UIController/ThemeManager 的消费接口交 B 接入 |
 | E：测试与探针 | 指定新增测试文件、两个 probe、定向 manifest、runner 必要接线 | T01/T06/T07；测试文件再按具体文件细分，防止多人改 Program.cs |
 | F：设置与独立验收 | 设置状态适配、文案、用户验收表；不得审查自己写的功能来代替独立终审 | T08；T09 中未参与实现部分的验证 |
+
+> **所有权表的完整性约束（复审第 2 轮补入）**：上表必须覆盖 §4/§5 条款中**要求被修改的每一个既有文件**。每个条款提到的文件都必须在某个 owner 的独占范围内，否则实现者会撞上越界或"无人认领"。
+> 本轮补入的四处即由此而来：`src/UI/LiveGlassController.cs`（A1/A4 要求同步句柄代次）→ B；`src/System/Backdrop/**`（U14 与捕获代次消费点）→ C；`src/Rendering/Configuration/RenderingRoutePolicy.cs`（A6 要求在其上扩展期望/有效路由）→ A；`src/Rendering/Configuration/ThemeRenderingConfig.cs`、`src/ThemeEditor/AppearanceFields.cs`、`src/Core/ThemeManager.cs`（A2 要求同步校验器、克隆与字段保留路径）→ D。
+> **A 与 D 都写 `src/Rendering/Configuration/`，但文件不重叠**（A 写新状态类型与 `RenderingRoutePolicy.cs`，D 写 `ThemeRenderingConfig.cs`）——不构成冲突，但同目录改动需在合并时留意。
+> `src/Rendering/Presentation/**` 全部属 C，`src/UI/UIController.cs`、`src/UI/MainForm_Transparent.cs`、`src/UI/Helpers/MainFormWinHelper.cs`、`src/UI/LiveGlassController.cs` 全部属 B，**B 与 C 之间不得出现同一文件**。
 
 依赖关系：
 

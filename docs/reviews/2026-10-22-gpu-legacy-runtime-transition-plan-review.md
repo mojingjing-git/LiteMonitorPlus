@@ -228,3 +228,61 @@ if (fallbackBackend != LegacyBackend || fallbackMaterial != LegacyMaterial)
 - A1–A4 为**中等缺口**，共同指向同一类问题：计划描述的是"应当如何"，但未充分对齐仓库**已经存在的同类资产与硬约束**。按字面执行会产生第二套代次口径、撞上既有主题校验器、误判 `HandleCreated` 语义。这些不需要改变技术路线，但需要把"现有资产"写进契约。
 - A5–A9 为**低等缺口**，属精度与可追溯性，不阻断路线。
 - 建议：按 §6 逐条修订后**重新复审一轮**（重点复核 A1–A4 是否落到可执行条款），再进入 T00。**T00 之前不需要任何实现改动。**
+
+---
+
+## 9. 复审第 2 轮（2026-10-22，编排方自审）
+
+**结论：PASS（修订后可进入 T00/B 期）。** 本轮只核对两件事：第 1 轮修订是否逐条落地且引用准确；修订本身是否引入新的不可执行点。
+
+### 9.1 逐条落地核对 —— 9/9 全部落地，引用行号全部正确
+
+| 发现 | 落点 | 引用行号复核 |
+|---|---|---|
+| A1 | §4.1 / §4.2 "句柄代次的唯一真相源"段 / §4.3 步骤 5 | `LiveGlassController.cs:87`、`:295-300`、`BackdropServiceRequest.cs:121`、`:143-147`、`ScreenCaptureFrameSource.cs:85-87`、`:184-186`、`BackdropCaptureAdapters.cs:274` —— 全部正确 |
+| A2 | §4.6 "三个硬依赖" / §5 T05 交付物 / §7.1 U12 | `ThemeRenderingConfig.cs:53-57`、`:136-141`、`AppearanceFields.cs:256-260`、`ThemeManager.cs:563` —— 全部正确 |
+| A3 | §4.3 步骤 4 / §4.7 路径表 / §6 owner B | `MainForm_Transparent.cs:14` —— 正确 |
+| A4 | §4.2 "HandleCreated 有两种来源"段 / §4.3 步骤 4-5 / §4.4 / §7.1 U06+U06b | `UIController.cs:299-302` —— 正确 |
+| A5 | §4.1 "T01 的判定规则" | — |
+| A6 | §4.2 "必须在既有模型上扩展"段 | `RenderingRoutePolicy.cs:5/12/19/27/32`、`UIController.cs:951` —— 全部正确 |
+| A7 | §4.5 术语澄清 / §7.1 U14 改名 | — |
+| A8 | §4.7 路径表（10 行） | 全部正确 |
+| A9 | 计划入库 | 已修（`fe220eb`） |
+
+### 9.2 新发现并修复：R2-1（所有权表未覆盖条款要求的文件）· 中
+
+第 1 轮的 A1/A4/A6/A2 **引入了新的文件修改要求**，但 §6 所有权表未授权任何 owner 写这些文件：
+
+| 被要求修改的文件 | 来源条款 | 原 §6 是否有归属 |
+|---|---|---|
+| `src/UI/LiveGlassController.cs` | A1/A4（同步句柄代次） | ❌ 无 |
+| `src/System/Backdrop/**` | U14、§4.3 步骤 5（捕获代次消费点） | ❌ 无 |
+| `src/Rendering/Configuration/RenderingRoutePolicy.cs` | A6（在其上扩展期望/有效路由） | ❌ 无（"配置字段"措辞含糊，归属 D） |
+| `src/Rendering/Configuration/ThemeRenderingConfig.cs` | A2（扩展 `Validate()`） | ⚠ 隐含在 D 的"配置字段" |
+| `src/ThemeEditor/AppearanceFields.cs` | A2（`CloneRendering` 字段保留） | ⚠ 隐含在 D 的"必要编辑器保留逻辑" |
+| `src/Core/ThemeManager.cs` | A2（`PruneNode` 字段保留路径） | ❌ 无 |
+
+**后果**：按字面执行，实施者要么越界改文件，要么因"无人认领"而漏做 §4.2/§4.5 的关键约束——这正是 A1/A2/A4/A6 想解决的问题。
+
+**已修复**：§6 所有权表补齐归属——`LiveGlassController.cs` → B；`src/System/Backdrop/**` → C；`RenderingRoutePolicy.cs` + T02 新增状态类型 → A；`ThemeRenderingConfig.cs`/`AppearanceFields.cs`/`ThemeManager.cs` → D。并加一条完整性约束："**所有权表必须覆盖 §4/§5 条款中被修改的每一个既有文件**"，以及 A/D 同写 `src/Rendering/Configuration/` 但文件不重叠的说明。
+
+### 9.3 新补充：R2-2（B 期需"冻结候选"）· 中
+
+§3.1 原写 B 期"A 期通过"即可启动。**但 T01 的结论必须绑定冻结候选**才有可比性与可复现性：
+
+- T01 的探针 `tools/GpuHostLifecycleProbe` 引用生产工程 `LiteMonitor`；若其它任务正在改 `src/` 且处于中间态（编译错误或鉴权半成品），**T01 根本跑不起来**，其结论不可信；
+- 计划 §8 第 8 条本身要求"冻结候选源码/配置/shader/二进制哈希"，B 期若不遵守就与 C/D 期自相矛盾。
+
+**已补充**：B 期启动条件改为"其它任务代码改动已全部提交 + 工作区干净 + 全量构建通过"；T01 报告须绑定候选哈希；运行中检测到被测源文件哈希变化则**结论作废并重跑**。
+
+### 9.4 本轮未发现
+
+- 未发现需要推翻 §4.1 主方案或 §9 备用路线的错误；
+- 未发现 §7 验收矩阵（U01–U14 / G01–G12）的缺口；
+- 未发现新的事实性错误（§2.1 的 9 条断言在本轮复核中仍全部成立）。
+
+### 9.5 第 2 轮未验证项
+
+1. **未实机验证 flip→GDI 行为**（仍归 T01）；
+2. **未验证 §4.2 新增条款的实现可行性**——"句柄代次真相源"的两种方案（合并 vs 同步递增）孰优，须由 T02 结合 T01 实测结论裁定，本轮不预设；
+3. **未评估与 GPU 计划 T08 的设置页串行交接**（`src/UI/Settings/MainPanelPage.cs` 当前由在途的网页服务任务占用），该交接在 C 期启动前完成即可。
