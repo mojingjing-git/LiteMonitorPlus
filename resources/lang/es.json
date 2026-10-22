@@ -307,6 +307,7 @@
     "PluginMarketUnverifiedHint": "Plugin aportado por la comunidad, aún sin verificar",
     "PluginMarketBuiltinProtected": "Este id coincide con un plugin integrado, instalación rechazada",
     "PluginMarketHashMismatch": "La comprobación de integridad de la descarga falló, instalación cancelada",
+    "PluginMarketMissingHash": "La entrada del índice no indica un resumen SHA-256; no se puede verificar la integridad, instalación cancelada",
     "PluginMarketIdMismatch": "El id descargado no coincide con el índice, instalación cancelada",
     "PluginMarketNotManaged": "Este plugin no se instaló desde el mercado, no se puede desinstalar",
     "PluginMarketTargetExists": "El archivo de destino ya existe y no se instaló desde el mercado, se rechaza sobrescribirlo",

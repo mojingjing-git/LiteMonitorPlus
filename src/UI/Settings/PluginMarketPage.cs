@@ -424,6 +424,14 @@ namespace LiteMonitor.src.UI.SettingsPage
                 case MarketErrorReason.TargetExists: return LanguageManager.T("Menu.PluginMarketTargetExists");
                 case MarketErrorReason.RecordCorrupted: return LanguageManager.T("Menu.PluginMarketNotManaged");
                 case MarketErrorReason.InvalidId: return LanguageManager.T("Menu.PluginMarketFailed");
+                // ★ 以下四个分支此前缺失，导致 9 个语言包里**已经存在**的对应文案永远不可达
+                //   （用户只会看到通用的"插件市场加载失败"）。本轮补齐，使文案与实际失败原因相符。
+                case MarketErrorReason.HashMismatch: return LanguageManager.T("Menu.PluginMarketHashMismatch");
+                case MarketErrorReason.IdMismatch: return LanguageManager.T("Menu.PluginMarketIdMismatch");
+                case MarketErrorReason.BadSource: return LanguageManager.T("Menu.PluginMarketBadSource");
+                case MarketErrorReason.SchemaMismatch: return LanguageManager.T("Menu.PluginMarketSchemaMismatch");
+                // LM-008：索引条目没有提供可用的 SHA-256 摘要 ⇒ 无法校验内容完整性 ⇒ 拒绝安装。
+                case MarketErrorReason.MissingHash: return LanguageManager.T("Menu.PluginMarketMissingHash");
                 default: return LanguageManager.T("Menu.PluginMarketFailed");
             }
         }

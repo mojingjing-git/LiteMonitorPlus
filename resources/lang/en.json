@@ -307,6 +307,7 @@
     "PluginMarketUnverifiedHint": "Community-contributed plugin, not yet verified",
     "PluginMarketBuiltinProtected": "This id conflicts with a built-in plugin; install rejected",
     "PluginMarketHashMismatch": "Download integrity check failed; install aborted",
+    "PluginMarketMissingHash": "Index entry provides no SHA-256 digest; integrity cannot be verified, install aborted",
     "PluginMarketIdMismatch": "Downloaded id does not match the index; install aborted",
     "PluginMarketNotManaged": "Not installed via the market; cannot uninstall",
     "PluginMarketTargetExists": "Target file exists and was not installed via the market; refusing to overwrite",

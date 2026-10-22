@@ -2,7 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
+using LiteMonitor.src.Core;
+using LiteMonitor.src.Plugins;
 using Xunit;
 
 namespace LiteMonitor.Tests
@@ -87,7 +90,8 @@ namespace LiteMonitor.Tests
                 "PluginMarketHint", "PluginMarketUnverified", "PluginMarketUnverifiedHint",
                 "PluginMarketBuiltinProtected", "PluginMarketHashMismatch", "PluginMarketIdMismatch",
                 "PluginMarketNotManaged", "PluginMarketTargetExists", "PluginMarketBadSource",
-                "PluginMarketSchemaMismatch", "PluginMarketNeedAdmin", "PluginMarketStatusOk",
+                "PluginMarketSchemaMismatch", "PluginMarketMissingHash", "PluginMarketNeedAdmin",
+                "PluginMarketStatusOk",
                 "PluginMarketStatusService", "PluginMarketStatusCode", "PluginMarketReinstall",
                 "PluginMarketReinstallAction", "PluginMarketPageLink", "PluginMarketSelfCheck"
             };
@@ -128,6 +132,52 @@ namespace LiteMonitor.Tests
 
                 bool allAsciiLetters = kv.Value.Length > 0 && kv.Value.All(c => char.IsLetter(c) && c < 128);
                 Assert.False(allAsciiLetters, "中文包的 " + kv.Key + " 疑似漏翻译: " + kv.Value);
+            }
+        }
+
+        /// <summary>
+        /// ★ 回归守卫：失败原因 → 专属文案的映射。
+        ///
+        /// 背景：<c>PluginMarketHashMismatch</c> / <c>PluginMarketIdMismatch</c> /
+        /// <c>PluginMarketBadSource</c> / <c>PluginMarketSchemaMismatch</c> 四个 key
+        /// 在 9 个语言包里**一直存在**，但界面侧的 <c>DescribeReason</c> switch
+        /// **缺少对应分支**，于是这些失败原因全部落回通用的"插件市场加载失败"——
+        /// 用户看到的提示与真实原因不符。LM-008 引入 <c>MissingHash</c> 后同样如此。
+        ///
+        /// 本用例把"switch 少一个分支"变成可发现的失败：删掉任意一个 case，
+        /// 对应断言立即失败（落回通用文案 ⇒ 与期望文案不等）。
+        /// </summary>
+        [Fact]
+        public void 插件市场失败原因都有专属文案_不落回通用失败文案()
+        {
+            // ★ 显式加载语言包：断言不能依赖"别的测试刚好加载过"
+            //   （与 CpuVoltagePresentationTests / GpuGroupTests 同一约定；
+            //     本测试工程已关闭并行，全局语言态不会被并发改写）
+            LanguageManager.Load("zh");
+
+            var method = typeof(LiteMonitor.src.UI.SettingsPage.PluginMarketPage)
+                .GetMethod("DescribeReason", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var expectations = new Dictionary<MarketErrorReason, string>
+            {
+                [MarketErrorReason.HashMismatch] = "Menu.PluginMarketHashMismatch",
+                [MarketErrorReason.IdMismatch] = "Menu.PluginMarketIdMismatch",
+                [MarketErrorReason.BadSource] = "Menu.PluginMarketBadSource",
+                [MarketErrorReason.SchemaMismatch] = "Menu.PluginMarketSchemaMismatch",
+                [MarketErrorReason.MissingHash] = "Menu.PluginMarketMissingHash",
+            };
+
+            string generic = LanguageManager.T("Menu.PluginMarketFailed");
+
+            foreach (var pair in expectations)
+            {
+                string actual = (string)method.Invoke(null, new object[] { pair.Key });
+                string expected = LanguageManager.T(pair.Value);
+
+                Assert.False(string.IsNullOrEmpty(expected), pair.Value + " 没有对应文案");
+                Assert.Equal(expected, actual);
+                Assert.NotEqual(generic, actual);
             }
         }
     }

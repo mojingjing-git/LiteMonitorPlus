@@ -308,6 +308,7 @@
     "PluginMarketUnverifiedHint": "コミュニティ提供のプラグインで、まだ検証されていません",
     "PluginMarketBuiltinProtected": "この ID は組み込みプラグインと競合するため、インストールを拒否しました",
     "PluginMarketHashMismatch": "ダウンロード内容の検証に失敗したため、インストールを中止しました",
+    "PluginMarketMissingHash": "インデックス項目に SHA-256 ダイジェストがないため、整合性を検証できず、インストールを中止しました",
     "PluginMarketIdMismatch": "ダウンロードした ID がインデックスと一致しないため、インストールを中止しました",
     "PluginMarketNotManaged": "このプラグインはマーケット経由でインストールされたものではないため、アンインストールできません",
     "PluginMarketTargetExists": "対象ファイルが既に存在し、マーケット経由のインストールではないため、上書きを拒否しました",

@@ -307,6 +307,7 @@
     "PluginMarketUnverifiedHint": "Von der Community bereitgestelltes Plugin, noch nicht verifiziert",
     "PluginMarketBuiltinProtected": "Diese ID kollidiert mit einem integrierten Plugin, Installation abgelehnt",
     "PluginMarketHashMismatch": "Integritätsprüfung des Downloads fehlgeschlagen, Installation abgebrochen",
+    "PluginMarketMissingHash": "Der Index-Eintrag liefert keine SHA-256-Prüfsumme; die Integrität kann nicht geprüft werden, Installation abgebrochen",
     "PluginMarketIdMismatch": "Heruntergeladene ID stimmt nicht mit dem Index überein, Installation abgebrochen",
     "PluginMarketNotManaged": "Dieses Plugin wurde nicht über den Markt installiert und kann nicht deinstalliert werden",
     "PluginMarketTargetExists": "Zieldatei existiert bereits und wurde nicht über den Markt installiert, Überschreiben verweigert",

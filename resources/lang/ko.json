@@ -307,6 +307,7 @@
     "PluginMarketUnverifiedHint": "커뮤니티 제공 플러그인으로 아직 검증되지 않았습니다",
     "PluginMarketBuiltinProtected": "이 ID는 내장 플러그인과 충돌하여 설치를 거부했습니다",
     "PluginMarketHashMismatch": "다운로드 내용 검증에 실패하여 설치를 중단했습니다",
+    "PluginMarketMissingHash": "인덱스 항목에 SHA-256 다이제스트가 없어 무결성을 확인할 수 없어 설치를 중단했습니다",
     "PluginMarketIdMismatch": "다운로드한 ID가 인덱스와 일치하지 않아 설치를 중단했습니다",
     "PluginMarketNotManaged": "이 플러그인은 마켓을 통해 설치된 것이 아니므로 제거할 수 없습니다",
     "PluginMarketTargetExists": "대상 파일이 이미 존재하며 마켓을 통해 설치된 것이 아니므로 덮어쓰기를 거부했습니다",

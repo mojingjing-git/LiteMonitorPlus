@@ -305,6 +305,7 @@
     "PluginMarketUnverifiedHint": "該插件由社群貢獻，尚未經驗證",
     "PluginMarketBuiltinProtected": "該 id 與內建插件衝突，安裝被拒絕",
     "PluginMarketHashMismatch": "下載內容校驗失敗，已中止安裝",
+    "PluginMarketMissingHash": "索引項目未提供 SHA-256 摘要，無法校驗完整性，已中止安裝",
     "PluginMarketIdMismatch": "下載內容與索引宣告的 id 不一致，已中止安裝",
     "PluginMarketNotManaged": "該插件不是透過本市集安裝的，無法卸載",
     "PluginMarketTargetExists": "目標檔案已存在且非本市集安裝，已拒絕覆寫",

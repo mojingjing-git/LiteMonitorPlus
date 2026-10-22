@@ -308,6 +308,7 @@
     "PluginMarketUnverifiedHint": "Plugin fourni par la communauté, pas encore vérifié",
     "PluginMarketBuiltinProtected": "Cet id entre en conflit avec un plugin intégré, installation refusée",
     "PluginMarketHashMismatch": "Échec de la vérification d’intégrité du téléchargement, installation interrompue",
+    "PluginMarketMissingHash": "L’entrée d’index ne fournit pas de condensé SHA-256 ; l’intégrité ne peut pas être vérifiée, installation interrompue",
     "PluginMarketIdMismatch": "L’id téléchargé ne correspond pas à l’index, installation interrompue",
     "PluginMarketNotManaged": "Ce plugin n’a pas été installé via le marketplace, désinstallation impossible",
     "PluginMarketTargetExists": "Le fichier cible existe déjà et n’a pas été installé via le marketplace, écrasement refusé",
