@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
+using LiteMonitor.Rendering.Configuration;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices.Backdrop;
 
@@ -84,7 +85,10 @@ namespace LiteMonitor
         /// <summary>当前绘制租约；只在换成新帧、失效、暂停或停止时释放。</summary>
         private BackdropFrameLease? _lease;
 
-        private long _handleGeneration = 1;
+        // ★【GPU T03 / 合同 §7.2 / 裁决 D1 / 主审裁决 D-G】本类**不再自持句柄代次计数器**。
+        //   句柄代次的唯一真相源 = LiteMonitor.Rendering.Configuration.WindowHandleGeneration.Instance
+        //   （进程内唯一实例，由类型自身持有）；本类只**只读消费**它。
+        //   ★ 尺寸代次（_sizeGeneration）与句柄代次**无关**，保持独立（合同 §7.2 末条）。
         private long _sizeGeneration = 1;
         private bool _suspended;
         private bool _disposed;
@@ -291,10 +295,17 @@ namespace LiteMonitor
             ReleaseHeldFrame();
         }
 
-        /// <summary>窗口句柄重建：句柄代次 +1 并更新请求。</summary>
+        /// <summary>
+        /// 窗口句柄重建：<b>只读</b>消费句柄代次唯一真相源（合同 §7.2 / 裁决 D1）。
+        /// <para>★ 本方法**不再自增**代次 —— 唯一递增点 = <c>WindowHandleGeneration.Advance()</c>，
+        /// 唯一驱动者 = 协调器在 <c>HandleCreated</c> 时调用
+        /// （<c>src/UI/MainForm_Transparent.cs</c> 的 HandleCreated 处理器**第一行**）。
+        /// ⇒ live 捕获链与 GPU 清理链读到**同一个**代次。</para>
+        /// <para>代次推进后照旧执行 <see cref="RefreshRequest"/>（旧请求里的句柄已失效）
+        /// 与 <see cref="ReleaseHeldFrame"/>（旧帧必须归还租约）。</para>
+        /// </summary>
         internal void OnHandleChanged()
         {
-            _handleGeneration++;
             RefreshRequest();
             ReleaseHeldFrame();
         }
@@ -393,7 +404,7 @@ namespace LiteMonitor
                 options,
                 handle,
                 bounds,
-                _handleGeneration,
+                WindowHandleGeneration.Instance.Current,
                 _sizeGeneration);
             return _lastRequest;
         }

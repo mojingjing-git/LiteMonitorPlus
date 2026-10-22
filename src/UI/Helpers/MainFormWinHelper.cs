@@ -151,6 +151,72 @@ namespace LiteMonitor.src.UI.Helpers
         }
 
         // =================================================================
+        // 【GPU T03 / 合同 §10 GPU-003 / 裁决 D4】分层窗口（WS_EX_LAYERED）读数
+        // =================================================================
+
+        /// <summary>
+        /// 当前窗口是否处于**分层窗口**状态（<c>WS_EX_LAYERED</c>）。
+        /// <para>★ <c>WS_EX_LAYERED</c> 与 <c>WDA_EXCLUDEFROMCAPTURE</c> **互斥**（合同 §10 GPU-003）：
+        /// 分层窗口上不得申请 WDA 排除 ⇒ 期望路由由
+        /// <c>RenderingRouteRequest.WindowIsLayered</c> 交给
+        /// <c>RenderingRoutePolicy.Decide</c> 判定（有效路由降级为 <c>GpuFixedInput</c>，
+        /// 原因码 <c>wda_capture_policy_unsupported_on_layered_window</c>）。</para>
+        /// <para>★ 本方法**只读**，绝不修改 ex-style（合同 §1.3 明确否决"顺手清 WS_EX_LAYERED"）。</para>
+        /// <para>★ 期望状态 = <c>Opacity &lt; 1 || ClickThrough</c>（合同 §4 步 7 / GPU-003）：
+        /// 重建后新 HWND 的 <c>WS_EX_LAYERED</c> 由 <c>CreateParams</c> 按配置决定 ⇒ 旧残留**不继承**。</para>
+        /// </summary>
+        public bool IsWindowLayered()
+        {
+            try
+            {
+                if (_form.IsDisposed || !_form.IsHandleCreated) return false;
+                int ex = GetWindowLong(_form.Handle, GWL_EXSTYLE);
+                return (ex & WS_EX_LAYERED) != 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 窗口存活探针（<c>IsWindow</c>）。
+        /// <para>★ 合同 §7.4：只有**同代次**才允许调用它 —— 旧代次的 HWND 数值可能被复用，
+        /// <c>IsWindow</c> 无法区分"旧 HWND 已销毁"与"句柄数值被复用"。</para>
+        /// </summary>
+        public static bool IsWindowAlive(IntPtr handle)
+        {
+            if (handle == IntPtr.Zero) return false;
+            try
+            {
+                return IsWindow(handle);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 把**原始** affinity 精确写回指定 HWND（合同 §4.5 :198）。
+        /// <para>★ 恢复的是原始策略，**不能固定写成 <c>WDA_NONE</c></para> —— 由调用方传入
+        /// <see cref="WindowCapturePolicyCleanup.OriginalAffinity"/> 的精确值。</para>
+        /// <para>★ 调用前提：合同 §7.4 —— 该 HWND 的代次必须**等于**当前代次。</para>
+        /// </summary>
+        public static bool RestoreDisplayAffinity(IntPtr handle, uint originalAffinity)
+        {
+            if (handle == IntPtr.Zero) return false;
+            try
+            {
+                return SetWindowDisplayAffinity(handle, originalAffinity);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // =================================================================
         // 圆角处理 (Hybrid: Win11 DWM / Win10 Region)
         // =================================================================
         /// <summary>
@@ -241,6 +307,8 @@ namespace LiteMonitor.src.UI.Helpers
         [DllImport("user32.dll", SetLastError = true)] private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll", SetLastError = true)] private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
         [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint flags);
+        [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindow(IntPtr hWnd);
+        [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool SetForegroundWindow(IntPtr hWnd);
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)] public static extern int RegisterWindowMessage(string lpString);
         [DllImport("user32.dll", SetLastError = true)] public static extern bool ChangeWindowMessageFilter(uint message, uint dwFlag);
