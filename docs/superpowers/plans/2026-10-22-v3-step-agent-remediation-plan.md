@@ -179,11 +179,11 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | LM-042 | `端到端_目标数恰好等于上限` 的请求数断言过弱（实测 61 vs 64） | P2 | `CONFIRMED` | ✅ 已修复（`d588440`） |
 | LM-043 | `Assert.NotEqual(TargetLimit, failure?.Reason)` 在 `failure == null` 时恒真（空转断言） | P3 | `CONFIRMED` | ✅ 已修复（`d588440`） |
 | LM-044 | 生产入口的 30 s 契约值未被测试钉住 | P2 | `CONFIRMED` | ✅ 已修复（`d588440` + 主审集成 `6310dbf`） |
-| GPU-001 | WDA 恢复失败后 GPU 呈现**永久不可重启**（进程生命周期内不可用） | P1 | `CONFIRMED` | GPU T03/T04（B 期只冻合同，不写生产代码） |
-| GPU-002 | `PresentationSession._originalAffinity` 跨 HWND 代次不可复用 | P2 | `CONFIRMED` | GPU T02/T04 |
-| GPU-003 | 鼠标穿透关闭后 `WS_EX_LAYERED` 永久残留，与 WDA 互斥 | P2 | `CONFIRMED` | GPU T02/T03（**待 T01/T09 实测确认**） |
-| GPU-004 | `IsWindow` 无法区分「旧 HWND 已销毁」与「句柄值被复用」 | P2 | `CONFIRMED` | GPU T04 |
-| GPU-005 | `GpuStartupGuard` 的 pending 语义比计划 §4.4 描述更弱 | P2 | `CONFIRMED` | GPU T02（合同澄清） |
+| GPU-001 | WDA 恢复失败后 GPU 呈现**永久不可重启**（进程生命周期内不可用） | P1 | ✅ **已闭环**（独立复核 `PASS_WITH_NOTES`） | GPU T03/T04：`4ade856` + `5a1eeb7` + `48de1a8`（**实机端到端属 T07/T09 ⇒ `NOT_VERIFIED`**） |
+| GPU-002 | `PresentationSession._originalAffinity` 跨 HWND 代次不可复用 | P2 | ✅ **已闭环**（独立复核 `PASS_WITH_NOTES`） | GPU T02/T04：`4ade856`（R1–R6） |
+| GPU-003 | 鼠标穿透关闭后 `WS_EX_LAYERED` 永久残留，与 WDA 互斥 | P2 | 🟡 **已实现，待实机** | GPU T02/T03：`5a1eeb7`（只读 layered 探针）+ T01 实测 `RECREATE_HANDLE_SAFE`（**合同 §14 第 3 项仍需实机 ⇒ `NOT_VERIFIED`**） |
+| GPU-004 | `IsWindow` 无法区分「旧 HWND 已销毁」与「句柄值被复用」 | P2 | ✅ **已闭环**（独立复核 `PASS_WITH_NOTES`） | GPU T04：`4ade856`（代次判据先于 `IsWindow`）+ `5a1eeb7`（删除第二个计数器）+ `48de1a8`（护栏盲区修复） |
+| GPU-005 | `GpuStartupGuard` 的 pending 语义比计划 §4.4 描述更弱 | P2 | ✅ **已闭环**（独立复核 `PASS_WITH_NOTES`） | GPU T02 + owner A 接线：`03a925a`（`AbandonPreservingPending`）+ `4ade856`（`ReleaseStartupAttempt` 衔接） |
 | ENV-003 | `LITEMONITOR_PLUGIN_REPO` 未设置 ⇒ 6 条市场契约测试被跳过 | P1 | `CONFIRMED`（已闭环，`a8fb2fc`） | S4.1 |
 | ENV-004 | `LITEMONITOR_E2E` 未设置 ⇒ 1 条联网 E2E 被跳过 | P2 | `CONFIRMED`（`BLOCKED_ENV`，**不计入通过**） | S4.1（联网 E2E 单独运行，不进 PR 门禁） |
 | LM-045 | `HttpClient` 默认跟随重定向 ⇒ 已声明主机 302 到未声明主机不被拦截，凭据（`X-Api-Key`/`Cookie`）外泄且响应数据进入插件流水线 | **P1** | `CONFIRMED`（**独立 verifier 已实证**） | ✅ **已修复**（`938dc4b`）：HTTP 步骤路径与 **`native://` 路径两侧**都关闭自动重定向、改为逐跳跟随并逐跳复核目标主机；不通过时**该跳请求根本不发出**。见 §4.5.9 LM-053 |
@@ -202,12 +202,16 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | LM-058 | IPv6 字面量主机在两处被**不同地**截断（`PluginProcessor.AddDeclaredHost` 取**第一个**冒号 ⇒ `"["`；`PluginExecutor.StripPort` 取**最后一个**冒号 ⇒ `"[:"`）⇒ IPv6 目标恒不可用 | P3 | `CONFIRMED`（**独立 verifier 独立实测**，§4.5.10） | 登记待清理（**偏严方向 / fail-closed**，不漏放行；影响 IPv6 回环与双栈插件） |
 | LM-059 | 既有 public 记录 `RenderingRouteRequest` 的**主位置签名**被追加成员（`bool WindowIsLayered = false`）⇒ 记录元数 5→6、相等性与 `ToString()` 语义改变（**二进制不兼容**） | P3 | `CONFIRMED`（**独立 verifier 实测**，§4.5.10） | 登记知悉（构造侧**源码兼容**；全仓仅 1 处生产调用点且用具名参数，无解构/相等比较消费点） |
 | LM-060 | `FpsStateTests.需求抖动不会击穿退避窗口` 是**时序敏感**用例（内部用真实时间 `WaitUntil(..., StateWaitMs)` 等待）⇒ 在满负载（`--no-incremental` 全量构建 + 全量测试并行）下**偶发超时变红** | P3 | `CONFIRMED`（**GPU T03 变异自证过程中实测到 1 次**，§4.4 GPU T03 行） | 登记待清理：**与本批改动无关**（不触碰 `FpsCounter` / FPS 退避任何代码；同一提交其余 9 轮"还原后全量"全绿、最终独立复跑全量亦全绿）⇒ 属**既有 flaky 用例**。修它需把真实时间等待改为**假时钟 / 注入式等待** ⇒ 属他人文件（`tests/LiteMonitor.Tests/FpsStateTests.cs`），本批不动 |
+| LM-061 | **实现者护栏 `EnumerateMethods` 不枚举实例构造函数** ⇒ D-G 唯一性护栏在**构造函数路径上不承重**（`GetMethods` 不返回实例 `.ctor`，`TypeInitializer` 只是静态 `.cctor`） | P2 | `CONFIRMED`（**GPU 独立复核用变异 M7 实测**，§4.5.12） | ✅ **已修复**（`48de1a8`）：`EnumerateMethods` 增枚举 `GetConstructors(flags)`；新增 2 条钉住用例；**主审变异自证**：宿主构造函数里 `new WindowHandleGeneration()` ⇒ 红 ⇒ 字节还原 SHA-256 一致 ⇒ 绿 47/47。**注**：当前生产代码本身**没有**第二实例 ⇒ 本条是**护栏可靠性**问题 |
+| LM-062 | 既有 public 方法 `NotifyGpuHandleChanged()` 的**无参重载被删除且未保留**（`src/UI/UIController.cs:325`） | P3 | `CONFIRMED`（**GPU 独立复核实测**，§4.5.12） | 登记知悉（**主审裁决 D-I**，§4.5.12）：内部 WinForms 类、非对外库 API、全仓仅 1 处调用点且已同步更新；补一个转发到 `(false, gen)` 的重载会**改变原语义**（原方法尝试拉起 GPU，新签名下 `controlled=false` 明确禁止）⇒ **不修**，保留复核方建议备查 |
+| LM-063 | `finally` 内 `_captureCleanup.Add(...)` 排在 `_gpuPresentation = null;` **之前** ⇒ 理论上登记异常会跳过置 null | P3 | `CONFIRMED`（**GPU 独立复核指出**，§4.5.12；当前 `Add` 无抛出路径 ⇒ **实际不可达**） | ✅ **已修复**（`48de1a8`）：改为**嵌套 `try`/`finally`**，置 null 位于**最内层** `finally` 体内；新增可执行 IL 护栏；**主审变异自证**：恢复单层 `finally` ⇒ 红 ⇒ 字节还原 SHA-256 一致（还原后 SHA 与修复前原值完全相同）⇒ 绿 47/47 |
+| LM-064 | ledger `Pump` 预填 `Attempts=2` 并覆盖 `LastErrorCode` ⇒ ledger 与 policy 两份实现存在语义漂移窗口 | P3 | `CONFIRMED`（**GPU 独立复核观察**，§4.5.12；生产移交路径恒为 2 ⇒ **实际不触发**） | 登记，不修（属**诊断保真观察**，抽取显式常量属**美化**而非修复 ⇒ 禁止无关重构） |
 
 **当前无 P0。** 若任一执行步骤新发现 P0，立即挂起其他任务优先处理。
 
 **编号规则：** `LM-` 缺陷 / `SEC-` 安全 / `BASE-` 基线 / `ENV-` 环境事实 / `GPU-` GPU 切换专项。第三方评审使用的 `LM-018`、`LM-019` 与 `LM-003b`、`LM-003c` 指同一处代码，已合并并保留别名以便交叉引用；`LM-005/006` 为同一协议缺陷的两个侧面。
 
-> **编号占用现状（2026-10-23 第五次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-060`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-061` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用，`LM-057`–`LM-059` 由本轮独立 verifier 复核产出，`LM-060` 由 GPU T03 变异自证过程实测产出）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
+> **编号占用现状（2026-10-23 第五次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-064`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-065` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用，`LM-057`–`LM-059` 由 LM-045 独立复核产出，`LM-060` 由 GPU T03 变异自证过程实测产出，`LM-061`–`LM-064` 由 GPU 独立复核产出）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
 
 ### 4.1 根因更正记录 · LM-001（原"永久停摆"前提已证伪）
 
@@ -795,6 +799,43 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 
 **本裁决的独立佐证**：GPU 部分的独立复核任务已同时收到本问题（要求给出带理由的独立判断）；若其判断与本裁决不一致，按"实现者/编排方意见一律以实测为准"处理，并在此处留痕更正。
 
+#### 4.5.12 GPU 部分独立复核结论归档（T03 / T04 / T05 + owner A 接线 + 裁决 D-H）
+
+**复核方式（严格独立）**：复核方在**自己新建**的隔离 worktree（`.artifacts/wt-verify-gpu`，分支 `verify/gpu-t03-t05`，**未提交未推送**）里**自写 42 条用例**（40 个 `[Fact]` + 1 个 `[Theory]` 的 3 个 `InlineData`），**自设计 14 条变异**（其中 **11 条属 NEW 类别**，与实现者已做类别不重复，远超"≥6 条、≥3 条不重复"的要求），每条走「改坏 → `dotnet build --no-incremental` → 红 → **字节级还原 + SHA-256 校验** → 强制重编译 → 复跑绿」闭环。**A 块不使用 grep 判定**，而是用**全程序集 IL 扫描**（找 `add_CapturePolicyCleanupRequired` / `CapturePolicyCleanupLedger.Add` / `set_CapturePolicyCleanupPendingProbe`）+ `StopGpuPresentation` 的**分支目标分析**（覆盖 `InlineBrTarget` / `ShortInlineBrTarget` / `InlineSwitch`）⇒ 证明置 null **不被任何条件分支跳过**且位于 `finally` 内。
+
+**结论：`PASS_WITH_NOTES`**（无阻断性缺陷；遗留 1 条中等护栏盲区 + 3 条低危）。
+
+**★ 过程留痕（基线选错，由主审纠正后重做）**：复核方第一轮把基线选到**已被取代的中间提交 `aafe949`**（T03 worker 首版，与最终提交 `a498583` **同父兄弟**；缺 ledger 订阅、缺 resolver 接线、`StopGpuPresentation` 仍是旧口径）⇒ 其 A 块结论**全部作废**；由主审发现并纠正后改用主分支 HEAD `7283b91` **重做全部验证**（A–H、42 条用例、14 条变异、门禁、依赖清单**无一复用旧结论**）。旧基线资产隔离备份至 `.artifacts/verify-backup-gpu`，**不混入**新基线证据目录。
+
+**A–H 逐条结论（复核方实测）**：
+
+| 块 | 结论 | 关键实测证据 |
+|---|---|---|
+| **A** GPU-001 清理责任闭环 | ✅ 成立 | 唯一订阅点 `src/UI/UIController.cs:478`（在唯一工厂 `CreateGpuPresentationHost` `:463-482` 内）；事件侧登记 `:489`→`:491`；兜底侧登记 `:518`→`:521`；**无条件置 null** `:525`（IL 分支目标分析确认无 `br`/`switch` 可跳过）；全程序集 `newobj GpuPresentationHostController` **仅 1 处** ⇒ 不存在漏订阅的第二创建点 |
+| **B** 句柄代次唯一性（D-G） | ✅ 成立，**但实现者护栏有盲区**（LM-061） | 唯一实例 `WindowHandleGeneration.cs:29`；`SharedWindowHandleGeneration` 全仓零命中；`LiveGlassController` 只剩 `_sizeGeneration`；递增唯一点 `MainForm_Transparent.cs:332`（`HandleCreated` 第一行） |
+| **C** 受控重建判别位 ①~④ | ✅ 成立 | 规则③ 陈旧兜底 `RenderingTransitionCoordinator.cs:215-220`；规则④ 5 秒超时 `:29` / `:283` |
+| **D** 三重丢弃判据（U05） | ✅ 成立 | `RenderingTransitionCoordinator.cs:553-556` 三判据缺一不可 |
+| **E** 诊断隔离 | ✅ 成立 | `gpu_fallback_style_invalid` 只进 diagnostics、不进 `Validate()` 错误列表；错误/警告/失败三路互不覆盖 |
+| **F** 回退样式桥 + **D-H 落点** | ✅ 成立，裁决独立成立 | `RenderingTransitionCoordinator.cs:746` `colors.TextTitle = style.Accent;`；派生副本**不修改源主题**、不写 `ThemeManager.Current`、不落盘。**裁决 D-H 的独立佐证**：另发现 `src/Rendering/Materials/ThemeForegroundStyleFactory.cs:46` 已把 `theme.Color.BarLow` 映射为 `ForegroundTone.Accent`、而 `BarLow` 同时是 `BarSafe`（`:55`）⇒ **双重语义**，进一步佐证**不能**占用 `Bar*` 作 accent 槽 |
+| **G** owner A 的 pending 处置 | ✅ 成立 | `GpuStartupGuard.cs:287-294` 只 `_attempts.Remove`、**不碰** `_pendingPath`、**不复位** `_attemptWritten`；`:355` `Interlocked.Exchange` 幂等；`GpuPresentationHostController.cs:893` `ReleaseStartupAttempt(stopClean)` → `:908` → `:924-929` |
+| **H** 常量 / 退避表 / 唯一决策函数 | ✅ 成立 | 插件沙箱 6 常量**逐字未改**（`PluginProcessor.cs:447/450/453/456/459/462`）；退避 **6 次 + 250/500/1000/2000 ms** 两份实现一致（`CapturePolicyCleanupLedger.cs:33/:36-42` 与 `CapturePolicyCleanupPolicy.cs:51`）；`Decide` 仍是唯一决策函数；CI 与 release 阈值**均为 1394** |
+
+**变异汇总**：`ShaMatch=True` **14/14**；`BuildRed=0 & RedExit=1` **14/14**；`BuildGreen=0 & GreenExit=0 & StillRed=0` **14/14**。
+
+**复核方报告的 4 条新缺陷与主审处置**：
+
+| ID | 级别 | 摘要 | 主审处置 |
+|---|---|---|---|
+| **LM-061** | 🟡 中 | **实现者护栏 `EnumerateMethods` 不枚举实例构造函数** ⇒ "生产代码不得新建第二个句柄代次实例"这道 D-G 护栏在**构造函数路径上不承重**（复核方用变异 M7 实测：构造函数里 `new WindowHandleGeneration()` ⇒ **仅复核方自己的护栏变红**，实现者护栏保持绿）。根因：`GetMethods(DeclaredOnly)` **不返回**实例 `.ctor`，`TypeInitializer` 只是**静态** `.cctor`。**当前生产代码本身没有第二实例** ⇒ 是**护栏可靠性**问题，不是现有代码缺陷 | ✅ **已修**（`48de1a8`）：`EnumerateMethods` 增枚举 `type.GetConstructors(flags)`（只返回实例构造函数 ⇒ 静态类返回空，不与 `.cctor` 重复）；**并新增两条钉住用例**：`护栏_方法枚举必须覆盖实例构造函数`（直接钉住前提本身）与 `护栏_停止呈现必须把释放宿主引用放在最内层finally里`。**主审变异自证**：变异 A（宿主构造函数里 `new WindowHandleGeneration()`）⇒ **红 1 条**（实现者护栏现已承重）⇒ 字节还原 SHA-256 一致 ⇒ 绿 47/47 |
+| **LM-062** | 🔵 低 | **既有 public 方法 `NotifyGpuHandleChanged()` 的无参重载被删除且未保留**（`src/UI/UIController.cs:325`）⇒ 与"既有 public 签名不得删除"口径不符 | 📌 **登记知悉，不修**（**主审裁决 D-I**）：`UIController` 是 WinForms 应用的**内部**类，其 `public` 只是 C# 默认可见性，**不是对外发布的库 API**；全仓生产调用点**仅 1 处**（`MainForm_Transparent.cs:347`）且已同步更新；**补一个转发到 `(false, gen)` 的无参重载反而有害** —— 原无参语义是"尝试拉起 GPU"，而 `controlled=false` 的新语义明确**禁止**拉起 ⇒ 为"兼容编译"引入一个**语义不同**的方法比删掉更危险。**保留复核方的建议备查**，将来若该类升格为对外 API 再补兼容重载 |
+| **LM-063** | 🔵 低 | **`finally` 内 `_captureCleanup.Add(...)` 排在 `_gpuPresentation = null;` 之前** ⇒ 理论上 `Add` 抛异常会跳过置 null，与"停止呈现后宿主引用必须无条件为 null"的合同意图存在**理论缝隙**（当前 `Add` 无抛出路径 ⇒ **实际不可达**） | ✅ **已修**（`48de1a8`）：改为**嵌套 `try`/`finally`**，使"无条件释放宿主引用"位于**最内层** `finally` 体内 ⇒ 任何登记异常都**不可能**旁路它。**新增可执行护栏** `护栏_停止呈现必须把释放宿主引用放在最内层finally里`（判据：IL 里 `endfinally` ≥ 2 次，且最后一次 `stfld _gpuPresentation` 之后**仍有** `endfinally`）。**主审变异自证**：变异 B（把置 null 移回外层 `finally`，恢复单层）⇒ **红 1 条** ⇒ 字节还原 SHA-256 一致（还原后 SHA 与修复前原始值 `CB3CC174…` **完全相同**，证明变异精确还原了旧代码）⇒ 绿 47/47 |
+| **LM-064** | 🔵 低 | **ledger `Pump` 预填 `Attempts=2` 并覆盖 `LastErrorCode`**（`CapturePolicyCleanupLedger.cs` 的 `while (cleanup.Attempts < 2)` 段）⇒ 生产移交路径恒为 `Attempts == 2` ⇒ **实际不触发**；但使 ledger 与 policy 两份实现的语义存在潜在漂移窗口 | 📌 **登记，不修**：属**诊断保真观察**，非功能缺陷；两份实现的"宿主停止时的首次 + 内联重试 = 2 次"口径本就来自合同 §6.4，抽取显式常量属**美化**而非修复 ⇒ 本批不做（禁止无关重构） |
+
+**`NOT_VERIFIED` / `BLOCKED_ENV`（复核方如实标注，不计入通过）**：
+- `BLOCKED_ENV`：① GPU 实机行为（真实 DXGI 呈现 / 真实 HWND 重建 / 真实 WDA 排除与恢复 / 异 DPI 显示器）⇒ 需真实 GPU + 双屏 + 管理员；② 计划 §7.2 的 **G01–G12** 实际窗口与画面矩阵。
+- `NOT_VERIFIED`：① `WS_EX_LAYERED` 窗口上 `SetWindowDisplayAffinity` 是否**确实**失败（合同 §14 第 3 项）；② 重建后 `Form.Opacity` 分层 alpha 是否自动恢复（第 1 项）；③ `MakeWindowAssociation` 残留是否清除（第 2 项）；④ 清理预算 6 次 / 退避 250→2000 ms 是否覆盖**真实**窗口存活时间（第 5 项，本轮只验了退避表数值与重试逻辑）；⑤ "新代次独立取得所有权"在实机上无 WDA 副作用（第 8 项）；⑥ 继承 T01 报告的 **N1–N10**。
+- **已验证且明确不列入未验**：合同 §14 第 10 项（`WindowIsLayered` 落在 `Decide` 的位置是否影响既有单测期望）—— 既有单测全绿，且变异 M8/M13/M14 仍能精准打红相关用例 ⇒ 该落点确实被覆盖。
+
 ---
 
 ## 5. 执行步骤
@@ -1189,11 +1230,11 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | LM-042 | **S3.6** | P2 | M3 | ✅ 已闭环 | `d588440`：URL 改目标专属 + 收紧为「恰好 64 个请求」 |
 | LM-043 | **S3.6** | P3 | M3 | ✅ 已闭环 | `d588440`：删除 2 处空转断言，承重断言保留 |
 | LM-044 | **S3.6** + 主审集成 | P2 | M3 | ✅ 已闭环 | `d588440`（共享默认）+ `6310dbf`（实例级 `CreateScope` 缝隙，**补上 S3.6 未能实测的变体**） |
-| GPU-001 | GPU T03/T04 | **P1** | GPU B→C | 🟡 **已实现，待独立复核** | **根因修复已落地**：`4ade856`（T04）宿主恢复失败 ⇒ 产出 `WindowCapturePolicyCleanup` 交给订阅者并**释放自己**；`5a1eeb7`（T03）`StopGpuPresentation` **无条件**置 null ⇒ 三条重启路径重新可达；清理责任由 `CapturePolicyCleanupLedger` **独立持有**（合同 §6.2 INV-1）。★ 主审巡检曾发现 worker 首版**未订阅**移交事件、`ledger.Add` 从未被调用 ⇒ 清理责任会彻底丢失 ⇒ 已纠正。**实机端到端（真实 GPU 走非干净停止分支）仍属 T07/T09 ⇒ `NOT_VERIFIED`** |
-| GPU-002 | GPU T02/T04 | P2 | GPU B→C | 🟡 **已实现，待独立复核** | `4ade856`（T04）正式采用 `PresentationSession.RecreateWindow`，补齐 R1–R6（代次单调校验 / 恢复失败不改句柄 / 新句柄重读原值 / 代次可观测 / 失败码可区分） |
-| GPU-003 | GPU T02/T03 | P2 | GPU B→C | 🟡 **已实现，待实测** | T01 实测判定 **`RECREATE_HANDLE_SAFE`**（句柄事件 `HandleDestroyed → HandleCreated` 有序、代次恰好 +1、桌面像素回读证明重建后 GDI 动态帧恢复）；`5a1eeb7`（T03）新增**只读** `MainFormWinHelper.IsWindowLayered()`（只读 ex-style，**绝不**修改 ⇒ 合同 §1.3 明确否决的"顺手清 `WS_EX_LAYERED`"未发生），真实值喂给 `RenderingRouteRequest.WindowIsLayered` ⇒ 期望路由由 `RenderingRoutePolicy.Decide` 判定。**真实 layered 窗口下的二次校验仍需实机（T09）⇒ `NOT_VERIFIED`** |
-| GPU-004 | GPU T04 | P2 | GPU B→C | 🟡 **已实现，待独立复核** | `4ade856`（T04）代次判据**先于** `IsWindow`（旧代次 ⇒ 禁止任何 Win32 调用）；代次唯一真相源 = `WindowHandleGeneration.Instance`（裁决 D-G）；`5a1eeb7`（T03）**删除了** `LiveGlassController` 的第二个计数器（⇒ 上一轮 verifier 的 F7 已消除） |
-| GPU-005 | GPU T02 + owner A 接线 | P2 | GPU B→C | 🟡 **已实现，待独立复核** | pending 仅在「首帧成功」或「受控放弃且停止流程干净」时清除：`03a925a`（owner A 接线）让 `GpuStartupAttempt` 实现 `IGpuStartupAttemptAbandon`（`AbandonPreservingPending`：只注销尝试、**不删** pending 标记、**不复位** `_attemptWritten`）；`4ade856`（T04）的 `ReleaseStartupAttempt(stopClean)` 通过运行时探测衔接该接口。**宿主侧端到端（停止不干净 ⇒ pending 保留）需真实 GPU ⇒ T07/T09** |
+| GPU-001 | GPU T03/T04 | **P1** | GPU B→C | 🟢 **已闭环（独立复核 PASS_WITH_NOTES）** | **根因修复已落地**：`4ade856`（T04）宿主恢复失败 ⇒ 产出 `WindowCapturePolicyCleanup` 交给订阅者并**释放自己**；`5a1eeb7`（T03）`StopGpuPresentation` **无条件**置 null ⇒ 三条重启路径重新可达；清理责任由 `CapturePolicyCleanupLedger` **独立持有**（合同 §6.2 INV-1）。★ 主审巡检曾发现 worker 首版**未订阅**移交事件、`ledger.Add` 从未被调用 ⇒ 清理责任会彻底丢失 ⇒ 已纠正。**实机端到端（真实 GPU 走非干净停止分支）仍属 T07/T09 ⇒ `NOT_VERIFIED`**。**独立复核（§4.5.12）**：以全程序集 IL 扫描 + `StopGpuPresentation` 分支目标分析实测「唯一订阅点 / 事件登记 / 兜底登记 / 无条件置 null / 无第二创建点」全部成立；14 条变异 14/14 被杀（含拆移交出口、`Add` 变 no-op、移除无条件置空） |
+| GPU-002 | GPU T02/T04 | P2 | GPU B→C | 🟢 **已闭环（独立复核 PASS_WITH_NOTES）** | `4ade856`（T04）正式采用 `PresentationSession.RecreateWindow`，补齐 R1–R6（代次单调校验 / 恢复失败不改句柄 / 新句柄重读原值 / 代次可观测 / 失败码可区分） |
+| GPU-003 | GPU T02/T03 | P2 | GPU B→C | 🟡 **已实现，待实测（独立复核未发现新问题）** | T01 实测判定 **`RECREATE_HANDLE_SAFE`**（句柄事件 `HandleDestroyed → HandleCreated` 有序、代次恰好 +1、桌面像素回读证明重建后 GDI 动态帧恢复）；`5a1eeb7`（T03）新增**只读** `MainFormWinHelper.IsWindowLayered()`（只读 ex-style，**绝不**修改 ⇒ 合同 §1.3 明确否决的"顺手清 `WS_EX_LAYERED`"未发生），真实值喂给 `RenderingRouteRequest.WindowIsLayered` ⇒ 期望路由由 `RenderingRoutePolicy.Decide` 判定。**真实 layered 窗口下的二次校验仍需实机（T09）⇒ `NOT_VERIFIED`** |
+| GPU-004 | GPU T04 | P2 | GPU B→C | 🟢 **已闭环（独立复核 PASS_WITH_NOTES）** | `4ade856`（T04）代次判据**先于** `IsWindow`（旧代次 ⇒ 禁止任何 Win32 调用）；代次唯一真相源 = `WindowHandleGeneration.Instance`（裁决 D-G）；`5a1eeb7`（T03）**删除了** `LiveGlassController` 的第二个计数器（⇒ 上一轮 verifier 的 F7 已消除） |
+| GPU-005 | GPU T02 + owner A 接线 | P2 | GPU B→C | 🟢 **已闭环（独立复核 PASS_WITH_NOTES）** | pending 仅在「首帧成功」或「受控放弃且停止流程干净」时清除：`03a925a`（owner A 接线）让 `GpuStartupAttempt` 实现 `IGpuStartupAttemptAbandon`（`AbandonPreservingPending`：只注销尝试、**不删** pending 标记、**不复位** `_attemptWritten`）；`4ade856`（T04）的 `ReleaseStartupAttempt(stopClean)` 通过运行时探测衔接该接口。**宿主侧端到端（停止不干净 ⇒ pending 保留）需真实 GPU ⇒ T07/T09** |
 | LM-045 | **本批已修** | **P1** | M3→M4 | 🟢 **已闭环（独立复核 `PASS_WITH_NOTES`）** | `938dc4b`：HTTP 步骤路径与 `native://` 路径**两侧**都关闭自动重定向、改为逐跳跟随并**逐跳复核目标主机**；带凭据的每一跳须落在**声明主机集合**内，不带凭据的每一跳须落在（声明集合 ∪ {直连目标主机}）内；不通过 ⇒ **该跳请求根本不发出**。跳数上限 5 / 缺 `Location` / 相对 `Location` / 非 http(s) / **https→http 降级**均被拒。22 条新用例 / 7 变异全捕获。**独立复核已完成（§4.5.10）**：复核方**自写** 47 条独立用例（不跑实现者用例）+ **自设计** 12 条变异（其中 9 条完全不在实现者已做类别内）**12/12 全部被捕获**；实测"未声明主机 **0 个请求** / **从未见到秘密** / 响应体**不入流水线**"；契约 **6 常量一个未改**；公开面**无既有 public 签名被删改** |
 | LM-046 | 接受并登记 | P3 | — | 📌 信息项 | `CryptoNative.SourceUrlOverrides`（`internal static` 可变全局测试接缝）：生产路径永不设置，测试用 `IDisposable` 复位 ⇒ 无泄漏、无并行冲突。但位于生产程序集内且可写 ⇒ **须在后续审计中显式知情**。独立 verifier 已复核：全仓赋值点仅在测试文件 |
 | LM-047 | 已修 | P2 | M3 | ✅ 已闭环 | `46f3f9d`：原语层 `Math.Min(maxBytes, MaxResponseBytes)` 夹取，契约天花板从"约定"变成"强制"；新增护栏用例并以变异自证（去掉夹取 ⇒ 变红 ⇒ 字节级还原 ⇒ 26/26 全绿） |
@@ -1210,6 +1251,10 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | LM-058 | 独立复核产出 | P3 | M4 | 📌 登记待清理 | IPv6 字面量主机在两处被**不同地**截断（`AddDeclaredHost` 取第一个冒号 ⇒ `"["`；`StripPort` 取最后一个冒号 ⇒ `"[:"`）⇒ IPv6 目标恒不可用。**偏严 / fail-closed**，不漏放行（§4.5.10） |
 | LM-059 | 独立复核产出 | P3 | — | 📌 登记知悉 | 既有 public 记录 `RenderingRouteRequest` 的**主位置签名**被追加成员 ⇒ 二进制不兼容；构造侧源码兼容，全仓仅 1 处生产调用点（§4.5.10） |
 | LM-060 | GPU T03 自证中实测 | P3 | — | 📌 登记待清理 | `FpsStateTests.需求抖动不会击穿退避窗口` 用真实时间等待 ⇒ 满负载下偶发超时变红。**既有 flaky，非本批引入**（不触碰 FPS 退避任何代码）；本批不动他人文件 |
+| LM-061 | GPU 独立复核产出 | P2 | M3 | ✅ **已修复**（48de1a8） | 实现者护栏 EnumerateMethods 不枚举实例构造函数 ⇒ D-G 唯一性护栏在构造函数路径上不承重。已补 GetConstructors 枚举 + 2 条钉住用例 + 主审变异自证（红 → SHA 一致 → 绿）。**当前生产代码无第二实例**，本条属护栏可靠性 |
+| LM-062 | GPU 独立复核产出 | P3 | — | 📌 登记知悉（裁决 D-I） | 既有 public NotifyGpuHandleChanged() 无参重载被删除。内部 WinForms 类、非对外库 API、全仓仅 1 处调用点；补兼容重载会**改变原语义** ⇒ 不修 |
+| LM-063 | GPU 独立复核产出 | P3 | M3 | ✅ **已修复**（48de1a8） | inally 内登记排在置 null 之前 ⇒ 理论缝隙。已改为嵌套 	ry/inally（置 null 在最内层）+ 新增可执行 IL 护栏 + 变异自证 |
+| LM-064 | GPU 独立复核产出 | P3 | — | 📌 登记，不修 | ledger Pump 预填 Attempts=2 并覆盖 LastErrorCode ⇒ 诊断保真观察（生产路径恒为 2，实际不触发） |
 | ENV-003 | S4.1 | P1 | M4 | ✅ 已闭环 | `a8fb2fc`：跳过 7→1；CI 门禁收紧（`MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS`） |
 | ENV-004 | S4.1 | P2 | M4 | ⏳ `BLOCKED_ENV` | 联网 E2E 单独运行，**不进 PR 门禁**；**不计入通过**（§9） |
 
