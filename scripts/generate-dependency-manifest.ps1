@@ -20,6 +20,16 @@
       3. 交叉核对 NOTICE 中形如 "N) 名称 版本" 的声明行，输出三类判定：
            漏列（实际直接依赖未声明） / 版本不符（声明版本 ≠ 实际解析版本） /
            多声明（NOTICE 声明了但实际不再依赖，只提示不自动删）。
+      4. NOTICE 分「直接依赖」段与「传递依赖」段（由 "----" 分隔线 + 含 "传递依赖"
+         的章节标题切分）。对**实际随包分发**的传递依赖再做一遍同样的核对：
+         未在传递依赖段声明 ⇒ 漏列；声明版本 ≠ 实际解析版本 ⇒ 版本不符。
+         两类判定分别汇总（SUMMARY / SUMMARY-TRANSITIVE），任一不通过都非零退出。
+      5. 「随包分发」的判定**不能**用"包里有没有 lib/ 目录"这种粗判据：NuGet 会
+         把与 .NET 共享框架同名的程序集（Microsoft.Win32.Registry、
+         System.Security.AccessControl、System.Security.Principal.Windows、
+         System.Reflection.TypeExtensions、System.Runtime.CompilerServices.Unsafe）
+         判定为"框架提供"，从而**不**复制进发布包；粗判据会把它们误算成随包分发。
+         现在的判据见 Get-DistributionMap 的注释，与实际 publish 产物逐条核对过。
 
     两种模式：
 
@@ -68,7 +78,8 @@
       0 = 全部一致（护栏通过）
       1 = 存在漏列 / 版本不符（护栏触发）
       2 = 参数错误或脚本自身失败
-      3 = 环境受阻（dotnet 不可用、工程无法还原且无 assets 回退等）
+      3 = 环境受阻（dotnet 不可用、工程无法还原且无 assets 回退、
+                   随包分发判定降级导致传递依赖结论不可信等）
 #>
 [CmdletBinding()]
 param(
@@ -103,7 +114,17 @@ $script:ExitEnv = 3
 # 非 NuGet 条目（PawnIO / PresentMon / 网络测速服务器）因为没有纯版本号而不会命中。
 $script:NoticeDeclPattern = '^\s*(\d+)\)\s+(\S+)\s+([0-9][0-9A-Za-z.\-+]*)\s*$'
 
+# NOTICE 的章节分隔线，以及"传递依赖"章节的识别标记。
+# NOTICE 用 "----" 分隔线切章节；章节标题行里含下面这个标记的即"传递依赖"段。
+$script:NoticeSectionSeparatorPattern = '^-{10,}\s*$'
+$script:NoticeTransitiveMarker = '传递依赖'
+
+# 发布包的运行时标识（RID）。pack-release.ps1 用 `-r win-x64` 发布，
+# NuGet 的 RID 回退链是 win-x64 → win → 任意，因此这两个 RID 的资产才会进包。
+$script:ReleaseRids = @('win', 'win-x64')
+
 $script:Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
 
 #region 基础设施
 
@@ -191,6 +212,26 @@ function Test-PackageHasRuntimeAsset {
     return $false
 }
 
+function Get-LicenseLabelFromText {
+    <#
+        从许可证文件正文里识别常见的 SPDX 标识（仅用于**报告展示**，
+        NOTICE 里的协议文字是人工核对后写死的，不依赖本函数）。
+    #>
+    param([string]$Text)
+
+    if (-not $Text) { return $null }
+    if ($Text -match 'Apache License,?\s*Version 2\.0') { return 'Apache-2.0' }
+    if ($Text -match 'Mozilla Public License Version 2\.0') { return 'MPL-2.0' }
+    if ($Text -match 'Mozilla Public License Version 1\.1') { return 'MPL-1.1' }
+    if ($Text -match 'GNU GENERAL PUBLIC LICENSE\s+Version 3') { return 'GPL-3.0-only' }
+    if ($Text -match 'GNU GENERAL PUBLIC LICENSE\s+Version 2') { return 'GPL-2.0-only' }
+    if ($Text -match 'Permission is hereby granted, free of charge') { return 'MIT' }
+    if ($Text -match 'Redistribution and use in source and binary forms') { return 'BSD-3-Clause' }
+    if ($Text -match 'Permission to use, copy, modify, and/or distribute this software') { return 'ISC' }
+    if ($Text -match 'released into the public domain') { return 'Unlicense' }
+    return $null
+}
+
 function Get-PackageFacts {
     <#
         从 NuGet 全局缓存的 .nuspec 读真实许可证表达式与来源地址。
@@ -207,6 +248,8 @@ function Get-PackageFacts {
         Version         = $Version
         LicenseType     = $null
         License         = $null
+        LicenseFile     = $null
+        LicenseFileText = $null
         LicenseUrl      = $null
         ProjectUrl      = $null
         RepositoryUrl   = $null
@@ -245,9 +288,13 @@ function Get-PackageFacts {
             if ($text) { $text = $text.Trim() }
             if (($lic.type -eq 'file') -and $text) {
                 $licenseFile = Join-Path $dir $text
+                $result.LicenseFile = $text
                 if (Test-Path -LiteralPath $licenseFile) {
-                    $result.License = (Get-Content -LiteralPath $licenseFile -Raw -Encoding UTF8) -replace '\s+', ' '
-                    $result.License = $result.License.Trim()
+                    $full = (Get-Content -LiteralPath $licenseFile -Raw -Encoding UTF8) -replace '\s+', ' '
+                    $full = $full.Trim()
+                    $result.LicenseFileText = $full
+                    $label = Get-LicenseLabelFromText -Text $full
+                    $result.License = if ($label) { "{0}（包内 {1}）" -f $label, $text } else { "文件许可证（包内 {0}）" -f $text }
                 } else {
                     $result.License = "FILE:$text"
                 }
@@ -257,7 +304,12 @@ function Get-PackageFacts {
         }
 
         $result.LicenseUrl = [string]$meta.licenseUrl
+        if (-not $result.License -and $result.LicenseUrl) {
+            # 有些包（如 Mono.Posix.NETStandard）只给 licenseUrl，没有 SPDX 表达式
+            $result.License = "未声明 SPDX 表达式（licenseUrl: {0}）" -f $result.LicenseUrl
+        }
         $result.ProjectUrl = [string]$meta.projectUrl
+
         $result.Authors = [string]$meta.authors
 
         $repo = $meta.repository
@@ -463,6 +515,24 @@ function Get-ResolvedPackages {
 
 #region NOTICE 解析
 
+function Get-NoticeSectionStart {
+    <#
+        NOTICE 用 "----" 分隔线切分章节。返回「传递依赖」章节分隔线所在的行号（0 基）；
+        找不到则返回 -1（此时全部声明都按「直接依赖」处理）。
+        识别规则：某个分隔线之后 3 行内出现含「传递依赖」的标题行。
+    #>
+    param([string[]]$Lines)
+
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -notmatch $script:NoticeSectionSeparatorPattern) { continue }
+        $limit = [Math]::Min($i + 3, $Lines.Count - 1)
+        for ($j = $i + 1; $j -le $limit; $j++) {
+            if ($Lines[$j] -match $script:NoticeTransitiveMarker) { return $i }
+        }
+    }
+    return -1
+}
+
 function Get-NoticeDeclarations {
     param([string]$NoticeFile)
 
@@ -472,6 +542,8 @@ function Get-NoticeDeclarations {
     # 显式 UTF-8 读取
     $text = [System.IO.File]::ReadAllText($NoticeFile, [System.Text.UTF8Encoding]::new($false))
     $lines = $text -split "`r`n|`n|`r"
+
+    $sectionStart = Get-NoticeSectionStart -Lines $lines
 
     $decls = @()
     for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -484,13 +556,271 @@ function Get-NoticeDeclarations {
                 Version = $m.Groups[3].Value
                 Line    = ($i + 1)
                 Raw     = $line
+                # 传递依赖段里的声明行；分隔线之前的一律算直接依赖
+                Section = if ($sectionStart -ge 0 -and $i -gt $sectionStart) { 'Transitive' } else { 'Direct' }
             }
         }
     }
-    return $decls
+    return [pscustomobject]@{
+        Declarations  = $decls
+        SectionStart  = $sectionStart
+        HasTransitive = ($sectionStart -ge 0)
+    }
+}
+
+function Test-VersionEqual {
+    <#
+        版本号比较。NuGet 版本的大小写不敏感（预发布标签 "-beta" 与 "-Beta" 等价），
+        因此这里做 OrdinalIgnoreCase 比较，且只比较归一化后的字面量 ——
+        不做 SemVer 排序比较，避免把 "2.4.2-beta" 之类的预发布串解析错。
+    #>
+    param([string]$A, [string]$B)
+    if ($null -eq $A -or $null -eq $B) { return $false }
+    $x = $A.Trim()
+    $y = $B.Trim()
+    if ($x.Length -eq 0 -and $y.Length -eq 0) { return $true }
+    return [string]::Equals($x, $y, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
 #endregion
+
+#region 随包分发判定
+
+function Get-AssetsGraph {
+    <#
+        读 obj/project.assets.json（还原期的解析产物），给出**实际会被复制进发布目录**
+        的资产清单，以及包之间的依赖关系。
+
+        返回：Source / Path / Tfm / TargetKey / HasRid / Libraries
+
+        优先选带 RID 的目标（"<tfm>/win-x64"），其次选不带 RID 的目标（"<tfm>"）。
+        带 RID 的目标里资产已经按 RID 解析完毕；不带 RID 的目标里 assets 会列出
+        所有 RID 的资产，由调用方按 $script:ReleaseRids 过滤。
+    #>
+    param([string]$ProjectFile)
+
+    $assetsPath = Join-Path (Split-Path -Parent $ProjectFile) 'obj\project.assets.json'
+    if (-not (Test-Path -LiteralPath $assetsPath)) { return $null }
+
+    try {
+        $a = ([System.IO.File]::ReadAllText($assetsPath, [System.Text.UTF8Encoding]::new($false))) | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+    if ($null -eq $a -or $null -eq $a.targets) { return $null }
+
+    $targetKeys = @($a.targets.PSObject.Properties | ForEach-Object { $_.Name })
+    $ridKey = $targetKeys | Where-Object { $_ -match '/win-x64$' } | Select-Object -First 1
+    $plainKey = $targetKeys | Where-Object { $_ -notmatch '/' } | Select-Object -First 1
+    $chosen = if ($ridKey) { $ridKey } else { $plainKey }
+    if (-not $chosen) { return $null }
+
+    $libraries = [ordered]@{}
+    foreach ($lp in $a.targets.PSObject.Properties[$chosen].Value.PSObject.Properties) {
+        $id = $lp.Name
+        $ver = ''
+        if ($id -match '^(?<i>[^/]+)/(?<v>.+)$') { $id = $Matches['i']; $ver = $Matches['v'] }
+        $rt = @(); if ($lp.Value.runtime) { $rt = @($lp.Value.runtime.PSObject.Properties | ForEach-Object { $_.Name }) }
+        $rtg = @(); if ($lp.Value.runtimeTargets) { $rtg = @($lp.Value.runtimeTargets.PSObject.Properties | ForEach-Object { $_.Name }) }
+        $nat = @(); if ($lp.Value.native) { $nat = @($lp.Value.native.PSObject.Properties | ForEach-Object { $_.Name }) }
+        $deps = @(); if ($lp.Value.dependencies) { $deps = @($lp.Value.dependencies.PSObject.Properties | ForEach-Object { $_.Name }) }
+        $libraries[$id] = [pscustomobject]@{
+            Id             = $id
+            Version        = $ver
+            Runtime        = $rt
+            RuntimeTargets = $rtg
+            Native         = $nat
+            Dependencies   = $deps
+        }
+    }
+
+    $tfm = if ($chosen -match '/') { ($chosen -split '/')[0] } else { $chosen }
+    return [pscustomobject]@{
+        Source    = 'obj/project.assets.json'
+        Path      = $assetsPath
+        Tfm       = $tfm
+        TargetKey = $chosen
+        HasRid    = [bool]($chosen -match '/')
+        Libraries = $libraries
+    }
+}
+
+function Get-TargetingPackAssemblyMap {
+    <#
+        取"目标框架（targeting pack）"提供的程序集及其程序集版本：
+          <dotnetRoot>\packs\Microsoft.NETCore.App.Ref\<ver>\ref\<tfm>\*.dll
+          <dotnetRoot>\packs\Microsoft.WindowsDesktop.App.Ref\<ver>\ref\<tfm>\*.dll
+
+        这些程序集由 .NET 共享框架提供 —— 当某个 NuGet 包提供的同名程序集版本
+        **不高于**框架版本时，NuGet/MSBuild 会判定"框架提供"，该文件**不会**被
+        复制进发布目录。这是"随包分发"判定的关键一环。
+    #>
+    param([string]$TargetFramework)
+
+    $map = @{}
+    $sources = @()
+    try {
+        $dotnetExe = (Get-Command dotnet -ErrorAction Stop).Source
+        # dotnet.exe -> <dotnetRoot>\dotnet.exe，dotnetRoot 就是它所在的目录
+        $dotnetRoot = Split-Path -Parent $dotnetExe
+        $packs = Join-Path $dotnetRoot 'packs'
+    } catch {
+        return [pscustomobject]@{ Map = $map; Sources = @(); Found = $false }
+    }
+
+    foreach ($pack in @('Microsoft.NETCore.App.Ref', 'Microsoft.WindowsDesktop.App.Ref')) {
+        $dir = Join-Path $packs $pack
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        $cands = @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue |
+                Sort-Object -Property @{ Expression = { try { [version](($_.Name -split '-')[0]) } catch { [version]'0.0' } } } -Descending)
+        foreach ($v in $cands) {
+            $ref = Join-Path $v.FullName (Join-Path 'ref' $TargetFramework)
+            if (-not (Test-Path -LiteralPath $ref)) { continue }
+            foreach ($f in (Get-ChildItem -LiteralPath $ref -File -Filter '*.dll' -ErrorAction SilentlyContinue)) {
+                try {
+                    $an = [System.Reflection.AssemblyName]::GetAssemblyName($f.FullName)
+                    if (-not $map.ContainsKey($an.Name)) { $map[$an.Name] = $an.Version }
+                } catch {
+                    # 非托管或无法读取元数据的文件：忽略
+                }
+            }
+            $sources += $ref
+            break
+        }
+    }
+    return [pscustomobject]@{ Map = $map; Sources = $sources; Found = ($sources.Count -gt 0) }
+}
+
+function Get-DistributionMap {
+    <#
+        判定"哪些包的文件会真的随发布包分发"。
+
+        判据（与 NuGet / MSBuild 的实际行为一致，已用
+        `dotnet publish -c Release -r win-x64 --self-contained false` 的真实产物
+        逐条核对过）：
+          1. 资产来自还原图的 runtime / runtimeTargets / native；
+          2. 文件名不是 "_._"（NuGet 的空占位符，代表该 TFM 没有实现）；
+          3. runtimes/<rid>/... 里的 rid 必须命中发布包的 RID（win-x64 / win）；
+          4. 托管程序集若被目标框架（targeting pack）以**不低于**的版本提供，
+             则该文件不会进入发布目录（NuGet 判定为"框架提供"）。
+
+        第 4 条是关键：没有它，Microsoft.Win32.Registry、System.Security.AccessControl、
+        System.Security.Principal.Windows、System.Reflection.TypeExtensions、
+        System.Runtime.CompilerServices.Unsafe 会被误判成随包分发。
+    #>
+    param(
+        [pscustomobject]$AssetsGraph,
+        [string]$GlobalPackagesRoot,
+        [hashtable]$FrameworkAssemblies
+    )
+
+    $result = @{}
+    if ($null -eq $AssetsGraph) { return $result }
+
+    foreach ($id in $AssetsGraph.Libraries.Keys) {
+        $lib = $AssetsGraph.Libraries[$id]
+        $pkgDir = Join-Path (Join-Path $GlobalPackagesRoot $id.ToLowerInvariant()) $lib.Version
+
+        $candidates = @()
+        foreach ($c in @($lib.Runtime, $lib.RuntimeTargets, $lib.Native)) { $candidates += @($c) }
+
+        $kept = @()
+        $sawPlaceholder = $false
+        $sawOtherRid = $false
+        $sawFramework = $false
+        foreach ($asset in $candidates) {
+            if (-not $asset) { continue }
+            $leaf = Split-Path -Leaf $asset
+            if ($leaf -eq '_._') { $sawPlaceholder = $true; continue }          # 空占位符
+
+            if (-not $AssetsGraph.HasRid -and $asset -match '(?i)^runtimes/(?<rid>[^/]+)/') {
+                # 未按 RID 还原的图：只有发布包的 RID 才会进包
+                if ($script:ReleaseRids -notcontains $Matches['rid'].ToLowerInvariant()) {
+                    $sawOtherRid = $true
+                    continue
+                }
+            }
+
+            if ($leaf -match '\.dll$' -and $asset -notmatch '(?i)^runtimes/[^/]+/native/') {
+                $full = Join-Path $pkgDir ($asset -replace '/', '\')
+                $pkgVersion = $null
+                try { $pkgVersion = [System.Reflection.AssemblyName]::GetAssemblyName($full).Version } catch { $pkgVersion = $null }
+                if ($pkgVersion) {
+                    $simple = [System.IO.Path]::GetFileNameWithoutExtension($leaf)
+                    if ($FrameworkAssemblies.ContainsKey($simple) -and $FrameworkAssemblies[$simple] -ge $pkgVersion) {
+                        $sawFramework = $true
+                        continue    # 框架提供 → 不随包分发
+                    }
+                }
+            }
+
+            $kept += $asset
+        }
+
+        $reason = '随包分发'
+        if ($kept.Count -eq 0) {
+            if ($sawFramework) {
+                $reason = '同名程序集由 .NET 共享框架提供（版本不低于包内版本），不随包分发'
+            } elseif ($sawOtherRid) {
+                $reason = '只提供非 Windows RID（win-x64 / win）的原生文件，不随包分发'
+            } elseif ($sawPlaceholder) {
+                $reason = '该目标框架下只有空占位符（_._），仅编译期引用，不随包分发'
+            } else {
+                $reason = '无运行库资产（仅编译期引用），不随包分发'
+            }
+        }
+
+        $result[$id] = [pscustomobject]@{
+            Id          = $id
+            Version     = $lib.Version
+            Distributed = ($kept.Count -gt 0)
+            Files       = $kept
+            Reason      = $reason
+        }
+    }
+    return $result
+}
+
+function Get-DirectAncestors {
+    <#
+        沿依赖图回溯，给出某个包是**由哪些直接依赖**带入的（用于 NOTICE 的"引入"字段）。
+    #>
+    param(
+        [pscustomobject]$AssetsGraph,
+        [string[]]$DirectIds,
+        [string]$Id
+    )
+
+    if ($null -eq $AssetsGraph) { return @() }
+    $parents = @{}
+    foreach ($lid in $AssetsGraph.Libraries.Keys) {
+        foreach ($d in $AssetsGraph.Libraries[$lid].Dependencies) {
+            if (-not $parents.ContainsKey($d)) { $parents[$d] = @() }
+            $parents[$d] += $lid
+        }
+    }
+
+    $seen = @{}
+    $found = New-Object System.Collections.Generic.List[string]
+    $stack = New-Object System.Collections.Generic.Stack[string]
+    $stack.Push($Id)
+    while ($stack.Count -gt 0) {
+        $cur = $stack.Pop()
+        if ($seen.ContainsKey($cur)) { continue }
+        $seen[$cur] = $true
+        if ($DirectIds -contains $cur) {
+            if (-not $found.Contains($cur)) { $found.Add($cur) }
+            continue
+        }
+        if ($parents.ContainsKey($cur)) {
+            foreach ($p in $parents[$cur]) { $stack.Push($p) }
+        }
+    }
+    return @($found | Sort-Object)
+}
+
+#endregion
+
 
 #region 包内更新器检查
 
@@ -708,17 +1038,21 @@ Write-Report ("NOTICE       : {0}" -f $NoticePath)
 Write-Report ''
 
 # --- NOTICE 声明 ---
-$declarations = @()
+$noticeParsed = $null
 try {
-    $declarations = Get-NoticeDeclarations -NoticeFile $noticeFile
+    $noticeParsed = Get-NoticeDeclarations -NoticeFile $noticeFile
 } catch {
     Write-Output "ERROR: $($_.Exception.Message)"
     exit $script:ExitUsage
 }
+$declarations = @($noticeParsed.Declarations)
 
-$declMap = @{}
+# 直接依赖段 / 传递依赖段分开建索引。两段不能混用：否则"多声明(EXTRA)"会把
+# 传递依赖误判成"已经不再依赖"，而漏列/版本不符也会串段。
+$declMap = @{}          # 直接依赖段
+$transDeclMap = @{}     # 传递依赖段
 foreach ($d in $declarations) {
-    $declMap[$d.Name] = $d
+    if ($d.Section -eq 'Transitive') { $transDeclMap[$d.Name] = $d } else { $declMap[$d.Name] = $d }
 }
 
 Write-Report '== NOTICE 声明（形如 "N) 名称 版本"）=='
@@ -726,10 +1060,15 @@ if ($declarations.Count -eq 0) {
     Write-Report '  （未解析到任何声明行）'
 } else {
     foreach ($d in ($declarations | Sort-Object Number)) {
-        Write-Report ("  {0,2}) {1} {2}    (NOTICE:{3})" -f $d.Number, $d.Name, $d.Version, $d.Line)
+        $suffix = if ($d.Section -eq 'Transitive') { '，传递依赖' } else { '' }
+        Write-Report ("  {0,2}) {1} {2}    (NOTICE:{3}{4})" -f $d.Number, $d.Name, $d.Version, $d.Line, $suffix)
     }
 }
+if (-not $noticeParsed.HasTransitive) {
+    Write-Report '  ! NOTICE 中未找到「传递依赖」章节 —— 传递依赖披露检查必然不通过'
+}
 Write-Report ''
+
 
 # --- 实际解析依赖 ---
 $globalPackages = Get-NuGetGlobalPackagesRoot
@@ -756,20 +1095,63 @@ Write-Report ''
 $topLevel = @()
 foreach ($fw in $resolved.Frameworks) { $topLevel += $fw.TopLevel }
 
+# --- 随包分发判定（还原图 + 目标框架冲突消解） ---
+$assetsGraph = Get-AssetsGraph -ProjectFile $productProject
+$frameworkAssemblies = @{}
+$targetingPack = $null
+$distMap = @{}
+$distDegraded = $false
+$distReason = $null
+
+if ($null -eq $assetsGraph) {
+    $distDegraded = $true
+    $distReason = "读不到 {0}，无法判定随包分发" -f (Join-Path (Split-Path -Parent $productProject) 'obj\project.assets.json')
+} else {
+    # 目标框架 ref 目录名：net8.0-windows7.0 -> net8.0
+    $refTfm = ($assetsGraph.Tfm -split '-')[0]
+    $targetingPack = Get-TargetingPackAssemblyMap -TargetFramework $refTfm
+    if (-not $targetingPack.Found) {
+        $distDegraded = $true
+        $distReason = "找不到 $refTfm 的目标框架清单（targeting pack），无法消解与 .NET 共享框架同名的程序集"
+    } else {
+        $frameworkAssemblies = $targetingPack.Map
+        $distMap = Get-DistributionMap -AssetsGraph $assetsGraph -GlobalPackagesRoot $globalPackages -FrameworkAssemblies $frameworkAssemblies
+    }
+}
+
+Write-Report ("随包分发判据 : {0}" -f $(if ($distDegraded) { '降级（见下方说明）' } else { '还原图 + 目标框架冲突消解' }))
+if (-not $distDegraded) {
+    Write-Report ("               还原图目标: {0}（TFM={1}）" -f $assetsGraph.TargetKey, $assetsGraph.Tfm)
+    Write-Report ("               目标框架包: {0}" -f (@($targetingPack.Sources) -join ', '))
+} else {
+    Write-Report ("               ! {0}" -f $distReason)
+}
+Write-Report ''
+
 # 基准工程自身的直接依赖
 $rows = @()
 foreach ($p in ($topLevel | Sort-Object Id -Unique)) {
     $facts = Get-PackageFacts -GlobalPackagesRoot $globalPackages -Id $p.Id -Version $p.ResolvedVersion
     $meta = $null
     if ($refMeta.ContainsKey($p.Id)) { $meta = $refMeta[$p.Id] }
-    $redist = Test-IsRedistributed -HasRuntimeAsset $facts.HasRuntimeAsset -RefMeta $meta
+
+    # 随包分发：以还原图判定为准；降级时退回"包内是否有运行库资产"的粗判据
+    $hasRuntime = $facts.HasRuntimeAsset
+    if ($distMap.ContainsKey($p.Id)) {
+        $hasRuntime = $distMap[$p.Id].Distributed
+    } elseif ($distDegraded) {
+        $hasRuntime = $facts.HasRuntimeAsset
+    } else {
+        $hasRuntime = $false
+    }
+    $redist = Test-IsRedistributed -HasRuntimeAsset $hasRuntime -RefMeta $meta
 
     $status = 'OK'
     $detail = ''
     if (-not $declMap.ContainsKey($p.Id)) {
         $status = 'MISSING'
         $detail = 'NOTICE 未声明该直接依赖'
-    } elseif ($declMap[$p.Id].Version -ne $p.ResolvedVersion) {
+    } elseif (-not (Test-VersionEqual -A $declMap[$p.Id].Version -B $p.ResolvedVersion)) {
         $status = 'MISMATCH'
         $detail = ("NOTICE 声明 {0}，实际解析 {1}" -f $declMap[$p.Id].Version, $p.ResolvedVersion)
     }
@@ -849,6 +1231,90 @@ foreach ($r in $rows) {
     Write-Report $line
     if ($r.NuspecError) { Write-Report ("           ! {0}" -f $r.NuspecError) }
 }
+Write-Report ''
+
+# --- 传递依赖：只针对"实际随包分发"的组件做披露核对 ---
+$directIds = @($rows | ForEach-Object { $_.Package })
+$transPkgMap = @{}
+foreach ($fw in $resolved.Frameworks) {
+    foreach ($t in $fw.Transitive) {
+        if ($directIds -contains $t.Id) { continue }
+        if (-not $transPkgMap.ContainsKey($t.Id)) {
+            $transPkgMap[$t.Id] = [pscustomobject]@{ Id = $t.Id; Version = $t.ResolvedVersion }
+        }
+    }
+}
+
+$transRows = @()      # 随包分发 ⇒ 必须在 NOTICE「传递依赖」段披露
+$buildOnlyRows = @()   # 不随包分发 ⇒ 不需要披露
+foreach ($tid in ($transPkgMap.Keys | Sort-Object)) {
+    $info = $transPkgMap[$tid]
+    $facts = Get-PackageFacts -GlobalPackagesRoot $globalPackages -Id $tid -Version $info.Version
+    $distributed = $false
+    if ($distMap.ContainsKey($tid)) { $distributed = $distMap[$tid].Distributed }
+    $parents = @(Get-DirectAncestors -AssetsGraph $assetsGraph -DirectIds $directIds -Id $tid)
+
+    $status = 'OK'
+    $detail = ''
+    if ($distributed) {
+        if (-not $transDeclMap.ContainsKey($tid)) {
+            $status = 'MISSING'
+            $detail = 'NOTICE「传递依赖」段未声明该组件'
+        } elseif (-not (Test-VersionEqual -A $transDeclMap[$tid].Version -B $info.Version)) {
+            $status = 'MISMATCH'
+            $detail = ("NOTICE 声明 {0}，实际解析 {1}" -f $transDeclMap[$tid].Version, $info.Version)
+        }
+    }
+
+    $row = [pscustomobject]@{
+        Package         = $tid
+        ResolvedVersion = $info.Version
+        License         = $facts.License
+        LicenseType     = $facts.LicenseType
+        SourceUrl       = $facts.RepositoryUrl
+        ProjectUrl      = $facts.ProjectUrl
+        Authors         = $facts.Authors
+        Distributed     = $distributed
+        IntroducedBy    = ($parents -join ', ')
+        Status          = $status
+        Detail          = $detail
+        NoticeLine      = if ($transDeclMap.ContainsKey($tid)) { $transDeclMap[$tid].Line } else { $null }
+        NoticeVersion   = if ($transDeclMap.ContainsKey($tid)) { $transDeclMap[$tid].Version } else { $null }
+        NuspecPath      = $facts.NuspecPath
+        NuspecError     = $facts.Error
+    }
+    if ($distributed) { $transRows += $row } else { $buildOnlyRows += $row }
+}
+
+Write-Report '== 传递依赖判定（仅"实际随包分发"的组件）=='
+if ($transRows.Count -eq 0) {
+    Write-Report '  （没有随包分发的传递依赖）'
+} else {
+    foreach ($r in $transRows) {
+        $mark = switch ($r.Status) {
+            'OK' { '一致  ' }
+            'MISSING' { '漏列  ' }
+            'MISMATCH' { '版本不符' }
+            default { $r.Status }
+        }
+        $line = ("  [{0}] {1} {2}  许可证={3}  引入={4}" -f $mark, $r.Package, $r.ResolvedVersion,
+            $(if ($r.License) { $r.License } else { '未知' }), $(if ($r.IntroducedBy) { $r.IntroducedBy } else { '未知' }))
+        if ($r.Status -ne 'OK') { $line += "  ← {0}" -f $r.Detail }
+        Write-Report $line
+        if ($r.NuspecError) { Write-Report ("           ! {0}" -f $r.NuspecError) }
+    }
+}
+
+if ($buildOnlyRows.Count -gt 0) {
+    Write-Report ''
+    Write-Report '== 仅构建期 / 不随包分发（无需在 NOTICE 中披露）=='
+    foreach ($r in $buildOnlyRows) {
+        $reason = '无运行库资产（仅编译期引用）'
+        if ($distMap.ContainsKey($r.Package)) { $reason = $distMap[$r.Package].Reason }
+        Write-Report ("  [不分发] {0} {1}  {2}" -f $r.Package, $r.ResolvedVersion, $reason)
+    }
+}
+Write-Report ''
 
 if ($scanRows.Count -gt 0) {
     Write-Report ''
@@ -889,6 +1355,15 @@ foreach ($n in $declaredNames) {
 $missingAll = @($missing) + @($scanMissing)
 $mismatchAll = @($mismatch) + @($scanMismatch)
 
+# 传递依赖侧的判定：只针对随包分发的组件
+$transMissing = @($transRows | Where-Object { $_.Status -eq 'MISSING' })
+$transMismatch = @($transRows | Where-Object { $_.Status -eq 'MISMATCH' })
+$distributedTransIds = @($transRows | ForEach-Object { $_.Package })
+$transExtra = @()
+foreach ($n in $transDeclMap.Keys) {
+    if ($distributedTransIds -notcontains $n) { $transExtra += $transDeclMap[$n] }
+}
+
 Write-Report '== 汇总 =='
 if ($missingAll.Count -gt 0) {
     Write-Report '漏列（实际直接依赖未在 NOTICE 中声明）：'
@@ -907,7 +1382,28 @@ if ($extra.Count -gt 0) {
     }
 }
 Write-Report ("SUMMARY MISSING={0} MISMATCH={1} EXTRA={2}" -f $missingAll.Count, $mismatchAll.Count, $extra.Count)
+
+if ($transMissing.Count -gt 0) {
+    Write-Report '传递依赖漏列（随包分发但 NOTICE「传递依赖」段未声明）：'
+    foreach ($m in $transMissing) {
+        Write-Report ("  - {0} {1}  引入={2}" -f $m.Package, $m.ResolvedVersion, $m.IntroducedBy)
+    }
+}
+if ($transMismatch.Count -gt 0) {
+    Write-Report '传递依赖版本不符（NOTICE 声明版本 ≠ 实际解析版本）：'
+    foreach ($m in $transMismatch) {
+        Write-Report ("  - {0}：声明 {1}，实际 {2}" -f $m.Package, $m.NoticeVersion, $m.ResolvedVersion)
+    }
+}
+if ($transExtra.Count -gt 0) {
+    Write-Report '传递依赖多声明（NOTICE 声明了但已不再随包分发 —— 仅提示，请人工判断，勿自动删除）：'
+    foreach ($e in $transExtra) {
+        Write-Report ("  - {0} {1}  (NOTICE:{2})" -f $e.Name, $e.Version, $e.Line)
+    }
+}
+Write-Report ("SUMMARY-TRANSITIVE MISSING={0} MISMATCH={1} EXTRA={2}" -f $transMissing.Count, $transMismatch.Count, $transExtra.Count)
 Write-Report ''
+
 
 # --- 包内更新器检查项 ---
 Write-Report '== 包内更新器 =='
@@ -951,8 +1447,13 @@ if ($Mode -eq 'Emit') {
         truthDegraded   = $resolved.Degraded
         gateProject     = $ProjectPath
         noticePath      = $NoticePath
+        noticeHasTransitiveSection = $noticeParsed.HasTransitive
+        noticeSectionStartLine     = if ($noticeParsed.HasTransitive) { $noticeParsed.SectionStart + 1 } else { $null }
+        distributionSource   = $(if ($distDegraded) { 'degraded' } else { 'project.assets.json + targeting-pack conflict resolution' })
+        distributionDegraded = $distDegraded
+        distributionNote     = $distReason
         noticeDeclarations = @($declarations | ForEach-Object {
-                [ordered]@{ number = $_.Number; name = $_.Name; version = $_.Version; noticeLine = $_.Line }
+                [ordered]@{ number = $_.Number; name = $_.Name; version = $_.Version; noticeLine = $_.Line; section = $_.Section }
             })
         packages        = @($rows | ForEach-Object {
                 [ordered]@{
@@ -995,10 +1496,44 @@ if ($Mode -eq 'Emit') {
                     project         = $_.Project
                 }
             })
+        transitivePackages = @($transRows | ForEach-Object {
+                [ordered]@{
+                    id                  = $_.Package
+                    resolvedVersion     = $_.ResolvedVersion
+                    licenseExpression  = $_.License
+                    licenseType         = $_.LicenseType
+                    sourceUrl           = $_.SourceUrl
+                    projectUrl          = $_.ProjectUrl
+                    authors             = $_.Authors
+                    redistributed       = $_.Distributed
+                    introducedBy        = $_.IntroducedBy
+                    noticeStatus        = switch ($_.Status) {
+                        'OK' { '一致' }
+                        'MISSING' { '漏列' }
+                        'MISMATCH' { '版本不符' }
+                        default { $_.Status }
+                    }
+                    noticeVersion       = $_.NoticeVersion
+                    noticeLine          = $_.NoticeLine
+                    nuspecPath          = $_.NuspecPath
+                }
+            })
+        buildOnlyPackages = @($buildOnlyRows | ForEach-Object {
+                [ordered]@{
+                    id                  = $_.Package
+                    resolvedVersion     = $_.ResolvedVersion
+                    licenseExpression  = $_.License
+                    redistributed       = $false
+                    introducedBy        = $_.IntroducedBy
+                }
+            })
         summary           = [ordered]@{
             MISSING  = $missingAll.Count
             MISMATCH = $mismatchAll.Count
             EXTRA    = $extra.Count
+            TRANSITIVE_MISSING  = $transMissing.Count
+            TRANSITIVE_MISMATCH = $transMismatch.Count
+            TRANSITIVE_EXTRA    = $transExtra.Count
         }
         updaterCheck     = [ordered]@{
             exePath              = $updater.ExePath
@@ -1044,7 +1579,27 @@ if ($Mode -eq 'Emit') {
         $md += ''
         $md += ("SUMMARY MISSING={0} MISMATCH={1} EXTRA={2}" -f $manifest.summary.MISSING, $manifest.summary.MISMATCH, $manifest.summary.EXTRA)
         $md += ''
+        $md += '## 传递依赖（实际随包分发）'
+        $md += ''
+        $md += '| 包 | 解析版本 | 许可证 | 来源 | 由哪个直接依赖带入 | NOTICE 状态 |'
+        $md += '| --- | --- | --- | --- | --- | --- |'
+        foreach ($p in $manifest.transitivePackages) {
+            $md += ("| {0} | {1} | {2} | {3} | {4} | {5} |" -f $p.id, $p.resolvedVersion,
+                $p.licenseExpression, $p.sourceUrl, $p.introducedBy, $p.noticeStatus)
+        }
+        $md += ''
+        $md += ("SUMMARY-TRANSITIVE MISSING={0} MISMATCH={1} EXTRA={2}" -f $manifest.summary.TRANSITIVE_MISSING, $manifest.summary.TRANSITIVE_MISMATCH, $manifest.summary.TRANSITIVE_EXTRA)
+        $md += ''
+        $md += '## 仅构建期 / 不随包分发'
+        $md += ''
+        $md += '| 包 | 解析版本 | 许可证 | 由哪个直接依赖带入 |'
+        $md += '| --- | --- | --- | --- |'
+        foreach ($p in $manifest.buildOnlyPackages) {
+            $md += ("| {0} | {1} | {2} | {3} |" -f $p.id, $p.resolvedVersion, $p.licenseExpression, $p.introducedBy)
+        }
+        $md += ''
         $md += '## 包内更新器'
+
         $md += ''
         $md += ("- 判定：**{0}**" -f $manifest.updaterCheck.verdictText)
         $md += ("- 依据：{0}" -f $manifest.updaterCheck.reason)
@@ -1058,6 +1613,21 @@ if ($Mode -eq 'Emit') {
 if ($missingAll.Count -gt 0 -or $mismatchAll.Count -gt 0) {
     Write-Report 'RESULT: FAIL（存在漏列 / 版本不符）'
     exit $script:ExitPolicy
+}
+
+if ($transMissing.Count -gt 0 -or $transMismatch.Count -gt 0) {
+    if ($distDegraded) {
+        # 判定来源降级时，"漏列/版本不符"的结论不可信 —— 报环境受阻而不是护栏失败
+        Write-Report 'RESULT: BLOCKED（随包分发判定降级，传递依赖结论不可信；请修复还原/目标框架环境后复跑）'
+        exit $script:ExitEnv
+    }
+    Write-Report 'RESULT: FAIL（传递依赖存在漏列 / 版本不符）'
+    exit $script:ExitPolicy
+}
+
+if ($distDegraded) {
+    Write-Report 'RESULT: BLOCKED（随包分发判定降级，传递依赖披露检查未能完整执行）'
+    exit $script:ExitEnv
 }
 
 Write-Report 'RESULT: PASS（NOTICE 声明与实际解析依赖一致）'
