@@ -30,7 +30,7 @@
     "steps": [
       {
         "id": "fetch_rate",
-        "url": "https://api.frankfurter.app/latest?from={{from}}&to={{to}}",
+        "url": "https://api.frankfurter.dev/v1/latest?from={{from}}&to={{to}}",
         "method": "GET",
         "response_format": "json",
         "extract": {

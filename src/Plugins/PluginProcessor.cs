@@ -493,6 +493,17 @@ namespace LiteMonitor.src.Plugins
 
         /// <summary>带凭据的请求目标主机不在插件显式声明的允许目标集合内（凭据未发送）。</summary>
         public const string CredentialTargetNotAllowed = "LM009_CREDENTIAL_TARGET_NOT_ALLOWED";
+
+        /// <summary>
+        /// [LM-045] 重定向目标主机不在允许集合内（该跳请求**未发出**，响应数据也未进入流水线）。
+        /// <para>用于**不带凭据**的重定向：允许集合 = 声明主机集合 ∪ {原始直连目标主机}。</para>
+        /// </summary>
+        public const string RedirectTargetNotAllowed = "LM009_REDIRECT_TARGET_NOT_ALLOWED";
+
+        /// <summary>
+        /// [LM-045] 重定向跳数超过上限（上限 5 跳，与 <c>PluginMarket.MaxDownloadRedirects</c> 对齐）。
+        /// </summary>
+        public const string RedirectLimit = "LM009_REDIRECT_LIMIT";
     }
 
     /// <summary>
