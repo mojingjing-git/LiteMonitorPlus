@@ -174,11 +174,11 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | LM-037 | Host 缺失的拒绝存在三层冗余 ⇒ 该具体行号无独立回归护栏 | P3 | `CONFIRMED` | 信息项，不阻断 |
 | LM-038 | 包内更新器的「内嵌构建提交」指向错误提交，使 LM-024 产物来源护栏**永久失效** | P2 | `CONFIRMED` | S4.2c |
 | LM-039 | `native://` 步骤绕过沙箱的三道闸门（并发/字节上限/凭据目标/截止时刻） | P1 | `CONFIRMED` | **S3.5（进行中）** |
-| LM-040 | 「目标展开数按实例累计」未被实现强制（比较入参而非累计值），类文档与实现不符 | P2 | `CONFIRMED` | **S3.6（进行中）** |
-| LM-041 | 端到端正则用例不锁定 500 ms 数值 | P2 | `CONFIRMED` | **S3.6（进行中）** |
-| LM-042 | `端到端_目标数恰好等于上限` 的请求数断言过弱（实测 61 vs 64） | P2 | `CONFIRMED` | **S3.6（进行中）** |
-| LM-043 | `Assert.NotEqual(TargetLimit, failure?.Reason)` 在 `failure == null` 时恒真（空转断言） | P3 | `CONFIRMED` | **S3.6（进行中）** |
-| LM-044 | 生产入口的 30 s 契约值未被测试钉住 | P2 | `CONFIRMED` | **S3.6（进行中）** |
+| LM-040 | 「目标展开数按实例累计」未被实现强制（比较入参而非累计值），类文档与实现不符 | P2 | `CONFIRMED` | ✅ 已修复（`d588440`：改用 `Interlocked.Add` 返回值判定累计值） |
+| LM-041 | 端到端正则用例不锁定 500 ms 数值 | P2 | `CONFIRMED` | ✅ 已修复（`d588440`） |
+| LM-042 | `端到端_目标数恰好等于上限` 的请求数断言过弱（实测 61 vs 64） | P2 | `CONFIRMED` | ✅ 已修复（`d588440`） |
+| LM-043 | `Assert.NotEqual(TargetLimit, failure?.Reason)` 在 `failure == null` 时恒真（空转断言） | P3 | `CONFIRMED` | ✅ 已修复（`d588440`） |
+| LM-044 | 生产入口的 30 s 契约值未被测试钉住 | P2 | `CONFIRMED` | ✅ 已修复（`d588440` + 主审集成 `6310dbf`） |
 | GPU-001 | WDA 恢复失败后 GPU 呈现**永久不可重启**（进程生命周期内不可用） | P1 | `CONFIRMED` | GPU T03/T04（B 期只冻合同，不写生产代码） |
 | GPU-002 | `PresentationSession._originalAffinity` 跨 HWND 代次不可复用 | P2 | `CONFIRMED` | GPU T02/T04 |
 | GPU-003 | 鼠标穿透关闭后 `WS_EX_LAYERED` 永久残留，与 WDA 互斥 | P2 | `CONFIRMED` | GPU T02/T03（**待 T01/T09 实测确认**） |
@@ -186,7 +186,7 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | GPU-005 | `GpuStartupGuard` 的 pending 语义比计划 §4.4 描述更弱 | P2 | `CONFIRMED` | GPU T02（合同澄清） |
 | ENV-003 | `LITEMONITOR_PLUGIN_REPO` 未设置 ⇒ 6 条市场契约测试被跳过 | P1 | `CONFIRMED`（已闭环，`a8fb2fc`） | S4.1 |
 | ENV-004 | `LITEMONITOR_E2E` 未设置 ⇒ 1 条联网 E2E 被跳过 | P2 | `CONFIRMED`（`BLOCKED_ENV`，**不计入通过**） | S4.1（联网 E2E 单独运行，不进 PR 门禁） |
-| LM-045 | `HttpClient` 默认跟随重定向 ⇒ 已声明主机 302 到未声明主机不被拦截，凭据（`X-Api-Key`/`Cookie`）外泄且响应数据进入插件流水线 | **P1** | `CONFIRMED`（**独立 verifier 已实证**） | **本批不修**（需改 `AllowAutoRedirect` 口径） |
+| LM-045 | `HttpClient` 默认跟随重定向 ⇒ 已声明主机 302 到未声明主机不被拦截，凭据（`X-Api-Key`/`Cookie`）外泄且响应数据进入插件流水线 | **P1** | `CONFIRMED`（**独立 verifier 已实证**） | ✅ **已修复**（`938dc4b`）：HTTP 步骤路径与 **`native://` 路径两侧**都关闭自动重定向、改为逐跳跟随并逐跳复核目标主机；不通过时**该跳请求根本不发出**。见 §4.5.9 LM-053 |
 | LM-046 | 生产代码内的可变全局测试接缝 `CryptoNative.SourceUrlOverrides`（`internal static`，生产路径不设置） | P3 | `CONFIRMED`（**接受并登记**） | 接受 |
 | LM-047 | 字节上限在原语层未被契约天花板夹住（`ReadResponseBodyAsync` 不与 `MaxResponseBytes` 比较） | P2 | `CONFIRMED` | ✅ 已修复（`46f3f9d`） |
 | LM-048 | 允许目标口径分裂：主机判据用 `allowedHosts`，带凭据时改用 `declaredHosts` | P2 | `CONFIRMED`（当前无功能影响） | 登记待清理 |
@@ -194,6 +194,9 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | LM-050 | `native://citycode` 的远程回退闸门（并发槽/字节上限/令牌）无回归钉住 | P3 | `CONFIRMED` | 登记待清理（需先加测试接缝） |
 | LM-051 | `CryptoNative.NormalizeSymbol` 未对 symbol 做 `EscapeDataString`（**既有缺陷，非本批引入**） | P2 | `CONFIRMED`（主机固定，不构成沙箱逃逸） | 登记待清理 |
 | LM-052 | `CityCodeResolver._isLoading` 是无锁 `static bool`（**既有缺陷，非本批引入**） | P3 | `CONFIRMED`（无安全影响） | 登记待清理 |
+| LM-053 | `native://` 路径同样可被 302 绕过"允许目标"：`CryptoNative` 客户端未关自动重定向，且 `allowedHosts` 未贯穿到发请求层 | P2 | `CONFIRMED`（**代码实测**，§4.5.9） | ✅ 已修复（`938dc4b`，随 LM-045 一并落地） |
+| LM-054 | 市场索引拉取仍允许自动跳转（`PluginMarket._http` 沿用原行为） | P3 | `CONFIRMED`（信息项，§4.5.9） | 登记待评估（本批不修，风险有界） |
+| LM-055 | `CityCodeResolver` 的远程回退 handler 未关自动重定向（目标是代码内建常量） | P3 | `CONFIRMED`（信息项，§4.5.9） | 登记待评估（本批不修） |
 
 **当前无 P0。** 若任一执行步骤新发现 P0，立即挂起其他任务优先处理。
 
@@ -615,7 +618,7 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 | **LM-042** | 🟡 低 | `端到端_目标数恰好等于上限` 的请求数断言**过弱** —— `PluginExecutorSandboxTests.cs:296` 的 URL 不含目标变量、`:309` 断言 `RequestCount > 0`。实测：64 目标 + 同一 URL ⇒ 服务端只收到 **61** 个请求（在途去重合并，`PluginExecutor.cs:432-435`）；URL 改目标专属后恰为 64 ⇒ 现断言无法证明"64 个目标都真的跑了各自的一步"。**S3.3 既有，非 S3.4 引入** | ✅ **已修复**（S3.6，`d588440`）：URL 改目标专属（`?n={{n}}`）+ 收紧为 `Assert.Equal(MaxTargetsPerStep, server.RequestCount)` |
 | **LM-043** | 🔵 信息 | `Assert.NotEqual(TargetLimit, failure?.Reason)` 在 `failure == null` 时**恒真**（空转断言），`PluginExecutorSandboxTests.cs:304` | ✅ **已修复**（S3.6，`d588440`）：删除该行（同模式另一处一并删除）；承重的 `Assert.Null(failure)` / `Assert.True(ok)` 保留 |
 | **LM-044** | 🔵 信息 | 生产入口的 **30 s 契约值未被测试钉住** —— 3 条总时长用例（`:322`/`:362`/`:543`）注入测试自建作用域并走私有方法；若把 `ExecuteInstanceAsync` 的默认时长改成 5 分钟，这 3 条仍全绿 | ✅ **已修复**（S3.6 `d588440` + 主审集成 `6310dbf`）：S3.6 用进程级登记表钉住共享默认；主审把它换成实例级 `CreateScope` 缝隙，**并补上 S3.6 自述未能实测的两个变体**（3 变异全捕获，详见 §4.5.7） |
-| **LM-045** | 🔴 高 | **`HttpClient` 默认跟随重定向 ⇒ "允许目标"校验可被 302 绕过** —— S3.5 把 `native://` 的用户可控 URL 收进"允许目标"集合（校验发生在请求发出之前），但底层 `HttpClient` 默认 `AllowAutoRedirect = true` ⇒ **已声明主机 302 跳转到未声明主机不会被拦截**。**HTTP 步骤路径同样存在**（`PluginExecutor` 的 HttpClient 未关闭自动重定向）⇒ S2.2 的"API Key 只发往用户知晓并允许的目标"在**重定向场景下不成立**。LM-007 的逐跳重定向校验只覆盖**市场下载**，不覆盖插件取数 | **必须修，但不在本轮**：需要"禁止自动重定向 + 逐跳复核每一跳主机"的口径变更（与 LM-007 的市场逻辑同构），属 S3.1 契约的扩展。**本轮不擅自改动 `AllowAutoRedirect`**（会改变既有取数行为）⇒ 登记为 **P1 未关闭**，**阻断"插件网络出口完全受控"的表述**，但不阻断本批其余项。**独立 verifier 已实证（§4.3.5）**：未声明主机确实收到产品请求，`X-Api-Key` 与 `Cookie` 被原样带过去（`Authorization` 被 .NET 跨主机剥离）；未声明主机的响应数据进入插件流水线并用于构造后续请求 ⇒ **P1 定级准确**，并据此**更正** LM-009 的闭环口径（直连受约束、重定向目标不受约束） |
+| **LM-045** | 🔴 高 | **`HttpClient` 默认跟随重定向 ⇒ "允许目标"校验可被 302 绕过** —— S3.5 把 `native://` 的用户可控 URL 收进"允许目标"集合（校验发生在请求发出之前），但底层 `HttpClient` 默认 `AllowAutoRedirect = true` ⇒ **已声明主机 302 跳转到未声明主机不会被拦截**。**HTTP 步骤路径同样存在**（`PluginExecutor` 的 HttpClient 未关闭自动重定向）⇒ S2.2 的"API Key 只发往用户知晓并允许的目标"在**重定向场景下不成立**。LM-007 的逐跳重定向校验只覆盖**市场下载**，不覆盖插件取数 | ✅ **已修复**（`938dc4b`）：**HTTP 步骤路径**与 **`native://` 路径两侧**都关闭自动重定向（`PluginExecutor` 的默认 handler 与代理 handler、`CryptoNative` 的 handler），改为**逐跳**跟随并**逐跳复核目标主机**：带凭据的请求每一跳必须落在**声明主机集合**内（原因码 `LM009_CREDENTIAL_TARGET_NOT_ALLOWED`），不带凭据的每一跳必须落在（声明集合 ∪ {直连目标主机}）内（原因码 `LM009_REDIRECT_TARGET_NOT_ALLOWED`）；不通过时**该跳请求根本不发出** ⇒ 凭据不外泄、未声明主机的响应也不进入流水线。跳数上限 5、缺 `Location`、相对 `Location` 解析、非 http(s) 协议、**https→http 降级**均被拒。22 条新用例 / 7 变异全捕获。**口径再次更正**：本行原文"HTTP 步骤路径同样存在"只覆盖了一半 —— 主审集成巡检**实测**发现 `native://` 侧同样是缺口（见 **LM-053**）⇒ 现两侧都闭环，"插件网络出口不再能绕过允许目标"这句话**现在**才成立 |
 | **LM-046** | 🔵 信息 | **生产代码内的可变全局测试接缝** —— `CryptoNative.SourceUrlOverrides`（`internal static Dictionary<string,string>`）供回归用例把官方币价源指向本地回环。生产路径**永不设置**（默认 null），测试用 `IDisposable` 助手保存/复位 ⇒ 无泄漏、无并行冲突（测试工程已关闭并行）。但它**位于生产程序集内且可写**，一旦将来有生产代码误赋值，官方取数源会被静默改向 | **接受并登记**：不属可利用缺陷，但须在 T08 文案与后续审计中显式知情。**可选加固**（未做，避免战线扩张）：改为只读属性 + `internal` setter 方法，或注入式 URL 提供者。**独立 verifier 已复核**：全仓赋值点仅在测试文件 ⇒ 生产路径确实不会设置它 |
 | **LM-047** | 🟡 低 | **字节上限在原语层未被契约天花板夹住** —— `PluginSandbox.ReadResponseBodyAsync`（`PluginProcessor.cs:886`）取 `limit = maxBytes > 0 ? maxBytes : MaxResponseBytes`，**未与 `MaxResponseBytes`（2 MiB）比较** ⇒ 调用方传入更大的数字即可突破沙箱字节上限。**当前生产调用方传的都是 `EffectiveMaxResponseBytes`（= min(实例级 8 MiB, 沙箱 2 MiB)），故尚无实际绕过**（verifier 的 M2 变异即证明生产实际为 2 MiB）—— 但"2 MiB"此前只是**调用方约定**，不是原语层保证 | ✅ **已修复**（`46f3f9d`）：`limit = maxBytes > 0 ? Math.Min(maxBytes, MaxResponseBytes) : MaxResponseBytes` —— 契约值从"约定"变成"强制"，对现有生产行为**零变化**；新增护栏用例 `原语层字节上限_调用方传入更大上限也不能突破契约天花板`，并以变异自证（去掉夹取 ⇒ 该用例变红 ⇒ 还原 SHA-256 一致 ⇒ 复跑 26/26 全绿） |
 | **LM-048** | 🟡 低 | **允许目标口径分裂** —— `PluginExecutor.cs:810-821`：主机判据用 `allowedHosts`（声明集 ∪ native URL 内嵌字面量主机），而**带凭据时改用 `declaredHosts`（严格声明集）** ⇒ 同一主机"不带凭据可用、带凭据被拒"。实测内置插件的凭据步骤数为 **0**，**当前无功能影响** | 登记待清理：统一为一套口径，或显式文档化该差异。**本批不改**（改动会影响凭据可达性，属契约变更） |
@@ -623,6 +626,9 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 | **LM-050** | 🔵 信息 | **`native://citycode` 的远程回退闸门无回归钉住** —— 本地 `resources/CityCode.json` 存在时走离线路径，远程 DB URL 是 `const` 不可替换 ⇒ 现有 8 条 native 用例只覆盖 crypto 与本地库，**远程回退路径的并发槽 / 字节上限 / 令牌中止均无用例** | 登记待清理：需先给 `JSON_DB_URL` 加测试接缝（与 `SourceUrlOverrides` 同类），再补一条强制远程回退的用例。**本批不做**（引入新接缝需独立评估） |
 | **LM-051** | 🟡 低 | **`CryptoNative.NormalizeSymbol` 未对 symbol 做 `EscapeDataString`** ⇒ 可向官方源 URL 注入查询串。**主机仍固定**（`api.binance.com` 等），**不构成沙箱逃逸**；属**既有缺陷，非本批引入** | 登记待清理（既有项）。修复需评估各官方源对 symbol 字符集的容忍度 |
 | **LM-052** | 🔵 信息 | **`CityCodeResolver._isLoading` 是无锁 `static bool`** ⇒ 并发加载时可能重复加载或漏加载。**非本批引入**，无安全影响 | 登记待清理（既有项）：改 `Interlocked` 标记或 `SemaphoreSlim` |
+| **LM-053** | 🟠 中 | **`native://` 路径同样可被 302 绕过"允许目标"** —— `CryptoNative.CreateClient()`（`src/Plugins/Native/CryptoNative.cs:40-57`）**未设** `AllowAutoRedirect = false`；`GetStringAsync()`（`:319-339`）用 `GetClient().GetAsync(...)` ⇒ 一次 302 就被静默跟到下一跳。而 `EnsureFallbackTargetAllowed`（`:144`）**只校验首个 URL 的主机**，且 `allowedHosts` **根本没有贯穿**到 `FetchFreshAsync`（`:186`）/ `GetStringAsync` ⇒ fallback 目标 302 到未声明主机时，未声明主机的响应会被当作行情 JSON 返回并**进入插件流水线**。**这是 LM-045 的 native 侧另一半** ⇒ 只修 HTTP 步骤路径**不足以关闭 LM-045** | ✅ **已修复**（`938dc4b`，随 LM-045 一并落地）：native 侧同样关闭自动重定向 + 逐跳复核；`allowedHosts` 贯穿 `FetchAsync` → `FetchFreshAsync` → `GetStringAsync`；官方源（代码内建目标）允许集合 = 内建官方源主机 ∪ 该次请求初始主机（`SourceUrlOverrides` 测试接缝指向回环时仍可用），fallback（插件/用户可控）允许集合 = native 允许目标集合 ∪ 回退目标主机；沙箱异常**不被降级**成"这个源不可用"/"回退源冷却" |
+| **LM-054** | 🔵 信息 | **市场索引拉取仍允许自动跳转** —— `src/Plugins/PluginMarket.cs:167-171` 的 `_http` 明确注释"索引拉取用（沿用原行为：允许自动跳转）" | 登记待评估（本批不修）：索引 URL 是**用户配置的固定目标**；其内容驱动的下载仍受 LM-007 的逐跳白名单 + 路径前缀 + sha256 三重校验，风险有界 |
+| **LM-055** | 🔵 信息 | **`CityCodeResolver` 的远程回退 handler 未关自动重定向** —— `src/Plugins/Native/CityCodeResolver.cs:196-206` | 登记待评估（本批不修）：其目标 `JSON_DB_URL` 是**代码内建常量**，插件与用户都改不动，与 LM-053 的"用户可控目标"不同级 |
 
 #### 4.5.5 LM-016 的不变式与残余窗口（S4.2）
 
@@ -683,6 +689,35 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | S3.5 | 未复现 verifier 的"64 target ⇒ 64 并发"原场景 | 如实记录：改用 9 并发闸门实测 + 服务端最大并发观测 |
 | S3.6 | "在 `PluginExecutor.cs` 里硬编码 5 分钟"变体当时**未实测**（文件归属他方） | **已由裁决 D-E 补测**（V1/V2 均变红） |
 | S3.6 | LM-041 的 5 s 耗时上界只是粗护栏（精确钉死靠 `MatchTimeout` 字面量断言） | 记录：机器极端高负载下可能变松，但**不会误绿** |
+
+#### 4.5.9 主审裁决 D-F / D-G：GPU C 期 owner A 物化，与"两份句柄代次 holder"的结构性纠正
+
+**背景**：GPU 切换合同（T02）§12.4 规定 C 期物化顺序 —— 序 6（T04 宿主清理）必须等序 1/2 落地，序 7（T03 UI 接线）必须等序 2/6 落地。序 1/2/3 属 **owner A**（主审/集成），**不能外包**，由主审直接物化。
+
+**裁决 D-F（物化补注）** —— 三处：
+
+1. `WindowCapturePolicyCleanup`（§3.2 草案）把 `Attempts` / `State` / `TerminalReason` 等写成 `private set` 却**没有任何迁移方法** ⇒ 纯 record 之外的状态机无法被 ledger 推进。**裁决**：保留合同原文的字段名与类型，**补齐**迁移方法 `TryRecordFailedAttempt` / `TryMarkCompleted` / `TryMarkFailed` / `TryMarkSupersededByNewGeneration`，并加一个 `WarningCode` 字段承载合同 §7.4 要求的 `gpu_capture_policy_cleanup_superseded`。**四个方法在已终结时一律返回 `false` 且不改动任何字段**（终态不可回退，INV-5 幂等）。
+2. `WindowHandleGeneration`（§7.2 草案）用 `++Current` 实现 `Advance()`。**裁决**：改用 `Interlocked.Increment` / `Interlocked.Read`，**公开签名与语义逐字不变**（唯一递增点、唯一驱动者）—— 读点分散在 live 捕获链与 GPU 清理链两条线程上。
+3. `RenderingRouteRequest.WindowIsLayered`（§3.1）按合同落为**尾部可选参数、默认 `false`** ⇒ 既有 4 处具名参数构造无需改动即可编译，`Decide` 输出与改造前**逐位相同**。
+
+**裁决 D-G（结构性纠正）** —— **两份 holder 会让 §7.4 的判据恰好在它要防的场景里失效**：
+
+集成巡检实测发现，owner C 在 `src/Rendering/Presentation/SharedWindowHandleGeneration.cs` 与 owner B 在 `src/UI/SharedWindowHandleGeneration.cs` **各自**建了一份 holder，各自 `new WindowHandleGeneration()` ⇒ **进程内出现两个不同的单例** ⇒ GPU 清理链与 live 捕获链读到**不同的代次** ⇒ 合同 §7.4 的"代次先于 `IsWindow`"判据失效（两边各以为对方是旧代次）。
+
+**裁决**：唯一实例由**类型自身**持有 —— `WindowHandleGeneration.Instance`，落在 owner A 的 `src/Rendering/Configuration/WindowHandleGeneration.cs`。
+- 该目录位于 UI 层与 Rendering 层**之下**，两侧都只读消费 ⇒ **不产生层次倒置**；
+- 类型与实例**同文件** ⇒ **结构上不可能**再出现第二份 holder；
+- owner B 与 owner C **禁止**另行 `new WindowHandleGeneration()`（测试如需隔离实例仍可自行 `new`，生产路径不得）。
+
+**判定标准（集成时逐条查）**：全仓（排除测试文件）`new WindowHandleGeneration()` 出现次数 = **0**；`SharedWindowHandleGeneration` 类型名在全仓**不存在**。合同 §13 自检"是否新建了第二个句柄代次计数器？否"仍然成立。
+
+**本轮新发现的缺陷**（§4 / §4.5.4 / §7 已补行；**新增缺陷从 LM-056 起顺延**）：
+
+| ID | 级别 | 摘要 | 归属 |
+|---|---|---|---|
+| **LM-053** | 🟠 中 | **`native://` 路径同样可被 302 绕过"允许目标"** —— `CryptoNative.CreateClient()`（`src/Plugins/Native/CryptoNative.cs:40-57`）**未设** `AllowAutoRedirect = false`；`GetStringAsync()`（`:319-339`）用 `GetClient().GetAsync(...)` ⇒ 一次 302 就被静默跟到下一跳。而 `EnsureFallbackTargetAllowed`（`:144`）**只校验首个 URL 的主机**，且 `allowedHosts` **根本没有贯穿**到 `FetchFreshAsync`（`:186`）/ `GetStringAsync` ⇒ fallback 目标 302 到未声明主机时，未声明主机的响应会被当作行情 JSON 返回并**进入插件流水线**。**这是 LM-045 的 native 侧另一半** ⇒ 只修 HTTP 步骤路径**不足以关闭 LM-045** | ✅ **已修**（随 LM-045 一并落地，`938dc4b`）：native 侧同样关闭自动重定向 + 逐跳复核；`allowedHosts` 贯穿 `FetchAsync` → `FetchFreshAsync` → `GetStringAsync`；官方源（代码内建目标）允许集合 = 内建官方源主机 ∪ 该次请求初始主机（`SourceUrlOverrides` 测试接缝指向回环时仍可用），fallback（插件/用户可控）允许集合 = native 允许目标集合 ∪ 回退目标主机 |
+| **LM-054** | 🔵 信息 | **市场索引拉取仍允许自动跳转** —— `src/Plugins/PluginMarket.cs:167-171` 的 `_http` 明确注释"索引拉取用（沿用原行为：允许自动跳转）" | **登记为信息项，本批不修**：索引 URL 是**用户配置的固定目标**；其内容驱动的下载仍受 LM-007 的逐跳白名单 + 路径前缀 + sha256 三重校验，风险有界 |
+| **LM-055** | 🔵 信息 | **`CityCodeResolver` 的远程回退 handler 未关自动重定向** —— `src/Plugins/Native/CityCodeResolver.cs:196-206` | **登记为信息项，本批不修**：其目标 `JSON_DB_URL` 是**代码内建常量**，插件与用户都改不动，与 LM-053 的"用户可控目标"不同级 |
 
 ---
 
@@ -1055,7 +1090,7 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | LM-023 | S2.2 | P2 | M2 | ✅ 已闭环 | `4be1a8c`（PBKDF2/DPAPI）；残留 F-08（DPAPI 失败明文回写）登记为独立信息项 |
 | LM-007 | S3.1 | P2 | M3 | ✅ 已闭环 | `14542f3`（URL 精确校验 + 逐跳重定向 + 8 MiB，53 用例 / 11 变异全捕获） |
 | LM-008 | S3.1 | P2 | M3 | ✅ 已闭环 | `14542f3`（强制摘要 + 事务化安装）+ `cb460b5`（本地化） |
-| LM-009 | S3.2 | P2 | M3 | 🟡 **部分闭环** | `ebe1c38`/`bc7b479` + 联合专项复核 **PASS**（§4.3.4）+ 独立复核 **PASS_WITH_NOTES**（§4.3.5）。**口径限定（2026-10-23 二次更正）**：① **直连目标**的 6 个上限已在「HTTP 步骤路径 **+ `native://` 路径**」闭环；② **重定向后的目标不受约束**（LM-045，P1 未关闭）⇒ **不得表述为「插件一切网络出口受沙箱约束」** |
+| LM-009 | S3.2 | P2 | M3 | 🟢 **已闭环**（2026-10-23 三次更正后） | `ebe1c38`/`bc7b479` + 联合专项复核 **PASS**（§4.3.4）+ 独立复核 **PASS_WITH_NOTES**（§4.3.5）+ `938dc4b`。**口径（2026-10-23 三次更正）**：① **直连目标**的 6 个上限已在「HTTP 步骤路径 **+ `native://` 路径**」闭环；② **重定向后的目标**原先不受约束（LM-045，P1）⇒ **现已受约束**（`938dc4b`：两侧都禁自动重定向 + 逐跳复核目标主机，不通过时该跳请求根本不发出）⇒ 「插件一切网络出口受沙箱约束」**现在**成立，但**仅限**插件可控的这两条出口 —— 市场索引拉取（LM-054）与 citycode 常量 URL（LM-055）的目标是**用户配置 / 代码内建常量**，不受"允许目标"约束（见 §4.5.9） |
 | LM-010~014 | S6.2 | P2 | M6 | ⏳ 未开始 | GPU/采样/资源恢复实机验收 **G01–G12 全部未跑**（G08 所需异 DPI 环境本机不存在） |
 | LM-015 | S5.1 + S5.2 | **P1** | M5 | ⏸ **延后** | 用户已定本批只做 S5.3 ⇒ 正式签名未就绪 ⇒ **阻断发布准入条件 4** |
 | LM-016 | S4.2 | **P1** | M4 | ✅ 已闭环 | `1a904d5`（字节绑定 + `FileShare.Read`，58 用例）+ `e1bd587`（重建包内更新器） |
@@ -1083,7 +1118,7 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | GPU-003 | GPU T02/T03 | P2 | GPU B→C | 🟡 合同已冻结，**待实测** | `WS_EX_LAYERED` 与 WDA 互斥；期望状态由 `CreateParams` 决定且重建后不继承残留。**外部权威已多源交叉确认**（微软社区支持 + StackOverflow `ERROR_NOT_ENOUGH_MEMORY`）；**本仓库实测仍未做**（T01/T09） |
 | GPU-004 | GPU T04 | P2 | GPU B→C | 🟡 合同已冻结 | 代次判据**先于** `IsWindow`；代次合并为同一真相源 `WindowHandleGeneration` |
 | GPU-005 | GPU T02 | P2 | GPU B→C | 🟡 合同已冻结 | pending 仅在「首帧成功」或「受控放弃且停止流程干净」时清除 |
-| LM-045 | **未修（本批不做）** | **P1** | M3→M4 | 🔴 **P1 未关闭** | `HttpClient` 默认跟随重定向 ⇒ 已声明主机 302 到未声明主机不被拦截（HTTP 步骤路径与 native 路径**都有**）⇒ "API Key 只发往用户知晓并允许的目标"在重定向场景下不成立。需"禁自动重定向 + 逐跳复核主机"的口径变更（与 LM-007 市场逻辑同构）。**不擅自改 `AllowAutoRedirect`**（会改变既有取数行为）⇒ 本批不修，**但阻断"插件网络出口完全受控"的表述** |
+| LM-045 | **本批已修** | **P1** | M3→M4 | 🟢 **已闭环（待独立复核）** | `938dc4b`：HTTP 步骤路径与 `native://` 路径**两侧**都关闭自动重定向、改为逐跳跟随并**逐跳复核目标主机**；带凭据的每一跳须落在**声明主机集合**内，不带凭据的每一跳须落在（声明集合 ∪ {直连目标主机}）内；不通过 ⇒ **该跳请求根本不发出**。跳数上限 5 / 缺 `Location` / 相对 `Location` / 非 http(s) / **https→http 降级**均被拒。22 条新用例 / 7 变异全捕获。**独立 verifier 复核已派发**（`bg_150121d6`） |
 | LM-046 | 接受并登记 | P3 | — | 📌 信息项 | `CryptoNative.SourceUrlOverrides`（`internal static` 可变全局测试接缝）：生产路径永不设置，测试用 `IDisposable` 复位 ⇒ 无泄漏、无并行冲突。但位于生产程序集内且可写 ⇒ **须在后续审计中显式知情**。独立 verifier 已复核：全仓赋值点仅在测试文件 |
 | LM-047 | 已修 | P2 | M3 | ✅ 已闭环 | `46f3f9d`：原语层 `Math.Min(maxBytes, MaxResponseBytes)` 夹取，契约天花板从"约定"变成"强制"；新增护栏用例并以变异自证（去掉夹取 ⇒ 变红 ⇒ 字节级还原 ⇒ 26/26 全绿） |
 | LM-048 | 登记待清理 | P2 | — | 📌 信息项 | 允许目标口径分裂（主机判据 `allowedHosts` vs 凭据判据 `declaredHosts`）；内置插件凭据步骤数 = 0 ⇒ 当前无功能影响 |
@@ -1091,6 +1126,9 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | LM-050 | 登记待清理 | P3 | — | 📌 信息项 | `native://citycode` 远程回退闸门无用例；需先给 `JSON_DB_URL` 加测试接缝 |
 | LM-051 | 登记待清理 | P2 | — | 📌 信息项 | `CryptoNative.NormalizeSymbol` 未 `EscapeDataString`（**既有缺陷**，主机固定 ⇒ 不构成沙箱逃逸） |
 | LM-052 | 登记待清理 | P3 | — | 📌 信息项 | `CityCodeResolver._isLoading` 无锁 `static bool`（**既有缺陷**，无安全影响） |
+| LM-053 | 随 LM-045 一并修 | P2 | M4 | 🟢 **已闭环（待独立复核）** | `native://` 路径同样可被 302 绕过"允许目标"：`CryptoNative` 客户端未关自动重定向 + `allowedHosts` 未贯穿到发请求层 ⇒ 只修 HTTP 步骤路径**不足以**关闭 LM-045。`938dc4b` 已两侧闭环（见 §4.5.9） |
+| LM-054 | 登记待评估 | P3 | — | 📌 信息项 | 市场索引拉取仍允许自动跳转（`PluginMarket._http`）：索引 URL 是**用户配置的固定目标**，其内容驱动的下载仍受 LM-007 的逐跳白名单 + 路径前缀 + sha256 三重校验 ⇒ 风险有界，本批不修 |
+| LM-055 | 登记待评估 | P3 | — | 📌 信息项 | `CityCodeResolver` 远程回退 handler 未关自动重定向：目标是**代码内建常量** `JSON_DB_URL`，插件与用户都改不动 ⇒ 与 LM-053 的"用户可控目标"不同级，本批不修 |
 | ENV-003 | S4.1 | P1 | M4 | ✅ 已闭环 | `a8fb2fc`：跳过 7→1；CI 门禁收紧（`MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS`） |
 | ENV-004 | S4.1 | P2 | M4 | ⏳ `BLOCKED_ENV` | 联网 E2E 单独运行，**不进 PR 门禁**；**不计入通过**（§9） |
 
