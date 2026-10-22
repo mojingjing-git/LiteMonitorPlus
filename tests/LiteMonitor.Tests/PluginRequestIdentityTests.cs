@@ -162,9 +162,15 @@ namespace LiteMonitor.Tests
         [Fact]
         public async Task I7_摘要跨运行一致_不依赖GetHashCode的进程内加盐()
         {
-            // 期望值由**外部工具**（PowerShell SHA-256）对同一份规范化负载算出：
-            //   lm-plugin-req-v1 | 3:GET | 23:http://127.0.0.1:8080/x | 0: | 5:utf-8 | 0: | 1: | 13:authorization | 8:Bearer t
-            // 外部工具算出 8F45D20E... —— 匹配它即证明摘要不再依赖进程内加盐的 GetHashCode()。
+            // 期望值由**外部工具**（PowerShell 的 SHA-256）对同一份规范化负载算出。
+            // 负载 = "lm-plugin-req-v1" + 逐字段"长度前缀+冒号+值"**直接拼接**（字段之间没有分隔符）：
+            //   lm-plugin-req-v13:GET23:http://127.0.0.1:8080/x0:5:utf-80:1:113:authorization8:Bearer t
+            // 逐字段拆解（仅为可读性，"|" 只是展示用分隔符，不参与哈希）：
+            //   lm-plugin-req-v1 | 3:GET | 23:http://127.0.0.1:8080/x | 0: | 5:utf-8 | 0: | 1:1 | 13:authorization | 8:Bearer t
+            //   ★ Header 数量字段渲染为 "1:1"（长度前缀 "1" + 值 "1"），不是 "1:"。
+            // 复算方式：对上面的字节串取 UTF-8 字节 → SHA-256 → 十六进制大写 → 取**前 32 位**：
+            //   = 8F45D20EFDDA4F671739A7CC79268775
+            // 匹配它即证明摘要不再依赖进程内加盐的 GetHashCode()。
             const string expected = "8F45D20EFDDA4F671739A7CC79268775";
             const string expectedPost = "D394FEB24D55BD70D0286D5A9515F8A6";
 
@@ -228,6 +234,23 @@ namespace LiteMonitor.Tests
         // R1..R5 —— 合并与竞态
         // =====================================================================
 
+        /// <summary>
+        /// R1（契约 §3.2）：N 个并发等待者发起**同一**身份请求 → 实际发出的 HTTP 请求数 **== 1**。
+        /// <para>
+        /// ★ 2026-10-22 复核更正 F3：原用例用反射**同步**调用 <c>ExecuteStepAsync</c>，
+        /// 而它在首个 <c>await</c> 之前是同步执行的 ⇒ N 个"并发等待者"在 <c>GetOrAdd</c> 点
+        /// 实际是**串行**的，结构上无法检验契约 §1.3 的"工厂并发"
+        /// （把 valueFactory 改回"直接启动请求"，原用例仍然通过）。
+        /// </para>
+        /// <para>
+        /// 本用例分两段：
+        /// <b>阶段 A（端到端）</b>：用<b>屏障</b>让 N 个等待者**真正同时**抵达 <c>GetOrAdd</c>，
+        /// 断言服务器实际只收到 1 条请求。
+        /// <b>阶段 B（确定性并发探针）</b>：直接对生产暴露的"取或启动在途请求"入口
+        /// （<c>PluginExecutor.GetOrStartInflight</c>）发起真正并发的调用，并把"发请求"动作
+        /// 人为放慢，使"valueFactory 并发执行"这一缺陷能**稳定**地被观察到。
+        /// </para>
+        /// </summary>
         [Fact]
         public async Task R1_N个并发等待者同一身份_实际HTTP请求数为1()
         {
@@ -237,17 +260,65 @@ namespace LiteMonitor.Tests
             var step = NewStep(server.Url + "/r1");
             server.ArmHold();
 
-            const int n = 8;
-            var waiters = new Task<string>[n];
-            for (int i = 0; i < n; i++) waiters[i] = RunStepAsync(exec, inst, step);
+            const int n = 16;
 
-            await server.WaitForRequestAsync();
-            await Task.Delay(500);
-            server.ReleaseHeld();
+            // ── 阶段 A：端到端 —— N 个等待者真正同时抵达 GetOrAdd ──
+            using (var barrier = new Barrier(n))
+            {
+                var waiters = new Task<string>[n];
+                for (int i = 0; i < n; i++)
+                {
+                    // LongRunning：给每个等待者一条独立线程，确保它们真的并行抵达 GetOrAdd
+                    waiters[i] = Task.Factory.StartNew(
+                        () =>
+                        {
+                            barrier.SignalAndWait();          // ★ 屏障：全部就位后同时放行
+                            return RunStepAsync(exec, inst, step);
+                        },
+                        TaskCreationOptions.LongRunning).Unwrap();
+                }
 
-            var results = await Task.WhenAll(waiters);
-            Assert.Equal(1, server.RequestCount);
-            Assert.All(results, r => Assert.Equal(results[0], r));
+                await server.WaitForRequestAsync();
+                await Task.Delay(500);
+                server.ReleaseHeld();
+
+                var results = await Task.WhenAll(waiters);
+                Assert.Equal(1, server.RequestCount);                  // ★ 实际发出的 HTTP 请求数 == 1
+                Assert.All(results, r => Assert.Equal(results[0], r));
+            }
+
+            // ── 阶段 B：确定性并发探针（直接打生产入口）──
+            int started = 0;
+            int before = server.RequestCount;
+            string probeKey = "r1-probe-" + Guid.NewGuid().ToString("N");   // ★ 同一把键：N 个调用者共享同一个在途条目
+            using var probeClient = new HttpClient();
+            Func<Task<string>> factory = async () =>
+            {
+                Interlocked.Increment(ref started);
+                Thread.Sleep(200);                                     // 扩大并发窗口（仅测试用）
+                return await probeClient.GetStringAsync(server.Url + "/r1probe");
+            };
+
+            using (var barrier = new Barrier(n))
+            {
+                var callers = new Task<string>[n];
+                for (int i = 0; i < n; i++)
+                {
+                    callers[i] = Task.Factory.StartNew(
+                        () =>
+                        {
+                            barrier.SignalAndWait();                  // ★ 屏障：全部就位后同时放行
+                            return GetOrStartInflight(exec, probeKey, factory);
+                        },
+                        TaskCreationOptions.LongRunning).Unwrap();
+                }
+
+                var probeResults = await Task.WhenAll(callers);
+                Assert.All(probeResults, r => Assert.Equal(probeResults[0], r));
+            }
+
+            Assert.Equal(1, started);                                  // ★ 只启动了一条请求
+            Assert.Equal(before + 1, server.RequestCount);             // 服务器也只看到 1 条新请求
         }
 
         [Fact]
@@ -442,8 +513,12 @@ namespace LiteMonitor.Tests
         // X1..X3 —— 客户端重置联动（C5）
         // =====================================================================
 
+        /// <summary>
+        /// X1（契约 §3.4）：<c>ResetNetworkClients()</c> 调用后，在途字典**不被清空**。
+        /// ★ 用例名按断言的实际含义命名（2026-10-22 复核更正 F4：原名"…后清空在途字典"与断言相反）。
+        /// </summary>
         [Fact]
-        public async Task X1_ResetNetworkClients后清空在途字典()
+        public async Task X1_ResetNetworkClients后在途字典未清空()
         {
             using var server = new TinyHttpServer(EchoAsync);
             using var exec = new PluginExecutor();
@@ -513,6 +588,22 @@ namespace LiteMonitor.Tests
         // H1..H2 —— HTTP 资源与上限（LM-003a）
         // =====================================================================
 
+        /// <summary>
+        /// H1（LM-003a）：插件响应消息**自身**必须被释放。
+        /// <para>
+        /// ★ 2026-10-22 复核更正 F2：原用例只断言"内容流被释放"，而正文读取处的
+        /// <c>using var stream</c> 已**独立**保证这一点 ⇒ 变异"只删 <c>using var response</c>"
+        /// 时 0 条测试失败，用例无法归因到响应消息本身。
+        /// </para>
+        /// <para>
+        /// 本用例改为跟踪 <see cref="HttpResponseMessage"/> 自身的释放：
+        /// 捕获 handler 返回的响应实例，检查它**自身**已被 Dispose（内部 <c>_disposed</c> 状态）；
+        /// 并检查其 <see cref="HttpContent"/> 被连带 Dispose
+        /// （<c>HttpResponseMessage.Dispose()</c> 会 Dispose 它的 Content）。
+        /// ★ 因此"只释放内容流、不释放响应"时本用例**必然失败**
+        /// （内容流被释放 ≠ Content 被释放 ≠ 响应被释放，三者互不等价）。
+        /// </para>
+        /// </summary>
         [Fact]
         public async Task H1_插件响应被正确释放()
         {
@@ -528,8 +619,19 @@ namespace LiteMonitor.Tests
             string body = await RunStepAsync(exec, inst, step);
 
             Assert.Equal("tracked", body);
-            // 响应被释放 → 它的内容流也被释放
-            Assert.True(handler.ContentStream.Disposed, "HttpResponseMessage 必须被释放（内容流随之释放）");
+
+            // ★ 归因到**响应消息本身**：捕获 handler 返回的 HttpResponseMessage 实例
+            HttpResponseMessage response = handler.Response;
+            Assert.NotNull(response);
+            Assert.True(IsResponseDisposed(response),
+                "HttpResponseMessage 必须被释放（不能只释放它的内容流）");
+
+            // 响应被释放 → 它的 Content 必然被连带释放
+            Assert.True(handler.ResponseContent.IsDisposed,
+                "HttpResponseMessage 被释放 → 其 Content 必须随之释放");
+
+            // 既有断言保留：响应正文流也必须被释放
+            Assert.True(handler.ContentStream.Disposed, "响应正文流必须被释放");
 
             original.Dispose();
         }
@@ -656,6 +758,30 @@ namespace LiteMonitor.Tests
             var f = target.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(f);
             f.SetValue(target, value);
+        }
+
+        /// <summary>
+        /// 直接调用产品的"取或启动在途请求"入口（私有方法）。
+        /// 这是生产暴露的在途租约入口：用它可以对**真正并发**的调用发起探针，
+        /// 而不依赖 <c>ExecuteStepAsync</c> 在首个 await 之前的同步执行顺序。
+        /// </summary>
+        private static Task<string> GetOrStartInflight(PluginExecutor exec, string key, Func<Task<string>> factory)
+        {
+            var task = (Task<string>)Method("GetOrStartInflight").Invoke(exec, new object[] { key, factory });
+            return task;
+        }
+
+        /// <summary>
+        /// 读取 <see cref="HttpResponseMessage"/> 自身的释放状态。
+        /// <see cref="HttpResponseMessage"/> 没有公开的 IsDisposed，只能读它的私有
+        /// <c>_disposed</c> 字段（.NET 8：<c>private bool _disposed;</c>）。
+        /// </summary>
+        private static bool IsResponseDisposed(HttpResponseMessage response)
+        {
+            var field = typeof(HttpResponseMessage).GetField("_disposed",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(field);
+            return (bool)field.GetValue(response);
         }
 
         private static MethodInfo Method(string name)
@@ -880,6 +1006,11 @@ namespace LiteMonitor.Tests
         private sealed class TrackingStream : MemoryStream
         {
             public bool Disposed { get; private set; }
+
+            public TrackingStream(byte[] buffer) : base(buffer, 0, buffer.Length, false, true)
+            {
+            }
+
             protected override void Dispose(bool disposing)
             {
                 Disposed = true;
@@ -887,21 +1018,76 @@ namespace LiteMonitor.Tests
             }
         }
 
+        /// <summary>
+        /// 会记录自身 Dispose 的 <see cref="HttpContent"/> —— 用作"这个响应被释放了"的探针。
+        /// ★ 关键性质：<see cref="HttpResponseMessage.Dispose()"/> 会连带 Dispose 它的 Content；
+        ///   而"只释放内容流"（<c>using var stream</c>）**不会**触发 Content.Dispose ——
+        ///   两者因此可以被区分，"响应被释放"才能被真正归因。
+        /// </summary>
+        private sealed class TrackingContent : HttpContent
+        {
+            private readonly byte[] _body;
+            private int _disposed;
+
+            public TrackingContent(byte[] body)
+            {
+                _body = body;
+                Stream = new TrackingStream(body);
+            }
+
+            /// <summary>正文流（记录自身 Dispose）。</summary>
+            public TrackingStream Stream { get; }
+
+            /// <summary>Content 自身是否已被 Dispose（由响应释放触发）。</summary>
+            public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext context)
+                => stream.WriteAsync(_body, 0, _body.Length);
+
+            protected override bool TryComputeLength(out long length)
+            {
+                length = _body.Length;
+                return true;
+            }
+
+            protected override Task<Stream> CreateContentReadStreamAsync()
+                => Task.FromResult<Stream>(Stream);
+
+            protected override Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken)
+                => Task.FromResult<Stream>(Stream);
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing) Interlocked.Exchange(ref _disposed, 1);
+                base.Dispose(disposing);
+            }
+        }
+
         private sealed class TrackingHandler : HttpMessageHandler
         {
-            public TrackingStream ContentStream { get; } = new TrackingStream();
+            private readonly byte[] _body;
 
             public TrackingHandler()
             {
-                var bytes = Encoding.UTF8.GetBytes("tracked");
-                ContentStream.Write(bytes, 0, bytes.Length);
-                ContentStream.Position = 0;
+                _body = Encoding.UTF8.GetBytes("tracked");
             }
+
+            /// <summary>handler 返回的响应消息实例（用于检查它**自身**是否被释放）。</summary>
+            public HttpResponseMessage Response { get; private set; }
+
+            /// <summary>响应的 Content（记录自身 Dispose）。</summary>
+            public TrackingContent ResponseContent { get; private set; }
+
+            /// <summary>响应正文流（记录自身 Dispose）。</summary>
+            public TrackingStream ContentStream => ResponseContent?.Stream;
 
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
-                var content = new StreamContent(ContentStream);
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content, RequestMessage = request });
+                var content = new TrackingContent(_body);
+                ResponseContent = content;
+                var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = content, RequestMessage = request };
+                Response = response;
+                return Task.FromResult(response);
             }
         }
     }

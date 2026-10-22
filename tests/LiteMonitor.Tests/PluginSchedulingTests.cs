@@ -16,9 +16,24 @@ namespace LiteMonitor.Tests
     /// <summary>
     /// 插件调度计时器测试（LM-001）。
     ///
-    /// 缺陷根因：不可见分支在 try 之前 return，永远进不了 finally，
-    /// 而"重新武装计时器"只发生在 finally 里；AutoReset=false 的计时器
-    /// 于是再也不会自行触发 ⇒ 该插件实例的调度永久停摆。
+    /// ★ 根因（2026-10-22 复核更正，原"永久停摆"表述不成立）：
+    /// 基线的不可见分支在 try 之前 return，进不了 finally，而"重新武装计时器"
+    /// 只发生在 finally 里 —— 也就是说基线**从未显式**重新武装过计时器，它依赖的是
+    /// <see cref="System.Timers.Timer"/> 的一个**未文档化副作用**：
+    /// 在 Elapsed 处理器内部给 <c>Interval</c> 赋值时，Timer 内部会执行
+    /// <c>_timer.Change(interval, Timeout.Infinite)</c>，把一次性的计时器顺带重新武装
+    /// （.NET 8 源码：<c>Timer.Interval</c> setter → <c>UpdateTimer()</c>）。
+    /// 因此基线**并非永久停摆**，而是"靠这个副作用继续轮询"。
+    /// <para>
+    /// 实证（本次复核独立复现，探针见交付报告）：30ms 间隔、400ms 窗口内触发 12 次；
+    /// 忠实重放基线 async-void 处理器时 6 秒内按 2 秒间隔持续触发 3 次（50ms / 2051ms / 4051ms）；
+    /// 而处理器内既不赋值 Interval 也不 Start 时只触发 1 次。
+    /// </para>
+    /// <para>
+    /// 修复后的行为**不再依赖**该副作用：不可见分支与其余退出路径统一由 <c>finally</c>
+    /// 收尾，显式调用 <c>Start()</c> 重新武装，并叠加"实例代次"守卫
+    /// （旧代次的回调不得重新调度、不得写回结果）。
+    /// </para>
     ///
     /// 覆盖契约 docs/superpowers/plans/2026-10-22-v3-s1-inflight-lease-contract.md §3.5 的
     /// T1–T8 全部条目，全部为真实执行断言（无跳过、无早退）。
@@ -66,8 +81,10 @@ namespace LiteMonitor.Tests
 
             // 不可见 → 跳过执行
             Assert.Equal(0, h.ExecuteCount);
-            // ★ 关键回归点：不可见分支必须重新武装计时器。
-            //   修复前该分支在 try 之前 return，进不了 finally ⇒ StartCount 停在 1，调度永久停摆。
+            // ★ 关键回归点：不可见分支必须**显式**重新武装计时器（调用 Start()）。
+            //   修复前该分支在 try 之前 return，进不了 finally ⇒ 没有任何显式 Start()，
+            //   StartCount 停在 1；基线只是靠 System.Timers.Timer 在处理器内赋值 Interval
+            //   的未文档化副作用才得以继续轮询（并不是"永久停摆"，见类注释）。
             Assert.Equal(2, timer.StartCount);
             Assert.Equal(h.Manager.InvisibleRetryIntervalMs, timer.Interval);
 
@@ -81,15 +98,19 @@ namespace LiteMonitor.Tests
         }
 
         // ==========================================================
-        // T2（生产计时器路径）不可见分支后仍然继续轮询
+        // T2b 不可见分支的**显式重新武装**（本次修复的实际机制）
         // ==========================================================
 
         [Fact]
-        public async Task T2b_生产计时器_不可见分支后仍然继续轮询()
+        public async Task T2b_不可见分支显式重新武装_不依赖Interval赋值副作用()
         {
             using var h = new ScheduleHarness(visible: false);
-            h.UseProductionTimer();                             // 不注入计时器工厂 → 真实 System.Timers.Timer
-            h.Manager.InvisibleRetryIntervalMs = 30;             // 复查间隔压到毫秒级，避免长等待
+            // ★ 计时器替身：赋值 Interval **不产生任何重武装副作用**（严格 Stop-Wait 语义）。
+            //   这正是基线缺陷所依赖的语义 —— 基线靠 System.Timers.Timer 在处理器内赋值
+            //   Interval 时"顺带"重武装才得以继续轮询；本次修复已改为显式 Start()，
+            //   不再依赖该副作用。所以在这里用"赋值不重武装"的替身，
+            //   调度能继续 ⇔ 显式重武装路径确实被走到。
+            h.UseStrictStopWaitTimer();
 
             int probes = 0;
             h.Manager.VisibilityProbe = _ =>
@@ -100,15 +121,71 @@ namespace LiteMonitor.Tests
 
             h.Manager.StartInstance(h.Instance, h.Template);
 
-            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
-            while (Volatile.Read(ref probes) < 3 && DateTime.UtcNow < deadline)
-            {
-                await Task.Delay(10).ConfigureAwait(false);
-            }
+            ManualPluginTimer timer = Assert.Single(h.Timers);
 
-            // ★ 真实计时器在不可见分支后仍在持续触发 ⇒ 调度没有停摆（修复前只会触发 1 次）
-            Assert.True(Volatile.Read(ref probes) >= 3,
-                $"不可见分支后调度停摆：可见性探测次数 = {probes}");
+            // 第 1 次心跳：不可见 → 跳过执行，但必须走"显式重新武装"
+            await timer.FireAsync();
+
+            Assert.Equal(0, h.ExecuteCount);                                  // 不可见 → 不执行
+            Assert.Equal(2, timer.StartCount);                                // ★ 显式重武装（Start）被走到
+            Assert.Equal(h.Manager.InvisibleRetryIntervalMs, timer.Interval); // 复查间隔已设置
+
+            // ★ 顺序：先设置复查间隔、再重新武装（否则下一次心跳会沿用旧间隔）
+            Assert.Equal(
+                new[] { "start", "interval=" + h.Manager.InvisibleRetryIntervalMs, "start" },
+                timer.Events);
+
+            // 第 2 次心跳：调度**继续** —— 靠的是显式重新武装，
+            // 与"赋值 Interval 会顺带重武装"这个副作用无关。
+            await timer.FireAsync();
+
+            Assert.Equal(2, probes);                                          // 可见性探针被再次调用
+            Assert.Equal(3, timer.StartCount);
+            Assert.Equal(0, h.ExecuteCount);                                  // 始终不可见 → 从不执行
+        }
+
+        // ==========================================================
+        // T2c 生产计时器（真实 System.Timers.Timer）：显式重新武装
+        // ==========================================================
+
+        [Fact]
+        public async Task T2c_生产计时器_不可见分支显式重新武装()
+        {
+            using var h = new ScheduleHarness(visible: false);
+            h.UseProductionTimer();                             // 不注入计时器工厂 → 真实 System.Timers.Timer
+            h.Manager.InvisibleRetryIntervalMs = 1000;           // 复查间隔：给读取 Enabled 留出窗口
+
+            int probes = 0;
+            h.Manager.VisibilityProbe = _ =>
+            {
+                Interlocked.Increment(ref probes);
+                return false;                                    // 始终不可见
+            };
+
+            h.Manager.StartInstance(h.Instance, h.Template);
+
+            // 等第一次心跳（不可见分支）走完
+            Assert.True(await WaitUntilAsync(() => Volatile.Read(ref probes) >= 1, TimeSpan.FromSeconds(10)),
+                "第一次心跳未在超时内发生");
+            await Task.Delay(200);                                  // 让第一次心跳的收尾（显式重武装）完成
+
+            // ★ 差异观测量：真实 System.Timers.Timer 的 Enabled。
+            //   事实（.NET 8 源码 + 本次复核探针实证）：
+            //   System.Timers.Timer 在 Elapsed 处理器**内部**被赋值 Interval 时会**重新武装**
+            //   （setter → UpdateTimer() → _timer.Change(i, Timeout.Infinite)），
+            //   但**不会**把 Enabled 置回 true —— 回调开始时 AutoReset=false 已经把
+            //   内部 _enabled 置为 false，而 Interval setter 不碰 _enabled。
+            //   只有显式 Start()（Enabled = true）才会让 Enabled 变成 true。
+            //   ⇒ 基线（只赋值 Interval、不 Start）：Enabled == false；
+            //     修复后（显式 Start 重武装）：Enabled == true。
+            System.Timers.Timer inner = h.InnerProductionTimer();
+            Assert.True(inner.Enabled,
+                "不可见分支必须显式重新武装（调用 Start），不能只依赖赋值 Interval 的副作用");
+
+            // 调度仍在继续（真实计时器确实还在跳）—— 修复前后都成立，仅作行为留档，
+            // 不承担判别力（判别力由上面的 Enabled 断言承担）。
+            Assert.True(await WaitUntilAsync(() => Volatile.Read(ref probes) >= 2, TimeSpan.FromSeconds(10)),
+                "不可见分支后生产计时器没有继续轮询");
 
             h.Manager.StopInstance(h.Instance.Id);
         }
@@ -449,6 +526,22 @@ namespace LiteMonitor.Tests
             return false;
         }
 
+        /// <summary>
+        /// 轮询等待条件成立（带超时）。返回是否在超时内成立。
+        /// 用于等待"生产计时器已经触发过 N 次"这类真实计时器场景，
+        /// 避免用固定长度的 Sleep 猜时间。
+        /// </summary>
+        private static async Task<bool> WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
+        {
+            DateTime deadline = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                if (predicate()) return true;
+                await Task.Delay(20).ConfigureAwait(false);
+            }
+            return predicate();
+        }
+
         /// <summary>仅用于识别"本用例制造"的异常，避免误判进程内其它未观察异常。</summary>
         private sealed class ScheduleMarkerException : Exception
         {
@@ -457,15 +550,37 @@ namespace LiteMonitor.Tests
 
         /// <summary>
         /// 手动驱动的调度计时器测试替身。
-        /// 语义对齐生产计时器（AutoReset=false 的 Stop-Wait 模式）：
+        /// <para>
+        /// 默认语义对齐生产计时器的 **Stop-Wait** 模式（AutoReset=false）：
         /// 触发一次之后必须被显式重新武装才会再次触发。
+        /// </para>
+        /// <para>
+        /// ★ <paramref name="strictStopWait"/> = true 时进一步做到
+        /// <b>赋值 Interval 不产生任何重武装副作用</b>：只有显式 <c>Start()</c> 才会重新武装。
+        /// 这正是基线缺陷所依赖、而本次修复已不再依赖的语义
+        /// （<see cref="System.Timers.Timer"/> 在处理器内赋值 Interval 会顺带重武装）。
+        /// 在这种替身上"调度能继续" ⇔ 显式重武装路径确实被走到。
+        /// </para>
         /// </summary>
         private sealed class ManualPluginTimer : IPluginTimer
         {
             private readonly Func<IPluginTimer, Task> _onTick;
+            private readonly bool _strictStopWait;
+            private readonly List<string> _events = new List<string>();
             private int _activeTicks;
+            private double _interval;
+            private bool _armed;
 
-            public double Interval { get; set; }
+            public double Interval
+            {
+                get => _interval;
+                set
+                {
+                    _interval = value;
+                    Record("interval=" + value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+
             public bool IsRunning { get; private set; }
             public bool IsDisposed { get; private set; }
             public int StartCount { get; private set; }
@@ -473,10 +588,17 @@ namespace LiteMonitor.Tests
             public int StartAfterDisposeCount { get; private set; }
             public int MaxConcurrentTicks { get; private set; }
 
-            public ManualPluginTimer(double interval, Func<IPluginTimer, Task> onTick)
+            /// <summary>事件序列（"start" / "interval=…" / "stop" / "dispose"），用于断言调用顺序。</summary>
+            public string[] Events
             {
-                Interval = interval;
+                get { lock (_events) return _events.ToArray(); }
+            }
+
+            public ManualPluginTimer(double interval, Func<IPluginTimer, Task> onTick, bool strictStopWait = false)
+            {
+                _interval = interval;
                 _onTick = onTick;
+                _strictStopWait = strictStopWait;
             }
 
             public void Start()
@@ -488,25 +610,35 @@ namespace LiteMonitor.Tests
                     throw new ObjectDisposedException(nameof(ManualPluginTimer));
                 }
                 IsRunning = true;
+                _armed = true;
                 StartCount++;
+                Record("start");
             }
 
             public void Stop()
             {
                 IsRunning = false;
+                _armed = false;
                 StopCount++;
+                Record("stop");
             }
 
             public void Dispose()
             {
                 IsDisposed = true;
                 IsRunning = false;
+                _armed = false;
+                Record("dispose");
             }
 
             /// <summary>手动触发一次心跳（模拟真实计时器到点）。未武装或已释放时不触发。</summary>
             public async Task FireAsync()
             {
                 if (!IsRunning || IsDisposed) return;
+                // ★ 严格 Stop-Wait：必须先被显式重新武装（Start）才会再次触发。
+                //   赋值 Interval 在这里**没有**任何重武装副作用（与 System.Timers.Timer 相反）。
+                if (_strictStopWait && !_armed) return;
+                _armed = false;
 
                 int active = Interlocked.Increment(ref _activeTicks);
                 if (active > MaxConcurrentTicks) MaxConcurrentTicks = active;
@@ -518,6 +650,11 @@ namespace LiteMonitor.Tests
                 {
                     Interlocked.Decrement(ref _activeTicks);
                 }
+            }
+
+            private void Record(string evt)
+            {
+                lock (_events) _events.Add(evt);
             }
         }
 
@@ -620,6 +757,34 @@ namespace LiteMonitor.Tests
             public void UseProductionTimer()
             {
                 Manager.TimerFactory = null;
+            }
+
+            /// <summary>
+            /// 改用"严格 Stop-Wait"计时器替身：赋值 Interval **不产生**重武装副作用，
+            /// 只有显式 Start() 才会重新武装。用于断言"显式重武装路径确实被走到"。
+            /// </summary>
+            public void UseStrictStopWaitTimer()
+            {
+                Manager.TimerFactory = (interval, onTick) =>
+                {
+                    var timer = new ManualPluginTimer(interval, onTick, strictStopWait: true);
+                    lock (_gate) { Timers.Add(timer); }
+                    return timer;
+                };
+            }
+
+            /// <summary>
+            /// 取生产计时器（真实 <see cref="System.Timers.Timer"/>）的内部实例，
+            /// 用于断言真实计时器自身的状态（例如 Enabled）。
+            /// </summary>
+            public System.Timers.Timer InnerProductionTimer()
+            {
+                var field = typeof(PluginManager).GetField("_timers",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.NotNull(field);
+                var timers = (Dictionary<string, IPluginTimer>)field.GetValue(Manager);
+                var timer = Assert.Single(timers.Values);
+                return ((SystemPluginTimer)timer).Inner;
             }
 
             public void Dispose()

@@ -17,6 +17,13 @@ namespace LiteMonitor.src.Plugins
     /// 生产实现是 <see cref="System.Timers.Timer"/> 的 Stop-Wait（AutoReset=false）包装：
     /// 触发一次之后必须由调度逻辑显式"重新武装 (re-arm)"才会再次触发。
     /// 测试可注入手动驱动实现，使"重新武装"这一关键行为能够确定性验证，无需真实等待。
+    /// <para>
+    /// ★ 事实（.NET 8 源码 + 实测）：<see cref="System.Timers.Timer"/> 在 <c>Elapsed</c>
+    /// 处理器**内部**被赋值 <c>Interval</c> 时会**顺带重新武装**
+    /// （<c>Interval</c> setter → <c>UpdateTimer()</c> → 内部 <c>_timer.Change(i, Infinite)</c>）。
+    /// 该行为**未被 .NET 文档明文保证**，因此调度**不得**依赖它：
+    /// 重武装必须由本调度逻辑显式调用 <see cref="IPluginTimer.Start"/> 完成。
+    /// </para>
     /// </summary>
     internal interface IPluginTimer : IDisposable
     {
@@ -32,6 +39,11 @@ namespace LiteMonitor.src.Plugins
 
     /// <summary>
     /// 生产计时器：包装 <see cref="System.Timers.Timer"/>（AutoReset=false 的 Stop-Wait 模式）。
+    /// <para>
+    /// ★ 注意：给 <see cref="System.Timers.Timer"/> 的 <c>Interval</c> 赋值会顺带重新武装它
+    /// （未文档化副作用）。本包装**不依赖**该副作用 —— 重新武装一律由调用方显式
+    /// 调用 <see cref="Start"/> 完成（见 <c>RearmSchedule</c>）。
+    /// </para>
     /// </summary>
     internal sealed class SystemPluginTimer : IPluginTimer
     {
@@ -96,7 +108,13 @@ namespace LiteMonitor.src.Plugins
 
         /// <summary>
         /// 插件不可见时的复查间隔（毫秒）：可见性是"按需刷新"的开关，
-        /// 不可见时仍必须按此间隔重新武装计时器，否则调度会永久停摆（LM-001）。
+        /// 不可见时仍必须按此间隔**显式**重新武装计时器（LM-001）。
+        /// <para>
+        /// ★ 根因更正（2026-10-22 复核）：基线的不可见分支在 <c>try</c> 之前 <c>return</c>，
+        /// 从未显式重新武装，它靠的是 <see cref="System.Timers.Timer"/> "在处理器内赋值
+        /// <c>Interval</c> 即重新武装"这一**未文档化副作用**才得以继续轮询 ——
+        /// 因此基线**并非永久停摆**。修复的定位是"消除对该副作用的依赖"，不是"恢复停摆"。
+        /// </para>
         /// <para>internal 可变：测试可压到毫秒级以在生产计时器上验证"仍在轮询"，不改变生产取值。</para>
         /// </summary>
         internal int InvisibleRetryIntervalMs { get; set; } = 2000;
@@ -356,6 +374,11 @@ namespace LiteMonitor.src.Plugins
         /// 都会发现代次不匹配，从而放弃重新调度、放弃写回结果。
         /// </para>
         /// <para>
+        /// ★ <c>Stop()</c> + <c>Dispose()</c> 会让 <see cref="System.Timers.Timer"/>
+        /// 内部计时器被释放，此后即便旧回调再给 <c>Interval</c> 赋值也不会重新武装
+        /// （赋值副作用依赖内部计时器仍然存在）—— 所以停止路径不会留下"僵尸计时器"。
+        /// </para>
+        /// <para>
         /// ★ 取消/释放在锁外执行：<c>CancellationTokenSource.Cancel()</c> 会同步触发
         /// 已注册的回调，回调不应该被同一把锁挡住。
         /// </para>
@@ -541,9 +564,15 @@ namespace LiteMonitor.src.Plugins
         /// <summary>
         /// 调度心跳：执行插件，并根据结果调整下一次心跳的间隔。
         /// <para>
-        /// ★ 不可见分支必须留在 <c>try</c> 内部 —— 否则它会在进入 <c>finally</c> 之前
-        /// 直接返回，而"重新武装计时器"只发生在 <c>finally</c> 里，
-        /// <c>AutoReset=false</c> 的计时器便再也不会自行触发 ⇒ 该实例的调度永久停摆（LM-001 根因）。
+        /// ★ 不可见分支必须留在 <c>try</c> 内部 —— 这样它才会经过 <c>finally</c> 的统一收尾，
+        /// 由 <c>RearmSchedule</c> **显式**重新武装计时器（LM-001 修复要求 1）。
+        /// <para>
+        /// ★ 根因更正（2026-10-22 复核）：基线的不可见分支在 <c>try</c> 之前直接 <c>return</c>，
+        /// 从未显式重新武装；基线之所以还能继续轮询，靠的是
+        /// <see cref="System.Timers.Timer"/> "在处理器内赋值 <c>Interval</c> 即重新武装"这一
+        /// **未文档化副作用**（赋值发生在提前 <c>return</c> 之前）——
+        /// <b>并非"调度永久停摆"</b>。修复的定位因此是
+        /// "消除对未文档化副作用的依赖"，而非"恢复停摆的轮询"。
         /// </para>
         /// <para>
         /// ★ 所有退出路径（可见 / 不可见 / 失败 / 取消 / 停止）统一由 <c>finally</c> 收尾。
@@ -561,7 +590,7 @@ namespace LiteMonitor.src.Plugins
                 if (!ProbeVisible(inst.Id))
                 {
                     timer.Interval = InvisibleRetryIntervalMs; // Check again in 2s
-                    return; // ★ 仍然会走 finally → 统一收尾 → 重新武装
+                    return; // ★ 走 finally → 统一收尾 → **显式**重新武装（不依赖赋值 Interval 的副作用）
                 }
 
                 // Execute and get success status
@@ -625,6 +654,11 @@ namespace LiteMonitor.src.Plugins
         /// ★ 以下任一条件成立时都<b>不得</b>重新武装：
         /// 代次已变（实例被停止/重启）、令牌已取消（实例被停止）、
         /// 实例已被禁用、计时器已不是该实例当前的计时器（被更替）。
+        /// </para>
+        /// <para>
+        /// ★ 这里的 <c>Start()</c> 是<b>显式</b>重新武装：调度存活**不依赖</b>
+        /// <see cref="System.Timers.Timer"/> "在处理器内赋值 <c>Interval</c> 即重新武装"
+        /// 这一未文档化副作用（LM-001 修复要求 1）。
         /// </para>
         /// </summary>
         private void RearmSchedule(PluginInstanceConfig inst, IPluginTimer timer, long generation, System.Threading.CancellationToken token)
