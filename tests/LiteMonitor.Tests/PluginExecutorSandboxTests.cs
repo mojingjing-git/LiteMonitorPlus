@@ -8,6 +8,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using LiteMonitor.src.Plugins;
@@ -212,7 +213,8 @@ namespace LiteMonitor.Tests
             catch (PluginSandboxException ex) { failure = ex; }
 
             // 失败原因码不得是步骤数上限（也不得是任何其它上限）
-            Assert.NotEqual(PluginSandboxReasons.StepLimit, failure?.Reason);
+            // [LM-043] 原先这里的 `Assert.NotEqual(StepLimit, failure?.Reason)` 在 failure == null 时
+            //   恒真（空转断言）⇒ 已删除；承重的是下面两条。
             Assert.Null(failure);
             Assert.True(ok, "多目标（每目标步数 ≤ 16）时执行应当成功");
             Assert.True(
@@ -281,6 +283,11 @@ namespace LiteMonitor.Tests
         /// 64 个目标 × 1 步 = 64 步 &gt; 16，但**每个目标都只有 1 步** ⇒ 不触达步骤数上限，
         /// 整次执行**应当成功** —— 这正是"目标上限（64）没有触发"的证据。
         /// （旧语义"步骤数实例内累计"下这里会以 LM009_STEP_LIMIT 失败。）</para>
+        /// <para>[LM-042] URL 必须是<b>目标专属</b>的（带 <c>{{n}}</c> 变量）：
+        /// 旧版 URL 对 64 个目标完全相同 ⇒ 在途去重（<c>PluginExecutor</c> 的请求合并）
+        /// 会把并发中的相同请求合并成一条，服务端实际只收到 61 个请求 ⇒
+        /// "64 个目标都真的跑了各自的一步"根本没被证明。
+        /// 现在断言收紧为<b>恰好 64 个请求</b>。</para>
         /// </summary>
         [Fact]
         public async Task 端到端_目标数恰好等于上限_目标上限不触发()
@@ -293,20 +300,22 @@ namespace LiteMonitor.Tests
                 .Select(i => new Dictionary<string, string> { ["n"] = i.ToString() })
                 .ToList();
 
-            var tmpl = ChainTemplate(server.Url + "/t");
+            // 每个目标请求各自的 URL（避免在途请求被合并 ⇒ 覆盖到"每个目标都真的跑了一遍"）
+            var tmpl = ChainTemplate(server.Url + "/t?n={{n}}");
+            tmpl.Inputs = new List<PluginInput> { new PluginInput { Key = "n", DefaultValue = "0" } };
 
             PluginSandboxException failure = null;
             bool ok = false;
             try { ok = await exec.ExecuteInstanceAsync(inst, tmpl); }
             catch (PluginSandboxException ex) { failure = ex; }
 
-            // 目标上限（64）不得触发
-            Assert.NotEqual(PluginSandboxReasons.TargetLimit, failure?.Reason);
-            // 步骤数按目标计 ⇒ 每个目标只有 1 步 ⇒ 整次执行成功，不得因步骤数上限失败
+            // 步骤数按目标计 ⇒ 每个目标只有 1 步 ⇒ 整次执行成功，不得因任何上限失败
+            // （[LM-043] 原先这里的 `Assert.NotEqual(TargetLimit, failure?.Reason)` 在
+            //   failure == null 时恒真，是空转断言 ⇒ 已删除；承重的是下面两条）
             Assert.Null(failure);
             Assert.True(ok, "目标数等于上限（每个目标仅 1 步）时执行应当成功");
-            // 目标上限放行 ⇒ 请求确实发出去了（不是被目标上限挡下的）
-            Assert.True(server.RequestCount > 0, "目标数等于上限时请求必须照常发出");
+            // [LM-042] 目标上限放行 ⇒ 64 个目标**各自**发出了一次请求（不多不少）
+            Assert.Equal(PluginSandboxLimits.MaxTargetsPerStep, server.RequestCount);
         }
 
         // ==========================================================
@@ -387,6 +396,42 @@ namespace LiteMonitor.Tests
             Assert.Equal(PluginSandboxReasons.DeadlineExceeded, ex.Reason);
             // 不得被步骤数上限掩盖（12 个目标 × 1 步 = 12 步 < 16）
             Assert.NotEqual(PluginSandboxReasons.StepLimit, ex.Reason);
+        }
+
+        /// <summary>
+        /// 端到端（[LM-044]）：**生产入口** <c>ExecuteInstanceAsync</c> 实际使用的
+        /// 单次执行总时长，必须等于契约值 <see cref="PluginSandboxLimits.MaxExecutionDurationMs"/>（30 s）。
+        /// <para>缺口背景：上面 3 条总时长用例都<b>注入测试自建作用域</b>并走私有方法
+        /// ⇒ 把生产入口的默认时长改成 5 分钟，它们仍然全绿 ⇒ 30 s 这个契约值从未被钉住。</para>
+        /// <para>本用例走<b>生产入口</b>（<c>ExecuteInstanceAsync</c>），并取回"本次生产入口
+        /// 实际创建的那个实例级作用域"（按本次独有的取消令牌索引），断言它的
+        /// <c>MaxDuration</c> 就是 30 s。</para>
+        /// </summary>
+        [Fact]
+        public async Task 端到端_生产入口实际使用的总时长_等于契约值30秒()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Text("ok")));
+            using var exec = new PluginExecutor();
+
+            var inst = NewInstance("inst-prod-duration");
+            var tmpl = ChainTemplate(server.Url + "/dur");
+
+            // 本次执行独有的取消令牌 ⇒ 能把"生产入口创建的作用域"与其它作用域区分开
+            using var cts = new CancellationTokenSource();
+
+            Assert.True(await exec.ExecuteInstanceAsync(inst, tmpl, cts.Token));
+
+            // 生产入口实际创建的实例级作用域
+            var scope = PluginSandboxScope.FindCreatedInstanceScope(cts.Token);
+            Assert.NotNull(scope);
+
+            // 契约值（字面量 + 常量双重钉死）
+            Assert.Equal(PluginSandboxLimits.MaxExecutionDurationMs, (int)scope.MaxDuration.TotalMilliseconds);
+            Assert.Equal(TimeSpan.FromMilliseconds(30_000), scope.MaxDuration);
+
+            // 同一作用域的其它上限也不得在生产入口上漂移
+            Assert.Equal(PluginSandboxLimits.MaxStepsPerExecution, scope.MaxSteps);
+            Assert.Equal(PluginSandboxLimits.MaxTargetsPerStep, scope.MaxTargets);
         }
 
         // ==========================================================
@@ -503,6 +548,11 @@ namespace LiteMonitor.Tests
         /// 端到端：变换里跑灾难性回溯正则时失败，原因码 <c>LM009_REGEX_TIMEOUT</c>。
         /// <para>证明 <c>PluginProcessor</c> 侧的"正则时限"经由**执行路径**真正可达
         /// （不是只调用原语才有）。</para>
+        /// <para>[LM-041] <b>钉住 500 ms 这个数值</b>（旧版只锁"可达性 + 原因码"，
+        /// 把 <c>RegexMatchTimeout</c> 从 500 ms 改成 10 s 时本用例仍然全绿）：
+        /// ① 内层 <see cref="RegexMatchTimeoutException"/> 携带"实际超时的时限"，
+        /// 直接断言它就是 500 ms；② 另加一条<b>宽松</b>的耗时上界（5 s），
+        /// 证明生产路径是"几百毫秒就失败"而不是"跑满 10 秒"（不做脆弱的精确计时）。</para>
         /// </summary>
         [Fact]
         public async Task 端到端_正则超时_失败且原因码为LM009_REGEX_TIMEOUT()
@@ -525,9 +575,24 @@ namespace LiteMonitor.Tests
                 }
             };
 
+            var sw = Stopwatch.StartNew();
             var ex = await Assert.ThrowsAnyAsync<PluginSandboxException>(() => exec.ExecuteInstanceAsync(inst, tmpl));
+            sw.Stop();
 
             Assert.Equal(PluginSandboxReasons.RegexTimeout, ex.Reason);
+
+            // [LM-041] 数值钉死：实际超时的时限就是契约值 500 ms
+            // （字面量 500 ms ⇒ 常量被改成 10 s 时本断言必然变红）
+            var timeoutEx = Assert.IsType<RegexMatchTimeoutException>(ex.InnerException);
+            Assert.Equal(TimeSpan.FromMilliseconds(500), timeoutEx.MatchTimeout);
+            Assert.Equal(PluginSandboxLimits.RegexMatchTimeout, timeoutEx.MatchTimeout);
+            Assert.Equal(PluginSandboxLimits.MaxRegexMatchTimeoutMs, (int)timeoutEx.MatchTimeout.TotalMilliseconds);
+
+            // [LM-041] 耗时上界（宽松）：500 ms 的时限 ⇒ 远小于 10 s
+            // （留足调度余量，避免精确计时导致的脆弱断言）
+            Assert.True(
+                sw.ElapsedMilliseconds < 5000,
+                $"正则超时耗时 {sw.ElapsedMilliseconds} ms，说明 500 ms 的时限没有真正生效");
         }
 
         // ==========================================================

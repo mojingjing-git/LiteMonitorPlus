@@ -266,27 +266,58 @@ namespace LiteMonitor.Tests
 
         /// <summary>
         /// 目标展开数**按实例计**：目标级作用域上的计数累加到**实例级作用域**上，
-        /// 一次执行内跨目标累计；单次展开超过上限仍报 <c>LM009_TARGET_LIMIT</c>。
+        /// 一次执行内跨 target 累计；<b>累计值</b>超过上限即报 <c>LM009_TARGET_LIMIT</c>。
+        /// <para>[LM-040] 判定依据必须是<b>累计值</b>（不是本次传入的展开数）：
+        /// 旧实现比较的是入参 ⇒ "每次都传一个 ≤ 64 的数字"就能把累计值撑到 70 而不报错，
+        /// "跨目标累计 ≤ 64"只是文档说法、并非强制约束。</para>
         /// </summary>
         [Fact]
-        public void 目标展开数_按实例计_跨目标累计到实例作用域()
+        public void 目标展开数_按实例计_跨目标累计超上限即失败()
         {
             using var scope = new PluginSandboxScope();
             using var t1 = scope.BeginTarget();
             using var t2 = scope.BeginTarget();
 
+            // 单次展开 40 个目标（累计 40，未达上限）
             scope.EnsureTargetsAllowed(40);
-            t2.EnsureTargetsAllowed(30);
+            Assert.Equal(40, scope.TargetCount);
 
-            // 实例级累计值（目标级作用域的调用也计入其中）
-            Assert.Equal(70, scope.TargetCount);
-            Assert.Equal(70, t1.TargetCount);
+            // 目标级作用域的展开数**累加到实例级作用域**上：40 + 24 = 64（恰好等于上限，放行）
+            t1.EnsureTargetsAllowed(24);
+            Assert.Equal(64, scope.TargetCount);
+            Assert.Equal(64, t2.TargetCount);
 
-            // 单次展开超过上限 → 目标数上限（与步骤数上限互不掩盖）
-            var ex = Assert.Throws<PluginSandboxException>(
-                () => scope.EnsureTargetsAllowed(PluginSandboxLimits.MaxTargetsPerStep + 1));
+            // 再展开 1 个 ⇒ 累计 65 > 64 ⇒ **必须失败**（LM-040：判定依据是累计值）
+            var ex = Assert.Throws<PluginSandboxException>(() => t2.EnsureTargetsAllowed(1));
             Assert.Equal(PluginSandboxReasons.TargetLimit, ex.Reason);
+            Assert.Contains(PluginSandboxLimits.MaxTargetsPerStep.ToString(), ex.Message);
             Assert.NotEqual(PluginSandboxReasons.StepLimit, ex.Reason);
+
+            // 累计值确实被记下来了（不是"只判单次"）
+            Assert.Equal(65, scope.TargetCount);
+        }
+
+        /// <summary>
+        /// [LM-044] 生产默认总时长必须等于契约值 30 秒。
+        /// <para>生产入口 <c>PluginExecutor.ExecuteInstanceAsync</c> 用的是<b>默认构造</b>，
+        /// 因此"默认构造的总时长"就是"生产入口实际使用的总时长"；
+        /// 这里把它钉死，防止生产默认时长被悄悄改成 5 分钟。</para>
+        /// </summary>
+        [Fact]
+        public void 生产默认总时长_等于契约值30秒()
+        {
+            // 契约值本身（字面量，防"被改成别的数"）
+            Assert.Equal(30_000, PluginSandboxLimits.MaxExecutionDurationMs);
+            Assert.Equal(TimeSpan.FromMilliseconds(30_000), PluginSandboxScope.DefaultExecutionDuration);
+
+            // 生产入口走的默认构造 ⇒ 其总时长必须与契约值一致
+            using var scope = new PluginSandboxScope();
+            Assert.Equal(PluginSandboxLimits.MaxExecutionDurationMs, (int)scope.MaxDuration.TotalMilliseconds);
+            Assert.Equal(TimeSpan.FromMilliseconds(30_000), scope.MaxDuration);
+
+            // 目标级作用域继承实例级的总时长（不得另有出处）
+            using var target = scope.BeginTarget();
+            Assert.Equal(scope.MaxDuration, target.MaxDuration);
         }
 
         /// <summary>
