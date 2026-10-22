@@ -173,7 +173,7 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | LM-036 | `dfe0fff` 无必要地删除一条断言（违反契约 §5.2「不得放宽断言」形式要求） | P2 | `CONFIRMED` | S2.4 |
 | LM-037 | Host 缺失的拒绝存在三层冗余 ⇒ 该具体行号无独立回归护栏 | P3 | `CONFIRMED` | 信息项，不阻断 |
 | LM-038 | 包内更新器的「内嵌构建提交」指向错误提交，使 LM-024 产物来源护栏**永久失效** | P2 | `CONFIRMED` | S4.2c |
-| LM-039 | `native://` 步骤绕过沙箱的三道闸门（并发/字节上限/凭据目标/截止时刻） | P1 | `CONFIRMED` | **S3.5（进行中）** |
+| LM-039 | `native://` 步骤绕过沙箱的三道闸门（并发/字节上限/凭据目标/截止时刻） | P1 | `CONFIRMED` | ✅ 已修复（`d23e6fc`：原生取数接入同一套闸门） |
 | LM-040 | 「目标展开数按实例累计」未被实现强制（比较入参而非累计值），类文档与实现不符 | P2 | `CONFIRMED` | ✅ 已修复（`d588440`：改用 `Interlocked.Add` 返回值判定累计值） |
 | LM-041 | 端到端正则用例不锁定 500 ms 数值 | P2 | `CONFIRMED` | ✅ 已修复（`d588440`） |
 | LM-042 | `端到端_目标数恰好等于上限` 的请求数断言过弱（实测 61 vs 64） | P2 | `CONFIRMED` | ✅ 已修复（`d588440`） |
@@ -197,13 +197,16 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | LM-053 | `native://` 路径同样可被 302 绕过"允许目标"：`CryptoNative` 客户端未关自动重定向，且 `allowedHosts` 未贯穿到发请求层 | P2 | `CONFIRMED`（**代码实测**，§4.5.9） | ✅ 已修复（`938dc4b`，随 LM-045 一并落地） |
 | LM-054 | 市场索引拉取仍允许自动跳转（`PluginMarket._http` 沿用原行为） | P3 | `CONFIRMED`（信息项，§4.5.9） | 登记待评估（本批不修，风险有界） |
 | LM-055 | `CityCodeResolver` 的远程回退 handler 未关自动重定向（目标是代码内建常量） | P3 | `CONFIRMED`（信息项，§4.5.9） | 登记待评估（本批不修） |
-| LM-056 | 发布流水线的用例发现数阈值与 CI **不一致**（`release.yml` 写着 1000，`ci.yml` 写着 1281），且未传 `-MaxSkipped` / `-MustExecuteTestClass` | P2 | `CONFIRMED`（**主审实测**，§4.5.9） | ✅ 已修复（阈值同步到 1316 + 补齐跳过数上限与"必须真正执行的测试类"） |
+| LM-056 | 发布流水线的用例发现数阈值与 CI **不一致**（`release.yml` 写着 1000，`ci.yml` 写着 1281），且未传 `-MaxSkipped` / `-MustExecuteTestClass` | P2 | `CONFIRMED`（**主审实测**，§4.5.9） | ✅ 已修复（`b1a8b42` 同步阈值 + 补齐跳过数上限与"必须真正执行的测试类"；阈值随后按**被推送分支实测总数**再校正为 **1349**，见 §8「阈值纪律」） |
+| LM-057 | 逐跳主机比对**忽略端口** ⇒ 同主机不同端口的重定向被放行（声明主机 `api.example.com` 的插件，凭据可被 302 到 `api.example.com:8443`） | P2 | `CONFIRMED`（**独立 verifier 独立实测**，§4.5.10） | 登记待评估（与 .NET 自身重定向语义一致、**既有行为非本批引入**；但 LM-045 把该口径继承到了逐跳复核上 ⇒ 属真实口径缺口。本批不修，见 §4.5.10 F1） |
+| LM-058 | IPv6 字面量主机在两处被**不同地**截断（`PluginProcessor.AddDeclaredHost` 取**第一个**冒号 ⇒ `"["`；`PluginExecutor.StripPort` 取**最后一个**冒号 ⇒ `"[:"`）⇒ IPv6 目标恒不可用 | P3 | `CONFIRMED`（**独立 verifier 独立实测**，§4.5.10） | 登记待清理（**偏严方向 / fail-closed**，不漏放行；影响 IPv6 回环与双栈插件） |
+| LM-059 | 既有 public 记录 `RenderingRouteRequest` 的**主位置签名**被追加成员（`bool WindowIsLayered = false`）⇒ 记录元数 5→6、相等性与 `ToString()` 语义改变（**二进制不兼容**） | P3 | `CONFIRMED`（**独立 verifier 实测**，§4.5.10） | 登记知悉（构造侧**源码兼容**；全仓仅 1 处生产调用点且用具名参数，无解构/相等比较消费点） |
 
 **当前无 P0。** 若任一执行步骤新发现 P0，立即挂起其他任务优先处理。
 
 **编号规则：** `LM-` 缺陷 / `SEC-` 安全 / `BASE-` 基线 / `ENV-` 环境事实 / `GPU-` GPU 切换专项。第三方评审使用的 `LM-018`、`LM-019` 与 `LM-003b`、`LM-003c` 指同一处代码，已合并并保留别名以便交叉引用；`LM-005/006` 为同一协议缺陷的两个侧面。
 
-> **编号占用现状（2026-10-23 第三次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-056`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-057` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
+> **编号占用现状（2026-10-23 第四次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-059`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-060` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用，`LM-057`–`LM-059` 由本轮独立 verifier 复核产出）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
 
 ### 4.1 根因更正记录 · LM-001（原"永久停摆"前提已证伪）
 
@@ -635,7 +638,10 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 | **LM-053** | 🟠 中 | **`native://` 路径同样可被 302 绕过"允许目标"** —— `CryptoNative.CreateClient()`（`src/Plugins/Native/CryptoNative.cs:40-57`）**未设** `AllowAutoRedirect = false`；`GetStringAsync()`（`:319-339`）用 `GetClient().GetAsync(...)` ⇒ 一次 302 就被静默跟到下一跳。而 `EnsureFallbackTargetAllowed`（`:144`）**只校验首个 URL 的主机**，且 `allowedHosts` **根本没有贯穿**到 `FetchFreshAsync`（`:186`）/ `GetStringAsync` ⇒ fallback 目标 302 到未声明主机时，未声明主机的响应会被当作行情 JSON 返回并**进入插件流水线**。**这是 LM-045 的 native 侧另一半** ⇒ 只修 HTTP 步骤路径**不足以关闭 LM-045** | ✅ **已修复**（`938dc4b`，随 LM-045 一并落地）：native 侧同样关闭自动重定向 + 逐跳复核；`allowedHosts` 贯穿 `FetchAsync` → `FetchFreshAsync` → `GetStringAsync`；官方源（代码内建目标）允许集合 = 内建官方源主机 ∪ 该次请求初始主机（`SourceUrlOverrides` 测试接缝指向回环时仍可用），fallback（插件/用户可控）允许集合 = native 允许目标集合 ∪ 回退目标主机；沙箱异常**不被降级**成"这个源不可用"/"回退源冷却" |
 | **LM-054** | 🔵 信息 | **市场索引拉取仍允许自动跳转** —— `src/Plugins/PluginMarket.cs:167-171` 的 `_http` 明确注释"索引拉取用（沿用原行为：允许自动跳转）" | 登记待评估（本批不修）：索引 URL 是**用户配置的固定目标**；其内容驱动的下载仍受 LM-007 的逐跳白名单 + 路径前缀 + sha256 三重校验，风险有界 |
 | **LM-055** | 🔵 信息 | **`CityCodeResolver` 的远程回退 handler 未关自动重定向** —— `src/Plugins/Native/CityCodeResolver.cs:196-206` | 登记待评估（本批不修）：其目标 `JSON_DB_URL` 是**代码内建常量**，插件与用户都改不动，与 LM-053 的"用户可控目标"不同级 |
-| **LM-056** | 🟡 低~中 | **发布流水线的防假绿阈值与 CI 不一致** —— `.github/workflows/release.yml:45-46` 的注释写着"与 ci.yml 完全一致的防假绿阈值，改动必须两处同步"，但**实际值是 `MIN_TEST_TOTAL: 1000`**，而 `ci.yml` 同期是 **1281** ⇒ **删掉 281 条用例时 CI 会红、发布流水线却会绿**；且 `release.yml` 的 `$assertArgs` **既没传 `-MaxSkipped` 也没传 `-MustExecuteTestClass`**（只依赖脚本默认值 1），比 CI 少两道门 | ✅ **已修复**：阈值同步到 1316（与 `ci.yml` 逐字一致），并补上 `MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests`（≥6 条）及其两个参数。门禁**只收紧不放宽** |
+| **LM-056** | 🟡 低~中 | **发布流水线的防假绿阈值与 CI 不一致** —— `.github/workflows/release.yml:45-46` 的注释写着"与 ci.yml 完全一致的防假绿阈值，改动必须两处同步"，但**实际值是 `MIN_TEST_TOTAL: 1000`**，而 `ci.yml` 同期是 **1281** ⇒ **删掉 281 条用例时 CI 会红、发布流水线却会绿**；且 `release.yml` 的 `$assertArgs` **既没传 `-MaxSkipped` 也没传 `-MustExecuteTestClass`**（只依赖脚本默认值 1），比 CI 少两道门 | ✅ **已修复**：阈值两处同步，并补上 `MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests`（≥6 条）及其两个参数。门禁**只收紧不放宽**。★ **二次更正**：阈值随后按「**被推送分支实测总数**」再校正为 **1349**（`b1a8b42` 只同步到 1316，而该分支实测仅 **1295** ⇒ 门禁**正确**报红，见 §8「阈值纪律」；最终 `61465ba` 实测 1349 ⇒ CI `39836128969` = **success**） |
+| **LM-057** | 🟡 低~中 | **逐跳主机比对忽略端口** —— `PluginExecutor.HostInAllowedSet` / `StripPort`（`src/Plugins/PluginExecutor.cs:831-850`）与 `PluginProcessor.HostMatches`（`:1044-1056`）在比对主机时**剥掉端口** ⇒ 同主机**不同端口**的重定向被放行：声明主机 `api.example.com` 的插件，凭据可被 302 到 `api.example.com:8443`（同一台机器上的另一个服务）。**既有行为非本批引入**（`.NET` 自身重定向语义即只比主机不比端口；`PluginProcessor.HostMatches` 早就忽略端口），但 LM-045 把该口径**继承**到了逐跳复核上 ⇒ 属**真实口径缺口** | 登记待评估，**本批不修**：修它属于**收紧**，会改变既有取数可达性 ⇒ 须单独评估兼容性并同步更新契约。**独立复核方实测复现**（同主机另一端口的服务器确实收到 1 个请求） |
+| **LM-058** | 🔵 低 | **IPv6 字面量主机在两处被不同地截断** —— `PluginProcessor.AddDeclaredHost`（`:431`）取**第一个**冒号 ⇒ `http://[::1]:8080/x` 切出 `"["`；`PluginExecutor.StripPort`（`:845`）取**最后一个**冒号 ⇒ `"[::1]"` → `"[:"` ⇒ 声明集合与比对值**恒不匹配** ⇒ IPv6 目标恒不可用 | 登记待清理：**偏严方向 / fail-closed**（不漏放行），但 IPv6 回环与双栈插件会莫名失败。修它需**两处口径对齐**，属独立小改动 |
+| **LM-059** | 🔵 低 | **既有 public 记录 `RenderingRouteRequest` 的主位置签名被追加成员** —— `src/Rendering/Configuration/RenderingRoutePolicy.cs:18-24` 追加 `bool WindowIsLayered = false` ⇒ 记录元数 5→6、记录相等性与 `ToString()` 语义改变（**二进制不兼容**）。与 §4.5.9 裁决 D-F 第 3 条"尾部可选参数 ⇒ 源码兼容"的意图一致，但**二进制**层面不是 | 登记知悉：全仓仅 **1 处**生产调用点（`src/UI/UIController.cs:941`，用具名参数），`git grep` 确认**无**任何解构 / 记录相等比较消费点 ⇒ 实际风险极低。**不 rebase、不改签名**（改动会波及合同 §3.1 的物化结果） |
 
 #### 4.5.5 LM-016 的不变式与残余窗口（S4.2）
 
@@ -726,6 +732,40 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | **LM-054** | 🔵 信息 | **市场索引拉取仍允许自动跳转** —— `src/Plugins/PluginMarket.cs:167-171` 的 `_http` 明确注释"索引拉取用（沿用原行为：允许自动跳转）" | **登记为信息项，本批不修**：索引 URL 是**用户配置的固定目标**；其内容驱动的下载仍受 LM-007 的逐跳白名单 + 路径前缀 + sha256 三重校验，风险有界 |
 | **LM-055** | 🔵 信息 | **`CityCodeResolver` 的远程回退 handler 未关自动重定向** —— `src/Plugins/Native/CityCodeResolver.cs:196-206` | **登记为信息项，本批不修**：其目标 `JSON_DB_URL` 是**代码内建常量**，插件与用户都改不动，与 LM-053 的"用户可控目标"不同级 |
 | **LM-056** | 🟡 低~中 | **发布流水线的防假绿阈值与 CI 不一致** —— `.github/workflows/release.yml:45-46` 注释声称"与 ci.yml 完全一致"，实际 `MIN_TEST_TOTAL: 1000` 而 `ci.yml` 是 1281 ⇒ **删掉 281 条用例时 CI 会红、发布流水线却会绿**；且 `release.yml` 未传 `-MaxSkipped` / `-MustExecuteTestClass` | ✅ **已修**：阈值同步到 1316（与 `ci.yml` 逐字一致）+ 补齐跳过数上限与"必须真正执行的测试类"两道门。门禁**只收紧不放宽** |
+
+#### 4.5.10 独立复核结论归档（LM-045 闭环 + owner A 物化 + 裁决 D-G）
+
+**复核方式（严格独立）**：复核方在**自己的** worktree（`.artifacts/wt-verify2`，钉在 `33eab52`）与对照 worktree（`.artifacts/wt-verify2-base`，detached `23a6c5c`）里**自写** 47 条用例（LM-045 34 + owner A 12 + 决策快照 1），**不跑实现者的任何用例**，**自设计** 12 条变异（其中 9 条完全不在实现者已做的类别内，含任务点名的"主机比对忽略端口"与"允许集合误改为直连主机优先"），每条变异走「改坏 → `dotnet build --no-incremental` → 红 → **按字节还原 + SHA-256 校验** → `--no-incremental` 强制重编译 → 复跑绿」闭环。
+
+**结论：`PASS_WITH_NOTES`**（闭环成立，遗留 3 项低危口径问题 + 2 项 `NOT_VERIFIED`）。
+
+**A 块 · LM-045 闭环（实证成立）**：未声明主机在带凭据重定向下**收到 0 个请求**、**从未见到秘密**、其响应正文**未进入插件流水线**；无凭据时跳到未声明主机同样 0 请求（原因码 `LM009_REDIRECT_TARGET_NOT_ALLOWED`）；带凭据时原因码为 `LM009_CREDENTIAL_TARGET_NOT_ALLOWED`。**对照项全部放行**：同主机换路径、带凭据跳到**另一个已声明主机**、native fallback 同主机 302/307。**绕过面自找实测**：相对 `Location` 放行（同主机，正确）、**协议相对 `//host/…` 被拒**、**缺 `Location` 被拒**、跳数超限实测恰好 6 个请求后以 `LM009_REDIRECT_LIMIT` 失败、`file://` 目标被拒、**经代理路径同样拦住**（未声明主机 0 请求）、声明集合为空时凭据请求被拒、**等价 IP 写法（十进制/八进制/十六进制）无法绕过**。
+
+**既有行为未被破坏（实测）**：301/302/303 ⇒ 方法变 GET 且丢正文；307/308 ⇒ 保留方法与正文；2 MiB 字节上限 ⇒ `LM009_RESPONSE_TOO_LARGE`；30 s 总时长**覆盖整条重定向链** ⇒ `LM009_DEADLINE_EXCEEDED`；并发槽位服务端观测峰值 **≤ 8**。
+
+**契约 6 常量逐行核对**（`src/Plugins/PluginProcessor.cs:447-462`）：`MaxResponseBytes=2 MiB` / `MaxRegexMatchTimeoutMs=500` / `MaxStepsPerExecution=16` / `MaxTargetsPerStep=64` / `MaxExecutionDurationMs=30000` / `MaxConcurrentRequests=8` —— **一个都没改**；`git diff` 在该文件的**唯一**改动是 `PluginSandboxReasons` 新增的 2 个常量。
+
+**公开面核对**：`git diff` 的 `^-` 侧**无任何** public/protected 行被删除或改签名；新增 public 成员**只有 2 个**（两个原因码常量）。
+
+**B/C 块 · owner A 与裁决 D-G**：改造前后决策矩阵 **192 行 / 23116 字节逐位相同**（两份 dump 的 SHA-256 同为 `5AB7CED0…862F2BD`）；layered 分支给出 `wda_capture_policy_unsupported_on_layered_window` 且**不抢**三个既有原因码的优先级；清理状态机两种终态下 4 个迁移方法**全部返回 false 且逐字段无变化**；句柄代次单调、`Instance` 为同一对象。**D-G 的结构性保证在复核时点 `33eab52` 与当时 HEAD `7c48d57` 均成立**：全仓 `new WindowHandleGeneration()` **仅 1 处**（`Instance` 初始化器）、`SharedWindowHandleGeneration` 全仓不存在。
+
+**D 块 · `Exchange.json`**：旧端点 `api.frankfurter.app/latest` 实测 **301 跨主机** ⇒ 在新的逐跳主机校验下**必然被拒** ⇒ 迁移**必要**；新端点 `api.frankfurter.dev/v1/latest` 实测 **200** 且 JSON 含 `rates` 与 `date`（插件 `extract` 依赖成立）；**不带 `/v1` 实测 404** ⇒ `/v1` 必需。其余 12 个内置端点逐条联网复测：**无一**会被新策略误伤（`timor.tech` 是同主机 301 + http→https **升级** ⇒ 按策略放行）。
+
+**本轮新发现的缺陷（§4 / §7 已补行；新增缺陷从 LM-060 起顺延）**：
+
+| ID | 级别 | 摘要 | 归属 |
+|---|---|---|---|
+| **LM-057** | 🟡 低~中 | **逐跳主机比对忽略端口** —— `PluginExecutor.HostInAllowedSet` / `PluginProcessor.HostMatches` 比对时剥掉端口 ⇒ 同主机**不同端口**的重定向被放行：声明主机 `api.example.com` 的插件，凭据可被 302 到 `api.example.com:8443`（同一台机器上的另一个服务） | **登记待评估，本批不修**：与 .NET 自身重定向语义一致、且 `PluginProcessor.HostMatches` **忽略端口是既有行为非本批引入**；但 LM-045 把该口径**继承**到了逐跳复核上 ⇒ 属真实口径缺口。修它属于**收紧**，须单独评估兼容性 |
+| **LM-058** | 🔵 低 | **IPv6 字面量主机在两处被不同地截断** —— `PluginProcessor.AddDeclaredHost`（`:431`）取**第一个**冒号 ⇒ `http://[::1]:8080/x` 得 `"["`；`PluginExecutor.StripPort`（`:845`）取**最后一个**冒号 ⇒ `"[::1]"` → `"[:"` ⇒ 声明集合与比对值恒不匹配 | **登记待清理**：**偏严方向 / fail-closed**（不漏放行），但 IPv6 回环与双栈插件会莫名失败 |
+| **LM-059** | 🔵 低 | **既有 public 记录 `RenderingRouteRequest` 的主位置签名被追加成员** —— `RenderingRoutePolicy.cs:18-24` 追加 `bool WindowIsLayered = false` ⇒ 记录元数 5→6、相等性与 `ToString()` 语义改变（**二进制不兼容**） | **登记知悉**：构造侧**源码兼容**（尾部可选参数）；全仓仅 1 处生产调用点且用具名参数，无解构/相等比较消费点 |
+
+**复核方的一条"预期外"发现（已被本轮消除）**：复核方在其复核时点报告「仓内仍存在**第二个**句柄代次计数器」（`src/UI/LiveGlassController.cs:87` 的 `private long _handleGeneration = 1;`）。该计数器**在复核前即存在**（`git grep 23a6c5c` 已证实），属 backdrop/live-capture 链。**GPU T03 已将其删除** —— `LiveGlassController` 改为**只读消费** `WindowHandleGeneration.Instance.Current`，代次递增点唯一化到 `MainForm_Transparent` 的 `HandleCreated` 处理器的**第一行** ⇒ 该项在 T03 集成后**自然消失**，无需单独立项。
+
+**`NOT_VERIFIED`（2 项，诚实标注）**：
+1. **https→http 降级的端到端拒绝** —— 生产客户端**刻意不装证书校验回调**，自签 TLS 服务器必然被 TLS 校验拒绝 ⇒ 无法构造受信任的 HTTPS 源。已用**白盒**核对 `EnsureRedirectSchemeAllowed`（降级抛 `REDIRECT_TARGET_NOT_ALLOWED`、http→https 升级放行、`file://` 抛）。**该分支的端到端行为未实测。**
+2. **真实公网插件端到端** —— 只做了**端点级**联网复测（状态码/Location/JSON 形状）与**本地双服务器**的策略级实测；未把真实公网端点灌进 `PluginExecutor` 跑完整链。D 块结论是由"端点实测"与"本地跨主机拒绝实测"**合成**推出的。
+
+**复核方自述的口径偏差（如实留痕）**：任务给定基线「1316 总数 / 1315 通过」与其实测「**1317 / 1316**」差 1 —— 查证 `1316` 是 **CI 阈值**（`e91c0cc`），不是该提交的**实际发现数**；不影响验收标准（失败 0、跳过 1）。
 
 ---
 
@@ -1126,7 +1166,7 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | GPU-003 | GPU T02/T03 | P2 | GPU B→C | 🟡 合同已冻结，**待实测** | `WS_EX_LAYERED` 与 WDA 互斥；期望状态由 `CreateParams` 决定且重建后不继承残留。**外部权威已多源交叉确认**（微软社区支持 + StackOverflow `ERROR_NOT_ENOUGH_MEMORY`）；**本仓库实测仍未做**（T01/T09） |
 | GPU-004 | GPU T04 | P2 | GPU B→C | 🟡 合同已冻结 | 代次判据**先于** `IsWindow`；代次合并为同一真相源 `WindowHandleGeneration` |
 | GPU-005 | GPU T02 | P2 | GPU B→C | 🟡 合同已冻结 | pending 仅在「首帧成功」或「受控放弃且停止流程干净」时清除 |
-| LM-045 | **本批已修** | **P1** | M3→M4 | 🟢 **已闭环（待独立复核）** | `938dc4b`：HTTP 步骤路径与 `native://` 路径**两侧**都关闭自动重定向、改为逐跳跟随并**逐跳复核目标主机**；带凭据的每一跳须落在**声明主机集合**内，不带凭据的每一跳须落在（声明集合 ∪ {直连目标主机}）内；不通过 ⇒ **该跳请求根本不发出**。跳数上限 5 / 缺 `Location` / 相对 `Location` / 非 http(s) / **https→http 降级**均被拒。22 条新用例 / 7 变异全捕获。**独立 verifier 复核已派发**（`bg_150121d6`） |
+| LM-045 | **本批已修** | **P1** | M3→M4 | 🟢 **已闭环（独立复核 `PASS_WITH_NOTES`）** | `938dc4b`：HTTP 步骤路径与 `native://` 路径**两侧**都关闭自动重定向、改为逐跳跟随并**逐跳复核目标主机**；带凭据的每一跳须落在**声明主机集合**内，不带凭据的每一跳须落在（声明集合 ∪ {直连目标主机}）内；不通过 ⇒ **该跳请求根本不发出**。跳数上限 5 / 缺 `Location` / 相对 `Location` / 非 http(s) / **https→http 降级**均被拒。22 条新用例 / 7 变异全捕获。**独立复核已完成（§4.5.10）**：复核方**自写** 47 条独立用例（不跑实现者用例）+ **自设计** 12 条变异（其中 9 条完全不在实现者已做类别内）**12/12 全部被捕获**；实测"未声明主机 **0 个请求** / **从未见到秘密** / 响应体**不入流水线**"；契约 **6 常量一个未改**；公开面**无既有 public 签名被删改** |
 | LM-046 | 接受并登记 | P3 | — | 📌 信息项 | `CryptoNative.SourceUrlOverrides`（`internal static` 可变全局测试接缝）：生产路径永不设置，测试用 `IDisposable` 复位 ⇒ 无泄漏、无并行冲突。但位于生产程序集内且可写 ⇒ **须在后续审计中显式知情**。独立 verifier 已复核：全仓赋值点仅在测试文件 |
 | LM-047 | 已修 | P2 | M3 | ✅ 已闭环 | `46f3f9d`：原语层 `Math.Min(maxBytes, MaxResponseBytes)` 夹取，契约天花板从"约定"变成"强制"；新增护栏用例并以变异自证（去掉夹取 ⇒ 变红 ⇒ 字节级还原 ⇒ 26/26 全绿） |
 | LM-048 | 登记待清理 | P2 | — | 📌 信息项 | 允许目标口径分裂（主机判据 `allowedHosts` vs 凭据判据 `declaredHosts`）；内置插件凭据步骤数 = 0 ⇒ 当前无功能影响 |
@@ -1134,10 +1174,13 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | LM-050 | 登记待清理 | P3 | — | 📌 信息项 | `native://citycode` 远程回退闸门无用例；需先给 `JSON_DB_URL` 加测试接缝 |
 | LM-051 | 登记待清理 | P2 | — | 📌 信息项 | `CryptoNative.NormalizeSymbol` 未 `EscapeDataString`（**既有缺陷**，主机固定 ⇒ 不构成沙箱逃逸） |
 | LM-052 | 登记待清理 | P3 | — | 📌 信息项 | `CityCodeResolver._isLoading` 无锁 `static bool`（**既有缺陷**，无安全影响） |
-| LM-053 | 随 LM-045 一并修 | P2 | M4 | 🟢 **已闭环（待独立复核）** | `native://` 路径同样可被 302 绕过"允许目标"：`CryptoNative` 客户端未关自动重定向 + `allowedHosts` 未贯穿到发请求层 ⇒ 只修 HTTP 步骤路径**不足以**关闭 LM-045。`938dc4b` 已两侧闭环（见 §4.5.9） |
+| LM-053 | 随 LM-045 一并修 | P2 | M4 | 🟢 **已闭环（独立复核 `PASS_WITH_NOTES`）** | `native://` 路径同样可被 302 绕过"允许目标"：`CryptoNative` 客户端未关自动重定向 + `allowedHosts` 未贯穿到发请求层 ⇒ 只修 HTTP 步骤路径**不足以**关闭 LM-045。`938dc4b` 已两侧闭环（见 §4.5.9）；**独立复核实测** native fallback 302→未声明主机 = **0 个请求** + 原因码 `LM009_REDIRECT_TARGET_NOT_ALLOWED`（**非**静默返回），且 native 307 同主机重定向**必须**被跟随（对照项） |
 | LM-054 | 登记待评估 | P3 | — | 📌 信息项 | 市场索引拉取仍允许自动跳转（`PluginMarket._http`）：索引 URL 是**用户配置的固定目标**，其内容驱动的下载仍受 LM-007 的逐跳白名单 + 路径前缀 + sha256 三重校验 ⇒ 风险有界，本批不修 |
 | LM-055 | 登记待评估 | P3 | — | 📌 信息项 | `CityCodeResolver` 远程回退 handler 未关自动重定向：目标是**代码内建常量** `JSON_DB_URL`，插件与用户都改不动 ⇒ 与 LM-053 的"用户可控目标"不同级，本批不修 |
-| LM-056 | 本批已修 | P2 | M4 | ✅ **已闭环** | 发布流水线的防假绿阈值与 CI **不一致**（`release.yml` 写着 1000、`ci.yml` 写着 1281，注释却声称"完全一致"）⇒ 删掉 281 条用例时 CI 会红、**发布流水线却会绿**；且 `release.yml` 少传 `-MaxSkipped` / `-MustExecuteTestClass` 两道门。已同步到 1316 并补齐两道门 |
+| LM-056 | 本批已修 | P2 | M4 | ✅ **已闭环** | 发布流水线的防假绿阈值与 CI **不一致**（`release.yml` 写着 1000、`ci.yml` 写着 1281，注释却声称"完全一致"）⇒ 删掉 281 条用例时 CI 会红、**发布流水线却会绿**；且 `release.yml` 少传 `-MaxSkipped` / `-MustExecuteTestClass` 两道门。已同步并补齐两道门；阈值随后按**被推送分支实测总数**校正为 **1349**（CI `39836128969` = success） |
+| LM-057 | 独立复核产出 | P2 | M4 | 📌 登记待评估 | 逐跳主机比对**忽略端口** ⇒ 同主机不同端口的重定向被放行（声明主机 `api.example.com` 的插件，凭据可被 302 到 `api.example.com:8443`）。**既有行为非本批引入**（`.NET` 自身语义即只比主机不比端口），但 LM-045 把该口径继承到了逐跳复核上 ⇒ 真实口径缺口。修它属**收紧**，须单独评估兼容性（§4.5.10） |
+| LM-058 | 独立复核产出 | P3 | M4 | 📌 登记待清理 | IPv6 字面量主机在两处被**不同地**截断（`AddDeclaredHost` 取第一个冒号 ⇒ `"["`；`StripPort` 取最后一个冒号 ⇒ `"[:"`）⇒ IPv6 目标恒不可用。**偏严 / fail-closed**，不漏放行（§4.5.10） |
+| LM-059 | 独立复核产出 | P3 | — | 📌 登记知悉 | 既有 public 记录 `RenderingRouteRequest` 的**主位置签名**被追加成员 ⇒ 二进制不兼容；构造侧源码兼容，全仓仅 1 处生产调用点（§4.5.10） |
 | ENV-003 | S4.1 | P1 | M4 | ✅ 已闭环 | `a8fb2fc`：跳过 7→1；CI 门禁收紧（`MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS`） |
 | ENV-004 | S4.1 | P2 | M4 | ⏳ `BLOCKED_ENV` | 联网 E2E 单独运行，**不进 PR 门禁**；**不计入通过**（§9） |
 
@@ -1150,25 +1193,25 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | 指标 | 数值 | 复现命令 | 核实状态 |
 |---|---|---|---|
 | 主测试工程（**初始基线**） | 通过 983 / 失败 0 / 跳过 7 / 共 990 | `dotnet test tests/LiteMonitor.Tests -c Debug` | 已实测，连续两次一致 |
-| 主测试工程（**CI 口径实测** @`46f3f9d`） | 通过 **1203** / 失败 0 / 跳过 **1** / 共 **1204** | 设 `LITEMONITOR_PLUGIN_REPO=tests/fixtures/plugin-repo` 后 `dotnet test tests/LiteMonitor.Tests -c Debug` | S3.5 + S3.6 + 主审集成落地后实测；跳过 1 = 唯一剩余联网 E2E（ENV-004） |
-| 主测试工程（**本地口径实测** @`366bf9c`） | 通过 **1186** / 失败 0 / 跳过 **7** / 共 **1193** | **不设** `LITEMONITOR_PLUGIN_REPO` 的同一条命令 | 已实测（`366bf9c`）；与 CI 口径的差值恰为 6 条市场契约用例（ENV-003）。本地口径在 `6310dbf` 上为 1203 / 通过 1196 / 跳过 7 |
+| 主测试工程（**CI 口径实测** @`61465ba`） | 通过 **1271** / 失败 0 / 跳过 **1** / 共 **1272** | 设 `LITEMONITOR_PLUGIN_REPO=tests/fixtures/plugin-repo` 后 `dotnet test LiteMonitor.sln -c Debug` | 本轮实测（owner A 物化 + 裁决 D-G + LM-045 + GPU T04 + GPU T05 + owner A 接线落地后）；跳过 1 = 唯一剩余联网 E2E（ENV-004） |
+| 主测试工程（**本地口径实测** @`61465ba`） | 通过 **1265** / 失败 0 / 跳过 **7** / 共 **1272** | **不设** `LITEMONITOR_PLUGIN_REPO` 的同一条命令 | 本轮实测；与 CI 口径的**用例总数相同**（三工程合计同为 **1349**），差值恰为 6 条市场契约用例（ENV-003，`MarketIndexContractTests`） |
 | 更新器测试工程 | 通过 **58** / 失败 0 / 跳过 0 / 共 **58** | `dotnet test tests/LiteMonitor.Updater.Tests -c Debug` | 已实测（S4.2 扩展后由 13 增至 58） |
 | GPU 非性能测试工程 | 通过 **19** / 失败 0 / 跳过 0 / 共 **19** | `dotnet test tests/LiteMonitor.GpuNonperformance.Tests -c Debug` | 已实测 |
-| **三工程合计（当前）** | **1281**（1204 + 58 + 19） | `dotnet test LiteMonitor.sln -c Debug -v minimal` | CI 口径实测（`LITEMONITOR_PLUGIN_REPO` 指向夹具），退出码 **0**；三道门禁（`dotnet test` / `assert-test-counts.ps1` / `generate-dependency-manifest.ps1 -Mode Check`）退出码全 **0**。CI 门禁 `MIN_TEST_TOTAL` 已**同步收紧** 1150 → **1280**；LM-047 修复新增 1 条用例（总数 1281），阈值待与最终提交点一并上调 |
+| **三工程合计（当前）** | **1349**（1272 + 58 + 19） | `dotnet test LiteMonitor.sln -c Debug -v minimal` | CI 口径实测（`LITEMONITOR_PLUGIN_REPO` 指向夹具），退出码 **0**；门禁脚本实测「发现 1349 条用例（通过 1348 / 失败 0 / 跳过 1）」、退出码 **0**。CI 门禁 `MIN_TEST_TOTAL` 已同步收紧 1281 → **1349**（= **被推送分支** `61465ba` 的实测总数，**不是**集成分支的数字） |
 | 主测试源码文件 | 顶层 **74** 个 / 含子目录 **80** 个 `.cs` | `Get-ChildItem tests/LiteMonitor.Tests -Filter *.cs -Recurse` | 已实测（原台账「64 个」已过时） |
 | 更新器 / GPU 测试源码文件 | 更新器 顶层 3 / 递归 9；GPU 顶层 0 / 递归 6 | 同上 | 已实测 |
-| 解决方案测试发现 | **1280**（CI 口径）／本地口径 1203 | `dotnet test LiteMonitor.sln` | **不再是 0** —— BASE-003 已闭环（`0366268` 三个测试工程入 `.sln`）；`assert-test-counts.ps1` 把「发现 0」变红 |
+| 解决方案测试发现 | **1349**（CI 口径） | `dotnet test LiteMonitor.sln` | **不再是 0** —— BASE-003 已闭环（`0366268` 三个测试工程入 `.sln`）；`assert-test-counts.ps1` 把「发现 0」变红 |
 | 两点 / 三点分支差异 | 484 / 522，共同祖先 `169e90a2…` | `git diff --name-only master branch` / `master...branch` | 已实测（BASE-002 起点；**本轮未重测**） |
 | Release 构建 | **成功** | `dotnet build LiteMonitor.sln -c Release` | 6 次 CI 全部 success（CI 内含 `dotnet build LiteMonitor.sln -c Release`，`.github/workflows/ci.yml:159`）。本地曾被运行中的 `LiteMonitor++.exe` 锁住输出目录（ENV-001，**非代码缺陷**，实例已自行退出） |
-| 远端 GitHub Actions | **6 次 push 运行，全部 `completed success`** | `gh run list --repo mojingjing-git/LiteMonitorPlus --limit 8` | 最新 `39816781583` @`18d5fab`；运行号 `39802630699`/`39804354003`/`39808904819`/`39811554270`/`39814447849`/`39816781583` |
+| 远端 GitHub Actions | 本轮 **1 次 failure → 修正后 success**；此前连续 `success` | `gh run list --repo mojingjing-git/LiteMonitorPlus --limit 8` | `39836128969` @`61465ba` = **success**（最新）；`39834352321` @`b1a8b42` = **failure**（根因：阈值按**集成分支**实测 1316 设置，而被推送的 `b1a8b42` 实测仅 **1295** ⇒ 门禁**正确**报红，**不是**门禁缺陷）；`39829176306` @`23a6c5c` = success |
 | 远端 Release | **仍为 0**（本批不发布） | `gh release list` | 已实测；发布准入见 §9 |
-| 本地 HEAD vs 远端 `origin/fix/audit-remediation-v3` | 本地领先 2 个提交（`7214135`、`26e3f40`） | `git log --oneline origin/fix/audit-remediation-v3..HEAD` | 已实测；`master` 本地与远端恒为 `9ffb4219`（**不得变更**） |
+| 本地 HEAD vs 远端 `origin/fix/audit-remediation-v3` | 本轮推送后**齐平**（`61465ba`） | `git log --oneline origin/fix/audit-remediation-v3..HEAD` | 已实测；`master` 本地与远端恒为 `23a6c5c`（**本批未合并**；合并须等本批收敛 + CI 绿 + 独立复核通过） |
 
-**基线纪律：** 任何步骤完成后，上述**当前实测值**（CI 口径：主工程 共 **1193**（通过 **1192** / 跳过 **1**），更新器 通过 **58**，GPU 非性能 通过 **19**，三工程合计 **1270**）**不得下降**；主工程**总数只增不减**。下降即为回归，必须在同一步骤内修复，不得记为"已知问题"后放行。CI 侧的对应门禁为 `MIN_TEST_TOTAL: 1150`、`MAX_SKIPPED_TESTS: 1`、`MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests (≥6)`（`.github/workflows/ci.yml`）—— 跳过数**有上限**、契约类**不许被跳过**，两者均为 S4.1 引入的收紧。
+**基线纪律：** 任何步骤完成后，上述**当前实测值**（CI 口径：主工程 共 **1272**（通过 **1271** / 跳过 **1**），更新器 通过 **58**，GPU 非性能 通过 **19**，三工程合计 **1349**）**不得下降**；主工程**总数只增不减**。下降即为回归，必须在同一步骤内修复，不得记为"已知问题"后放行。CI 侧的对应门禁为 `MIN_TEST_TOTAL: 1349`、`MAX_SKIPPED_TESTS: 1`、`MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests (≥6)`（`.github/workflows/ci.yml`）—— 跳过数**有上限**、契约类**不许被跳过**，两者均为 S4.1 引入的收紧。
 
-> **本行的重测义务：** 上表数字测于**最终发布提交点 `366bf9c`**（§4.2.8）。其后的 `e1bd587` / `18d5fab` / `7214135` / `26e3f40` 四个提交**只含文档与更新器二进制**，未触及测试源码；但 **S3.5 / S3.6 合入后主工程总数必然上升**（新增用例），届时**必须**在最终提交点重跑全量并回写本表，同时**上调** `MIN_TEST_TOTAL`（门禁只收紧不放宽）。在此之前，本表数字**不得**被引用为「当前最新」。
+> **本行的重测义务（本轮已履行）：** 上表数字测于**被推送分支 `61465ba`**（owner A 物化 + 裁决 D-G + LM-045 + GPU T04 + GPU T05 + owner A 接线）。`MIN_TEST_TOTAL` 已同步上调至 **1349**，**等于**该分支的实测总数。★ **阈值纪律**（本轮实测教训）：阈值**必须**取「**被推送分支**」的实测总数，**不得**取集成分支的数字，也**不得**为求绿下调阈值 —— `39834352321` @`b1a8b42` 就是把集成分支的 1316 写进了只含 `b1a8b42` 的分支（该分支实测仅 **1295**）⇒ 门禁**正确**报红。
 >
-> **本地口径 vs CI 口径的差异（已解释，非回归）：** 不设 `LITEMONITOR_PLUGIN_REPO` 时，主工程为 1193 / 通过 1186 / 跳过 **7**；设了（指向 `tests/fixtures/plugin-repo`）后跳过降为 **1**，通过升为 1192 ⇒ 差值恰为 **6** 条市场契约用例（ENV-003），与 §4.2.8 完全吻合。
+> **本地口径 vs CI 口径的差异（已解释，非回归）：** 不设 `LITEMONITOR_PLUGIN_REPO` 时，主工程为 1272 / 通过 1265 / 跳过 **7**；设了（指向 `tests/fixtures/plugin-repo`）后跳过降为 **1**，通过升为 **1271** ⇒ 差值恰为 **6** 条市场契约用例（ENV-003），与 §4.2.8 完全吻合。**两口径的用例总数相同（三工程合计同为 1349）**，只有环境门控造成的跳过数不同。
 
 ---
 
