@@ -828,8 +828,407 @@ namespace LiteMonitor.Tests
         }
 
         // ================================================================
+        //  S2.4 · 回归护栏补齐（M2 门禁 F-01 / F-02 / F-03 / F-05 / F-06）
+        // ================================================================
+        //
+        //  ★ 这一节只补**测试**，不改任何生产代码。
+        //  ★ 起因：M2 独立门禁用变异测试证明，契约 W6（CORS 白名单回显）与
+        //    W13 / W13.5（服务端拒绝旧 ?pwd=）两条硬约束**没有回归护栏**：
+        //    把生产代码改坏，既有用例照样全绿。
+        //  ★ 下面每条用例都按"变异必须变红"的标准写：断言必须落在**行为**上，
+        //    而且断言要能区分"因为对的原因而通过"和"因为别的原因而通过"。
+
+        /// <summary>
+        /// C1-1：请求的 Origin 命中用户显式配置的跨源白名单 ⇒ 回显**该具体源**（逐字相等），
+        /// 并带 <c>Access-Control-Allow-Credentials: true</c>；**绝不**出现 <c>*</c>。
+        /// </summary>
+        /// <remarks>
+        /// ★ 盯的是 <c>AppendCorsHeaders</c> 的**回显分支**（<c>WebSessionManager.cs:1995</c>）。
+        ///   既有用例 N7 不带 Origin 头 ⇒ <c>AppendCorsHeaders</c> 第一步就 return，
+        ///   白名单回显分支**根本没被执行** ⇒ 删掉回显 / 把回显改回 <c>*</c>，N7 仍然全绿。
+        /// ★ 断言用"逐字相等"而不是"包含"：<c>http://a.example.com</c> 与
+        ///   <c>http://a.example.com.evil</c> 必须能区分开。
+        /// </remarks>
+        [Fact]
+        public async Task C1_白名单内的Origin回显具体源且绝不带通配符()
+        {
+            await WithServerAsync(async (port, _) =>
+            {
+                const string allowedOrigin = "http://allowed.example.com";
+                SetAllowedOrigins(allowedOrigin);
+
+                // ① 已鉴权（200 路径）
+                LoginResult login = await LoginAsync(port, "cors-allow-password");
+                string resp = await SendRawAsync(port,
+                    $"GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    $"Origin: {allowedOrigin}\r\nCookie: lmsid={login!.SessionId}\r\nConnection: close\r\n\r\n");
+                Assert.Contains("200", FirstLine(resp));
+
+                string acao = FindHeaderValue(resp, "Access-Control-Allow-Origin");
+                Assert.NotNull(acao);
+                Assert.Equal(allowedOrigin, acao);                 // ★ 逐字等于该源
+                Assert.NotEqual("*", acao);
+                Assert.Equal("true", FindHeaderValue(resp, "Access-Control-Allow-Credentials"));
+                Assert.Equal(1, CountHeader(resp, "Access-Control-Allow-Origin"));
+                Assert.DoesNotContain("Access-Control-Allow-Origin: *", resp);
+
+                // ② 未鉴权（401 错误路径）同样必须回显 —— 白名单命中与"是否已登录"无关
+                string unauth = await SendRawAsync(port,
+                    $"GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: {allowedOrigin}\r\nConnection: close\r\n\r\n");
+                Assert.Contains("401", FirstLine(unauth));
+                Assert.Equal(allowedOrigin, FindHeaderValue(unauth, "Access-Control-Allow-Origin"));
+                Assert.Equal("true", FindHeaderValue(unauth, "Access-Control-Allow-Credentials"));
+            });
+        }
+
+        /// <summary>
+        /// C1-2：请求的 Origin **不在**跨源白名单 ⇒ 响应**一个 CORS 头都不给**
+        /// （没有 <c>Access-Control-Allow-Origin</c>，也没有 <c>Access-Control-Allow-Credentials</c>）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 分两种"不在白名单"：
+        ///   ① 同机地址（Host / Origin 校验放行，但**不在 CORS 白名单**）⇒ 请求本身**不被拒绝**，
+        ///      却依然不得带任何 CORS 头 —— 这一路真正走到了回显分支的"提前 return"，
+        ///      是"删掉白名单判定 ⇒ 一律回显 *"这类回归的抓手。
+        ///   ② 完全在外的源 ⇒ Origin 校验直接 403，同样一个 CORS 头都不给。
+        /// </remarks>
+        [Fact]
+        public async Task C1_白名单外的Origin不返回任何CORS头()
+        {
+            await WithServerAsync(async (port, _) =>
+            {
+                SetAllowedOrigins("http://allowed.example.com");
+
+                // ① 同机、但不在 CORS 白名单里的 Origin
+                string sameMachine = await SendRawAsync(port,
+                    $"GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    $"Origin: http://127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+                Assert.DoesNotContain("403", FirstLine(sameMachine));   // 先确认它没被拒绝，才谈得上下游标
+                Assert.Equal(0, CountHeader(sameMachine, "Access-Control-Allow-Origin"));
+                Assert.DoesNotContain("Access-Control-Allow-Credentials", sameMachine);
+
+                // ② 完全在外的源 ⇒ 403，且同样一个 CORS 头都不给
+                string foreign = await SendRawAsync(port,
+                    $"GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    "Origin: http://evil.example.com\r\nConnection: close\r\n\r\n");
+                Assert.Contains("403", FirstLine(foreign));
+                Assert.Equal(0, CountHeader(foreign, "Access-Control-Allow-Origin"));
+                Assert.DoesNotContain("Access-Control-Allow-Credentials", foreign);
+            });
+        }
+
+        /// <summary>
+        /// C1-3：请求**不带** Origin 头 ⇒ 响应**一个 CORS 头都不给**，
+        /// 即使跨源白名单本身是配置好的。
+        /// </summary>
+        /// <remarks>
+        /// ★ 与 C1-1 的区别：这里白名单**非空**，唯一挡住 CORS 头的就是"请求没有 Origin"。
+        ///   N7 覆盖的是"白名单为空 ⇒ 不加头"，本条覆盖的是"白名单非空但请求无 Origin ⇒ 仍不加头"。
+        /// ★ 这一条是"把白名单判定整段删掉"的抓手：那样任何请求都会被回显（甚至回显 <c>*</c>）。
+        /// </remarks>
+        [Fact]
+        public async Task C1_没有Origin头时不返回任何CORS头()
+        {
+            await WithServerAsync(async (port, _) =>
+            {
+                SetAllowedOrigins("http://allowed.example.com");   // 白名单非空 ⇒ 只差 Origin 头本身
+
+                string resp = await SendRawAsync(port,
+                    $"GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+                Assert.Equal(0, CountHeader(resp, "Access-Control-Allow-Origin"));
+                Assert.DoesNotContain("Access-Control-Allow-Credentials", resp);
+                Assert.DoesNotContain("Access-Control-Allow-Origin: *", resp);
+            });
+        }
+
+        /// <summary>
+        /// C2-1：查询串里的旧口令（<c>?pwd=</c>）在 HTTP 接口上一律 **401**，
+        /// 且**不签发任何会话 / 票据**（<c>Set-Cookie</c> / <c>csrf</c> / <c>ticket</c> 一个都不许出现）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 契约 W13 / W13.5 的要点是"旧路径**整体移除**"，不是"口令错了才拒"：
+        ///   所以**口令正确**时同样必须 401（否则等于"口令对了就放行 ?pwd="，旧路径等于没移除）。
+        /// ★ 盯的是 <c>HasLegacyPasswordQuery</c>（<c>WebSessionManager.cs:1516</c>）的拒绝分支 ——
+        ///   这条分支此前**零覆盖**，把服务端改回接受 <c>?pwd=</c>，全部用例仍然全绿。
+        /// </remarks>
+        [Fact]
+        public async Task C2_查询串口令在HTTP接口一律401且不签发任何凭据()
+        {
+            await WithServerAsync(async (port, _) =>
+            {
+                UsePassword("legacy-password");
+
+                // ① 口令**正确**也一样被拒（旧路径整体移除，不是"口令错了才拒"）
+                string okPwd = await SendRawAsync(port,
+                    $"GET /api/snapshot?pwd=legacy-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+                Assert.Contains("401", FirstLine(okPwd));
+                Assert.DoesNotContain("Set-Cookie", okPwd);
+                Assert.DoesNotContain("csrf", okPwd, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("ticket", okPwd, StringComparison.OrdinalIgnoreCase);
+
+                // ② 口令错误 ⇒ 同样 401，同样不签发任何东西
+                string wrongPwd = await SendRawAsync(port,
+                    $"GET /api/snapshot?pwd=wrong-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+                Assert.Contains("401", FirstLine(wrongPwd));
+                Assert.DoesNotContain("Set-Cookie", wrongPwd);
+
+                // ③ 票据接口同样拒绝旧路径
+                string ticketResp = await SendRawAsync(port,
+                    $"POST /api/auth/ticket?pwd=legacy-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    "Content-Length: 0\r\nConnection: close\r\n\r\n");
+                Assert.Contains("401", FirstLine(ticketResp));
+                Assert.DoesNotContain("Set-Cookie", ticketResp);
+                Assert.DoesNotContain("ticket", ticketResp, StringComparison.OrdinalIgnoreCase);
+
+                // ④ 登录接口**自身**也拒绝旧路径（否则等价于"用 URL 里的口令登录"）
+                string loginResp = await SendRawAsync(port,
+                    $"POST /api/auth/login?pwd=legacy-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    "Content-Length: 0\r\nConnection: close\r\n\r\n");
+                Assert.Contains("401", FirstLine(loginResp));
+                Assert.DoesNotContain("Set-Cookie", loginResp);
+                Assert.DoesNotContain("csrf", loginResp, StringComparison.OrdinalIgnoreCase);
+            });
+        }
+
+        /// <summary>
+        /// C2-2：查询串里的旧口令（<c>?pwd=</c>）在 **WebSocket 握手**上一律被拒（非 101），
+        /// 且不签发票据 / 会话。
+        /// </summary>
+        /// <remarks>
+        /// ★ WS 走的是另一条分支（<c>Handshake</c> 里的 <c>HasLegacyPasswordQuery</c>，
+        ///   <c>WebSessionManager.cs:2372</c>），与 HTTP 分支**互相独立**：
+        ///   只覆盖 HTTP 分支的话，把 WS 分支改回接受 <c>?pwd=</c> 依然全绿。
+        /// ★ Host 头给合法值 ⇒ 请求能走到 <c>HasLegacyPasswordQuery</c> 判定（否则会先吃 403，
+        ///   那样这条用例就变成在测 Host 校验，而不是在测旧口令拒绝）。
+        /// </remarks>
+        [Fact]
+        public async Task C2_查询串口令在WebSocket握手一律被拒且不签发票据()
+        {
+            await WithServerAsync(async (port, _) =>
+            {
+                UsePassword("legacy-ws-password");
+
+                // ① 口令**正确** ⇒ 握手依然被拒（非 101）
+                //    ★ 读取期限压到 3s：握手被拒时服务端**不关闭**这条连接
+                //      （WebSessionManager.cs:756-764 的 client.Close() 只在 HTTP 分支），
+                //      所以这里只需要等响应、不需要等连接结束 —— 不压期限会白等满 10s 超时。
+                string resp = await SendRawAsync(port,
+                    $"GET /ws?pwd=legacy-ws-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+                    timeoutMs: 3000);
+
+                Assert.DoesNotContain("101", FirstLine(resp));
+                Assert.DoesNotContain("Switching Protocols", resp);
+                Assert.Contains("401", resp);
+                Assert.DoesNotContain("Set-Cookie", resp);
+                Assert.DoesNotContain("csrf", resp, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("ticket", resp, StringComparison.OrdinalIgnoreCase);
+
+                // ② 口令错误 ⇒ 同样被拒
+                string wrong = await SendRawAsync(port,
+                    $"GET /ws?pwd=wrong-password HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+                    timeoutMs: 3000);
+
+                Assert.DoesNotContain("101", FirstLine(wrong));
+                Assert.Contains("401", wrong);
+                Assert.DoesNotContain("Set-Cookie", wrong);
+            });
+        }
+
+        /// <summary>
+        /// C3-1：主会话超过**绝对 TTL（30 分钟）**⇒ 失效。
+        /// </summary>
+        /// <remarks>
+        /// ★ 绝对 TTL（30 分钟）比空闲 TTL（2 分钟）长，所以"一把时钟推到 30 分钟"会被
+        ///   **空闲 TTL 先判掉** —— 那样这条用例根本分不清是哪个分支在起作用（护栏等于没建）。
+        /// ★ 这里每分钟用一次会话（刷新空闲计时）：推进到 29 分钟时仍然 200；
+        ///   再推进 1 分 1 秒 ⇒ 距创建 30 分 1 秒（≥ 绝对 TTL），距上次使用仅 1 分 1 秒（< 空闲 TTL 2 分钟）。
+        ///   此时**唯一**能让会话失效的就是绝对 TTL ⇒ 断言因此具备判别力。
+        /// ★ 时钟用可注入的假时钟（<see cref="FakeTimeProvider"/>），不靠 Thread.Sleep。
+        /// </remarks>
+        [Fact]
+        public async Task C3_会话超过绝对期限后失效()
+        {
+            var clock = new FakeTimeProvider();
+            using var host = new LoopbackHost(NewManager(clock));
+
+            string password = "absolute-ttl-password";
+            UsePassword(password);
+
+            LoginResult login = await LoginAsync(host.Port, password);
+            Assert.NotNull(login);
+
+            // 每分钟用一次会话：把空闲计时一直压在 2 分钟以内
+            for (int minute = 1; minute <= 29; minute++)
+            {
+                clock.Advance(TimeSpan.FromMinutes(1));
+                string ok = await SendRawAsync(host.Port,
+                    $"GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1:{host.Port}\r\nCookie: lmsid={login!.SessionId}\r\nConnection: close\r\n\r\n");
+                Assert.Contains("200", FirstLine(ok));
+            }
+
+            // 再推 1 分 1 秒 ⇒ 距创建 30 分 1 秒（≥ 绝对 TTL 30 分钟），距上次使用仅 1 分 1 秒（< 空闲 TTL）
+            clock.Advance(TimeSpan.FromSeconds(61));
+
+            string expired = await SendRawAsync(host.Port,
+                $"GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1:{host.Port}\r\nCookie: lmsid={login.SessionId}\r\nConnection: close\r\n\r\n");
+            Assert.Contains("401", FirstLine(expired));
+        }
+
+        /// <summary>
+        /// C3-2：请求**缺少 Host 头**⇒ **403**（防 DNS Rebinding / 虚拟主机混淆）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 盯的是 <c>IsHostAllowed</c> 里"没有 Host ⇒ 拒绝"的分支（<c>WebSessionManager.cs:1801</c>）。
+        /// ★ 顺带覆盖首页路径：默认路由返回首页，但首页同样必须过 Host 校验。
+        /// </remarks>
+        [Fact]
+        public async Task C3_缺少Host头时返回403()
+        {
+            await WithServerAsync(async (port, _) =>
+            {
+                // ① 快照接口
+                string resp = await SendRawAsync(port,
+                    "GET /api/snapshot HTTP/1.1\r\nConnection: close\r\n\r\n");
+                Assert.Contains("403", FirstLine(resp));
+
+                // ② 首页也一样（默认路由不是绕过 Host 校验的出口）
+                string index = await SendRawAsync(port,
+                    "GET / HTTP/1.1\r\nConnection: close\r\n\r\n");
+                Assert.Contains("403", FirstLine(index));
+            });
+        }
+
+        /// <summary>
+        /// C3-3：改密之后**已经建立**的 WebSocket 连接必须被服务端断开。
+        /// </summary>
+        /// <remarks>
+        /// ★ 盯的是 <c>RevokeAllAuthState</c>（<c>WebSessionManager.cs:916-932</c>）里
+        ///   <c>client.Close()</c> 那一段：只撤销会话表是不够的 —— 旧连接还能继续收数据，
+        ///   "改密 ⇒ 全部撤销"就形同虚设。
+        /// ★ 既有用例 A6 只验证了"旧会话 / 旧票据失效"，**没有**验证已建立的 WS 连接被断开。
+        /// ★ 反证：改密**之前**连接仍然是活的（否则"连接自己断了"也会让本用例通过）。
+        /// </remarks>
+        [Fact]
+        public async Task C3_改密后已建立的WebSocket被断开()
+        {
+            await WithServerAsync(async (port, _) =>
+            {
+                LoginResult login = await LoginAsync(port, "ws-revoke-password");
+                string ticket = await RequestTicketAsync(port, login!.SessionId, login.Csrf);
+                Assert.False(string.IsNullOrEmpty(ticket));
+
+                // 建立一条真实的 WS 连接（握手成功后保持连接）
+                using var ws = new WsClient();
+                await ws.ConnectAsync(port, ticket);
+                Assert.Contains("101", FirstLine(ws.HandshakeResponse));
+
+                Task<int> closed = ws.WaitForCloseAsync();
+
+                // 反证：改密之前这条连接仍然是活的（没被断开）
+                Task winner = await Task.WhenAny(closed, Task.Delay(500));
+                Assert.NotSame(closed, winner);
+
+                // 改密 ⇒ 口令指纹变化 ⇒ 下一次用旧会话访问触发"全部撤销"
+                UsePassword("ws-revoke-password-2");
+                string resp = await SendRawAsync(port,
+                    $"GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: lmsid={login.SessionId}\r\nConnection: close\r\n\r\n");
+                Assert.Contains("401", FirstLine(resp));
+
+                // 已建立的 WS 必须被服务端断开（读到 EOF）
+                Task done = await Task.WhenAny(closed, Task.Delay(5000));
+                Assert.Same(closed, done);
+                await closed;   // 正常读到 EOF（没有抛异常）⇒ 确实是服务端主动关闭的
+            });
+        }
+
+        // ================================================================
         //  辅助
         // ================================================================
+
+        /// <summary>
+        /// 设置跨源白名单（<c>Settings.WebServerAllowedOrigins</c>）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 白名单是**全局 Settings 单例**上的字段：<c>BuildAccessPolicy</c> 每次请求都
+        ///   <c>Settings.Load()</c> 取当前单例，所以必须改单例本身；
+        ///   同时同步 <c>_cfg</c>，避免两者不是同一个对象时留下脏值给后续用例。
+        /// </remarks>
+        private void SetAllowedOrigins(string value)
+        {
+            Settings.Load().WebServerAllowedOrigins = value;
+            _cfg.WebServerAllowedOrigins = value;
+        }
+
+        /// <summary>统计某个响应头出现的次数（大小写不敏感；只看头部行）。</summary>
+        private static int CountHeader(string response, string headerName)
+        {
+            int count = 0;
+            foreach (string line in response.Split('\n'))
+            {
+                string t = line.Trim();
+                if (t.StartsWith(headerName + ":", StringComparison.OrdinalIgnoreCase)) count++;
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// 一条真实的 WebSocket 连接：只做到"握手 + 等待服务端关闭"两件事。
+        /// </summary>
+        private sealed class WsClient : IDisposable
+        {
+            private readonly TcpClient _client = new TcpClient();
+            private NetworkStream? _stream;
+
+            /// <summary>握手响应（HTTP 头部分）。</summary>
+            public string HandshakeResponse = "";
+
+            public async Task ConnectAsync(int port, string ticket)
+            {
+                await _client.ConnectAsync(IPAddress.Loopback, port);
+                _stream = _client.GetStream();
+
+                string req =
+                    $"GET /ws?ticket={ticket} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+                byte[] data = Encoding.UTF8.GetBytes(req);
+                await _stream.WriteAsync(data, 0, data.Length);
+                await _stream.FlushAsync();
+
+                var sb = new StringBuilder();
+                var buf = new byte[1024];
+                using var cts = new CancellationTokenSource(10000);
+                while (sb.ToString().IndexOf("\r\n\r\n", StringComparison.Ordinal) < 0)
+                {
+                    int n = await _stream.ReadAsync(buf.AsMemory(0, buf.Length), cts.Token);
+                    if (n <= 0) break;
+                    sb.Append(Encoding.UTF8.GetString(buf, 0, n));
+                }
+                HandshakeResponse = sb.ToString();
+            }
+
+            /// <summary>一直读到服务端关闭连接（读到 EOF）为止；返回读到的字节数。</summary>
+            public async Task<int> WaitForCloseAsync()
+            {
+                var buf = new byte[4096];
+                int total = 0;
+                while (true)
+                {
+                    int n = await _stream!.ReadAsync(buf, 0, buf.Length);
+                    if (n <= 0) return total;      // EOF ⇒ 服务端关闭了这条连接
+                    total += n;
+                }
+            }
+
+            public void Dispose()
+            {
+                try { _client.Close(); } catch { }
+            }
+        }
 
         /// <summary>设置口令（只写哈希 + 盐，内存里不留明文 —— 与迁移后的生产状态一致）。</summary>
         private void UsePassword(string plain)
