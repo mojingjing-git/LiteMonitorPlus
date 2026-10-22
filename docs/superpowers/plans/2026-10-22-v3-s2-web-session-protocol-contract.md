@@ -199,8 +199,24 @@
 - 禁止在 `CheckAuth` 之外新增第二套鉴权口径（HTTP 与 WS 必须一致）。
 - 禁止把 DOM 修复写成"用正则过滤危险字符"——必须按文本节点处理（W14）。
 
-### W14 · DOM 修复（S2.1）与本契约的交界
+### W13.5 · 端点与报文形态（**冻结，前端与后端据此并行实现**）
 
+> 本节存在的唯一目的：让 **S2.1（前端，`WebPageContent.cs`）** 与 **S2.2（后端，`WebSessionManager.cs` 等）** 能**并行**开发而无需互相等待。端点路径、请求体形状、响应头名**全部在此固定，不得各自另立**。
+
+| 方法与路径 | 请求 | 成功响应 | 失败响应 |
+|---|---|---|---|
+| `POST /api/auth/login` | `Content-Type: application/json`，体 `{"password":"<明文口令>"}` | `200`，`Set-Cookie: lmsid=<id>; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800` | `401`（口令错误），`400`（体不合规），`403`（Host/Origin 不通过） |
+| `POST /api/auth/ticket` | 需要 `lmsid` Cookie + 头 `X-LiteMonitor-CSRF: <令牌>` | `200`，体 `{"ticket":"<base64url>"}` | `401`（无有效会话），`403`（CSRF 不符），`400` |
+| `POST /api/auth/logout` | 需要 `lmsid` Cookie + 头 `X-LiteMonitor-CSRF: <令牌>` | `204`，并下发 `Set-Cookie: lmsid=; Max-Age=0` 清除 Cookie | `401`，`403` |
+| `GET /api/snapshot` | 需要 `lmsid` Cookie（**不再接受 `?pwd=`**） | `200` + 快照 JSON（既有格式不变） | `401`（无有效会话），`403`（Host/Origin） |
+| `GET /ws?ticket=<票据>` | WebSocket 升级 | `101` | `401`（票据无效/过期/已用），`403`（Host/Origin） |
+
+- **CSRF 令牌的派生**：HMAC-SHA256，密钥 = 会话 ID，消息 = 固定串 `"liteMonitor-csrf-v1"`，输出 base64url。服务端与前端用同一算法各自计算（前端需要能算——见下）。
+  - 前端**读不到** `HttpOnly` 的 Cookie，因此 CSRF 令牌**必须**由登录响应一并下发：`POST /api/auth/login` 的 `200` 响应体改为 `{"csrf":"<令牌>"}`，前端保存在**内存变量**中（**不得**写 localStorage/sessionStorage）。
+- **旧 `?pwd=` 路径**：`GET /api/snapshot?pwd=...` 与 `GET /ws?pwd=...` **一律移除**，不再被接受（W13 禁止口令进 URL）。前端与后端在同一次发布中切换，不留兼容期。
+- **`GET /api/snapshot` 的响应体格式与既有实现保持一致**，本轮**不改**快照数据结构。
+
+### W14 · DOM 修复（S2.1）与本契约的交界
 - S2.1 负责 DOM 文本化；S2.2 负责会话与边界。
 - **交界点**：前端从"URL 带口令"改为"Cookie + 票据"后，`WebPageContent.cs` 中**两处**都要改（`:335/:362/:393` 的取数与 WS 连接，以及 `:303/:351` 的 localStorage）。这两个文件不同，但**前端协议**由本契约统一。实施顺序：**S2.2 先定服务端协议，S2.1 后接前端**，或两者按契约并行但**前端请求形态必须与本契约一致**。
 
