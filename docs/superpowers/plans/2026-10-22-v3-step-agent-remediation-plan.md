@@ -345,6 +345,34 @@ S2.4 补齐护栏后由**独立 verifier 重核**（不依赖实现者自述，�
 | **LM-036** | 🟡 低 | `dfe0fff` **无必要地删除**了一条断言（`WebSessionProtocolTests.cs` WS 用例中的 `Assert.DoesNotContain("ticket", resp, …)`）。verifier 的 V7 验证：把该行加回后 35/35 仍全绿 ⇒ **删除不必要**。虽**不削弱判别力**（V3b 仍能捕获），但违反契约 §5.2「不得放宽断言」的**形式要求** | **已修复**（恢复该行，复跑 35/35 通过、退出码 0） |
 | **LM-037** | 🔵 信息 | Host 缺失的拒绝存在**三层冗余**（`:1801` 缺 Host⇒拒 / `:1805` 空主机名⇒拒 / `:1806` 不在允许集⇒拒）⇒ 单改 `:1801` 用例仍绿，须三处同时失效才变红。契约条款**已有行为级护栏**（V5b），但该具体行号无独立回归护栏；构造"空主机名但命中允许集"的请求在当前架构下不可达 | 登记为信息项，**不阻断** |
 
+#### 4.2.8 M2 放行条件 #4 的执行：最终发布提交点全量回归（2026-10-23，候选 `366bf9c`）
+
+M2 放行条件 ④ 要求"最终发布提交点重跑全量"。编排方在提交点 `366bf9c` 上按 **CI 口径**重跑：`LITEMONITOR_PLUGIN_REPO` 指向仓库内夹具 `tests/fixtures/plugin-repo`（⇒ 6 条市场契约用例**真正执行**而非被跳过）、产出 TRX 后由 `.github/workflows/assert-test-counts.ps1` 做硬断言、另跑依赖清单核对。
+
+| 程序集 | 总计 | 通过 | 失败 | 跳过 |
+|---|---|---|---|---|
+| `LiteMonitor.Tests` | 1193 | 1192 | 0 | 1 |
+| `LiteMonitor.Updater.Tests` | 58 | 58 | 0 | 0 |
+| `LiteMonitor.GpuNonperformance.Tests` | 19 | 19 | 0 | 0 |
+| **合计** | **1270** | **1269** | **0** | **1** |
+
+- `dotnet test LiteMonitor.sln` 退出码 **0**；`assert-test-counts.ps1` 退出码 **0**（合计 1270 ≥ 阈值 1150；`MarketIndexContractTests` 发现 6 条 / 通过 6 条 / 被跳过 **0** 条）。
+- 唯一跳过项：`LiteMonitor.Tests.MarketE2ETests.端到端_拉索引_安装_校验_卸载`（原因：需 `LITEMONITOR_E2E=1` 才运行，会真实访问 GitHub）—— 即 CI 口径允许的**那 1 条**（`MAX_SKIPPED_TESTS: 1`），非新增跳过。
+- `scripts/generate-dependency-manifest.ps1 -Mode Check` 退出码 **0**：`SUMMARY MISSING=0 MISMATCH=0 EXTRA=0`、`SUMMARY-TRANSITIVE MISSING=0 MISMATCH=0 EXTRA=0`。
+- **M2 放行条件 ④ 满足** ⇒ M2 的 ①②③④ 四项条件全部达成，**M2 正式放行**。
+
+复现命令（本地等价 CI 口径）：
+
+```powershell
+cd 'G:\TOOL\LiteMonitor-fork'
+$env:LITEMONITOR_PLUGIN_REPO = "$PWD\tests\fixtures\plugin-repo"
+dotnet test LiteMonitor.sln -c Debug --nologo --logger "trx;LogFileName=results.trx" -v minimal
+pwsh -NoProfile -File '.github/workflows/assert-test-counts.ps1' -TrxRoot tests -MinTotal 1150 `
+  -ExpectedAssembly 'LiteMonitor.Tests, LiteMonitor.Updater.Tests, LiteMonitor.GpuNonperformance.Tests' `
+  -MaxSkipped 1 -MustExecuteTestClass MarketIndexContractTests -MustExecuteTestClassMinCount 6
+pwsh -NoProfile -File 'scripts/generate-dependency-manifest.ps1' -Mode Check
+```
+
 ---
 
 ### 4.3 M3 门禁复核结论归档（候选 `cb460b5`，2026-10-22）
@@ -391,13 +419,32 @@ M5 另做独立佐证：`^(a+)+$`（40×a + `!`）无 timeout 时 **180 s 未完
 
 | 步骤 | 提交 | 关键结论 |
 |---|---|---|
-| S3.3 | 待提交 | LM-009 沙箱接入 `PluginExecutor` 端到端路径（LM-030 闭环） |
-| S4.1 | `a8fb2fc` | 插件市场契约夹具入库。**6 条契约用例从"永远跳过"变为"真正执行"**（跳过 7→1，只剩联网 E2E）。CI 门禁**收紧**：`MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests(≥6)`，并做负向验证（置空 env var ⇒ 退出码 1、3 条 FAIL）。**关键发现**：原 `assert-test-counts.ps1` 只统计并打印跳过数、**没有任何上限** —— 这正是 ENV-003 能长期存在的原因 |
-| S4.1b | 待提交 | 5 类越界反例补自动化覆盖（S4.1 只留台账；台账不跑就只是文档） |
+| S0.3 | `d84b40f` | 建立最小 CI 并强制校验测试发现数（BASE-004）。配套 `assert-test-counts.ps1` 逐程序集核对总计/通过/失败/跳过，"0 发现"或缺程序集即红 |
+| S1.0 | `e1a7978` | 冻结 S1.0 在途租约模型与请求身份契约（C1–C7） |
+| S1.1 | `ac652f8` + `afb0869` + `6609543` | LM-001 插件计时器收尾 + 实例代次守卫；`afb0869` 修 M1-F6（`_timers` 锁外读 → 锁内 `exists`）；`6609543` 补强 F1/F2/F3/F4/F7 判别力。**根因已更正**（见 §4.1）：提交信息中的"永久停摆"前提已被证伪，以 §4.1 为准 |
+| S1.2 | `d437283` | LM-002 租约模型 + LM-003a 请求身份纳入方法/凭据/代理与 SHA-256（21 用例） |
+| S1.3 | `2bbb4cd` | LM-003b/c 更新器三段期限 + 资源释放 + 测速无进展期限（15 用例） |
+| S2.0 | `5521d1c` + `1beff7f` + `0f1177e` | 冻结 S2.0 主会话/票据与访问边界契约（W1–W14、W13.5 端点冻结）；补遗签发 L0 登录语义 / 既有测试迁移义务 / A10↔W2 |
+| S2.1 | `0484177` | LM-004 DOM 文本化 + 前端协议迁移（12 用例） |
+| S2.2 | `4be1a8c` | SEC-001/SEC-002/LM-005/LM-006/LM-023：默认环回监听、CORS `*` 移除、主会话+票据+CSRF、PBKDF2/DPAPI（27 新用例）。**M2 首轮门禁在此提交上判定 CONDITIONAL**（见 §4.2） |
+| S2.4 | `e893faf` + `dfe0fff` | 补 CORS 白名单回显与旧 `?pwd=` 拒绝的 8 条回归护栏；`dfe0fff` 强化 WS 断言（有效票据 + 有效会话）。**M2 重核放行的依据**（见 §4.2.6） |
+| S3.1 | `14542f3` | LM-007/LM-008 市场 URL 精确校验 + 逐跳重定向校验 + 8 MiB + 强制摘要 + 事务化安装（53 用例 / 11 变异全捕获） |
+| S3.2 | `b8444a1` | LM-009 插件沙箱原语：6 上限 + 7 原因码 + 异常语义 + `PluginSandboxScope`/`PluginSandbox`（20 用例 / 7 变异全捕获）。**冻结契约，数值不得改** |
+| S3.3 | `ebe1c38` | LM-009 沙箱接入 `PluginExecutor` 端到端路径（15 用例 / 7 变异全捕获）⇒ LM-030 闭环 |
+| S3.4 | `bc7b479` | 步骤数上限改为**按目标计**（`PluginSandboxScope.BeginTarget()` 子作用域，8 新用例 / 3 变异全捕获）。语义变更裁决见 §4.5.3 |
+| S3.2b | `cb460b5` | LM-008 本地化：9 语言包文案 + `LanguagePackTests` 守卫（228 键 / 14 用例） |
+| S4.1 | `a8fb2fc` | 插件市场契约夹具入库 + CI 接线（ENV-003）。**6 条契约用例从"永远跳过"变为"真正执行"**（跳过 7→1，只剩联网 E2E）。CI 门禁**收紧**：`MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests(≥6)`，并做负向验证（置空 env var ⇒ 退出码 1、3 条 FAIL）。**关键发现**：原 `assert-test-counts.ps1` 只统计并打印跳过数、**没有任何上限** —— 这正是 ENV-003 能长期存在的原因 |
+| S4.1b | `6c89a8b` | 5 类越界反例补自动化覆盖（S4.1 只留台账；台账不跑就只是文档） |
+| S4.2 | `1a904d5` | LM-016 验签→更新器**字节绑定**（独立验证 + `FileShare.Read` 字节钉住，58 用例）+ 重建 `resources/LiteMonitor++.Updater.exe`；ZIP 展开边界加固 |
 | S5.3 | `217102d` | NOTICE 版本修正 + 补 3 个漏列依赖 + 依赖清单护栏脚本。**方法论突破**：产物内嵌 `ProductVersion = 1.0.0+<git commit SHA>`，据此可判定"包内更新器是否由本次源码构建"（.NET 发布产物**非字节确定**，**不可**用重新 publish 比 SHA-256） |
-| S5.3b | 待提交 | 补全**传递依赖**披露并扩展护栏（NOTICE 须覆盖实际随包分发的传递依赖） |
+| S5.3b | `e452097` | 补全**传递依赖**披露并扩展护栏（NOTICE 须覆盖实际随包分发的传递依赖）⇒ LM-024 闭环 |
+| LM-034 | `6d993d7` | 被拒 WebSocket 握手补 `else { client.Close(); }`（4 用例）；危害描述经实测更正为"套接字泄漏"（见 §4.5.4） |
+| CI 护栏 | `600a18c` | 把依赖清单核对接入 CI（LM-024 护栏：NOTICE 与实际解析依赖不一致即红） |
+| 归档 | `56d573e` / `b0066da` / `d30f314` / `4aa4915` / `366bf9c` | 分别为：LM-001 根因更正 + M1 复核 F1–F8 归档 / M2 首轮 CONDITIONAL 归档 / M3 门禁 PASS_WITH_NOTES 归档 / LM-034 危害描述更正 / LM-036 断言恢复 + M2 重核放行归档 |
 
 **S5.3 实测的随包分发传递依赖**（均 MIT）：`Vortice.DXGI 3.8.3`、`Vortice.DirectX 3.8.3`、`Vortice.Mathematics 2.1.0`、`SharpGen.Runtime 2.4.2-beta`、`SharpGen.Runtime.COM 2.4.2-beta`、`Microsoft.Diagnostics.FastSerialization`。
+
+> ⚠️ **本段已被 §4.5.1 的 S5.3b 实测推翻，保留仅作留痕**：实际随包分发的传递依赖是 **21 个**（不是 6 个），且 `Microsoft.Diagnostics.FastSerialization` **不是独立 NuGet 包**（是 TraceEvent 包内程序集），真正随包分发的 TraceEvent 传递依赖是 `Microsoft.Diagnostics.NETCore.Client 0.2.661903`。以 §4.5.1 与 `NOTICE` 现文本为准。
 
 **CI 接线待办**：把 `scripts/generate-dependency-manifest.ps1 -Mode Check` 接入 CI（退出码 1 即失败）。`.github/workflows/**` 归 S4.1 所有且已提交；待 S5.3b 落地后由编排方接入。
 
@@ -459,6 +506,7 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 | **LM-035** | 🟡 低~中 | `Handshake` 的 `catch { return false; }`（`WebSessionManager.cs:2415`）**宽泛吞异常** —— 写响应失败时根因不可诊断，调用方只能看到"握手失败"。与 LM-031（`ExtractJsonValue` 宽泛 catch）同类 | 登记待清理（本轮未修，避免战线扩张） |
 | **LM-037** | 🔵 信息 | Host 缺失的拒绝存在**三层冗余**（`:1801`/`:1805`/`:1806`）⇒ `:1801` 无独立行级护栏（行为级护栏已由 V5b 证明） | 登记为信息项，见 §4.2.7 |
 | LM-032 | 🟡 低 | `PluginMarketPolicyTests.cs:420` 的用例名只断言终态、不直接断言顺序（见 §4.3.2） | 登记待清理 |
+| **LM-038** | 🟡 低 | **包内更新器的"内嵌构建提交"指向错误提交，使 LM-024 的产物来源护栏永久失效** —— `resources/LiteMonitor++.Updater.exe` 是 S4.2 在 HEAD 仍为 `ebe1c38` 时构建的（改源码 → 构建 → 再提交），产物 `ProductVersion = 1.0.0+ebe1c38…` **并不包含** S4.2 对 `LiteMonitor.Updater/Program.cs` 与 `UpdateFileTransaction.cs` 的改动。后果：`scripts/generate-dependency-manifest.ps1` 的"包内更新器是否由本次源码构建"检查**永久停在 `NOT_VERIFIED`**（`git diff ebe1c38 -- LiteMonitor.Updater/` 非空；差异文件写入时间早于产物写盘时间 ⇒ 无法证明一致）—— 即这道护栏**形同失效**：今后改 `LiteMonitor.Updater/` 而不重建，它**不会变红** | ✅ 已修复（按流水线口径 `dotnet publish -c Release -r win-x64 --self-contained false` 在提交点 `366bf9c` 重建并刷新仓库副本；内嵌 SHA 变为 `366bf9c3d53ffc7f16c5c97d6360c4c4293e301c`，`git diff` 为空，判定由 `NOT_VERIFIED` 翻转为**"与本次源码构建一致"**） |
 
 #### 4.5.5 LM-016 的不变式与残余窗口（S4.2）
 
@@ -471,6 +519,17 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 - **残余窗口**：主程序释放句柄 → 更新器打开文件之间的毫秒级缝隙。该缝隙内若被替换，结果是**更新被拒绝**（退出码 6、不解压），**不再是"未验证字节被安装"**。
 - **方案 B（受保护暂存区）未实现**：同用户低权限进程与主程序**共享同一 SID**（提权不换身份），`%LOCALAPPDATA%`/`%TEMP%`/安装目录对本用户非提权进程同样可写 —— 换目录**不能**隔离该威胁模型；内容绑定严格强于路径绑定，且不引入 ACL 加固与残留清理等新失败模式。
 - **NOT_VERIFIED**：安装目录 `resources/` 的 ACL 未实测 ⇒ **不主张**此前存在可利用提权漏洞，也**不主张**已"彻底消除提权风险"。本次消除的是"校验与使用之间无字节约束"这一缺口本身。
+
+#### 4.5.6 提交信息勘误：`ac652f8` 的根因表述 —— **登记更正，不 rebase**
+
+`ac652f8 fix(plugins): 修复不可见分支导致调度永久停摆并引入实例代次 (LM-001)` 的**提交信息**把根因写成"不可见分支导致调度**永久停摆**"。该前提**已被实测证伪**（见 §4.1.1），更正后的根因是"依赖未文档化副作用 + 缺实例代次守卫"，**代码修复本身不需要返工**。
+
+| 项 | 内容 |
+|---|---|
+| **勘误内容** | 以 **§4.1（根因更正记录）** 与提交 `56d573e docs(plan): 更正 LM-001 根因为"依赖未文档化副作用"并归档 M1 复核 F1-F8` 为**权威口径**；`ac652f8` 的提交信息中的"永久停摆"字样**作废** |
+| **为什么不 rebase 改提交信息** | `ac652f8` 是本批 26 个提交中的第 5 个，rebase 重写其信息会连带重写**其后 21 个提交的哈希**，使 §4.2/§4.3/§4.4 及本节台账中**全部哈希引用失效**，并需对已推送到 origin 且已跑过 5 次绿 CI 的 `fix/audit-remediation-v3` 做 **force-push**。代价远大于收益，且 Git 历史本就不是唯一事实来源 —— 本节即为其勘误入口 |
+| **可检索性** | 任何审计者 `git show ac652f8` 后，应能通过本节与 §4.1 找到更正后的根因。§4.4 台账 S1.1 行亦已标注"**根因已更正**（见 §4.1）" |
+| **结论** | **不 rebase**，以台账勘误方式闭环。该项**不阻断** M2/M3 门禁与发布准入 |
 
 ---
 
