@@ -559,6 +559,7 @@ M5 另做独立佐证：`^(a+)+$`（40×a + `!`）无 timeout 时 **180 s 未完
 | **owner A 接线** | `03a925a` | **GPU-005 守卫侧终结路径**（主审接线）：`IGpuStartupAttemptAbandon` **下移**到 `src/Rendering/Configuration/`（主审集成准则：接口若需下层实现必须放低层目录，否则形成 `Configuration ↔ Presentation` 命名空间循环依赖）；`GpuStartupGuard` 新增 `AbandonAttemptPreservingPending`（**只注销尝试，刻意不删 pending 标记、不复位 `_attemptWritten`** ⇒ 下次进程进入 conservative、等待用户显式重试）；`GpuStartupAttempt` 实现该接口（幂等）。5 条用例 / **3 变异全捕获**（MB3 曾一度假绿 —— 判别点被 `Dispose()` 抢先置位，已把判别点移到 `Dispose()` **之前**）。**该提交同时关闭 T04 报告里标为 `NOT_VERIFIED` 的「停止不干净 ⇒ pending 保留」在 guard 侧的空缺**（宿主侧仍需真实 GPU，属 T07/T09） |
 | **GPU T05** | `07a1b03` | **legacy 回退样式**（owner D）：加法式兄弟块 `rendering.fallbackStyle`（`ThemeFallbackStyle`，6 个纯 CLR `string?` 字段 + 自定义 JSON 转换器），`rendering.fallback` 类型与 legacy/legacy 校验**一字未改**；非法值走**非致命**诊断 `gpu_fallback_style_invalid`（不进 `Validate()` 错误列表）；编辑器克隆/恢复路径与 `ThemeManager.PruneNode` 保留路径均保住该块；`LegacyFallbackStyleResolver` 为**纯函数**（不改 Skin、不改 `ThemeManager.Current`、自动回退不写盘）；三份 GPU 主题各补一个回退样式块。13 条用例 / **4 变异全捕获**（含"撤掉 `Validate` 扩展"与"编辑器克隆丢块"）。**跨 owner 接线点由 T03 消费**（见下一行） |
 | **GPU T03** | `5a1eeb7` + `f4f3b2a` | **切换协调器 + 受控重建 + 判别位**（owner B）：新增 `src/UI/RenderingTransitionCoordinator.cs`（**状态与判据的唯一落点**：期望/有效路由、切换阶段、三重身份、HWND 呈现历史、清理状态、诊断字段、HandleCreated 判别位）与 `src/UI/CapturePolicyCleanupLedger.cs`（**未完成 affinity 清理责任的独立持有者**，合同 §6.2 INV-1~INV-6）；GPU→legacy 固定 **9 步**（`Decide` → 窗口状态快照 → 停呈现/转交清理 → 受控 HWND 重建 → 代次推进 → 布局/DPI 恢复 → 窗口状态恢复 → 一次有效重绘 → 发布稳定）；判别位规则 ①~④（受控 vs 构造期首次创建 / 取消归零 / 陈旧残留归零 / 5 秒超时兜底）；**清理责任永不通过宿主引用表达**（`StopGpuPresentation` **无条件**置 null）；`LiveGlassController` 的**第二个句柄代次计数器已删除**（⇒ 消除上一轮 verifier 报告的 F7）；回退样式经 `LegacyFallbackStyleBridge` 生成**派生主题副本**（不改 `theme.Color`、不改 `ThemeManager.Current`、不写盘）。44 条用例（worker）+ **主审补 1 条钉住裁决 D-H 的用例**（共 45 条，变异自证：删掉 accent 落点 ⇒ 红 ⇒ 字节级还原 SHA-256 一致 ⇒ 绿）。★ worker 自证 **10 个变异全被杀**、10/10 还原 SHA-256 逐字节一致（其中 9/10 轮"还原后全量"绿；M5 那轮出现 1 条**无关**的既有 flaky 用例 `FpsStateTests.需求抖动不会击穿退避窗口` 偶发红 ⇒ 已登记 **LM-060**，该用例属他人文件、本批未改）。★ **自证暴露并修复了一处真实护栏缺陷**：第一轮 **M9（恢复"保留引用"分支）未被杀死** —— 根因是 IL 护栏只识别**长格式**分支 opcode（`Br`/`Brfalse`/`Brtrue`/`Beq`/`Bne_Un`），而编译器对近距离跳转发射**短格式** `brtrue.s`/`brfalse.s`/`br.s` ⇒ 护栏漏判；修复为"**条件**分支（含短格式）不得跳过最后一次置 null"并**排除无条件 `br`**（"宿主本就为 null ⇒ 早退"路径，跳过置 null 属良性）后，M9 被杀死且还原后全量绿。★ 顺带修复了 `src/UI/UIController.cs` 注释里 1 个 **U+FFFD 乱码字符**（字节层 `EF BF BD EF BF BD` → `E5 A6 82`）。★ **主审集成巡检发现并纠正的缺口（阻断级）**：worker 首版**未订阅** T04 的 `CapturePolicyCleanupRequired` 移交事件、**从未**调用 `ledger.Add` ⇒ ledger 永远 `State=None` ⇒ 清理责任**彻底丢失**（旧 HWND 永远保持 WDA 排除，比 GPU-001 更糟）；且 `StopGpuPresentation` 仍是 T04 落地前的旧口径（"移交出口尚未接入 ⇒ 保留引用"）⇒ **死代码 + 掩盖缺口**。主审发回后补上「订阅 + `LastCapturePolicyCleanup` 兜底」双路（`Add` 同代次幂等）+ 统一工厂 `CreateGpuPresentationHost`（三个创建点订阅不可能漏）+ INV-6 探针 `CapturePolicyCleanupPendingProbe` |
+| **GPU 独立复核归档 + LM-061/063 修复** | `48de1a8` + `dd26b4c` | **GPU 独立复核（§4.5.12）**：verifier **自写 42 条独立用例**（不跑实现者用例）+ **自设计 14 条变异**（11 条为 NEW、不在实现者类别内）⇒ **14/14 全部被杀**（`ShaMatch` 14/14、`RedExit=1` 14/14、还原后 `GreenExit=0 & StillRed=0` 14/14）；A 块用**全程序集 IL 扫描 + `StopGpuPresentation` 分支目标分析**证明唯一订阅点 / 事件登记 / 兜底登记 / 无条件置 null / 无第二创建点全部成立。**结论 `PASS_WITH_NOTES`**，产出 LM-061~LM-064 与**裁决 D-I**。★ **主审据此修 LM-061（护栏盲区）**：实现者护栏 `EnumerateMethods` 只枚举方法、**不枚举实例构造函数** ⇒ "生产代码不得新建第二个句柄代次实例"这道 D-G 护栏**在构造函数路径上不承重**（`GetMethods` 不返回实例 `.ctor`，`TypeInitializer` 只是静态 `.cctor`）⇒ 增 `GetConstructors(flags)` 枚举 + 新增 2 条钉住用例。★ **并修 LM-063（finally 顺序）**：`StopGpuPresentation` 的 `finally` 内 `_captureCleanup.Add(...)` 排在 `_gpuPresentation = null;` **之前** ⇒ 理论上登记异常会跳过置 null ⇒ 改为**嵌套 `try`/`finally`**，置 null 置于**最内层** `finally` 体内。**主审变异自证**（`lm061-063-mutate.ps1`）：变异 A（宿主构造函数里 `new WindowHandleGeneration()`）⇒ 红 1/47 ⇒ 字节还原 SHA-256 一致 ⇒ 绿 47/47；变异 B（置 null 移回外层 `finally`，恢复单层）⇒ 红 1/47 ⇒ 字节还原 SHA-256 一致（还原后 SHA = `CB3CC174…`，与**修复前原始值完全相同**，证明变异精确还原旧代码）⇒ 绿 47/47 ⇒ `RESULT=PASS`。LM-062（`NotifyGpuHandleChanged()` 无参重载被删）与 LM-064（ledger `Pump` 预填 `Attempts=2`）按**裁决 D-I** 登记不修 |
 
 **S5.3 实测的随包分发传递依赖**（均 MIT）：`Vortice.DXGI 3.8.3`、`Vortice.DirectX 3.8.3`、`Vortice.Mathematics 2.1.0`、`SharpGen.Runtime 2.4.2-beta`、`SharpGen.Runtime.COM 2.4.2-beta`、`Microsoft.Diagnostics.FastSerialization`。
 
@@ -818,7 +819,7 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | **E** 诊断隔离 | ✅ 成立 | `gpu_fallback_style_invalid` 只进 diagnostics、不进 `Validate()` 错误列表；错误/警告/失败三路互不覆盖 |
 | **F** 回退样式桥 + **D-H 落点** | ✅ 成立，裁决独立成立 | `RenderingTransitionCoordinator.cs:746` `colors.TextTitle = style.Accent;`；派生副本**不修改源主题**、不写 `ThemeManager.Current`、不落盘。**裁决 D-H 的独立佐证**：另发现 `src/Rendering/Materials/ThemeForegroundStyleFactory.cs:46` 已把 `theme.Color.BarLow` 映射为 `ForegroundTone.Accent`、而 `BarLow` 同时是 `BarSafe`（`:55`）⇒ **双重语义**，进一步佐证**不能**占用 `Bar*` 作 accent 槽 |
 | **G** owner A 的 pending 处置 | ✅ 成立 | `GpuStartupGuard.cs:287-294` 只 `_attempts.Remove`、**不碰** `_pendingPath`、**不复位** `_attemptWritten`；`:355` `Interlocked.Exchange` 幂等；`GpuPresentationHostController.cs:893` `ReleaseStartupAttempt(stopClean)` → `:908` → `:924-929` |
-| **H** 常量 / 退避表 / 唯一决策函数 | ✅ 成立 | 插件沙箱 6 常量**逐字未改**（`PluginProcessor.cs:447/450/453/456/459/462`）；退避 **6 次 + 250/500/1000/2000 ms** 两份实现一致（`CapturePolicyCleanupLedger.cs:33/:36-42` 与 `CapturePolicyCleanupPolicy.cs:51`）；`Decide` 仍是唯一决策函数；CI 与 release 阈值**均为 1394** |
+| **H** 常量 / 退避表 / 唯一决策函数 | ✅ 成立 | 插件沙箱 6 常量**逐字未改**（`PluginProcessor.cs:447/450/453/456/459/462`）；退避 **6 次 + 250/500/1000/2000 ms** 两份实现一致（`CapturePolicyCleanupLedger.cs:33/:36-42` 与 `CapturePolicyCleanupPolicy.cs:51`）；`Decide` 仍是唯一决策函数；CI 与 release 阈值**均为 1396**（@`7a2ea69` 实测，两文件逐字一致） |
 
 **变异汇总**：`ShaMatch=True` **14/14**；`BuildRed=0 & RedExit=1` **14/14**；`BuildGreen=0 & GreenExit=0 & StillRed=0` **14/14**。
 
@@ -1253,7 +1254,7 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | LM-060 | GPU T03 自证中实测 | P3 | — | 📌 登记待清理 | `FpsStateTests.需求抖动不会击穿退避窗口` 用真实时间等待 ⇒ 满负载下偶发超时变红。**既有 flaky，非本批引入**（不触碰 FPS 退避任何代码）；本批不动他人文件 |
 | LM-061 | GPU 独立复核产出 | P2 | M3 | ✅ **已修复**（48de1a8） | 实现者护栏 EnumerateMethods 不枚举实例构造函数 ⇒ D-G 唯一性护栏在构造函数路径上不承重。已补 GetConstructors 枚举 + 2 条钉住用例 + 主审变异自证（红 → SHA 一致 → 绿）。**当前生产代码无第二实例**，本条属护栏可靠性 |
 | LM-062 | GPU 独立复核产出 | P3 | — | 📌 登记知悉（裁决 D-I） | 既有 public NotifyGpuHandleChanged() 无参重载被删除。内部 WinForms 类、非对外库 API、全仓仅 1 处调用点；补兼容重载会**改变原语义** ⇒ 不修 |
-| LM-063 | GPU 独立复核产出 | P3 | M3 | ✅ **已修复**（48de1a8） | inally 内登记排在置 null 之前 ⇒ 理论缝隙。已改为嵌套 	ry/inally（置 null 在最内层）+ 新增可执行 IL 护栏 + 变异自证 |
+| LM-063 | GPU 独立复核产出 | P3 | M3 | ✅ **已修复**（48de1a8） | finally 内登记排在置 null 之前 ⇒ 理论缝隙。已改为嵌套 try/finally（置 null 在最内层）+ 新增可执行 IL 护栏 + 变异自证 |
 | LM-064 | GPU 独立复核产出 | P3 | — | 📌 登记，不修 | ledger Pump 预填 Attempts=2 并覆盖 LastErrorCode ⇒ 诊断保真观察（生产路径恒为 2，实际不触发） |
 | ENV-003 | S4.1 | P1 | M4 | ✅ 已闭环 | `a8fb2fc`：跳过 7→1；CI 门禁收紧（`MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS`） |
 | ENV-004 | S4.1 | P2 | M4 | ⏳ `BLOCKED_ENV` | 联网 E2E 单独运行，**不进 PR 门禁**；**不计入通过**（§9） |
@@ -1267,25 +1268,25 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | 指标 | 数值 | 复现命令 | 核实状态 |
 |---|---|---|---|
 | 主测试工程（**初始基线**） | 通过 983 / 失败 0 / 跳过 7 / 共 990 | `dotnet test tests/LiteMonitor.Tests -c Debug` | 已实测，连续两次一致 |
-| 主测试工程（**CI 口径实测** @`f4f3b2a`） | 通过 **1316** / 失败 0 / 跳过 **1** / 共 **1317** | 设 `LITEMONITOR_PLUGIN_REPO=tests/fixtures/plugin-repo` 后 `dotnet test LiteMonitor.sln -c Debug` | 本轮实测（owner A 物化 + 裁决 D-G + LM-045 + GPU T04 + GPU T05 + owner A 接线落地后）；跳过 1 = 唯一剩余联网 E2E（ENV-004） |
-| 主测试工程（**本地口径实测** @`f4f3b2a`） | 通过 **1310** / 失败 0 / 跳过 **7** / 共 **1317** | **不设** `LITEMONITOR_PLUGIN_REPO` 的同一条命令 | 本轮实测；与 CI 口径的**用例总数相同**（三工程合计同为 **1349**），差值恰为 6 条市场契约用例（ENV-003，`MarketIndexContractTests`） |
+| 主测试工程（**CI 口径实测** @`7a2ea69`） | 通过 **1318** / 失败 0 / 跳过 **1** / 共 **1319** | 设 `LITEMONITOR_PLUGIN_REPO=tests/fixtures/plugin-repo` 后 `dotnet test LiteMonitor.sln -c Debug` | 本轮实测（owner A 物化 + 裁决 D-G + LM-045 + GPU T04 + GPU T05 + owner A 接线 + GPU T03 + 裁决 D-H + **LM-061/063 修复**全部落地后）；跳过 1 = 唯一剩余联网 E2E（ENV-004）。**CI 侧同口径实测一致**：`39856338946` @`7a2ea69` 门禁输出「发现 1396 条用例（通过 1395 / 失败 0 / 跳过 1）」 |
+| 主测试工程（**本地口径实测** @`7a2ea69`） | 通过 **1312** / 失败 0 / 跳过 **7** / 共 **1319** | **不设** `LITEMONITOR_PLUGIN_REPO` 的同一条命令 | 本轮实测（`$env:LITEMONITOR_PLUGIN_REPO=''`）；与 CI 口径的**用例总数相同**（三工程合计同为 **1396**），差值恰为 6 条市场契约用例（ENV-003，`MarketIndexContractTests`） |
 | 更新器测试工程 | 通过 **58** / 失败 0 / 跳过 0 / 共 **58** | `dotnet test tests/LiteMonitor.Updater.Tests -c Debug` | 已实测（S4.2 扩展后由 13 增至 58） |
 | GPU 非性能测试工程 | 通过 **19** / 失败 0 / 跳过 0 / 共 **19** | `dotnet test tests/LiteMonitor.GpuNonperformance.Tests -c Debug` | 已实测 |
-| **三工程合计（当前）** | **1394**（1317 + 58 + 19） | `dotnet test LiteMonitor.sln -c Debug -v minimal` | CI 口径实测（`LITEMONITOR_PLUGIN_REPO` 指向夹具），退出码 **0**；门禁脚本实测「发现 1349 条用例（通过 1348 / 失败 0 / 跳过 1）」、退出码 **0**。CI 门禁 `MIN_TEST_TOTAL` 已同步收紧 1281 → **1349**（= **被推送分支** `61465ba` 的实测总数，**不是**集成分支的数字） |
-| 主测试源码文件 | 顶层 **74** 个 / 含子目录 **80** 个 `.cs` | `Get-ChildItem tests/LiteMonitor.Tests -Filter *.cs -Recurse` | 已实测（原台账「64 个」已过时） |
+| **三工程合计（当前）** | **1396**（1319 + 58 + 19） | `dotnet test LiteMonitor.sln -c Debug -v minimal` | CI 口径实测（`LITEMONITOR_PLUGIN_REPO` 指向夹具），退出码 **0**；门禁脚本实测「发现 1396 条用例（通过 1395 / 失败 0 / 跳过 1）」、退出码 **0**（`GATE_EXIT=0`）。CI 门禁 `MIN_TEST_TOTAL` 已同步收紧 1316 → 1349 → 1394 → **1396**（= **被推送分支** `7a2ea69` 的实测总数，**不是**集成分支的数字） |
+| 主测试源码文件 | 顶层 **82** 个 / 含子目录 **88** 个 `.cs` | `Get-ChildItem tests/LiteMonitor.Tests -Filter *.cs -Recurse` | **本轮重新实测 @`7a2ea69`**（原台账记「顶层 74 / 递归 80」已过时 ⇒ 本批新增测试文件所致） |
 | 更新器 / GPU 测试源码文件 | 更新器 顶层 3 / 递归 9；GPU 顶层 0 / 递归 6 | 同上 | 已实测 |
-| 解决方案测试发现 | **1394**（CI 口径） | `dotnet test LiteMonitor.sln` | **不再是 0** —— BASE-003 已闭环（`0366268` 三个测试工程入 `.sln`）；`assert-test-counts.ps1` 把「发现 0」变红 |
+| 解决方案测试发现 | **1396**（CI 口径） | `dotnet test LiteMonitor.sln` | **不再是 0** —— BASE-003 已闭环（`0366268` 三个测试工程入 `.sln`）；`assert-test-counts.ps1` 把「发现 0」变红 |
 | 两点 / 三点分支差异 | 484 / 522，共同祖先 `169e90a2…` | `git diff --name-only master branch` / `master...branch` | 已实测（BASE-002 起点；**本轮未重测**） |
 | Release 构建 | **成功** | `dotnet build LiteMonitor.sln -c Release` | 6 次 CI 全部 success（CI 内含 `dotnet build LiteMonitor.sln -c Release`，`.github/workflows/ci.yml:159`）。本地曾被运行中的 `LiteMonitor++.exe` 锁住输出目录（ENV-001，**非代码缺陷**，实例已自行退出） |
-| 远端 GitHub Actions | 本轮 **1 次 failure → 修正后连续 2 次 success** | `gh run list --repo mojingjing-git/LiteMonitorPlus --limit 8` | `39844039100` @`9e384e0` = **success**（最新，含 GPU T03）；`39836128969` @`61465ba` = **success**；`39834352321` @`b1a8b42` = **failure**（根因：阈值按**集成分支**实测 1316 设置，而被推送的 `b1a8b42` 实测仅 **1295** ⇒ 门禁**正确**报红，**不是**门禁缺陷）；`39829176306` @`23a6c5c` = success |
+| 远端 GitHub Actions | 本轮 **1 次 failure → 修正后连续 6 次 success** | `gh run list --repo mojingjing-git/LiteMonitorPlus --limit 8` | `39856338946` @`7a2ea69` = **success**（最新，17 步全 success，含"强制校验测试发现数"门禁）；`39847068945` @`427b35d` = success；`39845677635` @`7283b91` = success；`39844871915` @`cf1c8ee` = success；`39844039100` @`9e384e0` = success；`39836128969` @`61465ba` = success；`39834352321` @`b1a8b42` = **failure**（根因：阈值按**集成分支**实测 1316 设置，而被推送的 `b1a8b42` 实测仅 **1295** ⇒ 门禁**正确**报红，**不是**门禁缺陷） |
 | 远端 Release | **仍为 0**（本批不发布） | `gh release list` | 已实测；发布准入见 §9 |
-| 本地 HEAD vs 远端 `origin/fix/audit-remediation-v3` | 本轮推送后**齐平**（`9e384e0`） | `git log --oneline origin/fix/audit-remediation-v3..HEAD` | 已实测；`master` 本地与远端恒为 `23a6c5c`（**本批未合并**；合并须等本批收敛 + CI 绿 + 独立复核通过） |
+| 本地 HEAD vs 远端 `origin/fix/audit-remediation-v3` | 本轮推送后**齐平**（`7a2ea69`） | `git log --oneline origin/fix/audit-remediation-v3..HEAD` | 已实测（`git rev-parse HEAD` 与 `git rev-parse origin/fix/audit-remediation-v3` 同为 `7a2ea69369b28f23079c94818d10f4cf3700f2fb`）；`master` 本地与远端恒为 `23a6c5c`（**本批未合并**；合并须等本批收敛 + CI 绿 + 独立复核通过） |
 
-**基线纪律：** 任何步骤完成后，上述**当前实测值**（CI 口径：主工程 共 **1317**（通过 **1316** / 跳过 **1**），更新器 通过 **58**，GPU 非性能 通过 **19**，三工程合计 **1394**）**不得下降**；主工程**总数只增不减**。下降即为回归，必须在同一步骤内修复，不得记为"已知问题"后放行。CI 侧的对应门禁为 `MIN_TEST_TOTAL: 1394`、`MAX_SKIPPED_TESTS: 1`、`MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests (≥6)`（`.github/workflows/ci.yml`）—— 跳过数**有上限**、契约类**不许被跳过**，两者均为 S4.1 引入的收紧。
+**基线纪律：** 任何步骤完成后，上述**当前实测值**（CI 口径：主工程 共 **1319**（通过 **1318** / 跳过 **1**），更新器 通过 **58**，GPU 非性能 通过 **19**，三工程合计 **1396**）**不得下降**；主工程**总数只增不减**。下降即为回归，必须在同一步骤内修复，不得记为"已知问题"后放行。CI 侧的对应门禁为 `MIN_TEST_TOTAL: 1396`、`MAX_SKIPPED_TESTS: 1`、`MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests (≥6)`（`.github/workflows/ci.yml`，`release.yml` 同名阈值**逐字一致**）—— 跳过数**有上限**、契约类**不许被跳过**，两者均为 S4.1 引入的收紧。
 
-> **本行的重测义务（本轮已履行）：** 上表数字测于**被推送分支 `f4f3b2a`**（owner A 物化 + 裁决 D-G + LM-045 + GPU T04 + GPU T05 + owner A 接线 + GPU T03 + 裁决 D-H 落地）。`MIN_TEST_TOTAL` 已同步上调至 **1394**，**等于**该分支的实测总数。★ **阈值纪律**（本轮实测教训）：阈值**必须**取「**被推送分支**」的实测总数，**不得**取集成分支的数字，也**不得**为求绿下调阈值 —— `39834352321` @`b1a8b42` 就是把集成分支的 1316 写进了只含 `b1a8b42` 的分支（该分支实测仅 **1295**）⇒ 门禁**正确**报红。
+> **本行的重测义务（本轮已履行）：** 上表数字测于**被推送分支 `7a2ea69`**（owner A 物化 + 裁决 D-G + LM-045 + GPU T04 + GPU T05 + owner A 接线 + GPU T03 + 裁决 D-H + **LM-061/063 修复**全部落地）。`MIN_TEST_TOTAL` 已同步上调至 **1396**，**等于**该分支的实测总数。★ **阈值纪律**（本轮实测教训）：阈值**必须**取「**被推送分支**」的实测总数，**不得**取集成分支的数字，也**不得**为求绿下调阈值 —— `39834352321` @`b1a8b42` 就是把集成分支的 1316 写进了只含 `b1a8b42` 的分支（该分支实测仅 **1295**）⇒ 门禁**正确**报红。
 >
-> **本地口径 vs CI 口径的差异（已解释，非回归）：** 不设 `LITEMONITOR_PLUGIN_REPO` 时，主工程为 1317 / 通过 1310 / 跳过 **7**；设了（指向 `tests/fixtures/plugin-repo`）后跳过降为 **1**，通过升为 **1316** ⇒ 差值恰为 **6** 条市场契约用例（ENV-003），与 §4.2.8 完全吻合。**两口径的用例总数相同（三工程合计同为 1394）**，只有环境门控造成的跳过数不同。
+> **本地口径 vs CI 口径的差异（已解释，非回归）：** 不设 `LITEMONITOR_PLUGIN_REPO` 时，主工程为 1319 / 通过 1312 / 跳过 **7**；设了（指向 `tests/fixtures/plugin-repo`）后跳过降为 **1**，通过升为 **1318** ⇒ 差值恰为 **6** 条市场契约用例（ENV-003），与 §4.2.8 完全吻合。**两口径的用例总数相同（三工程合计同为 1396）**，只有环境门控造成的跳过数不同。
 
 ---
 
@@ -1348,7 +1349,9 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | **owner A 接线** | `IGpuStartupAttemptAbandon` 下移 + 保留 pending 的终结路径（GPU-005 / 裁决 D6） | 集成 worktree `.artifacts/wt-integ` | `03a925a` | ✅ 5 条用例 / 3 变异全捕获 |
 | **GPU T03** | 切换协调器 + 受控重建 + HandleCreated 判别位（owner B） | 隔离 worktree `.artifacts/wt-gpu-t03` | `5a1eeb7` | ✅ 44 条用例；★ 主审巡检发现并纠正**移交事件未订阅**的阻断级缺口 |
 | **主审裁决 D-H** | 回退样式 `Accent` 落点 = `ColorConfig.TextTitle` | 主审直接做 | `f4f3b2a` | ✅ 1 条钉住用例 + 变异自证（红 → SHA-256 一致 → 绿） |
-| **CI 门禁** | 阈值与被推送分支实测总数对齐 | 主审直接做 | `b1a8b42` → `fe57544` | ✅ 1316 → **1349** → **1394**；`39834352321` 的一次红灯是**门禁正确报红**（阈值误用集成分支数字），非门禁缺陷 |
+| **GPU 独立复核归档** | GPU T03/T04/T05 + owner A 接线 + 裁决 D-H 的**独立复核**（实现者自审不算数） | 隔离 worktree `.artifacts/wt-verify-gpu` | `dd26b4c`（台账归档）；复核证据留在复核方 worktree（`.artifacts/verify-evidence/`，**不入库**） | ✅ **`PASS_WITH_NOTES`**：自写 42 条独立用例 + 自设计 14 条变异（11 条 NEW）⇒ **14/14 全被杀**（`ShaMatch` 14/14、`RedExit=1` 14/14、还原后 `GreenExit=0 & StillRed=0` 14/14）。产出 LM-061~064 + **裁决 D-I** |
+| **LM-061 / LM-063 修复** | 修复核产出的护栏盲区与 `finally` 顺序缝隙 | 主审直接做 | `48de1a8`：`tests/LiteMonitor.Tests/RenderingTransitionCoordinatorTests.cs`、`src/UI/UIController.cs` | ✅ 2 条钉住用例 + **主审变异自证**（变异 A/B 各红 1/47 ⇒ 字节还原 SHA-256 一致 ⇒ 绿 47/47 ⇒ `RESULT=PASS`）。LM-062 / LM-064 按**裁决 D-I** 登记不修 |
+| **CI 门禁** | 阈值与被推送分支实测总数对齐 | 主审直接做 | `b1a8b42` → `578ba2e` → `fe57544` → `7a2ea69` | ✅ 1316 → **1349** → **1394** → **1396**；`39834352321` 的一次红灯是**门禁正确报红**（阈值误用集成分支数字），非门禁缺陷 |
 
 ### 11.2 收尾动作序列（按序执行）
 
@@ -1358,12 +1361,12 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 4. ✅ **回写 §8 已知基线**与 **§7 追踪矩阵**（LM-039~044 转 `✅ 已闭环`），并在 §4.4 台账补上 S3.5 / S3.6 / 主审集成 / GPU T01 四行。
 5. ✅ **独立 verifier 复核**（S3.5 + S3.6 + 主审集成的合并结果）—— **不得由实现者自审**；复核在隔离 worktree 内自做变异。**VERDICT: PASS_WITH_NOTES**（10 轮自设计变异全部变红；契约 6 常量未改；CI 阈值恰等于实测总数；LM-045 被独立实证为真实 P1；发现 LM-047~LM-052 共 6 项）。归档见 §4.3.5。
 5b. ✅ **LM-047 修复**（`46f3f9d`）：字节上限在原语层夹到契约天花板（2 MiB 从"约定"变"强制"），新增护栏用例并以变异自证。
-6. ✅ **推送** `fix/audit-remediation-v3` 到 origin（已授权）⇒ 本轮最新 `cf1c8ee`；CI `39844039100` @`9e384e0` = **success**（`39836128969` @`61465ba` 亦 success）。★ **阈值纪律**：阈值**必须**等于「**被推送分支**」的实测总数，**不得**取集成分支的数字，也**不得**为求绿下调 —— `39834352321` @`b1a8b42` 即是把集成分支的 1316 写进了只含 `b1a8b42` 的分支（该分支实测仅 **1295**）⇒ 门禁**正确**报红。
-7. ⏳ **master 合并评估**：**本批尚未合并到 master**（`master` 仍为 `23a6c5c`）。合并的前置条件是「本批收敛 + CI 全绿 + 独立复核通过」—— 前两项已达成，**第三项（GPU 部分独立复核）进行中** ⇒ 合并**暂缓**，等复核结论落地再评估。
+6. ✅ **推送** `fix/audit-remediation-v3` 到 origin（已授权）⇒ 本轮最新 `7a2ea69`；CI `39856338946` @`7a2ea69` = **success**（17 步全 success，含"强制校验测试发现数"门禁：发现 **1396** 条 / 通过 **1395** / 失败 **0** / 跳过 **1**）。★ **阈值纪律**：阈值**必须**等于「**被推送分支**」的实测总数，**不得**取集成分支的数字，也**不得**为求绿下调 —— `39834352321` @`b1a8b42` 即是把集成分支的 1316 写进了只含 `b1a8b42` 的分支（该分支实测仅 **1295**）⇒ 门禁**正确**报红。
+7. ⏳ **master 合并评估**：**本批尚未合并到 master**（`master` 仍为 `23a6c5c`）。合并的前置条件「本批收敛 + CI 全绿 + 独立复核通过」**三项现已全部达成**（收敛 = 本轮 `7a2ea69` 全量回归 **0 失败**；CI 全绿 = `39856338946`；独立复核 = 两轮 **`PASS_WITH_NOTES`**）⇒ **合并可提交用户评估**，但在获得**新的明确授权**前**不得**执行。
 8. ✅ **GPU T01 结论落地**：判定 **`RECREATE_HANDLE_SAFE`** ⇒ 走 GPU 计划 §4.1 主线，**不启用** §9 备用路线；判别位重建分支**保留**，`RecreateWindow` **采用**。回填 GPU 计划 §12.7。
 9. ✅ **GPU C 期（T03–T08）启动条件**已齐备并**已启动**：T01 路线结论落地 **且** `src/Rendering/**` 哈希**全程未变**（T01 已实测）**且** M2/M3 门禁确认 ⇒ T03 / T04 / T05 已落地；**T06–T08 与实机验收（G01–G12）仍未完成**。
 10. ✅ **LM-045（重定向绕过允许目标，P1）已修并经独立复核闭环**：`198a9d4`（HTTP 步骤路径 + `native://` 路径**两侧**都禁自动重定向 + 逐跳复核目标主机）；**范围由主审集成巡检扩大**（native 侧同构缺口 ⇒ 新登记 LM-053，随本提交一并修掉）。独立复核 **PASS_WITH_NOTES**（§4.5.10）。
-11. ⏳ **GPU 部分独立复核**（T03 / T04 / T05 + owner A 接线 + 裁决 D-H）：进行中。★ **过程留痕**：复核方第一轮把基线选到**已被取代的中间提交** `aafe949`（与最终提交 `a498583` 同父兄弟，缺 ledger 订阅与 resolver 接线）⇒ 由主审纠正后改用主分支 HEAD 重做；旧基线上的结论**作废**，详见复核报告。
+11. ✅ **GPU 部分独立复核**（T03 / T04 / T05 + owner A 接线 + 裁决 D-H）：**`PASS_WITH_NOTES`**（§4.5.12）。★ **过程留痕**：复核方第一轮把基线选到**已被取代的中间提交** `aafe949`（与最终提交 `a498583` 同父兄弟，缺 ledger 订阅与 resolver 接线）⇒ 由主审纠正后改用主分支 HEAD 重做；旧基线上的结论**作废**，详见复核报告。复核产出的 **LM-061（护栏盲区）与 LM-063（`finally` 顺序）已由主审修复并做变异自证**（`48de1a8`）；**LM-062 / LM-064 按裁决 D-I 登记不修**。
 
 ### 11.3 需要人工到场 / 外部确认的事项（**不可由 agent 代替**）
 
