@@ -117,10 +117,12 @@ namespace LiteMonitor
         ///   —— <c>.gitignore</c> 已排除 <c>secrets/</c>、<c>*.pkcs8</c>、<c>*.pfx</c>。
         /// ★ 换密钥会让所有用旧密钥签过的 <c>version.json</c> 立刻失效，
         ///   所以客户端与发布必须**同一次**更新，不能分开发布。
-        /// ★ 公钥指纹（SPKI 的 SHA-256）：
+        /// ★ 公钥指纹（base64 文本的 SHA-256）：
         ///   <c>25E6659D954A92A9FCCF1E2622F30F68A7FA9C84390B419B33F3EB0F11F97572</c>
+        /// ★ 这份常量是 <c>internal</c> 而不是 <c>private</c>：单元测试要对着同一个指纹
+        ///   断言"内置公钥没有被换掉"，并且要与更新器工程里的那份拷贝逐字节一致。
         /// </remarks>
-        private const string UpdateSigningPublicKeySpkiBase64 =
+        internal const string UpdateSigningPublicKeySpkiBase64 =
             "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElF/yF1mc8EdJOeUhr/u5vxFJQXVm7oI1cEDuugjRmj5vWM9b14bZ5os1OZD9pDm0Gvj8GXevjHnl10G7kMeOuw==";
 
         /// <summary>
@@ -273,6 +275,12 @@ namespace LiteMonitor
         /// </summary>
         public static async Task CheckAsync(bool showMessage = false)
         {
+            // ★ 启动即读"升级通道与当前版本不兼容"标记（R05）。
+            //   必须排在任何网络请求**之前**：网络再慢、再不通，用户也必须先看到
+            //   "自动升级通道不可用，请手动下载新版本"这个结论，而不是只看到应用自己关掉。
+            //   标记读过一次就被消费，因此不会每次启动都重复提示。
+            ReportLegacyBridgeNoticeIfAny(AppContext.BaseDirectory);
+
             try
             {
                 // ---- 获取版本信息（自动 fallback + 验签）----
@@ -877,6 +885,185 @@ namespace LiteMonitor
                 Debug.WriteLine($"[UpdateChecker] 更新器自检异常: {ex.Message}");
                 return false;
             }
+        }
+
+        // ========================================================
+        // 【9】旧客户端升级通道不兼容的提示（R05）
+        // ========================================================
+
+        /// <summary>
+        /// 读取并消费更新器留下的"升级通道与当前版本不兼容"标记。
+        /// </summary>
+        /// <remarks>
+        /// ★ 背景：旧客户端用单参数调用更新器，新更新器按契约拒绝没有摘要的调用；
+        ///   旧客户端随即退出主程序，用户只看到"应用自己关掉了"。
+        ///   更新器因此在主程序目录旁留下一个机器可读的标记，这里把它读出来，
+        ///   明确告诉用户"自动升级通道与当前版本不兼容，请手动下载新版本"。
+        /// ★ **消费语义**：成功读到后立刻删除该文件，因此不会每次启动都弹同一件事。
+        /// ★ 读不到 / 内容损坏 ⇒ 返回 null（不提示），不抛异常、不阻断启动。
+        /// </remarks>
+        /// <param name="baseDir">主程序目录（标记所在目录）。</param>
+        /// <returns>读到的通知；没有标记或标记不可用 ⇒ null。</returns>
+        public static LegacyBridgeNotice? TryConsumeLegacyBridgeNotice(string baseDir)
+        {
+            if (string.IsNullOrWhiteSpace(baseDir)) return null;
+
+            string path = Path.Combine(baseDir, LegacyBridgeNotice.MarkerFileName);
+            if (!File.Exists(path)) return null;
+
+            string? json = null;
+            try { json = File.ReadAllText(path); } catch { }
+
+            LegacyBridgeNotice? notice = null;
+            if (!string.IsNullOrWhiteSpace(json))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(json);
+                    JsonElement root = doc.RootElement;
+
+                    string code = ReadMarkerString(root, "code");
+                    string reason = ReadMarkerString(root, "reason");
+                    string guidance = ReadMarkerString(root, "guidance");
+                    string manualDownloadUrl = ReadMarkerString(root, "manualDownloadUrl");
+                    string timestamp = ReadMarkerString(root, "timestamp");
+
+                    // 至少要有"原因"或"指引"其中之一，否则这个标记没有可传达的内容
+                    if (!string.IsNullOrWhiteSpace(reason) || !string.IsNullOrWhiteSpace(guidance))
+                    {
+                        notice = new LegacyBridgeNotice(
+                            code, reason, guidance, manualDownloadUrl, timestamp);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("[UpdateChecker] 升级通道标记解析失败：" + ex.Message);
+                }
+            }
+
+            // 消费：读过一次就不再重复提示（内容损坏时也清掉，避免每次启动都重复解析）
+            try { File.Delete(path); } catch { }
+
+            return notice;
+        }
+
+        /// <summary>
+        /// 启动时若发现"升级通道不兼容"标记，就明确告诉用户，并消费该标记。
+        /// </summary>
+        /// <remarks>
+        /// ★ 生产路径：弹窗提示（含原因与手动下载入口）。
+        /// ★ <paramref name="presenter"/> 只为测试存在：把"提示"这一步变成可断言的动作，
+        ///   避免测试去点真实的模态窗口。
+        /// </remarks>
+        internal static void ReportLegacyBridgeNoticeIfAny(
+            string baseDir, Action<LegacyBridgeNotice>? presenter = null)
+        {
+            LegacyBridgeNotice? notice = TryConsumeLegacyBridgeNotice(baseDir);
+            if (notice == null) return;
+
+            if (presenter != null)
+            {
+                presenter(notice);
+                return;
+            }
+
+            try
+            {
+                bool isZh = LanguageManager.CurrentLang == "zh";
+                MessageBox.Show(
+                    LegacyBridgeNotice.BuildMessage(isZh, notice),
+                    LegacyBridgeNotice.BuildTitle(isZh),
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+            catch (Exception ex)
+            {
+                // 提示失败不能影响启动
+                Debug.WriteLine("[UpdateChecker] 提示升级通道不兼容失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>从标记 JSON 里取一个字符串字段（缺失或类型不对 ⇒ 空串）。</summary>
+        private static string ReadMarkerString(JsonElement root, string propertyName)
+        {
+            if (!root.TryGetProperty(propertyName, out JsonElement element)) return string.Empty;
+            return element.ValueKind == JsonValueKind.String
+                ? (element.GetString() ?? string.Empty)
+                : string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// "升级通道与当前版本不兼容"的通知（由更新器留下的机器可读标记解析而来）。
+    /// </summary>
+    /// <remarks>
+    /// ★ 这个类型只承载**已经发生的事实**：旧客户端与新更新器之间的交接方式不兼容，
+    ///   自动升级通道在当前版本上走不通，需要用户手动下载新版本。
+    /// ★ 它不承载任何"要不要继续升级"的决策，也不影响任何完整性校验。
+    /// </remarks>
+    public sealed class LegacyBridgeNotice
+    {
+        /// <summary>标记文件名（与更新器侧 <c>LegacyBridgeMarker.MarkerFileName</c> 一致）。</summary>
+        public const string MarkerFileName = "update_legacy_bridge.json";
+
+        /// <summary>标记的 schema 版本。</summary>
+        public const string Schema = "liteMonitor.legacyBridge/v1";
+
+        /// <summary>原因码（当前只有一种：调用方没有给出期望摘要）。</summary>
+        public string Code { get; }
+
+        /// <summary>人可读的失败原因。</summary>
+        public string Reason { get; }
+
+        /// <summary>给用户的下一步指引（通常来自标记本身）。</summary>
+        public string Guidance { get; }
+
+        /// <summary>手工下载入口（发布页地址）。</summary>
+        public string ManualDownloadUrl { get; }
+
+        /// <summary>标记写入时间（ISO-8601）。</summary>
+        public string Timestamp { get; }
+
+        internal LegacyBridgeNotice(
+            string code, string reason, string guidance, string manualDownloadUrl, string timestamp)
+        {
+            Code = code ?? string.Empty;
+            Reason = reason ?? string.Empty;
+            Guidance = guidance ?? string.Empty;
+            ManualDownloadUrl = manualDownloadUrl ?? string.Empty;
+            Timestamp = timestamp ?? string.Empty;
+        }
+
+        /// <summary>提示窗口标题。</summary>
+        public static string BuildTitle(bool isZh)
+            => isZh ? "自动升级不可用" : "Automatic Update Unavailable";
+
+        /// <summary>
+        /// 拼装提示正文（纯函数，不读全局语言状态，便于直接断言）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 抬头用**客户端自己的本地化文案**，不直接用标记里的 <see cref="Guidance"/>：
+        ///   更新器没有多语言能力，标记里的指引是中文的；直接照搬会让英文用户看到中文。
+        ///   标记里的指引仍然保留在 <see cref="Guidance"/> 上，供人排障与其它工具读取。
+        /// ★ 标记里缺失发布页地址时回落到 <see cref="UpdateChecker.ReleasePageUrl"/>。
+        /// </remarks>
+        public static string BuildMessage(bool isZh, LegacyBridgeNotice notice)
+        {
+            string headline = isZh
+                ? "自动升级通道与当前版本不兼容，请手动下载新版本。"
+                : "The automatic update channel is incompatible with this version. Please download the new version manually.";
+
+            string reason = string.IsNullOrWhiteSpace(notice.Reason)
+                ? (isZh ? "（更新器未给出具体原因）" : "(the updater did not provide a reason)")
+                : notice.Reason;
+
+            string url = string.IsNullOrWhiteSpace(notice.ManualDownloadUrl)
+                ? UpdateChecker.ReleasePageUrl
+                : notice.ManualDownloadUrl;
+
+            return isZh
+                ? headline + "\n\n原因：" + reason + "\n\n发布页：" + url
+                : headline + "\n\nReason: " + reason + "\n\nRelease page: " + url;
         }
     }
 }

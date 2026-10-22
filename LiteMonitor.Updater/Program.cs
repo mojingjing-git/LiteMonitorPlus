@@ -34,10 +34,11 @@ namespace LiteMonitor.Updater
     /// 更新过程的可调项。生产路径一律使用默认值。
     /// </summary>
     /// <remarks>
-    /// 这里只保留两类接缝：
+    /// 这里只保留三类接缝：
     ///   · <see cref="RestartMain"/> / <see cref="WaitForMainExit"/>：测试环境里不能去
     ///     拉起或等待用户的 LiteMonitor++ 进程（更不能去终止它）。
     ///   · 展开上限：让"越界即拒绝"这条路径可以用很小的构造样本被确定性地测到。
+    ///   · <see cref="TrustedDigestSource"/>：旧客户端兼容用的"可信摘要来源"。
     /// 展开上限的**生产默认值**另有独立用例直接断言常量本身。
     /// </remarks>
     internal sealed class UpdaterRunOptions
@@ -47,6 +48,16 @@ namespace LiteMonitor.Updater
         public int MaxZipEntryCount { get; init; } = ZipExpansionLimits.MaxEntryCount;
         public long MaxExpandedBytes { get; init; } = ZipExpansionLimits.MaxExpandedBytes;
         public long MaxSingleEntryBytes { get; init; } = ZipExpansionLimits.MaxSingleEntryBytes;
+
+        /// <summary>
+        /// "可信摘要来源"：调用方没给期望摘要时，更新器去哪里取那份摘要。
+        /// </summary>
+        /// <remarks>
+        /// ★ 默认 null ⇒ 单参数（旧客户端）调用**仍然被拒绝**，现状行为不变。
+        /// ★ 装配它不等于"放宽校验"：来源给出的摘要仍然要通过
+        ///   <see cref="RunUpdate"/> 里的摘要比对，比对不过照样拒绝。
+        /// </remarks>
+        public ITrustedDigestSource? TrustedDigestSource { get; init; }
     }
 
     internal class Program
@@ -99,7 +110,10 @@ namespace LiteMonitor.Updater
         /// </summary>
         /// <param name="args">命令行参数。</param>
         /// <param name="resourcesDir">更新器所在目录（生产上是 AppContext.BaseDirectory）。</param>
-        internal static int RunFromArgs(string[] args, string resourcesDir)
+        /// <param name="options">
+        /// 可调项；生产路径传 null 走默认值（**没有可信摘要来源** ⇒ 单参数调用被拒绝）。
+        /// </param>
+        internal static int RunFromArgs(string[] args, string resourcesDir, UpdaterRunOptions? options = null)
         {
             if (args.Length == 0)
             {
@@ -126,9 +140,38 @@ namespace LiteMonitor.Updater
             //   那种交接方式没有任何"字节必须保持不变"的约束，退化成"不校验就继续解压"
             //   正是本次要消除的缺口，所以这里明确拒绝并给出可诊断原因，绝不静默放行。
             if (args.Length < 2 || string.IsNullOrWhiteSpace(args[1]))
-                return RejectMissingDigest(resourcesDir, args[0]);
+            {
+                // ★ 旧客户端兼容接缝：先问"可信摘要来源"要期望摘要。
+                //   默认没有装配来源（options 为 null 或 TrustedDigestSource 为 null），
+                //   于是这里仍然落到拒绝分支 —— 现状行为不变。
+                //   装配了来源也不等于放宽：拿到的摘要照样要过 RunUpdate 里的比对。
+                string? sourcedDigest = TryGetSourcedDigest(options, args[0]);
+                if (IsWellFormedDigest(sourcedDigest))
+                    return RunUpdate(args[0], sourcedDigest!, resourcesDir, options);
 
-            return RunUpdate(args[0], args[1], resourcesDir);
+                return RejectMissingDigest(resourcesDir, args[0]);
+            }
+
+            return RunUpdate(args[0], args[1], resourcesDir, options);
+        }
+
+        /// <summary>
+        /// 向"可信摘要来源"要期望摘要。拿不到 / 来源抛异常 ⇒ null（fail-closed）。
+        /// </summary>
+        private static string? TryGetSourcedDigest(UpdaterRunOptions? options, string zipFile)
+        {
+            ITrustedDigestSource? source = options?.TrustedDigestSource;
+            if (source == null) return null;
+
+            try
+            {
+                return source.TryGetExpectedDigest(zipFile);
+            }
+            catch
+            {
+                // 来源自己炸了 ⇒ 等同于"没有可信摘要"，不能因此放行
+                return null;
+            }
         }
 
         /// <summary>
@@ -137,13 +180,37 @@ namespace LiteMonitor.Updater
         private static int RejectMissingDigest(string resourcesDir, string zipFile)
         {
             string? baseDir = GetMainProgramDirectory(resourcesDir);
+            string targetDir = baseDir ?? resourcesDir;
+
             LogError(
-                baseDir ?? resourcesDir,
+                targetDir,
                 "[Reject] 拒绝执行：调用方没有提供期望 SHA-256 摘要（LM-016）。" +
                 "本更新器只接受 '<update.zip> <sha256>' 形式；" +
                 "单参数调用（旧版主程序）属于有意的不兼容变更，" +
                 "不会退化成'不校验就继续解压'。未解压任何文件，现有版本未被改动。" +
                 " zip=" + zipFile);
+
+            // ★ 机器可读标记：让**能读它的新客户端**在启动时把这件事明确告诉用户。
+            //   旧客户端自己读不了这个标记（它早于本机制），但它的失败会留在磁盘上，
+            //   等用户装上带本机制的新版本时就能看到"请手动下载新版本"。
+            //   写标记失败不改变拒绝结论，只留日志。
+            const string reason =
+                "调用方没有提供期望 SHA-256 摘要（LM-016）：本更新器只接受 '<update.zip> <sha256>' 形式；" +
+                "旧版主程序的单参数调用属于有意的不兼容变更，不会退化成'不校验就继续解压'。";
+
+            if (LegacyBridgeMarker.TryWrite(
+                    targetDir,
+                    LegacyBridgeMarker.CodeMissingDigest,
+                    reason,
+                    UpdaterVersion,
+                    out string markerPath))
+            {
+                LogError(targetDir, "[Bridge] 已写出升级通道不兼容标记：" + markerPath);
+            }
+            else
+            {
+                LogError(targetDir, "[Bridge] 写出升级通道不兼容标记失败，原因仍见上方日志。");
+            }
 
             return ExitIntegrityRejected;
         }
@@ -365,6 +432,9 @@ namespace LiteMonitor.Updater
                 try { File.Delete(zipFile); } catch { }
                 try { File.Delete(inProgressPath); } catch { }
                 try { if (File.Exists(errorLogPath)) File.Delete(errorLogPath); } catch { }
+                // ★ 通道既然通了，之前留下的"升级通道不兼容"标记就是过期信息：
+                //   不清掉的话，新客户端启动时会对一个已经能正常升级的用户弹"请手动下载"。
+                try { File.Delete(Path.Combine(baseDir, LegacyBridgeMarker.MarkerFileName)); } catch { }
             }
             else
             {
