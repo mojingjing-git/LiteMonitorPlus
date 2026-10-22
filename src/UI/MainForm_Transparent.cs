@@ -217,14 +217,23 @@ namespace LiteMonitor
             // 结果由插件市场页展示，提示用户删除
             src.Plugins.PluginSelfCheck.RunOnce();
 
+            // ★★★ 初始化顺序约束（R01，启动阻断）★★★
+            //   `_winHelper` 必须在 `new UIController(...)` **之前**赋值。
+            //   UIController 构造函数会走 ApplyTheme → ApplyGpuRenderingRoute →
+            //   MainForm.IsWindowLayered()，而 IsWindowLayered() 直接解引用 `_winHelper`
+            //   （`MainForm_Transparent.cs` 的转发方法）⇒ 晚一步赋值就是**启动即崩**的空引用，
+            //   且与主题、GPU 开关、安全模式**全部无关**（该调用无条件求值）。
+            //   实测复现：`.artifacts/r01-repro/mainform-construction-error.log`
+            //   （NullReferenceException @ MainForm.IsWindowLayered）。
+            //   安全性：MainFormWinHelper 的构造函数只保存窗体引用（不触碰 HWND、不依赖 _ui），
+            //   提前赋值无任何副作用；`IsWindowLayered()` 本身在句柄未创建时安全返回 false。
+            _winHelper = new MainFormWinHelper(this);
+
             _ui = new UIController(_cfg, this);
             new src.WebServer.LiteWebServer(_cfg);
 
             // 5. 设置背景色 (这是关键！解耦时漏掉了这行，导致背景是系统默认色而非透明或皮肤色)
             BackColor = ThemeManager.ParseColor(ThemeManager.Current.Color.Background);
-
-            // 2. 初始化双助手
-            _winHelper = new MainFormWinHelper(this);
 
             // ★ A13：窗口轮廓交给 A09 的控制器统一负责（DWM 角偏好 + Region）。
             //   必须在 UI 线程构造（控制器记录构造线程 ID，并拒绝跨线程调用）。
