@@ -31,6 +31,8 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 2. 每条结论必须附：可复现命令 + 实际输出 + 文件行号。
 3. 无法在当前环境验证的，一律记 `NOT_VERIFIED` 或 `BLOCKED_ENV`，**禁止**表述为通过。
 4. "未发现缺陷"必须附**测试范围**，不得表述为无限范围的无缺陷证明。
+5. **变异/还原后必须确认构建产物确实重新编译（2026-10-23 补充门禁踩坑后新增）**：用 `Copy-Item` 还原文件会**保留原时间戳**；若还原后的源文件 mtime **早于**已产出的 `bin/**` 程序集，MSBuild 增量判定"无需重编译"⇒ 测试实际跑的是**上一次变异的二进制**。核对：比对源文件 mtime 与程序集 mtime；不确定时用 `--no-incremental` 强制重建。
+   > **真实发生过**：M3 补充门禁的 9 次变异后，首轮全量回归出现 2 条失败，其签名与**最后一次变异（M9）完全一致** —— 正是这个"签名对得上"才暴露了陈旧二进制问题。还原校验（SHA-256 逐次比对）**只能证明源文件字节一致，不能证明构建产物来自该源文件**。
 
 ### 1.2 假绿禁令（每个任务都要自检）
 
@@ -415,6 +417,39 @@ M5 另做独立佐证：`^(a+)+$`（40×a + `!`）无 timeout 时 **180 s 未完
 
 ---
 
+#### 4.3.4 S3.3 + S3.4 联合专项复核（2026-10-23，候选 `bc7b479`）—— **VERDICT: PASS**
+
+由**独立 verifier** 在隔离 worktree（`git worktree add --detach .artifacts/wt-lm030 bc7b479`）中复核，**未触碰共享主工作区**。verifier 自做 **9 个变异**（6 个上限 + 2 个口径分离 + 1 个目标上限差一），**每个都让对应用例变红**。
+
+| 变异 | 破坏点 | 变红用例 | 端到端判定 |
+|---|---|---|---|
+| M1 | 去 `Math.Min(实例 8 MiB, 沙箱 2 MiB)` | `端到端_响应体超沙箱天花板` | ✅ 真端到端 |
+| M2 | 注释 `scope.EnsureStepAllowed()` | 3 条 | ✅（2 条端到端 + 1 条步骤级） |
+| M3 | 注释 `scope.EnsureTargetsAllowed(...)` | `端到端_目标数超限` | ✅ 真端到端 |
+| M4 | 等待者不监听 `scope.Token` | `端到端_总时长超限` | ✅ 实例级生产路径 |
+| M5 | 注释 `AcquireRequestSlotAsync` | `端到端_并发超限` | ✅ 步骤级生产路径 |
+| M6 | `RegexMatchTimeout` → 10 s | 仅 2 条**单元级**变红 | ⚠️ 端到端只锁"可达性 + 原因码"，**未锁 500 ms 数值** ⇒ **LM-041** |
+| M7 | 步骤计数改回实例级累加 | 4 条（含 3 条端到端） | ✅ 步骤/总时长两口径**确实分离** |
+| M8 | 目标级作用域自带截止时刻 | 2 条（含端到端） | ✅ 同上 |
+| M9 | 目标上限差一（`>` → `>=`） | 被改写的那条断言**变红** | ✅ 护栏强度**不降反升** |
+
+**§1.3 既有断言改动专项审查（`端到端_目标数恰好等于上限_目标上限不触发`）**：
+
+- **判断：正当，护栏强度不降反升。** 旧断言 = "以别的原因码失败（且非 TargetLimit）"；新断言 = "**根本不许失败**"。旧断言 `Assert.Equal(StepLimit, ex.Reason)` 在新语义下**必然失败**（64 目标 × 1 步不再触发 StepLimit 且不再抛异常）⇒ 同一场景**无法既"不改断言"又"让新语义成立"**；改场景的替代覆盖已由 `端到端_多目标_单目标链超16步_仍按LM009_STEP_LIMIT失败` 完整提供。
+- **硬证据**：M9（目标上限差一）与 M7（口径回退）**都让这条被改写的断言变红** ⇒ 它**仍具判别力**。
+
+**口径判定**：步骤数（按目标）✅ / 总时长（按实例共用截止时刻）✅ / 并发（按进程）✅ / **目标展开数（按实例累计）⚠️ 口径 ≠ 实现** ⇒ **LM-040**。逐字段审计 `PluginSandboxScope`（`:551-561`）确认**未发现数据竞争**（`_stepCount` 每目标各持一份并 `Interlocked.Increment`；`_cts` 共享且 CTS 线程安全；`Max*` 只读）。
+
+**内置插件实测复核**：12 个内置插件中**仅 9 个有 `inputs`**，这 9 个的 **18 个 input 声明 100% 为 `"scope": "target"`**（`Holiday`/`PublicIP`/`WeiboHot` 的 `inputs` 为空数组）。每目标步数：Stock=2、Weather=3、其余 10 个=1 ⇒ **全部 ≤ 16**。实测 12/12 均为"成功"（Stock 9 目标、Weather 6 目标，与裁决理由逐字吻合）；M7 实测证实"旧语义下同一探针全部会失败"。
+
+**残留风险（已记录，不阻断）**：单实例一次执行最大步骤数 16 → 64×16 = **1024**；每次响应 ≤ 2 MiB，而 `ParseAndExtract` 在 `response_format="text"` 时把**整段原始响应**写入 context（`PluginExecutor.cs:856-862`，context 为每目标一份）⇒ 单实例可保留 ≈ **2 GiB** 原始文本（需攻击者服务器在 30 s 内投递 ~68 MB/s；**上界可达，非必然**）。30 s 只约束时长、8 槽只约束并发、2 MiB 只约束单响应 —— **三者都不约束累计内存**。
+
+**方法论陷阱（已记入 §1.1 第 5 条）**：9 次变异后首轮全量回归出现 2 条失败，签名与 M9 完全一致 ⇒ 根因是 `Copy-Item` 还原**保留旧时间戳**导致 MSBuild 增量判定未重编译，回归跑的是 **M9 的陈旧二进制**。修正时间戳并 `--no-incremental` 强制重建后全量回归 exit 0（`LiteMonitor.Tests` 1189/1182/**0** 失败/7 跳过、Updater 58/58、Gpu 19/19），跳过清单与基线一致（未增加），契约数值未被改动（`git diff b8444a1 bc7b479 -- src/Plugins/PluginProcessor.cs` 未触及任何数值常量）。
+
+**放行结论**：**LM-030 闭环成立**（其缺陷描述"6 个上限中 5 个完全不生效"已被证伪并修复）。**但"LM-009 已闭环"的表述必须限定为"经 `PluginExecutor` HTTP 步骤路径的 6 个上限"** —— 不得宣称"插件一切网络出口受沙箱约束"，因为 **LM-039**（`native://` 出口）尚未修复，且它**直接违反 S3.2 的明文验收条款**（"总并发数"须有效、"API Key 只发往用户知晓并允许的目标"）⇒ **LM-039 必须修复，不得仅登记**。
+
+---
+
 ### 4.4 本轮并行步骤产出台账
 
 | 步骤 | 提交 | 关键结论 |
@@ -498,6 +533,8 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 
 落地归属 **S3.4**；四种计数口径的最终定义（步骤数按目标 / 目标数按实例 / 总时长按实例 / 并发按进程）须在 S3.4 完成后写入 `PluginSandboxScope` 的类文档。
 
+> ⚠️ **本节论证的覆盖边界（2026-10-23 补充门禁更正）**：上文第 2 条"跨目标放大已有三道独立闸门"**只覆盖 `PluginExecutor` 的 HTTP 步骤路径**。`native://` 步骤（`src/Plugins/PluginExecutor.cs:459-462`）走 `CityCodeResolver` / `CryptoNative` 自带的 HttpClient，**不占并发槽、不受 2 MiB 响应上限、不做凭据目标校验、也不绑定 `scope.Token`（不受 30 s 截止时刻中止）** ⇒ 本论证**不覆盖 native:// 出口**。已登记为 **LM-039**。因此"LM-009 已闭环"的结论口径必须限定为"**经 `PluginExecutor` HTTP 步骤路径的 6 个上限**"，**不得**表述为"插件一切网络出口均受沙箱约束"。
+
 #### 4.5.4 本轮新发现的缺陷
 
 | ID | 级别 | 摘要 | 归属 |
@@ -507,6 +544,12 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 | **LM-037** | 🔵 信息 | Host 缺失的拒绝存在**三层冗余**（`:1801`/`:1805`/`:1806`）⇒ `:1801` 无独立行级护栏（行为级护栏已由 V5b 证明） | 登记为信息项，见 §4.2.7 |
 | LM-032 | 🟡 低 | `PluginMarketPolicyTests.cs:420` 的用例名只断言终态、不直接断言顺序（见 §4.3.2） | 登记待清理 |
 | **LM-038** | 🟡 低 | **包内更新器的"内嵌构建提交"指向错误提交，使 LM-024 的产物来源护栏永久失效** —— `resources/LiteMonitor++.Updater.exe` 是 S4.2 在 HEAD 仍为 `ebe1c38` 时构建的（改源码 → 构建 → 再提交），产物 `ProductVersion = 1.0.0+ebe1c38…` **并不包含** S4.2 对 `LiteMonitor.Updater/Program.cs` 与 `UpdateFileTransaction.cs` 的改动。后果：`scripts/generate-dependency-manifest.ps1` 的"包内更新器是否由本次源码构建"检查**永久停在 `NOT_VERIFIED`**（`git diff ebe1c38 -- LiteMonitor.Updater/` 非空；差异文件写入时间早于产物写盘时间 ⇒ 无法证明一致）—— 即这道护栏**形同失效**：今后改 `LiteMonitor.Updater/` 而不重建，它**不会变红** | ✅ 已修复（按流水线口径 `dotnet publish -c Release -r win-x64 --self-contained false` 在提交点 `366bf9c` 重建并刷新仓库副本；内嵌 SHA 变为 `366bf9c3d53ffc7f16c5c97d6360c4c4293e301c`，`git diff` 为空，判定由 `NOT_VERIFIED` 翻转为**"与本次源码构建一致"**） |
+| **LM-039** | 🟠 中 | **`native://` 步骤绕过沙箱的三道闸门** —— `ExecuteNativeAsync`（`src/Plugins/PluginExecutor.cs:459-462`）直接调用 `CityCodeResolver` / `CryptoNative` **自带的 HttpClient**：**不占并发槽**、**不受 2 MiB 响应上限**、**不做凭据目标校验**、**不绑定 `scope.Token`**（不受 30 s 截止时刻中止）。且 `native://crypto?...&fallback=<任意 URL>` 会取回**用户提供的任意 URL**（`src/Plugins/Native/CryptoNative.cs:126-141`，8 s 超时）。实测：64 个 target 各跑一步 ⇒ 观察到 **64 个并发**请求直连回环，而 `PluginSandbox.AvailableRequestSlots` 仍为 8 ⇒ **突破"并发 ≤ 8（进程级）"**。**这直接违反 S3.2 的明文验收条款**"总并发数"须有效与"**API Key 只发往用户知晓并允许的目标**" ⇒ **不是范围外发现，必须修** | **必须修复**（S3.5）。属 S3.3 的覆盖缺口，S3.4 把每目标尝试步骤上限放大 64 倍后同步放大该绕过面 |
+| **LM-040** | 🟡 低~中 | "目标展开数按实例累计"**未被实现强制** —— `PluginSandboxScope.EnsureTargetsAllowed`（`src/Plugins/PluginProcessor.cs:694-701`）累加 `_targetCount` 后比较的是**入参 `targetCount`** 而非累计值（类文档 `:534-536` 声称"累计 ≤ 64"）。单元测试 `PluginSandboxLimitsTests` 目标展开数用例（`:272-290`）**自证**累计到 70 > 64 **不抛异常**（`:282-283`）。当前 `PluginExecutor` 只调用一次 ⇒ 实际行为正确，属**未来调用方风险 + 文档不符** | 登记后续清理：改为比较累计值 `Volatile.Read(ref _targetCount) > MaxTargets`，并同步调整该单元测试期望 |
+| **LM-041** | 🟡 低 | 端到端正则用例**不锁定 500 ms 数值** —— `tests/LiteMonitor.Tests/PluginExecutorSandboxTests.cs:508-531` 只锁"可达性 + 原因码"，数值 500 ms 仅由 `PluginSandboxLimitsTests.cs:151-153` 守住。变异（M6：`PluginProcessor.cs:468` → 10 s）时**端到端用例仍通过** | 登记后续清理：在端到端用例补"耗时 < 2 s"或断言实际传入的 `RegexMatchTimeout` |
+| **LM-042** | 🟡 低 | `端到端_目标数恰好等于上限` 的请求数断言**过弱** —— `PluginExecutorSandboxTests.cs:296` 的 URL 不含目标变量、`:309` 断言 `RequestCount > 0`。实测：64 目标 + 同一 URL ⇒ 服务端只收到 **61** 个请求（在途去重合并，`PluginExecutor.cs:432-435`）；URL 改目标专属后恰为 64 ⇒ 现断言无法证明"64 个目标都真的跑了各自的一步"。**S3.3 既有，非 S3.4 引入** | 登记后续清理：URL 改目标专属 + 收紧为 `Assert.Equal(MaxTargetsPerStep, server.RequestCount)` |
+| **LM-043** | 🔵 信息 | `Assert.NotEqual(TargetLimit, failure?.Reason)` 在 `failure == null` 时**恒真**（空转断言），`PluginExecutorSandboxTests.cs:304` | 登记后续清理：删去该行，或先断言 `failure` 非空再判原因码 |
+| **LM-044** | 🔵 信息 | 生产入口的 **30 s 契约值未被测试钉住** —— 3 条总时长用例（`:322`/`:362`/`:543`）注入测试自建作用域并走私有方法；若把 `ExecuteInstanceAsync` 的默认时长改成 5 分钟，这 3 条仍全绿 | 登记后续清理：补一条经 `ExecuteInstanceAsync` 的用例，断言实际使用的 `MaxDuration == MaxExecutionDurationMs` |
 
 #### 4.5.5 LM-016 的不变式与残余窗口（S4.2）
 
