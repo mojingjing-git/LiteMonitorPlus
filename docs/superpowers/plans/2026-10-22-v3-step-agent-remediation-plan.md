@@ -1230,9 +1230,9 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | 解决方案测试发现 | **1394**（CI 口径） | `dotnet test LiteMonitor.sln` | **不再是 0** —— BASE-003 已闭环（`0366268` 三个测试工程入 `.sln`）；`assert-test-counts.ps1` 把「发现 0」变红 |
 | 两点 / 三点分支差异 | 484 / 522，共同祖先 `169e90a2…` | `git diff --name-only master branch` / `master...branch` | 已实测（BASE-002 起点；**本轮未重测**） |
 | Release 构建 | **成功** | `dotnet build LiteMonitor.sln -c Release` | 6 次 CI 全部 success（CI 内含 `dotnet build LiteMonitor.sln -c Release`，`.github/workflows/ci.yml:159`）。本地曾被运行中的 `LiteMonitor++.exe` 锁住输出目录（ENV-001，**非代码缺陷**，实例已自行退出） |
-| 远端 GitHub Actions | 本轮 **1 次 failure → 修正后 success**；此前连续 `success` | `gh run list --repo mojingjing-git/LiteMonitorPlus --limit 8` | `39836128969` @`61465ba` = **success**（最新）；`39834352321` @`b1a8b42` = **failure**（根因：阈值按**集成分支**实测 1316 设置，而被推送的 `b1a8b42` 实测仅 **1295** ⇒ 门禁**正确**报红，**不是**门禁缺陷）；`39829176306` @`23a6c5c` = success |
+| 远端 GitHub Actions | 本轮 **1 次 failure → 修正后连续 2 次 success** | `gh run list --repo mojingjing-git/LiteMonitorPlus --limit 8` | `39844039100` @`9e384e0` = **success**（最新，含 GPU T03）；`39836128969` @`61465ba` = **success**；`39834352321` @`b1a8b42` = **failure**（根因：阈值按**集成分支**实测 1316 设置，而被推送的 `b1a8b42` 实测仅 **1295** ⇒ 门禁**正确**报红，**不是**门禁缺陷）；`39829176306` @`23a6c5c` = success |
 | 远端 Release | **仍为 0**（本批不发布） | `gh release list` | 已实测；发布准入见 §9 |
-| 本地 HEAD vs 远端 `origin/fix/audit-remediation-v3` | 本轮推送后**齐平**（`61465ba`） | `git log --oneline origin/fix/audit-remediation-v3..HEAD` | 已实测；`master` 本地与远端恒为 `23a6c5c`（**本批未合并**；合并须等本批收敛 + CI 绿 + 独立复核通过） |
+| 本地 HEAD vs 远端 `origin/fix/audit-remediation-v3` | 本轮推送后**齐平**（`9e384e0`） | `git log --oneline origin/fix/audit-remediation-v3..HEAD` | 已实测；`master` 本地与远端恒为 `23a6c5c`（**本批未合并**；合并须等本批收敛 + CI 绿 + 独立复核通过） |
 
 **基线纪律：** 任何步骤完成后，上述**当前实测值**（CI 口径：主工程 共 **1317**（通过 **1316** / 跳过 **1**），更新器 通过 **58**，GPU 非性能 通过 **19**，三工程合计 **1394**）**不得下降**；主工程**总数只增不减**。下降即为回归，必须在同一步骤内修复，不得记为"已知问题"后放行。CI 侧的对应门禁为 `MIN_TEST_TOTAL: 1394`、`MAX_SKIPPED_TESTS: 1`、`MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests (≥6)`（`.github/workflows/ci.yml`）—— 跳过数**有上限**、契约类**不许被跳过**，两者均为 S4.1 引入的收紧。
 
