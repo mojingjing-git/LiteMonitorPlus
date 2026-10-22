@@ -421,8 +421,9 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 
 | ID | 级别 | 摘要 | 归属 |
 |---|---|---|---|
-| **LM-034** | 🟡 低~中 | **被拒绝的 WebSocket 握手不关闭连接** —— `WebSessionManager` 的 `client.Close()` 只在 HTTP 分支，WS 握手被拒后连接**悬挂**到服务停止（不发 FIN）。而 `LiteWebServer.MaxConcurrentConnections = 64` ⇒ **64 次被拒握手即可占满连接额度**，使网页服务对该端点不可用 | **S4.2b**（修复中） |
-| LM-035 | 🟡 低 | `PluginMarketPolicyTests.cs:420` 的用例名只断言终态、不直接断言顺序（见 §4.3.2 LM-032） | 登记待清理 |
+| **LM-034** | 🟡 低~中 | **被拒绝的 WebSocket 握手不关闭连接** —— `WebSessionManager` 的 `client.Close()` 只在 HTTP 分支，WS 握手被拒后连接**悬挂**到服务停止（不发 FIN）。**危害经 S4.2b 实测更正**：是**服务端套接字/句柄泄漏**（每次被拒握手留下 1 条停在 `ESTABLISHED` 的连接，服务端 `TcpClient` 无人 Close），**不是**"占满 64 连接额度致服务不可用" —— `HandleClientAsync` 返回后 finally 已 `Interlocked.Decrement(_activeConnections)`，计数器不会被耗尽（实测 10 次被拒握手后仍能正常完成 101 成功握手）。附带：`SendHttpResponse` 已写 `Connection: close` 却不发 FIN，本身也是协议违约 | **S4.2b** ✅ 已修复（`6d993d7`：在 `if (Handshake(...))` 补 `else { client.Close(); }`，**先写回 401/403/400 响应再关闭**；握手成功路径不受影响） |
+| **LM-035** | 🟡 低~中 | `Handshake` 的 `catch { return false; }`（`WebSessionManager.cs:2415`）**宽泛吞异常** —— 写响应失败时根因不可诊断，调用方只能看到"握手失败"。与 LM-031（`ExtractJsonValue` 宽泛 catch）同类 | 登记待清理（本轮未修，避免战线扩张） |
+| LM-032/036 | 🟡 低 | `PluginMarketPolicyTests.cs:420` 的用例名只断言终态、不直接断言顺序（见 §4.3.2 LM-032） | 登记待清理 |
 
 #### 4.5.5 LM-016 的不变式与残余窗口（S4.2）
 
