@@ -767,6 +767,32 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 
 **复核方自述的口径偏差（如实留痕）**：任务给定基线「1316 总数 / 1315 通过」与其实测「**1317 / 1316**」差 1 —— 查证 `1316` 是 **CI 阈值**（`e91c0cc`），不是该提交的**实际发现数**；不影响验收标准（失败 0、跳过 1）。
 
+#### 4.5.11 主审裁决 D-H：legacy 回退样式的 `Accent` 落点
+
+**背景**：GPU T05 的 `LegacyFallbackStyle` 输出 6 项（`Background` / `PanelBackground` / `Border` / `Text` / `MutedText` / `Accent`），而 legacy 渲染的 `ColorConfig`（`src/Core/ThemeManager.cs:254-281`）**没有 accent 色槽**：
+
+| resolver 输出 | `ColorConfig` 落点 | 状态 |
+|---|---|---|
+| `Background` | `Background`（`:254`） | 直接对应 |
+| `PanelBackground` | `GroupBackground`（`:269`） | 直接对应（分组底色） |
+| `Border` | `Border`（`:273`，可空） | 直接对应 |
+| `Text` | `TextPrimary`（`:259`） | 直接对应（正文） |
+| `MutedText` | `TextSecondary`（`:281`，可空） | 直接对应（次要文字） |
+| `Accent` | **无对应槽** | ★ 本裁决 |
+
+**候选与排除（逐条给理由，不留"看着行"式裁决）**：
+
+- `ValueSafe` / `ValueWarn` / `ValueCrit`（`:260-262`）—— **排除**：它们是**告警语义色**（绿 / 黄 / 红）。合同 §4.6 明文要求"保留告警语义和进度值" ⇒ 占用即改变告警语义。
+- `BarLow` / `BarMid` / `BarHigh`（`:264-267`）—— **排除**：进度条分段色，与"强调"无关，且占用会改变进度条观感。
+- `TextGroup`（`:258`）—— **排除**：分组标题色，其层级语义接近 `MutedText`（次级文字）；若与 `MutedText` 同源覆盖，两个层级会塌陷成同一色。
+- `TextTitle`（`:256`）—— **采用**：标题 / 强调前景色，是 legacy 渲染里承担"突出"角色的槽位；正文可读性对比度由 `TextPrimary` 承担 ⇒ 占用它**不影响**合同 §9.5 针对正文与次要文字的对比度口径。
+
+**裁决 D-H**：`Accent` → **`ColorConfig.TextTitle`**。
+
+**落实要求（交给集成方 / T03 收尾）**：owner B 的派生主题副本（`LegacyFallbackStyleBridge.BuildDerivedTheme`）必须把 `Accent` 落到 `TextTitle`，且**不得**触碰 `ValueSafe/ValueWarn/ValueCrit` 与 `Bar*`；该落地必须由**至少一条会变红的用例**钉住（把落点改回"不消费 accent"必须红）。
+
+**本裁决的独立佐证**：GPU 部分的独立复核任务已同时收到本问题（要求给出带理由的独立判断）；若其判断与本裁决不一致，按"实现者/编排方意见一律以实测为准"处理，并在此处留痕更正。
+
 ---
 
 ## 5. 执行步骤
