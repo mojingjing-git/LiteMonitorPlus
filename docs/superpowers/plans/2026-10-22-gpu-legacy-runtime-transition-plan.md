@@ -516,13 +516,57 @@ T02 合同已冻结：**`docs/superpowers/plans/2026-10-23-gpu-transition-t02-co
 
 `ThemeFallbackStyle`（纯 CLR，全部可空，`null` = 未声明）：`Background`（背景）/ `PanelBackground`（分组底色）/ `Border`（边框）/ `Text`（主前景）/ `MutedText`（次要前景）/ `Accent`（强调）。颜色格式沿用 `ThemeManager.ParseColor`（`src/Core/ThemeManager.cs:596`）可解析的既有色值字符串。未知键由 `[JsonExtensionData]` 承接保留。
 
-### 12.7 与 T01 的交接（待定项，**T01 结论落地后本节必须回填**）
+### 12.7 与 T01 的交接 —— **已回填**（2026-10-23）
 
-| T01 结论 | 合同条款的变动 |
-|---|---|
-| **可安全使用** | §8 判别位、§4 步 4–7、§7.3 `RecreateWindow` 全量生效 |
-| **不可安全使用**（走 §9 备用路线） | **步 4 删除**、判别位的"重建"分支作废、`RecreateWindow` **不采用**、4 个重建类错误码不适用、**U02 / U03 / U06b 改判**；需新增"子 HWND 呈现历史"与"子 HWND / 顶层各自持有 affinity 所有权"两条规则 |
-| 路线无关、照常实现 | §6 清理转交（GPU-001）、§7 代次合并、§9 fallback 规则 |
+**T01 实测判定：`RECREATE_HANDLE_SAFE` —— `Control.RecreateHandle()` 在本项目窗口上可安全使用。**
+
+交付物：报告 `docs/superpowers/plans/2026-10-23-gpu-transition-t01-report.md` + 探针 `tools/GpuHostLifecycleProbe/**`（提交 `2c8915b`）；原始数据 `.artifacts/gpu-t01/{run-s1,run-s2-topmost,run-s2-plain,run-mainform4}/`。
+
+| T01 结论 | 合同条款的变动 | **本轮回填后的实际处置** |
+|---|---|---|
+| **可安全使用** ✅ | §8 判别位、§4 步 4–7、§7.3 `RecreateWindow` 全量生效 | **全部保留，合同不改**：判别位（`PendingControlledRecreateCount` / `PendingControlledRecreateRequestId`）**保留**；合同 §4 步 4–7 **保留**；`PresentationSession.RecreateWindow` **正式采用**（GPU-002 的 R1–R6 一并生效） |
+| **不可安全使用**（走 §9 备用路线） | 步 4 删除、判别位的"重建"分支作废、`RecreateWindow` 不采用、4 个重建类错误码不适用、U02 / U03 / U06b 改判 | **不适用**（该分支的前提已被实测证伪） |
+| 路线无关、照常实现 | §6 清理转交（GPU-001）、§7 代次合并、§9 fallback 规则 | **照常实现，不受 T01 影响** |
+
+**T01 的 4 组独立运行（结论完全一致）**：
+
+| 运行 | 场景 | A 组（只停 GPU，保留 HWND） | B 组（停 GPU + 重建 HWND） |
+|---|---|---|---|
+| `run-s1` | S1 正式 renderer | 未恢复 `0/1024`×3，三帧 `FFFFC257` = GPU 帧色（**冻结帧**） | 已恢复 `1024/1024`×3，**相邻帧颜色不同**（活帧） |
+| `run-s2-topmost` | S2 MainForm 形态（置顶） | 未恢复 `0/1024`×3，三帧 `FF132F30` = GPU 帧色 | 已恢复 `1024/1024`×3 |
+| `run-s2-plain` | S2 MainForm 形态（非置顶） | 未恢复 `0/1024`×3，三帧 `FFFFC257` = GPU 帧色 | 已恢复 `1024/1024`×3 |
+| `run-mainform4` | **真实 `MainForm`** | 未恢复 `0/1024`×3，三帧 `FF132E30` = GPU 帧色 | 已恢复 `1024/1024`×3 |
+
+三条支撑依据：
+
+1. **句柄事件序列 + 单调代次** —— `HandleDestroyed → HandleCreated` 严格有序，代次恰好 **+1**（S1/S2：1→2；真实 `MainForm`：0→1）。**判定不使用 `newHwnd != oldHwnd`**（句柄值仅作记录）。
+2. **窗口状态逐项恢复** —— 可见性、置顶样式、扩展样式、窗口矩形、Region、分层 alpha、前台窗口句柄**逐项相同**；前台句柄全程恒为 67372，探针**从未抢焦点**。
+3. **桌面像素回读** —— 基于 `CopyFromScreen`（**非** `DrawToBitmap` / `PrintWindow`）；采样客户区中心 32×32 桌面像素块，容差 ≤12/通道、命中率 ≥90%；**冻结帧判别 = 相邻帧实测色相同且等于 GPU 出帧色**。
+
+**真实 `MainForm` 分支不是 `NOT_VERIFIED`**：隔离目录运行，隔离门通过（托盘不可见、网页端口未监听、4 处用户/仓库目录比对**新增删除均为 0**）；唯一残留副作用是**进程内后台硬件采样无法隔离**（`UIController` 构造函数即启动）。前两次尝试的中止原因已如实记录（门 1 托盘可见 / 生产 legacy 渲染覆盖探针帧），并据此修正了隔离方式（`AppContext.BaseDirectory` 取自**可执行文件路径**，故必须启动隔离目录里的那份 exe）。
+
+**候选哈希前后比对**：生产 `src/Rendering/**`（`a39d49ce…`）与 `src/UI/**`（`502629b5…`）**全程未变**；4 次有效运行 `sourceHashChanged = false`（探针**内置**漂移检测，非人工声明）。两个探针哈希按预期变化（T01 必须改探针）。
+
+### 12.9 T01 登记的 10 项 `NOT_VERIFIED`（N1–N10）
+
+| 编号 | 事项 | 归属 |
+|---|---|---|
+| N1 | WDA / affinity 恢复（GPU-003 / U07 / U08） | T03/T04 + T09 |
+| N2 | `MakeWindowAssociation` 残留（GPU-004） | T04 |
+| N3 | 半透明 `Opacity<1` 的 GDI 恢复（alpha 合成分支本身亦未验证） | T06 / T09 |
+| N4 | 隐藏 / 最小化切换（G05 / U13） | T09（需人工） |
+| N5 | 重建后的淡入抑制与 DPI / 布局重算（G06 / G08） | T03 / T04 |
+| N6 | live / backdrop 捕获链与 GPU live 互斥（U14 / G10） | T09（需人工） |
+| N7 | 10 次连续往返（G03） | T09 |
+| N8 | 真实 `MainForm` 的后台硬件采样**无法隔离**（进程内副作用） | 如实登记，**不可用夹具消除** |
+| N9 | 探针 `bin/` 下残留 `settings.json`（**gitignore**、不属任何哈希组；可恢复删除被本机策略拒绝，**未强行绕过**） | 清理项 |
+| N10 | **T00 §2.1 的屏幕分辨率已过时** —— 实测 `DISPLAY1 = 3840×2160`、`DISPLAY2 = 1440×2560 @ x=-1440`（`Screen` 与 DXGI 两源一致，`Win32_VideoController` 复核）。T00 记录的 `2194×1234` / `1152×2048` 是**缩放后的逻辑分辨率**（175% / 125%） | **T09 的 G06 / G07 不得沿用旧值** |
+
+**T01 报告 §7 的接线约束（T03/T04 必须遵守）**，尤其：**先完整释放交换链 + factory、再重建**；**重建入口走 Form 自身的受控方法而非反射**；**重建期屏蔽自动拉起 GPU** 并引入"重建 / 首次创建"判别位。
+
+> **GPU-001 仍然直接卡死 §4.1 主线。** T01 证明的是「**HWND 重建本身可用**」，**不等于**「GPU 呈现可安全重启」—— 后者仍被 GPU-001 卡住：WDA 恢复失败 ⇒ `_presentation` 不置空 ⇒ `WindowCapturePolicyRestored` 为 false ⇒ `StopGpuPresentation()` 保留已 Dispose 的宿主 ⇒ 三条重启路径全部早退。必须由 T02 合同的 §6 **清理责任转交**先解决（落地于 T03/T04）。
+
+**适配器归属**：探针窗口 **4/4 落在 NVIDIA GeForce RTX 3080**（DXGI `DesktopCoordinates` + `EnumDisplayDevices` 双源一致），D3D11 渲染适配器同为 RTX 3080；**未落在** 4 个虚拟显示适配器上 ⇒ **不得据此断言虚拟适配器上行为相同**。
 
 ### 12.8 合同登记的 10 项 `NOT_VERIFIED`
 
