@@ -1031,6 +1031,7 @@ namespace LiteMonitor.Tests
                 Assert.Contains("401", FirstLine(resp));
                 Assert.DoesNotContain("Set-Cookie", resp);
                 Assert.DoesNotContain("csrf", resp, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("ticket", resp, StringComparison.OrdinalIgnoreCase);
 
                 // ② 口令错误也一样被拒
                 string wrong = await SendRawAsync(port,
