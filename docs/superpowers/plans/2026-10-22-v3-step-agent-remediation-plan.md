@@ -191,7 +191,7 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 
 **编号规则：** `LM-` 缺陷 / `SEC-` 安全 / `BASE-` 基线 / `ENV-` 环境事实 / `GPU-` GPU 切换专项。第三方评审使用的 `LM-018`、`LM-019` 与 `LM-003b`、`LM-003c` 指同一处代码，已合并并保留别名以便交叉引用；`LM-005/006` 为同一协议缺陷的两个侧面。
 
-> **编号占用现状（2026-10-23 核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-044`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-045` 起顺延，不得复用已关闭编号。** GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
+> **编号占用现状（2026-10-23 核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-044`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-047` 起顺延，不得复用已关闭编号**（`LM-045`/`LM-046` 已于本轮占用）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
 
 ### 4.1 根因更正记录 · LM-001（原"永久停摆"前提已证伪）
 
@@ -500,6 +500,10 @@ M5 另做独立佐证：`^(a+)+$`（40×a + `!`）无 timeout 时 **180 s 未完
 | LM-034 | `6d993d7` | 被拒 WebSocket 握手补 `else { client.Close(); }`（4 用例）；危害描述经实测更正为"套接字泄漏"（见 §4.5.4） |
 | CI 护栏 | `600a18c` | 把依赖清单核对接入 CI（LM-024 护栏：NOTICE 与实际解析依赖不一致即红） |
 | 归档 | `56d573e` / `b0066da` / `d30f314` / `4aa4915` / `366bf9c` | 分别为：LM-001 根因更正 + M1 复核 F1–F8 归档 / M2 首轮 CONDITIONAL 归档 / M3 门禁 PASS_WITH_NOTES 归档 / LM-034 危害描述更正 / LM-036 断言恢复 + M2 重核放行归档 |
+| **S3.5** | `d23e6fc` | **LM-039**：`native://` 步骤接入沙箱闸门 —— 原生取数复用**同一套既有原语**（`AcquireRequestSlotAsync` 进程级槽位 / `ReadResponseBodyAsync` 2 MiB / `scope.Token` 30 s 截止 / `EnsureCredentialTargetAllowed` 凭据目标），并新增**允许目标集合**（模板声明主机 ∪ native URL 内嵌字面量主机）—— 校验发生在**任何请求发出之前**（`fallback=<用户填的任意 URL>` 必拒，`LM009_CREDENTIAL_TARGET_NOT_ALLOWED`）。8 条新用例 / 5 变异全捕获 |
+| **S3.6** | `d588440` | **LM-040~044**：目标展开数改判**累计值**（`Interlocked.Add` 返回值，跨 target 累计 > 64 即失败）；端到端正则用例钉住 **500 ms**；目标数用例 URL 改目标专属并收紧为**恰好 64 个请求**（实测旧 URL 因在途合并只得 61）；删除 2 处 `failure == null` 时恒真的空转断言；生产默认时长收敛到唯一出处 `DefaultExecutionDuration`。2 条新增 / 3 条期望反转 |
+| **主审集成** | `6310dbf` | **LM-044 缝隙收敛**：把 S3.6 放进 `PluginSandboxScope` 的**进程级静态登记表**换成 `PluginExecutor.CreateScope` **实例级虚方法缝隙**（生产入口唯一创建点），移除只服务于测试的全局可变状态；**并补上 S3.6 自述未能实测的变体**（`CreateScope` 硬编码 5 分钟 / 生产入口绕开 `CreateScope`）—— 3 变异全捕获 |
+| **GPU T01** | `2c8915b` | 实测判定 **`RECREATE_HANDLE_SAFE`**：`Control.RecreateHandle()` 可安全使用 ⇒ 走计划 §4.1 主线，**不启用** §9 备用路线。4 组独立运行（S1 正式 renderer / S2 MainForm 形态×2 / **真实 MainForm**）结论一致：句柄事件 `HandleDestroyed → HandleCreated` 有序、代次恰好 +1；窗口状态（可见性/置顶/扩展样式/矩形/Region/分层 alpha/前台句柄）逐项相同；**桌面像素回读**（`CopyFromScreen`，非 `DrawToBitmap`）证明重建后 GDI 动态帧恢复（1024/1024，相邻帧颜色不同），对照组停在冻结 GPU 帧（0/1024，三帧逐位等于 GPU 帧色）。真实 MainForm 分支**隔离门通过**（托盘不可见、网页端口未监听、用户/仓库目录零增减），**非** `NOT_VERIFIED` |
 
 **S5.3 实测的随包分发传递依赖**（均 MIT）：`Vortice.DXGI 3.8.3`、`Vortice.DirectX 3.8.3`、`Vortice.Mathematics 2.1.0`、`SharpGen.Runtime 2.4.2-beta`、`SharpGen.Runtime.COM 2.4.2-beta`、`Microsoft.Diagnostics.FastSerialization`。
 
@@ -568,12 +572,12 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 | **LM-037** | 🔵 信息 | Host 缺失的拒绝存在**三层冗余**（`:1801`/`:1805`/`:1806`）⇒ `:1801` 无独立行级护栏（行为级护栏已由 V5b 证明） | 登记为信息项，见 §4.2.7 |
 | LM-032 | 🟡 低 | `PluginMarketPolicyTests.cs:420` 的用例名只断言终态、不直接断言顺序（见 §4.3.2） | 登记待清理 |
 | **LM-038** | 🟡 低 | **包内更新器的"内嵌构建提交"指向错误提交，使 LM-024 的产物来源护栏永久失效** —— `resources/LiteMonitor++.Updater.exe` 是 S4.2 在 HEAD 仍为 `ebe1c38` 时构建的（改源码 → 构建 → 再提交），产物 `ProductVersion = 1.0.0+ebe1c38…` **并不包含** S4.2 对 `LiteMonitor.Updater/Program.cs` 与 `UpdateFileTransaction.cs` 的改动。后果：`scripts/generate-dependency-manifest.ps1` 的"包内更新器是否由本次源码构建"检查**永久停在 `NOT_VERIFIED`**（`git diff ebe1c38 -- LiteMonitor.Updater/` 非空；差异文件写入时间早于产物写盘时间 ⇒ 无法证明一致）—— 即这道护栏**形同失效**：今后改 `LiteMonitor.Updater/` 而不重建，它**不会变红** | ✅ 已修复（按流水线口径 `dotnet publish -c Release -r win-x64 --self-contained false` 在提交点 `366bf9c` 重建并刷新仓库副本；内嵌 SHA 变为 `366bf9c3d53ffc7f16c5c97d6360c4c4293e301c`，`git diff` 为空，判定由 `NOT_VERIFIED` 翻转为**"与本次源码构建一致"**） |
-| **LM-039** | 🟠 中 | **`native://` 步骤绕过沙箱的三道闸门** —— `ExecuteNativeAsync`（`src/Plugins/PluginExecutor.cs:459-462`）直接调用 `CityCodeResolver` / `CryptoNative` **自带的 HttpClient**：**不占并发槽**、**不受 2 MiB 响应上限**、**不做凭据目标校验**、**不绑定 `scope.Token`**（不受 30 s 截止时刻中止）。且 `native://crypto?...&fallback=<任意 URL>` 会取回**用户提供的任意 URL**（`src/Plugins/Native/CryptoNative.cs:126-141`，8 s 超时）。实测：64 个 target 各跑一步 ⇒ 观察到 **64 个并发**请求直连回环，而 `PluginSandbox.AvailableRequestSlots` 仍为 8 ⇒ **突破"并发 ≤ 8（进程级）"**。**这直接违反 S3.2 的明文验收条款**"总并发数"须有效与"**API Key 只发往用户知晓并允许的目标**" ⇒ **不是范围外发现，必须修** | **必须修复**（S3.5）。属 S3.3 的覆盖缺口，S3.4 把每目标尝试步骤上限放大 64 倍后同步放大该绕过面 |
-| **LM-040** | 🟡 低~中 | "目标展开数按实例累计"**未被实现强制** —— `PluginSandboxScope.EnsureTargetsAllowed`（`src/Plugins/PluginProcessor.cs:694-701`）累加 `_targetCount` 后比较的是**入参 `targetCount`** 而非累计值（类文档 `:534-536` 声称"累计 ≤ 64"）。单元测试 `PluginSandboxLimitsTests` 目标展开数用例（`:272-290`）**自证**累计到 70 > 64 **不抛异常**（`:282-283`）。当前 `PluginExecutor` 只调用一次 ⇒ 实际行为正确，属**未来调用方风险 + 文档不符** | 登记后续清理：改为比较累计值 `Volatile.Read(ref _targetCount) > MaxTargets`，并同步调整该单元测试期望 |
-| **LM-041** | 🟡 低 | 端到端正则用例**不锁定 500 ms 数值** —— `tests/LiteMonitor.Tests/PluginExecutorSandboxTests.cs:508-531` 只锁"可达性 + 原因码"，数值 500 ms 仅由 `PluginSandboxLimitsTests.cs:151-153` 守住。变异（M6：`PluginProcessor.cs:468` → 10 s）时**端到端用例仍通过** | 登记后续清理：在端到端用例补"耗时 < 2 s"或断言实际传入的 `RegexMatchTimeout` |
-| **LM-042** | 🟡 低 | `端到端_目标数恰好等于上限` 的请求数断言**过弱** —— `PluginExecutorSandboxTests.cs:296` 的 URL 不含目标变量、`:309` 断言 `RequestCount > 0`。实测：64 目标 + 同一 URL ⇒ 服务端只收到 **61** 个请求（在途去重合并，`PluginExecutor.cs:432-435`）；URL 改目标专属后恰为 64 ⇒ 现断言无法证明"64 个目标都真的跑了各自的一步"。**S3.3 既有，非 S3.4 引入** | 登记后续清理：URL 改目标专属 + 收紧为 `Assert.Equal(MaxTargetsPerStep, server.RequestCount)` |
-| **LM-043** | 🔵 信息 | `Assert.NotEqual(TargetLimit, failure?.Reason)` 在 `failure == null` 时**恒真**（空转断言），`PluginExecutorSandboxTests.cs:304` | 登记后续清理：删去该行，或先断言 `failure` 非空再判原因码 |
-| **LM-044** | 🔵 信息 | 生产入口的 **30 s 契约值未被测试钉住** —— 3 条总时长用例（`:322`/`:362`/`:543`）注入测试自建作用域并走私有方法；若把 `ExecuteInstanceAsync` 的默认时长改成 5 分钟，这 3 条仍全绿 | 登记后续清理：补一条经 `ExecuteInstanceAsync` 的用例，断言实际使用的 `MaxDuration == MaxExecutionDurationMs` |
+| **LM-039** | 🟠 中 | **`native://` 步骤绕过沙箱的三道闸门** —— `ExecuteNativeAsync`（`src/Plugins/PluginExecutor.cs:459-462`）直接调用 `CityCodeResolver` / `CryptoNative` **自带的 HttpClient**：**不占并发槽**、**不受 2 MiB 响应上限**、**不做凭据目标校验**、**不绑定 `scope.Token`**（不受 30 s 截止时刻中止）。且 `native://crypto?...&fallback=<任意 URL>` 会取回**用户提供的任意 URL**（`src/Plugins/Native/CryptoNative.cs:126-141`，8 s 超时）。实测：64 个 target 各跑一步 ⇒ 观察到 **64 个并发**请求直连回环，而 `PluginSandbox.AvailableRequestSlots` 仍为 8 ⇒ **突破"并发 ≤ 8（进程级）"**。**这直接违反 S3.2 的明文验收条款**"总并发数"须有效与"**API Key 只发往用户知晓并允许的目标**" ⇒ **不是范围外发现，必须修** | ✅ **已修复**（S3.5，`d23e6fc`）：原生取数接入同一套闸门（并发槽位 / 2 MiB / 30 s 截止 / 凭据目标 / 允许目标），8 条新用例、5 变异全捕获。**口径更新**：LM-009 的闭环范围由"HTTP 步骤路径"扩展到"HTTP 步骤路径 **+ native:// 路径**"，但**仍不覆盖"插件自带任意 HTTP 客户端"**（见 §4.5.7 LM-045） |
+| **LM-040** | 🟡 低~中 | "目标展开数按实例累计"**未被实现强制** —— `PluginSandboxScope.EnsureTargetsAllowed`（`src/Plugins/PluginProcessor.cs:694-701`）累加 `_targetCount` 后比较的是**入参 `targetCount`** 而非累计值（类文档 `:534-536` 声称"累计 ≤ 64"）。单元测试 `PluginSandboxLimitsTests` 目标展开数用例（`:272-290`）**自证**累计到 70 > 64 **不抛异常**（`:282-283`）。当前 `PluginExecutor` 只调用一次 ⇒ 实际行为正确，属**未来调用方风险 + 文档不符** | ✅ **已修复**（S3.6，`d588440`）：改用 `Interlocked.Add` 的返回值判定累计值（无读—比较竞态），并同步反转了那条"自证累计 70 不抛异常"的单元测试期望 |
+| **LM-041** | 🟡 低 | 端到端正则用例**不锁定 500 ms 数值** —— `tests/LiteMonitor.Tests/PluginExecutorSandboxTests.cs:508-531` 只锁"可达性 + 原因码"，数值 500 ms 仅由 `PluginSandboxLimitsTests.cs:151-153` 守住。变异（M6：`PluginProcessor.cs:468` → 10 s）时**端到端用例仍通过** | ✅ **已修复**（S3.6，`d588440`）：端到端用例断言内层 `RegexMatchTimeoutException.MatchTimeout == 500 ms`（字面量）+ 宽松耗时上界 < 5 s |
+| **LM-042** | 🟡 低 | `端到端_目标数恰好等于上限` 的请求数断言**过弱** —— `PluginExecutorSandboxTests.cs:296` 的 URL 不含目标变量、`:309` 断言 `RequestCount > 0`。实测：64 目标 + 同一 URL ⇒ 服务端只收到 **61** 个请求（在途去重合并，`PluginExecutor.cs:432-435`）；URL 改目标专属后恰为 64 ⇒ 现断言无法证明"64 个目标都真的跑了各自的一步"。**S3.3 既有，非 S3.4 引入** | ✅ **已修复**（S3.6，`d588440`）：URL 改目标专属（`?n={{n}}`）+ 收紧为 `Assert.Equal(MaxTargetsPerStep, server.RequestCount)` |
+| **LM-043** | 🔵 信息 | `Assert.NotEqual(TargetLimit, failure?.Reason)` 在 `failure == null` 时**恒真**（空转断言），`PluginExecutorSandboxTests.cs:304` | ✅ **已修复**（S3.6，`d588440`）：删除该行（同模式另一处一并删除）；承重的 `Assert.Null(failure)` / `Assert.True(ok)` 保留 |
+| **LM-044** | 🔵 信息 | 生产入口的 **30 s 契约值未被测试钉住** —— 3 条总时长用例（`:322`/`:362`/`:543`）注入测试自建作用域并走私有方法；若把 `ExecuteInstanceAsync` 的默认时长改成 5 分钟，这 3 条仍全绿 | ✅ **已修复**（S3.6 `d588440` + 主审集成 `6310dbf`）：S3.6 用进程级登记表钉住共享默认；主审把它换成实例级 `CreateScope` 缝隙，**并补上 S3.6 自述未能实测的两个变体**（3 变异全捕获，详见 §4.5.7） |
 
 #### 4.5.5 LM-016 的不变式与残余窗口（S4.2）
 
@@ -597,6 +601,43 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 | **为什么不 rebase 改提交信息** | `ac652f8` 是本批 26 个提交中的第 5 个，rebase 重写其信息会连带重写**其后 21 个提交的哈希**，使 §4.2/§4.3/§4.4 及本节台账中**全部哈希引用失效**，并需对已推送到 origin 且已跑过 5 次绿 CI 的 `fix/audit-remediation-v3` 做 **force-push**。代价远大于收益，且 Git 历史本就不是唯一事实来源 —— 本节即为其勘误入口 |
 | **可检索性** | 任何审计者 `git show ac652f8` 后，应能通过本节与 §4.1 找到更正后的根因。§4.4 台账 S1.1 行亦已标注"**根因已更正**（见 §4.1）" |
 | **结论** | **不 rebase**，以台账勘误方式闭环。该项**不阻断** M2/M3 门禁与发布准入 |
+
+#### 4.5.7 主审裁决 D-E：LM-044 的测试缝隙改为**实例级**（取代 S3.6 的进程级登记表）
+
+S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 里放了一个**进程级静态登记表**（`_createdInstanceScopes` + `FindCreatedInstanceScope`），供测试按外部取消令牌反查生产入口创建的作用域。该方案经**主审逐行复核后否决**，理由三条：
+
+| # | 问题 | 证据 |
+|---|---|---|
+| 1 | 生产代码里保留**只服务于测试的全局可变状态**，最多滞留 32 个**已释放**作用域（含各自的 `CancellationTokenSource`），永不主动回收 | `RecordInstanceScopeCreation` 只做入队 + FIFO 裁剪，**无 Dispose 钩子** |
+| 2 | 它**钉不住生产入口本身**：只能观测「共享默认」与「默认构造」两处；"在 `PluginExecutor.cs` 里硬编码 5 分钟"这一变体**未被覆盖** | S3.6 交付报告第 5 节第 1 条自述："该文件属 LM-039 agent 所有权，我不得写入" ⇒ **未实测** |
+| 3 | 按取消令牌反查在令牌为 `CancellationToken.None` 时会命中**多个历史作用域**（返回最后一个匹配项） | `FindCreatedInstanceScope` 的实现对每个匹配项覆盖 `found`，最终返回**最后**一个 |
+
+**裁决 D-E**：改为**实例级**缝隙 —— `PluginExecutor` 新增 `protected virtual PluginSandboxScope CreateScope(token)`（生产入口**唯一**的沙箱作用域创建点），`ExecuteInstanceAsync` 与 `ExecuteStepAsync` 两处创建改走它；回归测试用 `RecordingPluginExecutor` 覆写 `CreateScope` 并**调用基类实现** ⇒ 观测到的就是生产路径真正使用的那份作用域；**移除** `PluginSandboxScope` 的进程级登记表（字段 / 常量 / 查询方法 / 登记调用）。
+
+**裁决理由**：实例级缝隙与生产语义**同源**（覆写时调用基类 ⇒ 基类就是生产实现），因而能覆盖"生产入口硬编码时长"与"生产入口绕开 `CreateScope`"两类变体；而进程级登记表**与生产语义异源**（观测的是共享默认值，不是入口实际用的那一个），天然覆盖不到入口级漂移。代价是生产类多一个 `protected virtual` 成员 —— 与被否决方案相比，**没有全局状态、没有滞留、没有歧义匹配**，净收益为正。
+
+**裁决 D-E 的判别力自证**（`6310dbf`，每轮改坏 → 变红 → 字节级还原 → 复跑全绿）：
+
+| 变异 | 变红用例 | 判定 |
+|---|---|---|
+| V1 `CreateScope` 硬编码 5 分钟 | `端到端_生产入口实际使用的总时长_等于契约值30秒`（Expected 30000 / Actual 300000） | ✅ **这正是 S3.6 未能实测的变体** |
+| V2 生产入口绕开 `CreateScope` 直接 `new` | 同一用例（`CapturedScope` 为 null ⇒ `Assert.NotNull` 失败） | ✅ |
+| V3 共享默认时长漂移（30 s → 5 min） | 3 条（含新护栏） | ✅ |
+
+还原后 3 个文件 SHA-256 与基线**逐一致**，聚焦用例 **45/45 全绿**；契约 6 数值（2 MiB / 500 ms / 16 步 / 64 目标 / 30 s / 8 并发）**一个未改**。
+
+#### 4.5.8 S3.5 / S3.6 的未验证项汇总（**不计入通过**）
+
+| 来源 | 事项 | 处置 |
+|---|---|---|
+| S3.5 | **重定向未复核**：`HttpClient` 默认跟随重定向，已声明主机 302 到未声明主机不被拦截（HTTP 步骤路径同样如此） | **登记为 LM-045（P1 未关闭）**；本批**不擅自**改 `AllowAutoRedirect`（会改变既有取数行为） |
+| S3.5 | 内建官方源（bybit/gateio/binance/okx）与 citycode DB URL 是**代码常量**，不受"允许目标"集合约束（但受槽位 / 字节 / 令牌约束） | 如实记录：用户与插件**改不动**这些主机 |
+| S3.5 | native 字节超限抛 `PluginSandboxException`，HTTP 路径抛其子类 `PluginResponseTooLargeException` —— **原因码一致**，异常类型不同 | 记录；统一异常继承属契约变更，本批不做 |
+| S3.5 | `CryptoNative` 在途去重改为**按作用域键**（不同实例不再共享同一在途请求） | 记录为一处**行为收窄**，已由既有功能回归用例覆盖 |
+| S3.5 | 测试接缝 `CryptoNative.SourceUrlOverrides`（`internal static`）位于生产程序集内且可写 | **登记为 LM-046（接受并登记）** |
+| S3.5 | 未复现 verifier 的"64 target ⇒ 64 并发"原场景 | 如实记录：改用 9 并发闸门实测 + 服务端最大并发观测 |
+| S3.6 | "在 `PluginExecutor.cs` 里硬编码 5 分钟"变体当时**未实测**（文件归属他方） | **已由裁决 D-E 补测**（V1/V2 均变红） |
+| S3.6 | LM-041 的 5 s 耗时上界只是粗护栏（精确钉死靠 `MatchTimeout` 字面量断言） | 记录：机器极端高负载下可能变松，但**不会误绿** |
 
 ---
 
@@ -986,17 +1027,19 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 | LM-036 | S2.4 | P2 | M2 | ✅ 已闭环 | `366bf9c`（恢复被删断言，复跑 35/35 通过）⇒ M2 放行条件 ① 满足 |
 | LM-037 | 信息项 | P3 | — | 📌 信息项 | §4.2.7；行为级护栏已存在（V5b），**不阻断** |
 | LM-038 | S4.2c | P2 | M4 | ✅ 已闭环 | `e1bd587`（按流水线口径在 `366bf9c` 重建并刷新仓库副本，内嵌 SHA 对齐） |
-| LM-039 | **S3.5** | **P1** | M3 | 🔄 进行中 | **必须修复**，不得仅登记：直接违反 S3.2 明文验收条款（§4.3.4） |
-| LM-040 | **S3.6** | P2 | M3 | 🔄 进行中 | 改为比较累计值而非入参；同步调整自证式单元测试期望 |
-| LM-041 | **S3.6** | P2 | M3 | 🔄 进行中 | 端到端用例补「耗时 < 2 s」或断言实际传入的超时值 |
-| LM-042 | **S3.6** | P2 | M3 | 🔄 进行中 | URL 改目标专属 + 收紧为 `Assert.Equal(MaxTargetsPerStep, server.RequestCount)` |
-| LM-043 | **S3.6** | P3 | M3 | 🔄 进行中 | 删去空转断言，或先断言 `failure` 非空再判原因码 |
-| LM-044 | **S3.6** | P2 | M3 | 🔄 进行中 | 补一条经 `ExecuteInstanceAsync` 的用例，断言实际 `MaxDuration == MaxExecutionDurationMs` |
+| LM-039 | **S3.5** | **P1** | M3 | ✅ 已闭环 | `d23e6fc`：原生取数接入同一套闸门（并发槽位 / 2 MiB / 30 s 截止 / 凭据目标 / 允许目标）；8 条新用例 / 5 变异全捕获。**口径更新**：LM-009 闭环范围由"HTTP 步骤路径"扩展到"HTTP 步骤路径 **+ native:// 路径**" |
+| LM-040 | **S3.6** | P2 | M3 | ✅ 已闭环 | `d588440`：改判 `Interlocked.Add` 的累计返回值；单元测试期望已同步反转 |
+| LM-041 | **S3.6** | P2 | M3 | ✅ 已闭环 | `d588440`：端到端断言 `MatchTimeout == 500 ms`（字面量）+ 宽松耗时上界 < 5 s |
+| LM-042 | **S3.6** | P2 | M3 | ✅ 已闭环 | `d588440`：URL 改目标专属 + 收紧为「恰好 64 个请求」 |
+| LM-043 | **S3.6** | P3 | M3 | ✅ 已闭环 | `d588440`：删除 2 处空转断言，承重断言保留 |
+| LM-044 | **S3.6** + 主审集成 | P2 | M3 | ✅ 已闭环 | `d588440`（共享默认）+ `6310dbf`（实例级 `CreateScope` 缝隙，**补上 S3.6 未能实测的变体**） |
 | GPU-001 | GPU T03/T04 | **P1** | GPU B→C | 🟡 合同已冻结 | GPU T02 合同（`26e3f40`）给出处置：新增 `WindowCapturePolicyCleanup` + `CapturePolicyCleanupLedger`，宿主恢复失败时**移交清理责任并释放自己**，`StopGpuPresentation()` **无条件置 null** ⇒ 三条重启路径重新可达。**B 期不写生产代码** |
 | GPU-002 | GPU T02/T04 | P2 | GPU B→C | 🟡 合同已冻结 | 正式采用 `PresentationSession.RecreateWindow`，补齐 R1–R6 |
 | GPU-003 | GPU T02/T03 | P2 | GPU B→C | 🟡 合同已冻结，**待实测** | `WS_EX_LAYERED` 与 WDA 互斥；期望状态由 `CreateParams` 决定且重建后不继承残留。**外部权威已多源交叉确认**（微软社区支持 + StackOverflow `ERROR_NOT_ENOUGH_MEMORY`）；**本仓库实测仍未做**（T01/T09） |
 | GPU-004 | GPU T04 | P2 | GPU B→C | 🟡 合同已冻结 | 代次判据**先于** `IsWindow`；代次合并为同一真相源 `WindowHandleGeneration` |
 | GPU-005 | GPU T02 | P2 | GPU B→C | 🟡 合同已冻结 | pending 仅在「首帧成功」或「受控放弃且停止流程干净」时清除 |
+| LM-045 | **未修（本批不做）** | **P1** | M3→M4 | 🔴 **P1 未关闭** | `HttpClient` 默认跟随重定向 ⇒ 已声明主机 302 到未声明主机不被拦截（HTTP 步骤路径与 native 路径**都有**）⇒ "API Key 只发往用户知晓并允许的目标"在重定向场景下不成立。需"禁自动重定向 + 逐跳复核主机"的口径变更（与 LM-007 市场逻辑同构）。**不擅自改 `AllowAutoRedirect`**（会改变既有取数行为）⇒ 本批不修，**但阻断"插件网络出口完全受控"的表述** |
+| LM-046 | 接受并登记 | P3 | — | 📌 信息项 | `CryptoNative.SourceUrlOverrides`（`internal static` 可变全局测试接缝）：生产路径永不设置，测试用 `IDisposable` 复位 ⇒ 无泄漏、无并行冲突。但位于生产程序集内且可写 ⇒ **须在后续审计中显式知情** |
 | ENV-003 | S4.1 | P1 | M4 | ✅ 已闭环 | `a8fb2fc`：跳过 7→1；CI 门禁收紧（`MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS`） |
 | ENV-004 | S4.1 | P2 | M4 | ⏳ `BLOCKED_ENV` | 联网 E2E 单独运行，**不进 PR 门禁**；**不计入通过**（§9） |
 
@@ -1009,14 +1052,14 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 | 指标 | 数值 | 复现命令 | 核实状态 |
 |---|---|---|---|
 | 主测试工程（**初始基线**） | 通过 983 / 失败 0 / 跳过 7 / 共 990 | `dotnet test tests/LiteMonitor.Tests -c Debug` | 已实测，连续两次一致 |
-| 主测试工程（**CI 口径实测** @`366bf9c`） | 通过 **1192** / 失败 0 / 跳过 **1** / 共 **1193** | 设 `LITEMONITOR_PLUGIN_REPO=tests/fixtures/plugin-repo` 后 `dotnet test tests/LiteMonitor.Tests -c Debug` | M2 放行条件 #4 实测（§4.2.8）；跳过 1 = 唯一剩余联网 E2E（ENV-004） |
-| 主测试工程（**本地口径实测** @`366bf9c`） | 通过 **1186** / 失败 0 / 跳过 **7** / 共 **1193** | **不设** `LITEMONITOR_PLUGIN_REPO` 的同一条命令 | 已实测；与上一行的差值恰为 6 条市场契约用例（ENV-003） |
+| 主测试工程（**CI 口径实测** @`6310dbf`） | 通过 **1202** / 失败 0 / 跳过 **1** / 共 **1203** | 设 `LITEMONITOR_PLUGIN_REPO=tests/fixtures/plugin-repo` 后 `dotnet test tests/LiteMonitor.Tests -c Debug` | S3.5 + S3.6 + 主审集成落地后实测；跳过 1 = 唯一剩余联网 E2E（ENV-004） |
+| 主测试工程（**本地口径实测** @`366bf9c`） | 通过 **1186** / 失败 0 / 跳过 **7** / 共 **1193** | **不设** `LITEMONITOR_PLUGIN_REPO` 的同一条命令 | 已实测（`366bf9c`）；与 CI 口径的差值恰为 6 条市场契约用例（ENV-003）。本地口径在 `6310dbf` 上为 1203 / 通过 1196 / 跳过 7 |
 | 更新器测试工程 | 通过 **58** / 失败 0 / 跳过 0 / 共 **58** | `dotnet test tests/LiteMonitor.Updater.Tests -c Debug` | 已实测（S4.2 扩展后由 13 增至 58） |
 | GPU 非性能测试工程 | 通过 **19** / 失败 0 / 跳过 0 / 共 **19** | `dotnet test tests/LiteMonitor.GpuNonperformance.Tests -c Debug` | 已实测 |
-| **三工程合计（当前）** | **1270**（1193 + 58 + 19） | `dotnet test LiteMonitor.sln -c Debug -v minimal` | M2 放行条件 #4 实测（§4.2.8），退出码 **0**；三道门禁（`dotnet test` / `assert-test-counts.ps1` / `generate-dependency-manifest.ps1 -Mode Check`）退出码全 **0** |
+| **三工程合计（当前）** | **1280**（1203 + 58 + 19） | `dotnet test LiteMonitor.sln -c Debug -v minimal` | CI 口径实测（`LITEMONITOR_PLUGIN_REPO` 指向夹具），退出码 **0**；三道门禁（`dotnet test` / `assert-test-counts.ps1` / `generate-dependency-manifest.ps1 -Mode Check`）退出码全 **0**。CI 门禁 `MIN_TEST_TOTAL` 已**同步收紧** 1150 → **1280** |
 | 主测试源码文件 | 顶层 **74** 个 / 含子目录 **80** 个 `.cs` | `Get-ChildItem tests/LiteMonitor.Tests -Filter *.cs -Recurse` | 已实测（原台账「64 个」已过时） |
 | 更新器 / GPU 测试源码文件 | 更新器 顶层 3 / 递归 9；GPU 顶层 0 / 递归 6 | 同上 | 已实测 |
-| 解决方案测试发现 | **1270**（CI 口径）／本地口径 1193 | `dotnet test LiteMonitor.sln` | **不再是 0** —— BASE-003 已闭环（`0366268` 三个测试工程入 `.sln`）；`assert-test-counts.ps1` 把「发现 0」变红 |
+| 解决方案测试发现 | **1280**（CI 口径）／本地口径 1203 | `dotnet test LiteMonitor.sln` | **不再是 0** —— BASE-003 已闭环（`0366268` 三个测试工程入 `.sln`）；`assert-test-counts.ps1` 把「发现 0」变红 |
 | 两点 / 三点分支差异 | 484 / 522，共同祖先 `169e90a2…` | `git diff --name-only master branch` / `master...branch` | 已实测（BASE-002 起点；**本轮未重测**） |
 | Release 构建 | **成功** | `dotnet build LiteMonitor.sln -c Release` | 6 次 CI 全部 success（CI 内含 `dotnet build LiteMonitor.sln -c Release`，`.github/workflows/ci.yml:159`）。本地曾被运行中的 `LiteMonitor++.exe` 锁住输出目录（ENV-001，**非代码缺陷**，实例已自行退出） |
 | 远端 GitHub Actions | **6 次 push 运行，全部 `completed success`** | `gh run list --repo mojingjing-git/LiteMonitorPlus --limit 8` | 最新 `39816781583` @`18d5fab`；运行号 `39802630699`/`39804354003`/`39808904819`/`39811554270`/`39814447849`/`39816781583` |
@@ -1075,24 +1118,27 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 
 > **状态（2026-10-23）：本计划已进入实施阶段，不是待执行文档。** M0 / M1 / M2 / M3 四个门禁已全部归档（M1 PASS、M2 **PASS 并放行**、M3 `PASS_WITH_NOTES`），S0–S5.3b 各步骤均已产出提交并登记于 §4.4。以下为**当前**的收尾动作。
 
-### 11.1 正在进行（不得抢占其文件所有权）
+### 11.1 本批已完成的并行任务（2026-10-23）
 
-| 编号 | 内容 | 隔离方式 | 产出物 |
-|---|---|---|---|
-| **S3.5** | 修 **LM-039**（`native://` 绕过并发槽 / 2 MiB 上限 / 凭据目标校验 / 30 s 截止时刻）—— **P1，必须修**，直接违反 S3.2 明文验收条款 | 隔离 worktree `.artifacts/wt-lm039`（分支 `task/lm039-native-gates`） | `src/Plugins/PluginExecutor.cs`、`src/Plugins/Native/CryptoNative.cs`、`src/Plugins/Native/CityCodeResolver.cs`、新建 `tests/LiteMonitor.Tests/PluginNativeSandboxTests.cs` |
-| **S3.6** | 修 **LM-040~LM-044**（目标数累计未强制 / 500 ms 未钉住 / 请求数断言过弱 / 空转断言 / 30 s 生产入口未钉住） | 隔离 worktree `.artifacts/wt-lm040`（分支 `task/lm040-contract-pinning`） | `src/Plugins/PluginProcessor.cs`、`tests/LiteMonitor.Tests/PluginExecutorSandboxTests.cs`、`tests/LiteMonitor.Tests/PluginSandboxLimitsTests.cs` |
-| **GPU T01** | HWND 重建 A/B 对照（仅停止 vs 重建）+ GDI 桌面像素观察 ⇒ 判定 `Control.RecreateHandle()` 是否可安全使用 | 主工作区（`tools/GpuHostLifecycleProbe/`） | 探针工程 + 实测证据；结论回填 GPU 计划 §12.7 |
+| 编号 | 内容 | 隔离方式 | 产出物 | 结论 |
+|---|---|---|---|---|
+| **S3.5** | 修 **LM-039**（`native://` 绕过并发槽 / 2 MiB 上限 / 凭据目标校验 / 30 s 截止时刻）—— **P1，必须修**，直接违反 S3.2 明文验收条款 | 隔离 worktree `.artifacts/wt-lm039` | `d23e6fc`：`src/Plugins/PluginExecutor.cs`、`src/Plugins/Native/CryptoNative.cs`、`src/Plugins/Native/CityCodeResolver.cs`、新建 `tests/LiteMonitor.Tests/PluginNativeSandboxTests.cs` | ✅ 已闭环（8 条新用例 / 5 变异全捕获） |
+| **S3.6** | 修 **LM-040~LM-044**（目标数累计未强制 / 500 ms 未钉住 / 请求数断言过弱 / 空转断言 / 30 s 生产入口未钉住） | 隔离 worktree `.artifacts/wt-lm040` | `d588440`：`src/Plugins/PluginProcessor.cs`、两个测试文件 | ✅ 已闭环（2 条新增 / 3 条期望反转） |
+| **主审集成** | 裁决 **D-E**：把 S3.6 的进程级登记表换成实例级 `CreateScope` 缝隙，并补测 S3.6 未能实测的变体 | 隔离 worktree `.artifacts/wt-integ` | `6310dbf` | ✅ 3 变异全捕获 |
+| **GPU T01** | HWND 重建 A/B 对照（仅停止 vs 重建）+ GDI 桌面像素观察 ⇒ 判定 `Control.RecreateHandle()` 是否可安全使用 | 主工作区（`tools/GpuHostLifecycleProbe/`） | `2c8915b`：探针工程 + `docs/superpowers/plans/2026-10-23-gpu-transition-t01-report.md` | ✅ **`RECREATE_HANDLE_SAFE`**（4 组独立运行一致） |
 
 ### 11.2 收尾动作序列（按序执行）
 
-1. **合入 S3.5 / S3.6**：由编排方在主工作区 `cherry-pick` 两个 worker 提交（**不 rebase、不改写其历史**）；文件所有权不重叠，可顺序合入。
-2. **重跑全量回归（CI 口径）**：`LITEMONITOR_PLUGIN_REPO=$PWD\tests/fixtures/plugin-repo` + `dotnet test LiteMonitor.sln -c Debug` + `assert-test-counts.ps1` + `generate-dependency-manifest.ps1 -Mode Check` ⇒ **三道门禁退出码必须全 0**，且主工程**总数只增不减**。
-3. **上调 `MIN_TEST_TOTAL`**：`.github/workflows/ci.yml` 的 `MIN_TEST_TOTAL: 1150` 相对新总数已偏松 ⇒ 按「门禁只收紧不放宽」原则上调到新总数附近（**不放宽**）。
-4. **回写 §8 已知基线**与 **§7 追踪矩阵**（LM-039~044 转 `✅ 已闭环`），并把 §4.4 台账补上 S3.5 / S3.6 两行。
-5. **推送** `fix/audit-remediation-v3` 到 origin（已授权），等待 CI 全绿（当前基线：6 次 push 运行全部 success）。
-6. **提出 master 合并评估**（用户已定：门禁全绿且本批收敛后再评估）。就绪度事实已备齐：merge-base 即 master `9ffb4219` ⇒ **可快进、零冲突**；`A=287 / M=29 / D=0`（零删除）；生产代码仅 **13 个 `src/` 文件**（+5750/−586）。
-7. **GPU T01 结论落地**：回填 GPU 计划 §12.7；若判定「`RecreateHandle` 不可安全使用」⇒ 步 4 删除、判别位重建分支作废、`RecreateWindow` 不采用、U02/U03/U06b 改判。**在此之前不得物化 T02 合同到 `src/`。**
-8. **GPU C 期（T03–T08）启动条件**：T01 路线结论落地 **且** `src/Rendering/**` **重新冻结哈希** **且** M2/M3 门禁确认 ⇒ 三者齐备才启动。
+1. ✅ **合入 S3.5 / S3.6 / 主审集成**：由编排方在主工作区 `cherry-pick`（**不 rebase、不改写其历史**）；文件所有权不重叠，均干净合入。
+2. ✅ **重跑全量回归（CI 口径）**：`LITEMONITOR_PLUGIN_REPO=$PWD\tests/fixtures/plugin-repo` + `dotnet test LiteMonitor.sln -c Debug` + `assert-test-counts.ps1` + `generate-dependency-manifest.ps1 -Mode Check` ⇒ **三道门禁退出码必须全 0**，且主工程**总数只增不减**。实测：**1280 / 1279 通过 / 0 失败 / 1 跳过**。
+3. ✅ **上调 `MIN_TEST_TOTAL`**：`.github/workflows/ci.yml` 由 `1150` → **`1280`**（**等于**当前实测总数；门禁只收紧不放宽）。
+4. ✅ **回写 §8 已知基线**与 **§7 追踪矩阵**（LM-039~044 转 `✅ 已闭环`），并在 §4.4 台账补上 S3.5 / S3.6 / 主审集成 / GPU T01 四行。
+5. ⏳ **独立 verifier 复核**（S3.5 + S3.6 + 主审集成的合并结果）—— **不得由实现者自审**；复核在隔离 worktree 内自做变异。
+6. ⏳ **推送** `fix/audit-remediation-v3` 到 origin（已授权），等待 CI 全绿（当前基线：6 次 push 运行全部 success）。
+7. ⏳ **提出 master 合并评估**（用户已定：门禁全绿且本批收敛后再评估）。就绪度事实已备齐：merge-base 即 master `9ffb4219` ⇒ **可快进、零冲突**；`A=287 / M=29 / D=0`（零删除）；生产代码仅 **13 个 `src/` 文件**（+5750/−586）。
+8. ✅ **GPU T01 结论落地**：判定 **`RECREATE_HANDLE_SAFE`** ⇒ 走 GPU 计划 §4.1 主线，**不启用** §9 备用路线；判别位重建分支**保留**，`RecreateWindow` **采用**。回填 GPU 计划 §12.7。
+9. ⏳ **GPU C 期（T03–T08）启动条件**：T01 路线结论落地 **且** `src/Rendering/**` **重新冻结哈希** **且** M2/M3 门禁确认 ⇒ 三者齐备才启动。**注意**：T01 已实测 `src/Rendering/**` 与 `src/UI/**` 的 T00 哈希**全程未变** ⇒ 重新冻结的**内容**不变，但**记录**须更新（含 T01 更正的物理分辨率事实）。
+10. ⏳ **LM-045（重定向绕过允许目标，P1 未关闭）**：需要"禁自动重定向 + 逐跳复核主机"的口径变更（与 LM-007 市场逻辑同构）⇒ 属独立步骤，**不得**在收尾阶段顺手改 `AllowAutoRedirect`。
 
 ### 11.3 需要人工到场 / 外部确认的事项（**不可由 agent 代替**）
 
