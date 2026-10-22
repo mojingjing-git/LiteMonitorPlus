@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>LiteMonitor.NetworkExclusionProbe</AssemblyName>
+    <RootNamespace>LiteMonitor.NetworkExclusionProbe</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultNoneItems>false</EnableDefaultNoneItems>
+    <NoWarn>$(NoWarn);NU1701</NoWarn>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      ★ 探针复用**产品代码**（src/System/NetworkTraffic/），不再自带一份重复实现。
+        N0 的结论、载荷解码、规则编译、归属映射全部来自产品模块；
+        探针只负责「造流量 + 采证据」，因此它既是 N0 的证据工具，也是产品代码的回归工具。
+      Microsoft.Diagnostics.Tracing.TraceEvent 4.0.0（MIT）由主工程引用并传递过来。
+    -->
+    <ProjectReference Include="..\..\LiteMonitor.csproj" />
+  </ItemGroup>
+
+</Project>

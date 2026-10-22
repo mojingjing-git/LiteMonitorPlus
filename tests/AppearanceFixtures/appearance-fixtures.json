@@ -1,0 +1,147 @@
+{
+  "kind": "appearance_fixture_data",
+  "version": 1,
+  "description": "LiteMonitor++ 外观探针 (A04) 的固定夹具数据。纯数据：不依赖硬件、不依赖驱动、不读用户配置。所有指标值由 valueModel 推导，Dashboard 文本由 dashValues 注入，保证同一台机器上可逐像素复现。",
+
+  "axes": {
+    "modes": ["vertical", "horizontal"],
+    "gpuCounts": [1, 4],
+    "dpis": [96, 120, 144, 192],
+    "userScales": [1.0, 2.0],
+    "panelWidth": 240,
+    "referenceDpi": 96,
+    "referenceUserScale": 1.0
+  },
+
+  "valueModel": {
+    "base": 40.0,
+    "step": 0.37,
+    "max": 99.0,
+    "itemOffset": 13.7,
+    "note": "第 frame 帧、第 i 个指标的值 = base + ((i * itemOffset + frame * step) mod (max - base))"
+  },
+
+  "dashValues": {
+    "HOST": "LITEBENCH-HOST",
+    "Time": "Mon 00:00:00",
+    "Uptime": "12h 34m",
+    "IP": "192.168.1.42"
+  },
+
+  "requiredLegacyThemes": [
+    "AuroraDream_Purple",
+    "CyberBlue_Neon",
+    "DarkFlat_Classic",
+    "DarkNeo_Modern",
+    "DeepOcean_Blue",
+    "Dracula_Vampire",
+    "LightPure_Elegant",
+    "MatrixGreen_Terminal",
+    "Monokai_Pro",
+    "SolarAmber_Warm"
+  ],
+
+  "gpus": [
+    { "index": 0, "shortName": "RTX 4090", "fullName": "NVIDIA GeForce RTX 4090" },
+    { "index": 1, "shortName": "RX 7900 XTX", "fullName": "AMD Radeon RX 7900 XTX" },
+    { "index": 2, "shortName": "Arc A770", "fullName": "Intel Arc A770 Graphics" },
+    { "index": 3, "shortName": "RTX 3060 Ti", "fullName": "NVIDIA GeForce RTX 3060 Ti" },
+    { "index": 4, "shortName": "RTX 4070", "fullName": "NVIDIA GeForce RTX 4070" },
+    { "index": 5, "shortName": "RX 6800", "fullName": "AMD Radeon RX 6800" },
+    { "index": 6, "shortName": "Arc B580", "fullName": "Intel Arc B580 Graphics" },
+    { "index": 7, "shortName": "RTX 2080 Ti", "fullName": "NVIDIA GeForce RTX 2080 Ti" }
+  ],
+
+  "items": [
+    { "key": "DASH.HOST",   "sortIndex": 101, "visibleInPanel": true,  "visibleInTaskbar": false },
+    { "key": "DASH.Time",   "sortIndex": 102, "visibleInPanel": false, "visibleInTaskbar": false },
+    { "key": "DASH.Uptime", "sortIndex": 103, "visibleInPanel": true,  "visibleInTaskbar": false },
+    { "key": "DASH.IP",     "sortIndex": 104, "visibleInPanel": false, "visibleInTaskbar": false },
+
+    { "key": "CPU.Load",  "sortIndex": 201, "visibleInPanel": true,  "visibleInTaskbar": true },
+    { "key": "CPU.Temp",  "sortIndex": 202, "visibleInPanel": true,  "visibleInTaskbar": true },
+    { "key": "CPU.Clock", "sortIndex": 203, "visibleInPanel": false, "visibleInTaskbar": false },
+    { "key": "CPU.Power", "sortIndex": 204, "visibleInPanel": false, "visibleInTaskbar": false },
+
+    { "key": "MEM.Load",  "sortIndex": 401, "visibleInPanel": true,  "visibleInTaskbar": true },
+    { "key": "FPS",       "sortIndex": 402, "visibleInPanel": false, "visibleInTaskbar": false },
+    { "key": "MOBO.Temp", "sortIndex": 403, "visibleInPanel": false, "visibleInTaskbar": false },
+    { "key": "DISK.Temp", "sortIndex": 404, "visibleInPanel": false, "visibleInTaskbar": false },
+    { "key": "CASE.Fan",  "sortIndex": 405, "visibleInPanel": false, "visibleInTaskbar": false },
+
+    { "key": "DISK.Read",  "sortIndex": 601, "visibleInPanel": true, "visibleInTaskbar": false },
+    { "key": "DISK.Write", "sortIndex": 602, "visibleInPanel": true, "visibleInTaskbar": false },
+
+    { "key": "NET.Up",   "sortIndex": 701, "visibleInPanel": true, "visibleInTaskbar": true },
+    { "key": "NET.Down", "sortIndex": 702, "visibleInPanel": true, "visibleInTaskbar": true },
+
+    { "key": "DATA.DayUp",   "sortIndex": 801, "visibleInPanel": true, "visibleInTaskbar": false },
+    { "key": "DATA.DayDown", "sortIndex": 802, "visibleInPanel": true, "visibleInTaskbar": false }
+  ],
+
+  "gpuItems": [
+    { "key": "GPU.{card}.Load",  "sortIndex": 300, "visibleInPanel": true,  "visibleInTaskbar": true },
+    { "key": "GPU.{card}.Temp",  "sortIndex": 301, "visibleInPanel": true,  "visibleInTaskbar": false },
+    { "key": "GPU.{card}.VRAM",  "sortIndex": 302, "visibleInPanel": true,  "visibleInTaskbar": false },
+    { "key": "GPU.{card}.Clock", "sortIndex": 303, "visibleInPanel": false, "visibleInTaskbar": false },
+    { "key": "GPU.{card}.Power", "sortIndex": 304, "visibleInPanel": false, "visibleInTaskbar": false },
+    { "key": "GPU.{card}.Fan",   "sortIndex": 305, "visibleInPanel": false, "visibleInTaskbar": false }
+  ],
+
+  "edgeScenarios": [
+    {
+      "id": "edge-long-group-name",
+      "kind": "longGroupName",
+      "description": "组标题与显卡简称都超长：验证组标题/项标签的排版与不溢出边界。",
+      "groupAliases": {
+        "CPU": "Central Processing Unit Package Thermal Zone",
+        "HOST": "Motherboard Chassis And Fan Controller Aggregate",
+        "DISK": "Physical Disk Input Output Aggregate Throughput",
+        "NET": "Network Interface Aggregate Throughput Meter",
+        "DATA": "Daily Traffic Accounting Volume Counter",
+        "DASH": "Dashboard Widget Aggregate Information Panel"
+      },
+      "gpuShortNames": {
+        "0": "NVIDIA GeForce RTX 4090 Founders Edition",
+        "1": "AMD Radeon RX 7900 XTX Sapphire Nitro",
+        "2": "Intel Arc A770 Graphics 16GB",
+        "3": "NVIDIA GeForce RTX 3060 Ti Founders Edition"
+      }
+    },
+    {
+      "id": "edge-custom-labels",
+      "kind": "customLabels",
+      "description": "用户自定义标签 / 短标签（含空格隐藏标签、含中文、含超长 ASCII）：验证标签优先级链。",
+      "userLabels": {
+        "CPU.Load": "处理器总占用率",
+        "CPU.Temp": "封装温度 (Package)",
+        "MEM.Load": "Physical Memory Occupancy Ratio",
+        "GPU.0.Load": "图形处理器负载"
+      },
+      "taskbarLabels": {
+        "CPU.Load": "CPU",
+        "CPU.Temp": "TCPU",
+        "MEM.Load": " "
+      }
+    },
+    {
+      "id": "edge-zero-items",
+      "kind": "zeroItems",
+      "description": "没有任何可见监控项：验证空面板（零项）不崩溃、不越界。",
+      "clearAllItems": true
+    },
+    {
+      "id": "edge-narrow-window",
+      "kind": "narrowWindow",
+      "panelWidth": 160,
+      "description": "窄窗（160 逻辑像素）：验证窄宽度下的两列组与数值精简路径。"
+    }
+  ],
+
+  "invalidation": {
+    "frames": 100,
+    "fixedRect": { "x": 37, "y": 43, "width": 20, "height": 20 },
+    "clipInflation": 3,
+    "note": "clipInflation 用于把字形抗锯齿溢出一起纳入失效区；fixedRect 是 v4 §7.2 点名的固定失效矩形。"
+  }
+}

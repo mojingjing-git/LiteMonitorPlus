@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    LiteMonitor++ 性能探针（实施前基线 / 改后复测共用）。
+
+    设计约束（见 tests/LiteMonitor.PerformanceProbe/README.md）：
+    - 不新增任何 NuGet 包 / 测试框架 / 运行时依赖，只引用主项目与已有的 LibreHardwareMonitorLib。
+    - 输出目录固定为本项目下的 output\ ，即 AppContext.BaseDirectory。
+      TrafficHistory.json / HardwareHistory.json / LiteMonitor++_HardwareError.log
+      等运行期文件全部落在这里，不会污染用户常用实例目录。
+    - 主项目已有 <Compile Remove="tests\**" />，本项目不会被主项目编译进去。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>LiteMonitor.PerformanceProbe</RootNamespace>
+    <AssemblyName>LiteMonitor.PerformanceProbe</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- 隔离输出目录：探针自己的运行期产物目录（相对本项目目录） -->
+    <OutputPath>output\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+
+    <!-- 探针自身不追求零警告，但也不要用警告噪声干扰主项目构建 -->
+    <NoWarn>$(NoWarn);CS8600;CS8602;CS8603;CS8604;CS8618;CS8619;CS8625</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\LiteMonitor.csproj" />
+  </ItemGroup>
+
+  <!-- 主题与语言包：探针需要它们才能复现主程序的渲染/取值路径 -->
+  <ItemGroup>
+    <Content Include="..\..\resources\themes\*.json" Link="resources\themes\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\resources\lang\*.json" Link="resources\lang\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--
+    A04 外观探针的固定夹具数据。
+    唯一事实来源是 tests/AppearanceFixtures/appearance-fixtures.json；
+    这里只做一次"复制到输出目录"，不新增任何程序集引用。
+    探针运行时优先从输出目录读，读不到再按仓库根回溯找同一份文件。
+  -->
+  <ItemGroup>
+    <Content Include="..\AppearanceFixtures\*.json" Link="appearance-fixtures\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

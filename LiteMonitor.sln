@@ -7,6 +7,14 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor", "LiteMonitor.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.Updater", "LiteMonitor.Updater\LiteMonitor.Updater.csproj", "{3A8B5F59-3708-4B2C-A20D-CA4DA179D1D7}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{90DB0C1B-D047-48A1-876E-ACCE695ADE5D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.Tests", "tests\LiteMonitor.Tests\LiteMonitor.Tests.csproj", "{5ADC3C09-06CE-4BDB-A7AA-B1DC5042A1B9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.Updater.Tests", "tests\LiteMonitor.Updater.Tests\LiteMonitor.Updater.Tests.csproj", "{B529FF0A-790F-4135-85A2-D50D1C1B5F0E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.GpuNonperformance.Tests", "tests\LiteMonitor.GpuNonperformance.Tests\LiteMonitor.GpuNonperformance.Tests.csproj", "{2143EAB6-AABB-44DB-9371-418C7222C748}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,11 +29,28 @@ Global
 		{3A8B5F59-3708-4B2C-A20D-CA4DA179D1D7}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3A8B5F59-3708-4B2C-A20D-CA4DA179D1D7}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3A8B5F59-3708-4B2C-A20D-CA4DA179D1D7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5ADC3C09-06CE-4BDB-A7AA-B1DC5042A1B9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5ADC3C09-06CE-4BDB-A7AA-B1DC5042A1B9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5ADC3C09-06CE-4BDB-A7AA-B1DC5042A1B9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5ADC3C09-06CE-4BDB-A7AA-B1DC5042A1B9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B529FF0A-790F-4135-85A2-D50D1C1B5F0E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B529FF0A-790F-4135-85A2-D50D1C1B5F0E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B529FF0A-790F-4135-85A2-D50D1C1B5F0E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B529FF0A-790F-4135-85A2-D50D1C1B5F0E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2143EAB6-AABB-44DB-9371-418C7222C748}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2143EAB6-AABB-44DB-9371-418C7222C748}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2143EAB6-AABB-44DB-9371-418C7222C748}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2143EAB6-AABB-44DB-9371-418C7222C748}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {F6826114-276E-43DF-B0F5-FB52FBD92A2F}
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{5ADC3C09-06CE-4BDB-A7AA-B1DC5042A1B9} = {90DB0C1B-D047-48A1-876E-ACCE695ADE5D}
+		{B529FF0A-790F-4135-85A2-D50D1C1B5F0E} = {90DB0C1B-D047-48A1-876E-ACCE695ADE5D}
+		{2143EAB6-AABB-44DB-9371-418C7222C748} = {90DB0C1B-D047-48A1-876E-ACCE695ADE5D}
 	EndGlobalSection
 EndGlobal

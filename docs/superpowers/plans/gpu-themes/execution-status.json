@@ -1,0 +1,132 @@
+{
+  "executionModel": "DeepSeek V4.1 Flash",
+  "baselineCommit": "694a8c57d27b628e0edba803e5f24b3ca53dbc5f",
+  "updatedAt": "2026-10-22T01:33:00+08:00",
+  "tasks": {
+    "R00": "pass",
+    "R01": "pass",
+    "R02": "pass-fixed-input",
+    "R03": "functional-pass; broader matrix not-verified",
+    "R04": "functional-pass; WDA accepted; broader matrix not-verified",
+    "R05": "core-and-capture-functional-frozen; WDA accepted",
+    "R06": "approved: fixed-glass-v16",
+    "R07": "approved: fixed-cyber-v3",
+    "R08": "targeted-pass; device and resource contracts plus one automatic recovery verified on RTX 3080 Ti",
+    "R09": "targeted-pass; real MainForm vertical/horizontal presentation and suspend/resume verified at 168 DPI",
+    "R10": "targeted-pass; production shader, D3D11 swap chain, Direct2D foreground and HWND masking exercised",
+    "R11": "targeted-pass; production single-loop material composition runs at 30 FPS target",
+    "R12": "targeted-pass; one production Desktop Duplication session, DXGI frame, WDA exclusion and release path verified with synthetic backdrop",
+    "R13": "targeted-pass; Direct2D/DirectWrite production foreground verified in glass and cyber routes",
+    "R14": "targeted-pass; production glass route displays all real MainForm groups without nested glass frames",
+    "R15": "targeted-pass; production cyber route displays real MainForm groups with zero capture sessions",
+    "R16": "targeted-pass; vertical and horizontal scene adapters exercised through real MainForm",
+    "R17": "targeted-pass; schema, route policy, cloning and settings UI covered by tests",
+    "R18": "targeted-pass; real editor GPU preview active, zero capture sessions, dispose verified",
+    "R19": "targeted-pass; fixed glass/cyber, live glass, horizontal, editor, legacy fallback and safe package launch verified; top-level handle recreation and broad matrix remain",
+    "R20": "partial; 168 DPI vertical/horizontal and two old themes verified; 96/144/192/200 DPI, HDR, multi-monitor and broad OS matrix remain open",
+    "R21": "targeted-pass; suspend/resume, automatic recovery, real handle recreation, live resize/capture generation recovery and zeroed resource ledger verified; broad device-fault p95 matrix remains open",
+    "R22": "in-progress; probe interference fixed with monotonic elapsed time, atomic minute checkpoints, cancel-file, external watchdog and status-specific exits; formal stress-30m-v2 is running non-topmost/non-activating; prior paired-v3 failed present p95 and live windows failed present/live budgets, so no G4 performance pass is claimed",
+    "R23": "static-pass pending final repack; pack-release-v2 produced a validated 72-file ZIP with SHA256 183deb25cdc48b2ebcd29853a5ed6bbe01348a3e921839a9e36f53fd779e948e; that package predates the latest probe/runtime fixes and packaged runtime launch remains blocked by the elevation requirement",
+    "R24": "in-progress; I01-I10 owner response and probe follow-up response recorded; WDA repeated-policy ownership fixed and targeted tests pass; remaining long-stress, fixed/live performance and package-runtime evidence",
+    "R25": "open"
+  },
+  "gates": {
+    "G0": "pass",
+    "G1": "targeted-pass; broader support matrix not verified",
+    "G2": "pass",
+    "G3": "targeted-pass; broad compatibility and packaged runtime launch remain open",
+    "G4": "open; fixed present and live performance budgets fail, and the prior long-stress run was aborted for user interference",
+    "G5": "open"
+  },
+  "latestVerification": {
+    "checkedAt": "2026-10-22T00:27:00+08:00",
+    "mainTests": {
+      "command": "dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Release --no-restore --nologo --logger \"console;verbosity=minimal\"",
+      "passed": 723,
+      "skipped": 7,
+      "failed": 0
+    },
+    "updaterTests": {
+      "command": "dotnet test tests/LiteMonitor.Updater.Tests/LiteMonitor.Updater.Tests.csproj -c Release --no-restore --nologo --logger \"console;verbosity=minimal\"",
+      "passed": 13,
+      "skipped": 0,
+      "failed": 0
+    },
+    "gpuContractAndDeviceTests": {
+      "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run-gpu-contracts.ps1 -IncludeGpu -IncludeLiveCapture",
+      "passed": 48,
+      "skipped": 0,
+      "failed": 0,
+      "evidence": "docs/reviews/evidence/gpu-themes/694a8c5/R08/latest-run.json"
+    },
+    "prototypeBuild": {
+      "command": "dotnet build tools/AppearanceMaterialLab/AppearanceMaterialLab.csproj -c Release --no-restore --nologo",
+      "warnings": 0,
+      "errors": 0,
+      "note": null
+    },
+    "productionBuild": {
+      "command": "dotnet build LiteMonitor.csproj -c Release --no-restore --nologo",
+      "warnings": 238,
+      "errors": 0,
+      "note": "The warnings are dominated by pre-existing legacy files; the GPU implementation and probe builds introduce no build error."
+    }
+  },
+  "latestVisualFeedback": {
+    "receivedAt": "2026-10-21T22:46:19+08:00",
+    "summary": "User separately approved Liquid Glass v16 and Cyberpunk v3 and accepted the WDA capture-exclusion policy.",
+    "result": "G2 pass; production routing may proceed subject to the remaining functional, performance and packaging gates."
+  },
+  "latestEvidence": {
+    "mainformGlass": "docs/reviews/evidence/gpu-themes/694a8c5/R19/mainform-glass-v8",
+    "mainformCyber": "docs/reviews/evidence/gpu-themes/694a8c5/R19/mainform-cyber-v2",
+    "horizontalGlass": "docs/reviews/evidence/gpu-themes/694a8c5/R19/mainform-glass-horizontal-v1",
+    "horizontalCyber": "docs/reviews/evidence/gpu-themes/694a8c5/R19/mainform-cyber-horizontal-v1",
+    "liveGlass": "docs/reviews/evidence/gpu-themes/694a8c5/R19/mainform-glass-live-v1",
+    "editorGlass": "docs/reviews/evidence/gpu-themes/694a8c5/R18/editor-glass-v1",
+    "editorCyber": "docs/reviews/evidence/gpu-themes/694a8c5/R18/editor-cyber-v1",
+    "legacyRoutes": [
+      "docs/reviews/evidence/gpu-themes/694a8c5/R19/legacy-glass-v1",
+      "docs/reviews/evidence/gpu-themes/694a8c5/R19/legacy-cyber-v1"
+    ],
+    "lifecycle": "docs/reviews/evidence/gpu-themes/694a8c5/R21/host-lifecycle-v3",
+    "handleRecreation": "docs/reviews/evidence/gpu-themes/694a8c5/R19/lifecycle-recreate-live-v2",
+    "liveResize": "docs/reviews/evidence/gpu-themes/694a8c5/R19/live-resize-v1",
+    "package": "docs/reviews/evidence/gpu-themes/694a8c5/R23/pack-release-v2",
+    "performancePreliminary": "docs/reviews/evidence/gpu-themes/694a8c5/R22/paired-v3",
+    "livePerformance": [
+      "docs/reviews/evidence/gpu-themes/694a8c5/R22/live-window-v1",
+      "docs/reviews/evidence/gpu-themes/694a8c5/R22/live-window-v2"
+    ],
+    "stressAborted": "docs/reviews/evidence/gpu-themes/694a8c5/R22/stress-30m-v1/aborted-user-interference.json",
+    "windowPolicySmoke": "docs/reviews/evidence/gpu-themes/694a8c5/R22/window-policy-smoke-v1",
+    "runnerCancelSmoke": "docs/reviews/evidence/gpu-themes/694a8c5/R22/runner-cancel-v2",
+    "formalStressInProgress": "docs/reviews/evidence/gpu-themes/694a8c5/R22/stress-30m-v2",
+    "gpuTimestampDiagnostic": "docs/reviews/evidence/gpu-themes/694a8c5/R22/timestamp-diagnostic-v2",
+    "independentReviewResponse": "docs/reviews/evidence/gpu-themes/694a8c5/R24/independent-review-response-v1.md"
+    ,
+    "probeFollowupResponse": "docs/reviews/evidence/gpu-themes/694a8c5/R24/probe-followup-owner-response-v1.md"
+  },
+  "approvals": {
+    "liquidGlass": {
+      "version": "fixed-glass-v16",
+      "sha256": "CA9689A2C02166AD93FD3F7354B9A49BF42BE669A9F311A8DFBF6465D82C0752"
+    },
+    "cyberpunk": {
+      "version": "fixed-cyber-v3",
+      "sha256": "EBE521EAFE2C883F54220DEDBFCD7C473349973F1FC9429C010C01752E2EAABF"
+    },
+    "capturePolicy": "accepted; supported system screenshots and recordings exclude the entire application"
+  },
+  "constraints": {
+    "oldThemesModified": false,
+    "m2ContractModified": false,
+    "gitIgnoreModified": false,
+    "wdaPolicyAccepted": true,
+    "published": false
+  },
+  "knownIssues": [
+    "Live blur offsets are divided by desktop size twice; production shader intentionally unchanged pending separately authorized visual direction. Evidence: docs/reviews/evidence/gpu-themes/694a8c5/R22/known-issues/live-blur-pixel-space-v1.md",
+    "The first 30-minute stress attempt used a topmost full-screen backdrop and periodically activated the probe. It was stopped after 396.906 seconds and is not a pass. Evidence: docs/reviews/evidence/gpu-themes/694a8c5/R22/stress-30m-v1/aborted-user-interference.json"
+  ]
+}

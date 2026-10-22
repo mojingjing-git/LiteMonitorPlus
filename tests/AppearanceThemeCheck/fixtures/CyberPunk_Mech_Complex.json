@@ -1,0 +1,61 @@
+{
+  "version": 4,
+  "name": "CyberPunk_Mech_Complex",
+  "layout": {
+    "rowHeight": 40,
+    "padding": 10,
+    "cornerRadius": 0,
+    "groupRadius": 4,
+    "groupPadding": 8,
+    "groupSpacing": 28,
+    "groupBottom": 0,
+    "groupTitleOffset": 6,
+    "itemGap": 6,
+    "frameStyle": 1,
+    "frameWidth": 3,
+    "frameLength": 14,
+    "scanline": 30,
+    "glow": 55,
+    "grid": 20,
+    "barStyle": 1
+  },
+  "font": {
+    "family": "Microsoft YaHei UI",
+    "valueFamily": "Consolas",
+    "title": 11.5,
+    "group": 10.5,
+    "item": 10.0,
+    "value": 14.0,
+    "bold": true,
+    "scale": 1.0
+  },
+  "color": {
+    "background": "#06080D",
+    "groupBackground": "#18202E",
+    "border": "#7DF9FF",
+    "shadow": "rgba(255,46,151,0.30)",
+    "textTitle": "#7DF9FF",
+    "textGroup": "#B9D2E8",
+    "textPrimary": "#E9F1F8",
+    "textSecondary": "#A9BDD0",
+    "valueSafe": "#3AE08D",
+    "valueWarn": "#FFC24B",
+    "valueCrit": "#FF6B85",
+    "barBackground": "#0E1520",
+    "barLow": "#7DF9FF",
+    "barMid": "#FFC24B",
+    "barHigh": "#FF6B85"
+  },
+  "backdrop": {
+    "mode": "gradient",
+    "opacity": 0.35,
+    "blur": 0,
+    "tint": "rgba(255,46,151,0.25)",
+    "gradientStart": "#0A1830",
+    "gradientEnd": "#2A0A24",
+    "gradientAngle": 135,
+    "noise": 22,
+    "edgeGlow": 45,
+    "fps": 2
+  }
+}

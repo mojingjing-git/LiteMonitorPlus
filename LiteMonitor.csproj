@@ -140,6 +140,7 @@
   -->
   <ItemGroup>
     <InternalsVisibleTo Include="LiteMonitor.Tests" />
+    <InternalsVisibleTo Include="LiteMonitor.GpuNonperformance.Tests" />
     <InternalsVisibleTo Include="AppearanceWindowShapeProbe" />
   </ItemGroup>
 </Project>

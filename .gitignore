@@ -14,11 +14,13 @@ TrafficHistory.json.bak
 *.log
 
 # Local review and development artifacts
-/docs/
-/tests/
-/scripts/
+/docs/reviews/evidence/
 /start.cmd
 /.review-scratch/
+
+# Probe build and runtime output
+tests/**/output/
+tests/**/Capture/
 
 # Release output
 /dist/

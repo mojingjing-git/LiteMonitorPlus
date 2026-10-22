@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A17「释放压力」实测用的资源采样器。
+
+    用途：给定一个正在运行的 LiteMonitor 进程，按固定间隔采样它的
+    句柄数 / GDI 对象数 / USER 对象数 / 内存，输出时间序列与增长斜率，
+    用来判断「反复打开/关闭设置页」「反复换肤」「反复隐藏恢复」等场景
+    是否出现句柄或内存的**持续增长**（A17 判据：句柄/内存持续增长 ⇒ 不通过）。
+
+    ★ 本工程**故意不引用主工程**：
+      - 只需 P/Invoke 三个 Win32 API + BCL，编译不碰主工程的 obj/ ⇒
+        可以与其它会话的 build/test **并发**执行而不争抢；
+      - 也不需要加载 LiteMonitor 的任何类型，跑起来不碰硬件、不抓屏。
+
+    ★ 不进 sln（与既有探针的惯例一致）。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>LiteMonitor.AppearanceResourceProbe</RootNamespace>
+    <AssemblyName>AppearanceResourceProbe</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- 隔离输出目录：探针自己的运行期产物目录（相对本项目目录） -->
+    <OutputPath>output\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+
+    <!-- 探针自身不追求零警告 -->
+    <NoWarn>$(NoWarn);CS8600;CS8602;CS8603;CS8604;CS8618;CS8619;CS8625</NoWarn>
+  </PropertyGroup>
+
+</Project>
