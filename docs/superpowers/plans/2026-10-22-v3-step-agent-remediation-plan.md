@@ -186,12 +186,20 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | GPU-005 | `GpuStartupGuard` 的 pending 语义比计划 §4.4 描述更弱 | P2 | `CONFIRMED` | GPU T02（合同澄清） |
 | ENV-003 | `LITEMONITOR_PLUGIN_REPO` 未设置 ⇒ 6 条市场契约测试被跳过 | P1 | `CONFIRMED`（已闭环，`a8fb2fc`） | S4.1 |
 | ENV-004 | `LITEMONITOR_E2E` 未设置 ⇒ 1 条联网 E2E 被跳过 | P2 | `CONFIRMED`（`BLOCKED_ENV`，**不计入通过**） | S4.1（联网 E2E 单独运行，不进 PR 门禁） |
+| LM-045 | `HttpClient` 默认跟随重定向 ⇒ 已声明主机 302 到未声明主机不被拦截，凭据（`X-Api-Key`/`Cookie`）外泄且响应数据进入插件流水线 | **P1** | `CONFIRMED`（**独立 verifier 已实证**） | **本批不修**（需改 `AllowAutoRedirect` 口径） |
+| LM-046 | 生产代码内的可变全局测试接缝 `CryptoNative.SourceUrlOverrides`（`internal static`，生产路径不设置） | P3 | `CONFIRMED`（**接受并登记**） | 接受 |
+| LM-047 | 字节上限在原语层未被契约天花板夹住（`ReadResponseBodyAsync` 不与 `MaxResponseBytes` 比较） | P2 | `CONFIRMED` | ✅ 已修复（`46f3f9d`） |
+| LM-048 | 允许目标口径分裂：主机判据用 `allowedHosts`，带凭据时改用 `declaredHosts` | P2 | `CONFIRMED`（当前无功能影响） | 登记待清理 |
+| LM-049 | `native://` URL 产出伪主机并污染声明集合 | P2 | `CONFIRMED`（无害） | 登记待清理 |
+| LM-050 | `native://citycode` 的远程回退闸门（并发槽/字节上限/令牌）无回归钉住 | P3 | `CONFIRMED` | 登记待清理（需先加测试接缝） |
+| LM-051 | `CryptoNative.NormalizeSymbol` 未对 symbol 做 `EscapeDataString`（**既有缺陷，非本批引入**） | P2 | `CONFIRMED`（主机固定，不构成沙箱逃逸） | 登记待清理 |
+| LM-052 | `CityCodeResolver._isLoading` 是无锁 `static bool`（**既有缺陷，非本批引入**） | P3 | `CONFIRMED`（无安全影响） | 登记待清理 |
 
 **当前无 P0。** 若任一执行步骤新发现 P0，立即挂起其他任务优先处理。
 
 **编号规则：** `LM-` 缺陷 / `SEC-` 安全 / `BASE-` 基线 / `ENV-` 环境事实 / `GPU-` GPU 切换专项。第三方评审使用的 `LM-018`、`LM-019` 与 `LM-003b`、`LM-003c` 指同一处代码，已合并并保留别名以便交叉引用；`LM-005/006` 为同一协议缺陷的两个侧面。
 
-> **编号占用现状（2026-10-23 核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-044`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-047` 起顺延，不得复用已关闭编号**（`LM-045`/`LM-046` 已于本轮占用）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
+> **编号占用现状（2026-10-23 核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-044`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-053` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 已于本轮占用）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
 
 ### 4.1 根因更正记录 · LM-001（原"永久停摆"前提已证伪）
 
@@ -474,6 +482,35 @@ M5 另做独立佐证：`^(a+)+$`（40×a + `!`）无 timeout 时 **180 s 未完
 
 ---
 
+#### 4.3.5 S3.5 + S3.6 + 主审集成的独立复核（2026-10-23，锚定 `711ec61`）—— **VERDICT: PASS_WITH_NOTES**
+
+由**独立 verifier** 在隔离 worktree（`git worktree add --detach .artifacts/wt-verify 711ec61`）中复核，**未触碰共享主工作区**，且**不采信任何实现者自述**。
+
+**纪律执行**：每轮变异 = 改坏 → `dotnet build --no-incremental` → `dotnet test --no-build` → `[System.IO.File]::WriteAllBytes` 字节级还原 → `Get-FileHash` **逐文件 SHA-256 比对** → 强制重编译 → 复跑 **53/53 全绿（exit 0）**。收尾实证：worktree `git status --porcelain` 空、4 个变异文件 SHA-256 与基线逐字节一致；主工作区 `git status` 空；`master` 仍为 `9ffb4219`。
+
+**10 轮自设计变异，全部变红（无一条护栏失灵）**：
+
+| # | 破坏点（verifier 自设计，非照抄实现者） | 变红用例 | 捕获 |
+|---|---|---|---|
+| M1 | `CryptoNative.GetStringAsync` 删掉 `AcquireRequestSlotAsync` | `原生步骤_并发闸门生效_…LM009_CONCURRENCY_LIMIT失败` | ✅ |
+| M2 | 原生正文读取改传 `int.MaxValue` | `原生步骤_响应体超沙箱天花板_按LM009_RESPONSE_TOO_LARGE失败` | ✅ |
+| M3 | `nativeToken` 改为 `CancellationToken.None`（不绑 `scope.Token`） | `原生步骤_总时长到期_被及时中止且原因码为LM009_DEADLINE_EXCEEDED` | ✅ |
+| M4 | 删执行器侧 native 预检 + 传给 `CryptoNative` 的 `allowedHosts` 置 `null` | `原生步骤_fallback主机来自用户输入且未声明_…` 与 `原生步骤_带凭据且回退主机未在模板级声明_…`（均"No exception was thrown"） | ✅ |
+| M5 | `EnsureTargetsAllowed` 改回比较入参 | `目标展开数_按实例计_跨目标累计超上限即失败` | ✅ |
+| M6 | `MaxRegexMatchTimeoutMs` 500 → 10 000 | **端到端正则用例由绿转红**（旧版漏判的那条）+ 2 条单元级 | ✅ |
+| M7 | 目标上限差一（`>` → `>=`） | 3 条 | ✅ |
+| M8a | `CreateScope` 硬编码 5 分钟 | `端到端_生产入口实际使用的总时长_等于契约值30秒` | ✅ **正是 S3.6 未能实测的变体** |
+| M8b | `DefaultExecutionDuration` → 5 分钟 | 同上 + 2 条 | ✅ |
+| M8c | 生产入口**绕过** `CreateScope` 直接 `new` | 同一用例（`CapturedScope` 为 null） | ✅ **证明缝隙无假绿** |
+
+**其余核查项**：契约 6 常量逐行核对**未改**（`PluginProcessor.cs:447/450/453/456/459/462`）；CI 口径回归 **1280 / 1279 通过 / 0 失败 / 1 跳过**，`assert-test-counts.ps1 -MinTotal 1280` **恰等于**实测总数 ⇒ 删任何一条用例即跌破阈值变红；`PluginSandboxScope` 全类**唯一** static 成员是 `DefaultExecutionDuration`（不可变），进程级登记表已彻底消失；三个提交在 `src/` 新增的 static **字段**只有 `CryptoNative.SourceUrlOverrides`（`internal static`），全仓赋值点**仅在测试文件** ⇒ 生产路径确实不会设置它（LM-046 描述属实）；内置 `Crypto.json` 的官方源落在允许集内 ⇒ **未被误杀**。
+
+**LM-045 独立实证为真实且定级准确（P1）**：verifier 自建本地双服务器复现（声明主机 `127.0.0.1` → 302 → 未声明主机 `127.0.0.2`），实测：未声明主机**确实收到产品发出的请求**；请求头带 **`X-Api-Key=SECRET-APIKEY`**，且 **`Cookie` 被原样带过去**（`Authorization` 被 .NET 跨主机剥离，但前两者不会，而二者均被产品自身 `IsCredentialHeaderName` 判为凭据头）⇒ 沙箱"凭据只发往声明主机"的承诺**确实被破坏**；且未声明主机的**响应数据进入插件流水线并被用于构造后续请求**。
+
+> **对闭环口径的二次更正**：§4.5.4 的 LM-039 行原写"闭环范围扩展到 HTTP 步骤路径 **+ native:// 路径**" —— 经复核，**该表述仍不可用**：LM-045 证明 HTTP 步骤路径在**重定向场景下**同样会把凭据发往未声明主机 ⇒ 正确口径是「**直连目标**已受约束，**重定向后的目标不受约束**」。§7 的 LM-009 行已同步更正。
+
+---
+
 ### 4.4 本轮并行步骤产出台账
 
 | 步骤 | 提交 | 关键结论 |
@@ -578,6 +615,14 @@ S3.3 在其交付报告 §5 **显式标出**编排方裁决 3（步骤计数在�
 | **LM-042** | 🟡 低 | `端到端_目标数恰好等于上限` 的请求数断言**过弱** —— `PluginExecutorSandboxTests.cs:296` 的 URL 不含目标变量、`:309` 断言 `RequestCount > 0`。实测：64 目标 + 同一 URL ⇒ 服务端只收到 **61** 个请求（在途去重合并，`PluginExecutor.cs:432-435`）；URL 改目标专属后恰为 64 ⇒ 现断言无法证明"64 个目标都真的跑了各自的一步"。**S3.3 既有，非 S3.4 引入** | ✅ **已修复**（S3.6，`d588440`）：URL 改目标专属（`?n={{n}}`）+ 收紧为 `Assert.Equal(MaxTargetsPerStep, server.RequestCount)` |
 | **LM-043** | 🔵 信息 | `Assert.NotEqual(TargetLimit, failure?.Reason)` 在 `failure == null` 时**恒真**（空转断言），`PluginExecutorSandboxTests.cs:304` | ✅ **已修复**（S3.6，`d588440`）：删除该行（同模式另一处一并删除）；承重的 `Assert.Null(failure)` / `Assert.True(ok)` 保留 |
 | **LM-044** | 🔵 信息 | 生产入口的 **30 s 契约值未被测试钉住** —— 3 条总时长用例（`:322`/`:362`/`:543`）注入测试自建作用域并走私有方法；若把 `ExecuteInstanceAsync` 的默认时长改成 5 分钟，这 3 条仍全绿 | ✅ **已修复**（S3.6 `d588440` + 主审集成 `6310dbf`）：S3.6 用进程级登记表钉住共享默认；主审把它换成实例级 `CreateScope` 缝隙，**并补上 S3.6 自述未能实测的两个变体**（3 变异全捕获，详见 §4.5.7） |
+| **LM-045** | 🔴 高 | **`HttpClient` 默认跟随重定向 ⇒ "允许目标"校验可被 302 绕过** —— S3.5 把 `native://` 的用户可控 URL 收进"允许目标"集合（校验发生在请求发出之前），但底层 `HttpClient` 默认 `AllowAutoRedirect = true` ⇒ **已声明主机 302 跳转到未声明主机不会被拦截**。**HTTP 步骤路径同样存在**（`PluginExecutor` 的 HttpClient 未关闭自动重定向）⇒ S2.2 的"API Key 只发往用户知晓并允许的目标"在**重定向场景下不成立**。LM-007 的逐跳重定向校验只覆盖**市场下载**，不覆盖插件取数 | **必须修，但不在本轮**：需要"禁止自动重定向 + 逐跳复核每一跳主机"的口径变更（与 LM-007 的市场逻辑同构），属 S3.1 契约的扩展。**本轮不擅自改动 `AllowAutoRedirect`**（会改变既有取数行为）⇒ 登记为 **P1 未关闭**，**阻断"插件网络出口完全受控"的表述**，但不阻断本批其余项。**独立 verifier 已实证（§4.3.5）**：未声明主机确实收到产品请求，`X-Api-Key` 与 `Cookie` 被原样带过去（`Authorization` 被 .NET 跨主机剥离）；未声明主机的响应数据进入插件流水线并用于构造后续请求 ⇒ **P1 定级准确**，并据此**更正** LM-009 的闭环口径（直连受约束、重定向目标不受约束） |
+| **LM-046** | 🔵 信息 | **生产代码内的可变全局测试接缝** —— `CryptoNative.SourceUrlOverrides`（`internal static Dictionary<string,string>`）供回归用例把官方币价源指向本地回环。生产路径**永不设置**（默认 null），测试用 `IDisposable` 助手保存/复位 ⇒ 无泄漏、无并行冲突（测试工程已关闭并行）。但它**位于生产程序集内且可写**，一旦将来有生产代码误赋值，官方取数源会被静默改向 | **接受并登记**：不属可利用缺陷，但须在 T08 文案与后续审计中显式知情。**可选加固**（未做，避免战线扩张）：改为只读属性 + `internal` setter 方法，或注入式 URL 提供者。**独立 verifier 已复核**：全仓赋值点仅在测试文件 ⇒ 生产路径确实不会设置它 |
+| **LM-047** | 🟡 低 | **字节上限在原语层未被契约天花板夹住** —— `PluginSandbox.ReadResponseBodyAsync`（`PluginProcessor.cs:886`）取 `limit = maxBytes > 0 ? maxBytes : MaxResponseBytes`，**未与 `MaxResponseBytes`（2 MiB）比较** ⇒ 调用方传入更大的数字即可突破沙箱字节上限。**当前生产调用方传的都是 `EffectiveMaxResponseBytes`（= min(实例级 8 MiB, 沙箱 2 MiB)），故尚无实际绕过**（verifier 的 M2 变异即证明生产实际为 2 MiB）—— 但"2 MiB"此前只是**调用方约定**，不是原语层保证 | ✅ **已修复**（`46f3f9d`）：`limit = maxBytes > 0 ? Math.Min(maxBytes, MaxResponseBytes) : MaxResponseBytes` —— 契约值从"约定"变成"强制"，对现有生产行为**零变化**；新增护栏用例 `原语层字节上限_调用方传入更大上限也不能突破契约天花板`，并以变异自证（去掉夹取 ⇒ 该用例变红 ⇒ 还原 SHA-256 一致 ⇒ 复跑 26/26 全绿） |
+| **LM-048** | 🟡 低 | **允许目标口径分裂** —— `PluginExecutor.cs:810-821`：主机判据用 `allowedHosts`（声明集 ∪ native URL 内嵌字面量主机），而**带凭据时改用 `declaredHosts`（严格声明集）** ⇒ 同一主机"不带凭据可用、带凭据被拒"。实测内置插件的凭据步骤数为 **0**，**当前无功能影响** | 登记待清理：统一为一套口径，或显式文档化该差异。**本批不改**（改动会影响凭据可达性，属契约变更） |
+| **LM-049** | 🟡 低 | **`native://` URL 产出伪主机并污染声明集合** —— `PluginProcessor.cs:413-436` 的 `AddDeclaredHost` 对 `native://crypto?symbol=BTC&fallback=http:` 这类 URL 会切出伪主机塞进集合。当前匹配不上任何真实主机 ⇒ **无害**，但污染集合 | 登记待清理：对 `native:` scheme 单独解析，不产出伪主机。**本批不改**（该函数是安全判据核心，改动需连带回归） |
+| **LM-050** | 🔵 信息 | **`native://citycode` 的远程回退闸门无回归钉住** —— 本地 `resources/CityCode.json` 存在时走离线路径，远程 DB URL 是 `const` 不可替换 ⇒ 现有 8 条 native 用例只覆盖 crypto 与本地库，**远程回退路径的并发槽 / 字节上限 / 令牌中止均无用例** | 登记待清理：需先给 `JSON_DB_URL` 加测试接缝（与 `SourceUrlOverrides` 同类），再补一条强制远程回退的用例。**本批不做**（引入新接缝需独立评估） |
+| **LM-051** | 🟡 低 | **`CryptoNative.NormalizeSymbol` 未对 symbol 做 `EscapeDataString`** ⇒ 可向官方源 URL 注入查询串。**主机仍固定**（`api.binance.com` 等），**不构成沙箱逃逸**；属**既有缺陷，非本批引入** | 登记待清理（既有项）。修复需评估各官方源对 symbol 字符集的容忍度 |
+| **LM-052** | 🔵 信息 | **`CityCodeResolver._isLoading` 是无锁 `static bool`** ⇒ 并发加载时可能重复加载或漏加载。**非本批引入**，无安全影响 | 登记待清理（既有项）：改 `Interlocked` 标记或 `SemaphoreSlim` |
 
 #### 4.5.5 LM-016 的不变式与残余窗口（S4.2）
 
@@ -1010,7 +1055,7 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | LM-023 | S2.2 | P2 | M2 | ✅ 已闭环 | `4be1a8c`（PBKDF2/DPAPI）；残留 F-08（DPAPI 失败明文回写）登记为独立信息项 |
 | LM-007 | S3.1 | P2 | M3 | ✅ 已闭环 | `14542f3`（URL 精确校验 + 逐跳重定向 + 8 MiB，53 用例 / 11 变异全捕获） |
 | LM-008 | S3.1 | P2 | M3 | ✅ 已闭环 | `14542f3`（强制摘要 + 事务化安装）+ `cb460b5`（本地化） |
-| LM-009 | S3.2 | P2 | M3 | 🟡 **部分闭环** | `ebe1c38`/`bc7b479` + 联合专项复核 **PASS**（§4.3.4）。**口径限定**：仅「经 `PluginExecutor` **HTTP 步骤路径**的 6 个上限」已闭环；`native://` 出口未覆盖 ⇒ **LM-039 未修前不得表述为「插件一切网络出口受沙箱约束」** |
+| LM-009 | S3.2 | P2 | M3 | 🟡 **部分闭环** | `ebe1c38`/`bc7b479` + 联合专项复核 **PASS**（§4.3.4）+ 独立复核 **PASS_WITH_NOTES**（§4.3.5）。**口径限定（2026-10-23 二次更正）**：① **直连目标**的 6 个上限已在「HTTP 步骤路径 **+ `native://` 路径**」闭环；② **重定向后的目标不受约束**（LM-045，P1 未关闭）⇒ **不得表述为「插件一切网络出口受沙箱约束」** |
 | LM-010~014 | S6.2 | P2 | M6 | ⏳ 未开始 | GPU/采样/资源恢复实机验收 **G01–G12 全部未跑**（G08 所需异 DPI 环境本机不存在） |
 | LM-015 | S5.1 + S5.2 | **P1** | M5 | ⏸ **延后** | 用户已定本批只做 S5.3 ⇒ 正式签名未就绪 ⇒ **阻断发布准入条件 4** |
 | LM-016 | S4.2 | **P1** | M4 | ✅ 已闭环 | `1a904d5`（字节绑定 + `FileShare.Read`，58 用例）+ `e1bd587`（重建包内更新器） |
@@ -1039,7 +1084,13 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | GPU-004 | GPU T04 | P2 | GPU B→C | 🟡 合同已冻结 | 代次判据**先于** `IsWindow`；代次合并为同一真相源 `WindowHandleGeneration` |
 | GPU-005 | GPU T02 | P2 | GPU B→C | 🟡 合同已冻结 | pending 仅在「首帧成功」或「受控放弃且停止流程干净」时清除 |
 | LM-045 | **未修（本批不做）** | **P1** | M3→M4 | 🔴 **P1 未关闭** | `HttpClient` 默认跟随重定向 ⇒ 已声明主机 302 到未声明主机不被拦截（HTTP 步骤路径与 native 路径**都有**）⇒ "API Key 只发往用户知晓并允许的目标"在重定向场景下不成立。需"禁自动重定向 + 逐跳复核主机"的口径变更（与 LM-007 市场逻辑同构）。**不擅自改 `AllowAutoRedirect`**（会改变既有取数行为）⇒ 本批不修，**但阻断"插件网络出口完全受控"的表述** |
-| LM-046 | 接受并登记 | P3 | — | 📌 信息项 | `CryptoNative.SourceUrlOverrides`（`internal static` 可变全局测试接缝）：生产路径永不设置，测试用 `IDisposable` 复位 ⇒ 无泄漏、无并行冲突。但位于生产程序集内且可写 ⇒ **须在后续审计中显式知情** |
+| LM-046 | 接受并登记 | P3 | — | 📌 信息项 | `CryptoNative.SourceUrlOverrides`（`internal static` 可变全局测试接缝）：生产路径永不设置，测试用 `IDisposable` 复位 ⇒ 无泄漏、无并行冲突。但位于生产程序集内且可写 ⇒ **须在后续审计中显式知情**。独立 verifier 已复核：全仓赋值点仅在测试文件 |
+| LM-047 | 已修 | P2 | M3 | ✅ 已闭环 | `46f3f9d`：原语层 `Math.Min(maxBytes, MaxResponseBytes)` 夹取，契约天花板从"约定"变成"强制"；新增护栏用例并以变异自证（去掉夹取 ⇒ 变红 ⇒ 字节级还原 ⇒ 26/26 全绿） |
+| LM-048 | 登记待清理 | P2 | — | 📌 信息项 | 允许目标口径分裂（主机判据 `allowedHosts` vs 凭据判据 `declaredHosts`）；内置插件凭据步骤数 = 0 ⇒ 当前无功能影响 |
+| LM-049 | 登记待清理 | P2 | — | 📌 信息项 | `native://` URL 产出伪主机污染声明集合；当前匹配不上真实主机 ⇒ 无害 |
+| LM-050 | 登记待清理 | P3 | — | 📌 信息项 | `native://citycode` 远程回退闸门无用例；需先给 `JSON_DB_URL` 加测试接缝 |
+| LM-051 | 登记待清理 | P2 | — | 📌 信息项 | `CryptoNative.NormalizeSymbol` 未 `EscapeDataString`（**既有缺陷**，主机固定 ⇒ 不构成沙箱逃逸） |
+| LM-052 | 登记待清理 | P3 | — | 📌 信息项 | `CityCodeResolver._isLoading` 无锁 `static bool`（**既有缺陷**，无安全影响） |
 | ENV-003 | S4.1 | P1 | M4 | ✅ 已闭环 | `a8fb2fc`：跳过 7→1；CI 门禁收紧（`MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS`） |
 | ENV-004 | S4.1 | P2 | M4 | ⏳ `BLOCKED_ENV` | 联网 E2E 单独运行，**不进 PR 门禁**；**不计入通过**（§9） |
 
@@ -1052,11 +1103,11 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 | 指标 | 数值 | 复现命令 | 核实状态 |
 |---|---|---|---|
 | 主测试工程（**初始基线**） | 通过 983 / 失败 0 / 跳过 7 / 共 990 | `dotnet test tests/LiteMonitor.Tests -c Debug` | 已实测，连续两次一致 |
-| 主测试工程（**CI 口径实测** @`6310dbf`） | 通过 **1202** / 失败 0 / 跳过 **1** / 共 **1203** | 设 `LITEMONITOR_PLUGIN_REPO=tests/fixtures/plugin-repo` 后 `dotnet test tests/LiteMonitor.Tests -c Debug` | S3.5 + S3.6 + 主审集成落地后实测；跳过 1 = 唯一剩余联网 E2E（ENV-004） |
+| 主测试工程（**CI 口径实测** @`46f3f9d`） | 通过 **1203** / 失败 0 / 跳过 **1** / 共 **1204** | 设 `LITEMONITOR_PLUGIN_REPO=tests/fixtures/plugin-repo` 后 `dotnet test tests/LiteMonitor.Tests -c Debug` | S3.5 + S3.6 + 主审集成落地后实测；跳过 1 = 唯一剩余联网 E2E（ENV-004） |
 | 主测试工程（**本地口径实测** @`366bf9c`） | 通过 **1186** / 失败 0 / 跳过 **7** / 共 **1193** | **不设** `LITEMONITOR_PLUGIN_REPO` 的同一条命令 | 已实测（`366bf9c`）；与 CI 口径的差值恰为 6 条市场契约用例（ENV-003）。本地口径在 `6310dbf` 上为 1203 / 通过 1196 / 跳过 7 |
 | 更新器测试工程 | 通过 **58** / 失败 0 / 跳过 0 / 共 **58** | `dotnet test tests/LiteMonitor.Updater.Tests -c Debug` | 已实测（S4.2 扩展后由 13 增至 58） |
 | GPU 非性能测试工程 | 通过 **19** / 失败 0 / 跳过 0 / 共 **19** | `dotnet test tests/LiteMonitor.GpuNonperformance.Tests -c Debug` | 已实测 |
-| **三工程合计（当前）** | **1280**（1203 + 58 + 19） | `dotnet test LiteMonitor.sln -c Debug -v minimal` | CI 口径实测（`LITEMONITOR_PLUGIN_REPO` 指向夹具），退出码 **0**；三道门禁（`dotnet test` / `assert-test-counts.ps1` / `generate-dependency-manifest.ps1 -Mode Check`）退出码全 **0**。CI 门禁 `MIN_TEST_TOTAL` 已**同步收紧** 1150 → **1280** |
+| **三工程合计（当前）** | **1281**（1204 + 58 + 19） | `dotnet test LiteMonitor.sln -c Debug -v minimal` | CI 口径实测（`LITEMONITOR_PLUGIN_REPO` 指向夹具），退出码 **0**；三道门禁（`dotnet test` / `assert-test-counts.ps1` / `generate-dependency-manifest.ps1 -Mode Check`）退出码全 **0**。CI 门禁 `MIN_TEST_TOTAL` 已**同步收紧** 1150 → **1280**；LM-047 修复新增 1 条用例（总数 1281），阈值待与最终提交点一并上调 |
 | 主测试源码文件 | 顶层 **74** 个 / 含子目录 **80** 个 `.cs` | `Get-ChildItem tests/LiteMonitor.Tests -Filter *.cs -Recurse` | 已实测（原台账「64 个」已过时） |
 | 更新器 / GPU 测试源码文件 | 更新器 顶层 3 / 递归 9；GPU 顶层 0 / 递归 6 | 同上 | 已实测 |
 | 解决方案测试发现 | **1280**（CI 口径）／本地口径 1203 | `dotnet test LiteMonitor.sln` | **不再是 0** —— BASE-003 已闭环（`0366268` 三个测试工程入 `.sln`）；`assert-test-counts.ps1` 把「发现 0」变红 |
@@ -1133,7 +1184,8 @@ S3.6 为钉住"生产入口实际使用的总时长"，在 `PluginSandboxScope` 
 2. ✅ **重跑全量回归（CI 口径）**：`LITEMONITOR_PLUGIN_REPO=$PWD\tests/fixtures/plugin-repo` + `dotnet test LiteMonitor.sln -c Debug` + `assert-test-counts.ps1` + `generate-dependency-manifest.ps1 -Mode Check` ⇒ **三道门禁退出码必须全 0**，且主工程**总数只增不减**。实测：**1280 / 1279 通过 / 0 失败 / 1 跳过**。
 3. ✅ **上调 `MIN_TEST_TOTAL`**：`.github/workflows/ci.yml` 由 `1150` → **`1280`**（**等于**当前实测总数；门禁只收紧不放宽）。
 4. ✅ **回写 §8 已知基线**与 **§7 追踪矩阵**（LM-039~044 转 `✅ 已闭环`），并在 §4.4 台账补上 S3.5 / S3.6 / 主审集成 / GPU T01 四行。
-5. ⏳ **独立 verifier 复核**（S3.5 + S3.6 + 主审集成的合并结果）—— **不得由实现者自审**；复核在隔离 worktree 内自做变异。
+5. ✅ **独立 verifier 复核**（S3.5 + S3.6 + 主审集成的合并结果）—— **不得由实现者自审**；复核在隔离 worktree 内自做变异。**VERDICT: PASS_WITH_NOTES**（10 轮自设计变异全部变红；契约 6 常量未改；CI 阈值恰等于实测总数；LM-045 被独立实证为真实 P1；发现 LM-047~LM-052 共 6 项）。归档见 §4.3.5。
+5b. ✅ **LM-047 修复**（`46f3f9d`）：字节上限在原语层夹到契约天花板（2 MiB 从"约定"变"强制"），新增护栏用例并以变异自证。
 6. ⏳ **推送** `fix/audit-remediation-v3` 到 origin（已授权），等待 CI 全绿（当前基线：6 次 push 运行全部 success）。
 7. ⏳ **提出 master 合并评估**（用户已定：门禁全绿且本批收敛后再评估）。就绪度事实已备齐：merge-base 即 master `9ffb4219` ⇒ **可快进、零冲突**；`A=287 / M=29 / D=0`（零删除）；生产代码仅 **13 个 `src/` 文件**（+5750/−586）。
 8. ✅ **GPU T01 结论落地**：判定 **`RECREATE_HANDLE_SAFE`** ⇒ 走 GPU 计划 §4.1 主线，**不启用** §9 备用路线；判别位重建分支**保留**，`RecreateWindow` **采用**。回填 GPU 计划 §12.7。
