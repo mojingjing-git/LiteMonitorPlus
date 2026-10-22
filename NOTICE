@@ -37,12 +37,27 @@ Copyright (c) 2026 mojingjing-git
    用途：读取 CPU / GPU / 内存 / 主板 / 风扇 / 温度 / 功耗等硬件传感器
    来源：https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
 
-2) System.Text.Json 9.0.10
+2) System.Text.Json 10.0.3
    协议：MIT
    用途：主题 / 语言包 / 插件 / 配置的 JSON 序列化
    来源：https://github.com/dotnet/runtime
 
-3) PawnIO 驱动（resources/assets/PawnIO_setup.exe、resources/assets/driver.zip）
+3) Microsoft.Diagnostics.Tracing.TraceEvent 4.0.0
+   协议：MIT
+   用途：ETW 会话管理与网络流量事件解码（IP 流量排除功能）
+   来源：https://github.com/Microsoft/perfview
+
+4) Vortice.Direct2D1 3.8.3
+   协议：MIT
+   用途：GPU 玻璃前景层的 Direct2D 绘制（文字 / 图元 / 色刷）
+   来源：https://github.com/amerkoleci/Vortice.Windows
+
+5) Vortice.Direct3D11 3.8.3
+   协议：MIT
+   用途：GPU 渲染路径的 D3D11 设备 / 纹理 / 着色器 / 渲染目标与桌面复制抓屏
+   来源：https://github.com/amerkoleci/Vortice.Windows
+
+6) PawnIO 驱动（resources/assets/PawnIO_setup.exe、resources/assets/driver.zip）
    协议：GNU General Public License v2.0 或更高版本（GPL-2.0-or-later），
         并附有 PawnIO 版权持有人授予的链接例外（linking exception）
    版权：Copyright (C) namazso <admin@namazso.eu>
@@ -54,12 +69,12 @@ Copyright (c) 2026 mojingjing-git
         因此本项目自身仍以 MIT 协议发布。
         二进制文件为 PawnIO 官方发布的安装包，未经修改。
 
-4) PresentMon（resources/assets/LiteMonitorPlusFPS.exe）
+7) PresentMon（resources/assets/LiteMonitorPlusFPS.exe）
    协议：BSD 3-Clause License
    用途：提供游戏帧率（FPS）计数所需的 ETW 采集能力
    来源：https://github.com/GameTechDev/PresentMon
    说明：二进制为上游项目分发的预编译版本，未经修改。
 
-5) 网络测速服务器
+8) 网络测速服务器
    来源见 src/Core/NetworkSpeedTester.cs 中的服务器地址列表，
    均为第三方公开测速服务，使用其公开接口。
