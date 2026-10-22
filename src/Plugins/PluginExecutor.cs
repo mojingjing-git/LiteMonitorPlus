@@ -456,9 +456,11 @@ namespace LiteMonitor.src.Plugins
                 if (!hit)
                 {
                     // [Feature] Support Native Native Handlers (Weather, Crypto)
+                    // [LM-039] 原生步骤与 HTTP 步骤走**同一套**沙箱闸门：
+                    // 进程级并发槽位 / 响应体 2 MiB 上限 / 总时长可中止 / 允许目标校验。
                     if (url.StartsWith("native://"))
                     {
-                        resultRaw = await ExecuteNativeAsync(url, context);
+                        resultRaw = await ExecuteNativeAsync(url, context, step, scope, declaredHosts, inst?.Id ?? "");
                     }
                     else
                     {
@@ -605,41 +607,227 @@ namespace LiteMonitor.src.Plugins
             });
         }
 
-        private async Task<string> ExecuteNativeAsync(string url, Dictionary<string, string> context)
+        /// <summary>
+        /// [LM-039] <c>native://</c> 步骤的执行入口（与 HTTP 步骤**共用同一套**沙箱闸门）。
+        /// <para>闸门：</para>
+        /// <list type="bullet">
+        /// <item><b>允许目标</b>：native 参数里的绝对 URL（<c>fallback</c> 等）必须落在插件
+        /// <b>显式声明</b>的主机集合内 —— 校验发生在<b>任何请求发出之前</b>，
+        /// 不通过时一个请求都不会发出（用户填的任意 URL 不会被取回）。</item>
+        /// <item><b>并发槽位</b>：原生处理器的每个网络请求都占用进程级槽位（上限 8）。</item>
+        /// <item><b>响应体字节上限</b>：≤ 2 MiB（同一原语、同一原因码）。</item>
+        /// <item><b>总时长</b>：绑定 <see cref="PluginSandboxScope.Token"/> ⇒ 30 s 截止时刻可中止。</item>
+        /// <item><b>凭据目标校验</b>：带凭据头的 native 步骤，其目标必须通过
+        /// <see cref="PluginSandbox.EnsureCredentialTargetAllowed"/>（与 HTTP 路径同一口径）。</item>
+        /// </list>
+        /// </summary>
+        /// <param name="url">已解析模板的 native URL（<c>native://host?k=v</c>）。</param>
+        /// <param name="step">步骤定义（用于取**模板** URL 与请求头）。</param>
+        /// <param name="scope">沙箱作用域（令牌 / 字节上限）。</param>
+        /// <param name="declaredHosts">插件显式声明的主机集合。</param>
+        /// <param name="inflightScopeKey">原生在途去重的作用域键（避免跨作用域互相打断）。</param>
+        private async Task<string> ExecuteNativeAsync(string url, Dictionary<string, string> context,
+            PluginExecutionStep step, PluginSandboxScope scope, HashSet<string> declaredHosts, string inflightScopeKey)
         {
             // url: native://citycode?province=...
             var uri = new Uri(url);
-            
+
             // Simple Query Parse
-            var args = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (!string.IsNullOrEmpty(uri.Query))
+            var args = ParseNativeArgs(uri);
+
+            // [LM-039] 允许目标主机集合：插件**显式声明**的主机（口径同 HTTP 步骤路径）。
+            var allowedHosts = GetNativeAllowedHosts(step?.Url, declaredHosts);
+
+            // [LM-039] 用户可控目标（fallback 等绝对 URL 参数）必须在**请求发出之前**校验。
+            foreach (var kv in args)
             {
-                var q = uri.Query.TrimStart('?');
-                foreach (var part in q.Split('&', StringSplitOptions.RemoveEmptyEntries))
+                if (IsAbsoluteHttpUrl(kv.Value))
                 {
-                    var kv = part.Split(new[] { '=' }, 2);
-                    if (kv.Length == 2) 
-                    {
-                        args[kv[0]] = System.Net.WebUtility.UrlDecode(kv[1]);
-                    }
+                    EnsureNativeTargetAllowed(kv.Value, step?.Headers, allowedHosts, declaredHosts);
                 }
             }
 
+            // [LM-039] 总时长：原生请求绑定作用域令牌 ⇒ 截止时刻可被中止。
+            var nativeToken = scope?.Token ?? System.Threading.CancellationToken.None;
+            int maxResponseBytes = EffectiveMaxResponseBytes;
+
             if (uri.Host.Equals("citycode", StringComparison.OrdinalIgnoreCase))
             {
-                string p = args.ContainsKey("province") ? args["province"] : "";
-                string c = args.ContainsKey("city") ? args["city"] : "";
-                string d = args.ContainsKey("district") ? args["district"] : "";
-                return await CityCodeResolver.ResolveAsync(p, c, d);
+                string p = args.TryGetValue("province", out var pv) ? pv : "";
+                string c = args.TryGetValue("city", out var cv) ? cv : "";
+                string d = args.TryGetValue("district", out var dv) ? dv : "";
+                return await CityCodeResolver.ResolveAsync(p, c, d, nativeToken, maxResponseBytes).ConfigureAwait(false);
             }
             else if (uri.Host.Equals("crypto", StringComparison.OrdinalIgnoreCase))
             {
-                string s = args.ContainsKey("symbol") ? args["symbol"] : "BTC";
-                string fb = args.ContainsKey("fallback") ? args["fallback"] : "";
-                return await CryptoNative.FetchAsync(s, fb);
+                string s = args.TryGetValue("symbol", out var sv) ? sv : "BTC";
+                string fb = args.TryGetValue("fallback", out var fv) ? fv : "";
+                return await CryptoNative.FetchAsync(s, fb, nativeToken, maxResponseBytes, allowedHosts, inflightScopeKey).ConfigureAwait(false);
             }
-            
+
             throw new Exception($"Unknown native host: {uri.Host}");
+        }
+
+        /// <summary>[LM-039] 解析 native:// URL 的查询参数（键不区分大小写）。</summary>
+        private static Dictionary<string, string> ParseNativeArgs(Uri uri)
+        {
+            var args = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (uri == null || string.IsNullOrEmpty(uri.Query)) return args;
+
+            var q = uri.Query.TrimStart('?');
+            foreach (var part in q.Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var kv = part.Split(new[] { '=' }, 2);
+                if (kv.Length == 2)
+                {
+                    args[kv[0]] = System.Net.WebUtility.UrlDecode(kv[1]);
+                }
+            }
+            return args;
+        }
+
+        /// <summary>
+        /// [LM-039] native:// 步骤的**允许目标主机集合**。
+        /// <para>口径与 HTTP 步骤路径一致（<see cref="PluginProcessor.GetDeclaredHosts"/>）：
+        /// 只认插件**显式声明**（模板里写死）的主机；主机来自模板变量（<c>{{...}}</c>）时<b>不</b>构成声明。</para>
+        /// <para>native:// 的 URL 形态是 <c>native://handler?k=v&amp;fallback=https://host/path</c> ——
+        /// 内嵌的绝对 URL（<c>fallback</c> 等）同样是插件在模板里写死的目标，
+        /// 因此把它们的<b>字面量</b>主机并入允许集合（否则内置插件 <c>Crypto.json</c> 的回退源会被误杀）。
+        /// 用户能改的只是路径与查询串，<b>改不动主机</b>。</para>
+        /// </summary>
+        internal static HashSet<string> GetNativeAllowedHosts(string urlTemplate, HashSet<string> declaredHosts)
+        {
+            var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (declaredHosts != null)
+            {
+                foreach (var h in declaredHosts)
+                {
+                    if (!string.IsNullOrWhiteSpace(h)) hosts.Add(h.Trim());
+                }
+            }
+
+            foreach (var embedded in ExtractEmbeddedUrls(urlTemplate))
+            {
+                if (TryExtractLiteralHost(embedded, out var host)) hosts.Add(host);
+            }
+
+            return hosts;
+        }
+
+        /// <summary>[LM-039] 取出模板里内嵌的绝对 URL（<c>http://</c> / <c>https://</c> 开头）。</summary>
+        private static IEnumerable<string> ExtractEmbeddedUrls(string urlTemplate)
+        {
+            if (string.IsNullOrWhiteSpace(urlTemplate)) yield break;
+
+            string s = urlTemplate;
+            int index = 0;
+            while (index < s.Length)
+            {
+                int pos = s.IndexOf("http://", index, StringComparison.OrdinalIgnoreCase);
+                int pos2 = s.IndexOf("https://", index, StringComparison.OrdinalIgnoreCase);
+                if (pos < 0) pos = pos2;
+                else if (pos2 >= 0 && pos2 < pos) pos = pos2;
+                if (pos < 0) yield break;
+
+                int end = s.IndexOfAny(new[] { ' ', '\t', '\r', '\n', '"', '\'', '<', '>' }, pos);
+                if (end < 0) end = s.Length;
+                yield return s.Substring(pos, end - pos);
+                index = pos + 1;
+            }
+        }
+
+        /// <summary>
+        /// [LM-039] 取 URL 的**字面量**主机（口径同 <c>PluginProcessor.AddDeclaredHost</c>）：
+        /// 主机来自模板变量（<c>{{...}}</c>）时<b>不</b>构成声明。
+        /// </summary>
+        private static bool TryExtractLiteralHost(string url, out string host)
+        {
+            host = "";
+            if (string.IsNullOrWhiteSpace(url)) return false;
+
+            string trimmed = url.Trim();
+            int schemeEnd = trimmed.IndexOf("://", StringComparison.Ordinal);
+            if (schemeEnd < 0) return false;
+
+            string rest = trimmed.Substring(schemeEnd + 3);
+            int cut = rest.IndexOfAny(new[] { '/', '?', '#', '&' });
+            string authority = cut >= 0 ? rest.Substring(0, cut) : rest;
+
+            // 主机来自模板 → 不是插件的显式声明
+            if (authority.Contains("{{")) return false;
+
+            int at = authority.LastIndexOf('@');
+            if (at >= 0) authority = authority.Substring(at + 1);
+
+            int colon = authority.IndexOf(':');
+            if (colon >= 0) authority = authority.Substring(0, colon);
+
+            authority = authority.Trim();
+            if (authority.Length == 0) return false;
+
+            host = authority;
+            return true;
+        }
+
+        /// <summary>[LM-039] 判断字符串是否是绝对 http(s) 地址（native 的用户可控目标）。</summary>
+        private static bool IsAbsoluteHttpUrl(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return false;
+            if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)) return false;
+            return uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
+        }
+
+        /// <summary>
+        /// [LM-039] 校验 native 步骤的**用户可控目标**（<c>fallback</c> 等绝对 URL 参数）。
+        /// <para>与 HTTP 步骤路径同一口径：目标主机必须在插件**显式声明**的允许集合内；
+        /// 带凭据头的步骤额外走 <see cref="PluginSandbox.EnsureCredentialTargetAllowed"/>。</para>
+        /// </summary>
+        private static void EnsureNativeTargetAllowed(string targetUrl, Dictionary<string, string> headers,
+            HashSet<string> allowedHosts, HashSet<string> declaredHosts)
+        {
+            if (!Uri.TryCreate((targetUrl ?? "").Trim(), UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                throw new PluginSandboxException(
+                    PluginSandboxReasons.CredentialTargetNotAllowed,
+                    "原生步骤的目标地址非法，请求未发出");
+            }
+
+            string host = uri.Host;
+            if (string.IsNullOrEmpty(host) || !HostInAllowedSet(host, allowedHosts))
+            {
+                throw new PluginSandboxException(
+                    PluginSandboxReasons.CredentialTargetNotAllowed,
+                    $"原生步骤的目标主机 '{host}' 不在插件显式声明的允许目标集合内，请求未发出");
+            }
+
+            // 带凭据的原生步骤：与 HTTP 步骤路径**同一口径** —— 凭据只允许发往声明的主机。
+            if (headers != null && PluginSandbox.HasCredentialHeader(headers))
+            {
+                PluginSandbox.EnsureCredentialTargetAllowed(targetUrl, headers, declaredHosts);
+            }
+        }
+
+        /// <summary>主机是否在允许集合内（忽略端口、大小写不敏感）。</summary>
+        private static bool HostInAllowedSet(string host, IEnumerable<string> allowedHosts)
+        {
+            if (allowedHosts == null) return false;
+
+            string h = StripPort(host ?? "");
+            foreach (var allowed in allowedHosts)
+            {
+                if (string.IsNullOrWhiteSpace(allowed)) continue;
+                if (string.Equals(StripPort(allowed.Trim()), h, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
+
+        private static string StripPort(string value)
+        {
+            int colon = value.LastIndexOf(':');
+            if (colon > 0 && colon < value.Length - 1) return value.Substring(0, colon);
+            return value;
         }
 
         /// <summary>响应体读取上限（字节）默认值。超出即明确失败，防止异常插件把内存打爆。</summary>

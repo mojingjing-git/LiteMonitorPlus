@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using LiteMonitor.src.Core; // Added for UIUtils
 using LiteMonitor.src.SystemServices.InfoService;
@@ -30,7 +32,22 @@ namespace LiteMonitor.src.Plugins.Native
 
         public static async Task<string> ResolveAsync(string province, string city, string district)
         {
-            await EnsureDbLoadedAsync();
+            return await ResolveAsync(province, city, district, CancellationToken.None, 0).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// [LM-039] 受沙箱约束的城市代码解析。
+        /// <para>闸门（与 <c>PluginExecutor</c> 的 HTTP 步骤路径同一套）：
+        /// 远程回退下载占用 <see cref="PluginSandbox"/> 的进程级并发槽位、
+        /// 受响应体字节上限约束（≤ 2 MiB）、并绑定 <paramref name="token"/>
+        /// ⇒ 单次执行总时长到期时下载可被中止。</para>
+        /// </summary>
+        /// <param name="token">作用域令牌（总时长到期即中止下载）。</param>
+        /// <param name="maxResponseBytes">响应体字节上限；&lt;= 0 时回落到沙箱硬天花板。</param>
+        public static async Task<string> ResolveAsync(string province, string city, string district,
+            CancellationToken token, int maxResponseBytes)
+        {
+            await EnsureDbLoadedAsync(token, maxResponseBytes).ConfigureAwait(false);
 
             if (_db == null) throw new Exception("CityCode DB failed to load");
 
@@ -126,12 +143,12 @@ namespace LiteMonitor.src.Plugins.Native
             }
         }
 
-        private static async Task EnsureDbLoadedAsync()
+        private static async Task EnsureDbLoadedAsync(CancellationToken token, int maxResponseBytes)
         {
             if (_db != null) return;
-            if (_isLoading) 
+            if (_isLoading)
             {
-                await Task.Delay(100); 
+                await Task.Delay(100, token);
                 if (_db != null) return;
             }
 
@@ -145,10 +162,27 @@ namespace LiteMonitor.src.Plugins.Native
                     foreach (var candidate in LocalJsonCandidates)
                     {
                         if (!File.Exists(candidate)) continue;
-                        json = await File.ReadAllTextAsync(candidate);
+
+                        // [LM-039] 本地库同样受字节上限约束（防止异常资产把内存打爆）。
+                        int limit = maxResponseBytes > 0 ? maxResponseBytes : PluginSandboxLimits.MaxResponseBytes;
+                        long length = new FileInfo(candidate).Length;
+                        if (length > limit)
+                        {
+                            throw new PluginResponseTooLargeException(candidate, length, limit);
+                        }
+
+                        json = await File.ReadAllTextAsync(candidate, token).ConfigureAwait(false);
                         System.Diagnostics.Debug.WriteLine($"[CityCodeResolver] Loaded local CityCode.json: {candidate}");
                         break;
                     }
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (PluginSandboxException)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -176,8 +210,23 @@ namespace LiteMonitor.src.Plugins.Native
                         // 设置超时
                         client.Timeout = TimeSpan.FromSeconds(15);
                         client.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor++/1.0");
-                        
-                        json = await client.GetStringAsync(JSON_DB_URL);
+
+                        // [LM-039] 远程回退同样受沙箱约束：
+                        // 进程级并发槽位 + 作用域令牌（可中止）+ 响应体字节上限。
+                        using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                        cts.CancelAfter(TimeSpan.FromSeconds(15));
+                        using var slot = await PluginSandbox.AcquireRequestSlotAsync(cts.Token).ConfigureAwait(false);
+
+                        using var response = await client
+                            .GetAsync(JSON_DB_URL, HttpCompletionOption.ResponseHeadersRead, cts.Token)
+                            .ConfigureAwait(false);
+                        response.EnsureSuccessStatusCode();
+
+                        using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
+                        byte[] bytes = await PluginSandbox
+                            .ReadResponseBodyAsync(stream, maxResponseBytes, cts.Token)
+                            .ConfigureAwait(false);
+                        json = Encoding.UTF8.GetString(bytes);
                     }
                 }
 
@@ -205,6 +254,17 @@ namespace LiteMonitor.src.Plugins.Native
                     }
                     _db[key] = lists;
                 }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // [LM-039] 作用域取消（总时长到期）必须原样上抛：吞掉会变成"城市库加载失败"，
+                // 上限就形同虚设。
+                throw;
+            }
+            catch (PluginSandboxException)
+            {
+                // [LM-039] 沙箱上限（并发 / 响应字节）不得被降级成普通加载失败。
+                throw;
             }
             catch (Exception ex)
             {
