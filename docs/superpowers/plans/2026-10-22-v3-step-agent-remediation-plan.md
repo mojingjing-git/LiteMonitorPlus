@@ -313,6 +313,64 @@ F1–F4、F7 属**测试判别力缺口**，不影响产品实现正确性（ver
 
 ---
 
+### 4.3 M3 门禁复核结论归档（候选 `cb460b5`，2026-10-22）
+
+**结论：`PASS_WITH_NOTES`，建议放行（附三项强制条件，均已满足）。**
+
+S3.1 / S3.2 / cb460b5 在各自所有权范围内的行为均被独立复现且**具备判别力**：15 处破坏点、6 轮变异**全部被捕获**（含 1 处挂死）。全量回归 **1153/1146/7/0 + 13/13/0/0 + 19/19/0/0 = 1185**，退出码 **0**（两次独立复跑）。
+
+#### 4.3.1 变异证据（节选）
+
+| 变体 | 破坏点 | 结果 |
+|---|---|---|
+| M1-a | 去掉 8 MiB 下载上限 | 2 条 FAIL ✅ |
+| M1-b | 安装路径去掉强制摘要 | 1 条 FAIL ✅ |
+| M1-c | `AllowAutoRedirect` false→true | 1 条 FAIL ✅ |
+| M2-d | Host 精确匹配→`Contains` | 1 条 FAIL ✅ |
+| M2-e | 移除逐跳重定向重校验 | 3 条 FAIL ✅ |
+| M3-f | `matchTimeout` 500 ms→10 s | 1 条 FAIL（"灾难性回溯耗时 9987 ms"）✅ |
+| M3-g~k | 去掉 6 个沙箱上限 | 8 条 FAIL ✅ |
+| M4 | 恢复宽泛 `catch{return val;}` | 4 条 FAIL ✅ |
+| **M5** | **彻底删除 `matchTimeout` 参数** | **挂死 120 077 ms 未完成**（HEAD 同用例约 500 ms 通过）✅ |
+| M6 | 记录写入提前到 `File.Move` 之前 | 1 条 FAIL + 探针 FAIL ✅ |
+
+M5 另做独立佐证：`^(a+)+$`（40×a + `!`）无 timeout 时 **180 s 未完成**；带 500 ms timeout 时 **494 ms** 抛 `RegexMatchTimeoutException` ⇒ `matchTimeout` 参数确被真实传入并生效。
+
+#### 4.3.2 发现项
+
+| ID | 级别 | 摘要 | 处置 |
+|---|---|---|---|
+| **LM-030** | 🟠 中 | **LM-009 的 6 个上限在 `cb460b5` 上仍未接入端到端执行路径**：`PluginSandbox`/`PluginSandboxScope` 在 `src/` 下**仅出现在 `PluginProcessor.cs` 自身**，`PluginExecutor.cs` 命中数 **0** ⇒ 6 个上限中 **5 个**（响应体 2 MiB、步骤 16、目标 64、总时长 30 s、并发 8）在生产**完全不生效**（执行器仍用自带 8 MiB 传输上限 `PluginExecutor.cs:537`）；仅"正则超时"经 `ApplyTransforms` 间接生效 | **指派 S3.3**（`PluginExecutor.cs` 所有权）。**闭环前禁止在任何里程碑结论中记为"LM-009 已闭环"**。注：`PluginProcessor.cs:66-72` 的"覆盖边界"自述虽诚实，但**文档 ≠ 闭环** |
+| LM-031 | 🟡 低 | `PluginProcessor.cs:135-138` `ExtractJsonValue` 仍 `catch { return STATUS_UNKNOWN; }` 宽泛吞异常。**属既有行为**（基线 `4be1a8c` 即存在），非 S3.2 引入 ⇒ 不判本轮失败 | 登记为后续清理项，**不阻断** M3。不建议在声明式插件场景下盲目改成传播异常 —— "坏字段降级"与"整体失败"是设计取舍，需单独评估 |
+| LM-032 | 🟡 低·测试质量 | `PluginMarketPolicyTests.cs:420` 用例名 `安装_成功_先落盘再写记录且内容与摘要一致` 只断言**终态**（文件存在/内容/记录字段），**不直接断言顺序**；真正抓住顺序回退的是 `启动恢复_替换已发生但记录未更新_回滚到旧内容`（M6 已证明） | 登记为后续清理项（重命名或补顺序断言）。**不阻断** |
+| LM-033 | 🔵 流程 | 门禁基线描述陈旧：任务书下限写 1152(1145/7)，仓库 CI 自述为 **1185(1153+13+19)** | 已按 §8 更新基线数字 |
+
+#### 4.3.3 M3 放行条件（3 项，均已满足）
+
+1. ✅ LM-030 登记为独立缺陷并指派 S3.3，验收口径改为"`PluginExecutor.cs` 端到端路径实测触达 6 个上限"。
+2. ✅ LM-031 / LM-032 登记为后续清理项（低 severity，不阻断）。
+3. ✅ M3 表述显式声明 6 条契约 + 1 条联网 E2E 为 `NOT_VERIFIED`，不计入通过数。
+
+---
+
+### 4.4 本轮并行步骤产出台账
+
+| 步骤 | 提交 | 关键结论 |
+|---|---|---|
+| S3.3 | 待提交 | LM-009 沙箱接入 `PluginExecutor` 端到端路径（LM-030 闭环） |
+| S4.1 | `a8fb2fc` | 插件市场契约夹具入库。**6 条契约用例从"永远跳过"变为"真正执行"**（跳过 7→1，只剩联网 E2E）。CI 门禁**收紧**：`MAX_SKIPPED_TESTS: 1` + `MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests(≥6)`，并做负向验证（置空 env var ⇒ 退出码 1、3 条 FAIL）。**关键发现**：原 `assert-test-counts.ps1` 只统计并打印跳过数、**没有任何上限** —— 这正是 ENV-003 能长期存在的原因 |
+| S4.1b | 待提交 | 5 类越界反例补自动化覆盖（S4.1 只留台账；台账不跑就只是文档） |
+| S5.3 | `217102d` | NOTICE 版本修正 + 补 3 个漏列依赖 + 依赖清单护栏脚本。**方法论突破**：产物内嵌 `ProductVersion = 1.0.0+<git commit SHA>`，据此可判定"包内更新器是否由本次源码构建"（.NET 发布产物**非字节确定**，**不可**用重新 publish 比 SHA-256） |
+| S5.3b | 待提交 | 补全**传递依赖**披露并扩展护栏（NOTICE 须覆盖实际随包分发的传递依赖） |
+
+**S5.3 实测的随包分发传递依赖**（均 MIT）：`Vortice.DXGI 3.8.3`、`Vortice.DirectX 3.8.3`、`Vortice.Mathematics 2.1.0`、`SharpGen.Runtime 2.4.2-beta`、`SharpGen.Runtime.COM 2.4.2-beta`、`Microsoft.Diagnostics.FastSerialization`。
+
+**CI 接线待办**：把 `scripts/generate-dependency-manifest.ps1 -Mode Check` 接入 CI（退出码 1 即失败）。`.github/workflows/**` 归 S4.1 所有且已提交；待 S5.3b 落地后由编排方接入。
+
+**环境事实（供后续引用）**：受保护的 `LiteMonitor++.exe`（PID 24936）在本轮**自行退出**；应用事件日志**无崩溃记录** ⇒ 属正常退出而非崩溃。S4.1 与 M3 verifier **两个独立 agent** 均自述从未终止该进程，且全程会话记录中**无任何**针对 `LiteMonitor++` 的 `Stop-Process`/`taskkill` 命令。
+
+---
+
 ## 5. 执行步骤
 
 ### M0 · 基线与可复现
@@ -696,15 +754,18 @@ F1–F4、F7 属**测试判别力缺口**，不影响产品实现正确性（ver
 
 | 指标 | 数值 | 复现命令 | 核实状态 |
 |---|---|---|---|
-| 主测试工程 | 通过 983 / 失败 0 / 跳过 7 / 共 990 | `dotnet test tests/LiteMonitor.Tests -c Debug` | 已实测，连续两次一致 |
+| 主测试工程（**初始基线**） | 通过 983 / 失败 0 / 跳过 7 / 共 990 | `dotnet test tests/LiteMonitor.Tests -c Debug` | 已实测，连续两次一致 |
+| 主测试工程（**当前实测**） | 通过 **1152** / 失败 0 / 跳过 **1** / 共 **1153** | 同上 | M3 门禁 @`cb460b5` 实测；S4.1 接入夹具后跳过由 **7 → 1**（唯一剩余为联网 E2E） |
 | 更新器测试工程 | 通过 13 / 失败 0 / 跳过 0 / 共 13 | `dotnet test tests/LiteMonitor.Updater.Tests -c Debug` | 已实测 |
+| GPU 非性能测试工程 | 通过 19 / 失败 0 / 跳过 0 / 共 19 | `dotnet test tests/LiteMonitor.GpuNonperformance.Tests -c Debug` | 已实测 |
+| **三工程合计（当前）** | **1185**（1153 + 13 + 19） | `dotnet test LiteMonitor.sln -c Debug -v minimal` | M3 门禁两次独立复跑，退出码 **0** |
 | 主测试源码文件 | 64 个 `.cs` | `Get-ChildItem tests/LiteMonitor.Tests -Filter *.cs` | 已实测 |
 | 解决方案测试发现 | **0（静默空跑，退出码 0）** | `dotnet test LiteMonitor.sln` | 已实测——S0.2 目标 |
 | 两点 / 三点分支差异 | 484 / 522，共同祖先 `169e90a2…` | `git diff --name-only master branch` / `master...branch` | 已实测 |
 | Release 构建 | **失败**（ENV-001 锁定） | `dotnet build LiteMonitor.sln -c Release` | 已实测 |
 | 远端 Actions / Release | 均无 | `gh run list` / `gh release list` | 已实测 |
 
-**基线纪律：** 任何步骤完成后，上述"通过 983 / 通过 13"两项**不得下降**。下降即为回归，必须在同一步骤内修复，不得记为"已知问题"后放行。
+**基线纪律：** 任何步骤完成后，上述**当前实测值**（主工程 通过 **1152** / 跳过 **1** / 总 **1153**，更新器 通过 **13**，GPU 非性能 通过 **19**，三工程合计 **1185**）**不得下降**；主工程**总数只增不减**。下降即为回归，必须在同一步骤内修复，不得记为"已知问题"后放行。CI 侧的对应门禁为 `MIN_TEST_TOTAL: 1150`、`MAX_SKIPPED_TESTS: 1`、`MUST_EXECUTE_TEST_CLASS: MarketIndexContractTests (≥6)`（`.github/workflows/ci.yml`）—— 跳过数**有上限**、契约类**不许被跳过**，两者均为 S4.1 引入的收紧。
 
 ---
 
