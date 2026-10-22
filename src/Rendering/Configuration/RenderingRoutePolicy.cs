@@ -9,12 +9,19 @@ public enum RenderingRoute
     GpuLiveBackground
 }
 
+/// <summary>
+/// 【T02 合同 §3.1 / 裁决 D9 配套】期望路由的输入。
+/// <para><c>WindowIsLayered</c> 是**唯一**新增成员，且为**尾部可选参数、默认 false</c>：
+/// 既有 <c>src/UI/UIController.cs:941-946</c> 的 4 处具名参数构造**无需改动即可编译**，
+/// 且未显式传入时 <c>Decide</c> 的输出与改造前**逐位相同**（合同 §3.1"既有行为零变化"）。</para>
+/// </summary>
 public sealed record RenderingRouteRequest(
     ThemeRenderingConfig? Configuration,
     bool GpuEffectsEnabled,
     bool LiveBackgroundEnabled,
     bool WdaCapturePolicyAccepted,
-    bool SafeMode);
+    bool SafeMode,
+    bool WindowIsLayered = false);
 
 public sealed record RenderingRouteDecision(
     RenderingRoute Route,
@@ -109,6 +116,23 @@ public static class RenderingRoutePolicy
                 MaterialKind.LiquidGlass,
                 CaptureRequested: false,
                 FallbackCode: "wda_capture_policy_not_accepted",
+                errors);
+        }
+
+        // 【T02 合同 §3.1 / GPU-003】期望仍是 GPU live，但窗口处于分层窗口 ⇒ 不得申请 WDA 排除
+        // ⇒ 降级为 GpuFixedInput（既有路线，RenderingRoutePolicy.cs:95-102 同一形状），
+        //    并给出独立原因码；期望路由 = 有效路由中的"有效"侧由协调器承担。
+        //
+        // 放置位置：既有 :104-113 的 WdaCapturePolicyAccepted 判定**之后** ⇒
+        // safe_mode（:61）、gpu_effects_opt_in_required（:66）等既有原因码**优先级不变**。
+        if (request.WindowIsLayered)
+        {
+            return new RenderingRouteDecision(
+                RenderingRoute.GpuFixedInput,
+                RenderBackendKind.Gpu,
+                MaterialKind.LiquidGlass,
+                CaptureRequested: false,
+                FallbackCode: "wda_capture_policy_unsupported_on_layered_window",
                 errors);
         }
 
