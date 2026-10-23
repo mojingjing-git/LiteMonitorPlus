@@ -912,29 +912,6 @@ namespace LiteMonitor.src.Plugins
         private int _maxResponseBytes = DefaultMaxResponseBytes;
 
         /// <summary>
-        /// [LM-081] 把步骤声明的方法字符串映射成 <see cref="HttpMethod"/>。
-        /// <para>白名单：GET / POST / HEAD / PUT / DELETE / PATCH / OPTIONS；
-        /// 其余（含空值、含未知方法）⇒ 回落 GET（既有默认行为不变）。</para>
-        /// <para>★ 为什么必须"真的发得出" PUT / DELETE：.NET 原生重定向对**不同方法**的语义
-        /// **逐状态码不同**（301/302 只降级 POST，303 降级一切非 GET/HEAD）⇒ 执行器必须能发出
-        /// 这些方法，否则这条语义既无从观测、也无从对齐（修复前本方法把一切非 POST/HEAD 的方法
-        /// 一律发成 GET，PUT / DELETE 步骤因此根本无法被观测）。</para>
-        /// </summary>
-        private static HttpMethod ResolveHttpMethod(string methodStr)
-        {
-            switch ((methodStr ?? "").Trim().ToUpperInvariant())
-            {
-                case "POST": return HttpMethod.Post;
-                case "HEAD": return HttpMethod.Head;
-                case "PUT": return HttpMethod.Put;
-                case "DELETE": return HttpMethod.Delete;
-                case "PATCH": return HttpMethod.Patch;
-                case "OPTIONS": return HttpMethod.Options;
-                default: return HttpMethod.Get;
-            }
-        }
-
-        /// <summary>
         /// 唯一的 HTTP 出网点。
         /// <para>[LM-009] 这里接入沙箱：</para>
         /// <list type="bullet">
@@ -955,9 +932,13 @@ namespace LiteMonitor.src.Plugins
         /// 共享在途请求必须传 false（C1 契约：取消一个等待者不得取消共享任务）。</param>
         private async Task<string> FetchRawAsync(string methodStr, string url, string body, Dictionary<string, string> headers, string encoding, System.Threading.CancellationToken token, string proxy = null, PluginSandboxScope scope = null, HashSet<string> allowedHosts = null, bool scopeCancelsRequest = true)
         {
-            // [LM-081] 方法映射：步骤声明什么方法就发什么方法（白名单见 ResolveHttpMethod；
-            // 其余 ⇒ GET，既有默认不变）。
-            HttpMethod method = ResolveHttpMethod(methodStr);
+            // 方法解析：**只支持 GET / POST / HEAD**，其余一律回落 GET（既有行为，逐字不变）。
+            // ★ LM-081 的判据对齐**不**扩大插件可发的方法面：第三方插件仍只能发
+            //   GET / POST / HEAD（插件市场里的插件是第三方代码，扩大方法面属于需要
+            //   单独评估与授权的安全变更，不搭车进缺陷修复）。
+            HttpMethod method = HttpMethod.Get;
+            if (methodStr?.ToUpper() == "POST") method = HttpMethod.Post;
+            else if (methodStr?.ToUpper() == "HEAD") method = HttpMethod.Head;
             
             // Log($"[Start] {method} {url} Proxy:{proxy ?? "None"}");
 
