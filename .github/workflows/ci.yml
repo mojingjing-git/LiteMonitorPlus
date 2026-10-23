@@ -129,8 +129,18 @@ jobs:
           $out = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\startup-check'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           $probe = 'tools\GpuHostLifecycleProbe\bin\Debug\net8.0-windows\GpuHostLifecycleProbe.exe'
-          & $probe --scenario=startup $out
-          $code = $LASTEXITCODE
+          # ★★ 探针是 WinExe（GUI 子系统）★★：PowerShell 的 `&` 对 GUI 程序
+          #   **不等待**、**不更新** $LASTEXITCODE；而上一步 `dotnet build` 恰好把
+          #   $LASTEXITCODE 置为 0 ⇒ `&` 之后读到的永远是 0 ⇒ 门禁**恒绿**。
+          #   实测（LM-090）：把 R01 的启动空引用放回去，这条门禁照样判 PASS，
+          #   而探针真实退出码是 1（探针根本没跑完就被判定了）。
+          #   ⇒ 必须用 Start-Process -PassThru + WaitForExit 取**真实**退出码。
+          $proc = Start-Process -FilePath $probe -ArgumentList @('--scenario=startup', $out) -PassThru -WindowStyle Hidden
+          if (-not $proc.WaitForExit(180000)) {
+            try { $proc.Kill() } catch { }
+            throw '生产主窗体启动检查超时（180 s）'
+          }
+          $code = $proc.ExitCode
           Write-Host "生产主窗体启动检查退出码: $code"
           if ($code -ne 0) {
             $err = Join-Path $out 'startup-error.log'
