@@ -167,8 +167,35 @@ namespace LiteMonitor.src.Plugins
             lock (_scheduleLock) { return _timers.ContainsKey(instanceId) ? 1 : 0; }
         }
 
+        /// <summary>
+        /// 启动恢复（LM-083）：把上次没干完的**插件安装事务**对账掉。
+        /// <para>
+        /// ★ 必须在任何**加载 / 调度之前**完成：恢复会把磁盘回滚到旧版本；
+        ///   如果先加载再恢复，磁盘回滚了而内存里仍跑新版本 ⇒ 回滚承诺在进程内**不成立**。
+        /// </para>
+        /// <para>
+        /// ★ 恢复失败**不阻断**加载：恢复本身是对账，失败时保持现状继续启动，
+        ///   但绝不能因此跳过恢复（跳过 ⇒ 又变成"恢复晚于加载"）。
+        /// </para>
+        /// </summary>
+        public void RecoverMarketTransactions(string pluginsDir)
+        {
+            try { PluginMarket.RecoverInterruptedInstallsIn(pluginsDir); }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    "[PluginManager] 对账未完成的插件安装事务失败：" + ex.Message);
+            }
+        }
+
         public void LoadPlugins(string directoryPath)
         {
+            // ★★ LM-083：恢复必须排在**任何加载 / 调度之前** ——
+            //   先把上次没干完的安装事务对账掉（磁盘回滚到旧版本），
+            //   否则就会出现"磁盘已回滚、内存仍跑新版本"。
+            //   这是**结构性兜底**：任何调用方（启动、市场页安装/卸载）都绕不过它。
+            RecoverMarketTransactions(directoryPath);
+
             if (!Directory.Exists(directoryPath))
             {
                 try { Directory.CreateDirectory(directoryPath); } catch { }

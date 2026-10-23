@@ -181,8 +181,13 @@ namespace LiteMonitor.src.Plugins
         static PluginMarket()
         {
             // ★ 启动恢复（LM-008）：进程上次被杀/崩溃时可能留下"写了一半"的安装事务。
-            //   PluginMarket 在应用启动早期就会被碰到（PluginSelfCheck.RunOnce 读 PluginsDir），
             //   这里在类型首次使用时对账，保证不留半截插件文件、也不让记录与文件不一致。
+            // ★★ LM-083：**这里只是兜底**，不能当成"恢复已经发生了"的依据 ——
+            //   类型首次被碰到的那一刻可能**晚于**插件加载与调度（例：PluginSelfCheck.RunOnce
+            //   才会第一次读 PluginsDir），那时磁盘虽然回滚了，内存里跑的却还是新版本。
+            //   真正保证"先恢复、后加载"的是：
+            //     ① PluginManager.LoadPlugins 开头的恢复（结构性兜底，任何调用方都绕不过）；
+            //     ② MainForm 构造函数里显式的恢复调用（启动顺序一眼可见）。
             try { EnsureRecovered(PluginsDir); }
             catch { /* 恢复失败不阻断启动 */ }
         }
@@ -735,6 +740,25 @@ namespace LiteMonitor.src.Plugins
         public static void RecoverInterruptedInstalls()
         {
             EnsureRecovered(PluginsDir, force: true);
+        }
+
+        /// <summary>
+        /// 启动恢复（LM-083）：对账**指定目录**里的未完成安装事务。
+        /// <para>
+        /// ★ 为什么需要"按目录"的入口：插件管理器加载的是**调用方传进来的目录**，
+        ///   而 <see cref="RecoverInterruptedInstalls"/> 只认 <see cref="PluginsDir"/>。
+        ///   恢复必须发生在**任何加载 / 调度之前**，所以加载路径上需要一个能对账
+        ///   "即将被加载的那个目录"的入口。
+        /// </para>
+        /// <para>
+        /// ★ 这里必须 <c>force: true</c>：恢复要**当场**发生，
+        ///   不能因为"这个目录之前已经对账过"就跳过 —— 跳过就又回到"恢复晚于加载"的老问题。
+        /// </para>
+        /// </summary>
+        internal static void RecoverInterruptedInstallsIn(string pluginsDir)
+        {
+            if (string.IsNullOrWhiteSpace(pluginsDir)) return;
+            EnsureRecovered(pluginsDir, force: true);
         }
 
         /// <summary>确保指定目录里的未完成安装事务已经被对账过（每个目录只做一次）。</summary>

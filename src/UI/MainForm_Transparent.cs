@@ -217,6 +217,12 @@ namespace LiteMonitor
 
             TrafficLogger.Load();
             HardwareHistoryLogger.Load();
+
+            // ★★ LM-083：安装事务恢复必须排在**任何加载 / 调度之前** ——
+            //   上次进程被杀/崩溃可能留下"写了一半"的安装事务；恢复会把磁盘回滚到旧版本。
+            //   若先加载再恢复，磁盘虽然回滚了，内存里跑的却仍是新版本 ⇒ 回滚承诺在进程内不成立。
+            //   （插件管理器内部还有一道结构性兜底，见 PluginManager.LoadPlugins。）
+            src.Plugins.PluginMarket.RecoverInterruptedInstalls();
             src.Plugins.PluginManager.Instance.LoadPlugins(Path.Combine(AppContext.BaseDirectory, "resources", "plugins"));
             src.Plugins.PluginManager.Instance.Start();
 
