@@ -220,9 +220,15 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
     /// <summary>
     /// 进程退出码：**持续送帧失败**（LM-086）。
     /// <para>0 = 通过；1 = 运行异常；2 = 源码漂移；3 = 超时；4 = 隔离门失败；
-    /// 5 = 持续送帧失败；64 = 参数错误；70 = 未处理异常。</para>
+    /// 5 = 持续送帧失败；6 = 源码漂移比对**未做**（NOT_VERIFIED）；64 = 参数错误；70 = 未处理异常。</para>
     /// </summary>
     internal const int ScenePumpFailureExitCode = 5;
+
+    /// <summary>
+    /// 进程退出码：**源码漂移比对未做**（LM-088，NOT_VERIFIED）。
+    /// <para>找不到源码 ⇒ 根本没有做比对 ⇒ 这一项**不能**当成"通过"（假绿）。</para>
+    /// </summary>
+    internal const int SourceHashNotVerifiedExitCode = 6;
 
     private readonly Form _form;
     private readonly Action _recreateHandle;
@@ -859,12 +865,24 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
         // ★ LM-086：收尾时确保送帧通道已经停下（失败计数才是最终值）。
         StopScenePump();
 
-        bool unchanged = true;
+        // ★ LM-088：比对**没做**时必须**如实说没做**。
+        //   原实现让 `unchanged` 保持初值 true ⇒ 输出 `sourceHashChanged = false`
+        //   （读起来就是"源码未漂移"），而实际上**根本没有做比对** ——
+        //   「候选二进制是否与当前源码一致」这一项在没有源码的机器上会**恒绿**。
+        bool sourceHashVerified = _guard is not null;
+        bool unchanged = false;
         IReadOnlyDictionary<string, string>? endHashes = null;
         if (_guard is not null)
         {
             unchanged = _guard.VerifyUnchanged(out endHashes);
         }
+
+        // ★ 没做比对 ⇒ `sourceHashChanged` 必须是 **null**（"不知道"），
+        //   绝不能是 false（"没漂移"）。
+        bool? sourceHashChanged = sourceHashVerified ? !unchanged : null;
+        string sourceHashStatus = sourceHashVerified
+            ? (unchanged ? "VERIFIED_UNCHANGED" : "VERIFIED_CHANGED")
+            : "NOT_VERIFIED_NO_SOURCE";
 
         // ★ LM-086：持续送帧的**真实**结果。
         //   `required` = 这次运行真的进过 GPU 阶段（否则"持续送帧"不是本实验的前提）。
@@ -898,7 +916,7 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
         // ★ 证据文件里的 exitCode 必须与**进程真实退出码**一致 ——
         //   否则"文件说成功、进程说失败"本身就是一种假绿。
         int finalExitCode = exitCode;
-        if (!unchanged && finalExitCode == 0)
+        if (sourceHashVerified && !unchanged && finalExitCode == 0)
         {
             finalExitCode = 2;
         }
@@ -906,6 +924,12 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
         if (!scenePumpOk && finalExitCode == 0)
         {
             finalExitCode = ScenePumpFailureExitCode;
+        }
+
+        // ★ LM-088：比对没做 ⇒ 不能算"通过"（NOT_VERIFIED 必须有非零退出码）。
+        if (!sourceHashVerified && finalExitCode == 0)
+        {
+            finalExitCode = SourceHashNotVerifiedExitCode;
         }
 
         try
@@ -920,7 +944,9 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
                         exitCode = finalExitCode,
                         failure,
                         finishedAt = DateTimeOffset.Now,
-                        sourceHashChanged = !unchanged,
+                        sourceHashChanged = sourceHashChanged,
+                        sourceHashVerified = sourceHashVerified,
+                        sourceHashStatus = sourceHashStatus,
                         candidateHashesAtEnd = endHashes,
                         scenePump = new
                         {
@@ -947,6 +973,8 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
                                 : RoundA.Frames[0].Observed.ToArgb().ToString("X8"),
                             recreatePassed = Recreate?.Passed,
                             scenePumpOk = scenePumpOk,
+                            sourceHashVerified = sourceHashVerified,
+                            sourceHashStatus = sourceHashStatus,
                             pixelCriterion = new
                             {
                                 tolerancePerChannel = DesktopObservation.ChannelTolerance,
@@ -988,7 +1016,9 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
                         roundA_gdiRecovered = roundARecovered,
                         roundB_gdiRecovered = roundBRecovered,
                         recreatePassed = Recreate?.Passed,
-                        sourceHashChanged = !unchanged,
+                        sourceHashChanged = sourceHashChanged,
+                        sourceHashVerified = sourceHashVerified,
+                        sourceHashStatus = sourceHashStatus,
                         scenePumpOk = scenePumpOk,
                         scenePumpSent,
                         scenePumpFailed
