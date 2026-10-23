@@ -1356,6 +1356,7 @@ DPI 变化路径、`PresentationSession.RecreateWindow` 的合同 §7.3 R1~R6（
 - 主审亲跑 CI 口径（**构建与测试串行**）：`dotnet build --no-incremental` **0 错误**；`dotnet test --no-build` ⇒ **1547 总 / 1546 通过 / 0 失败 / 1 跳过**（分工程：`LiteMonitor.Tests` 1455/1454/0/1、`LiteMonitor.Updater.Tests` 73/73/0/0、`LiteMonitor.GpuNonperformance.Tests` 19/19/0/0）。
 - 阈值：`MIN_TEST_TOTAL` **1530 → 1547**（= 被推送分支实测总数 1455+73+19）；`ci.yml` 与 `release.yml` **逐字一致**；另外 4 个门禁参数（`EXPECTED_TEST_ASSEMBLIES` / `MAX_SKIPPED_TESTS` / `MUST_EXECUTE_TEST_CLASS` / `MUST_EXECUTE_TEST_CLASS_MIN_COUNT`）**逐字一致**；只收紧不放宽；两个文件 **CRLF、无 BOM**。
 - ★ 口径说明：1526 → 1530 是 **LM-095** 的 +4；1530 → 1547 是**批次 B 的 +17**（LM-075 4 + LM-076 4 + LM-077 3 + LM-078 6；**LM-079 三处 `StripPort` 同构改动不加用例**）。
+- ★ **CI 取证**（★ 2026-10-23 补记：本条此前**遗漏**，主审收尾核查时发现并回填）：run **`39905818210`** @ `cb4450a` = **success**（作业「构建 / 测试 / 打包」）。门禁「强制校验测试发现数」在真实 runner 上的实际输出：**发现 1547 条用例（通过 1546 / 失败 0 / 跳过 1），阈值 1547** ⇒ 阈值**等于**被推送分支的实测总数。日志存档：`.artifacts/ci-run-39905818210.log`。
 
 #### 4.12.6 残留与未验证项（**不计入通过**）
 
