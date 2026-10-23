@@ -234,12 +234,13 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | **LM-090** | **启动检查 CI 门禁假绿**：探针 `GpuHostLifecycleProbe.csproj` 是 `<OutputType>WinExe</OutputType>`（GUI 子系统）⇒ PowerShell 的 `&` 对 GUI 程序**不等待**且**不更新** `$LASTEXITCODE`；而门禁前一步恰是 `dotnet build`（把 `$LASTEXITCODE` 置 **0**）⇒ `$code` 恒为 0 ⇒ `if ($code -ne 0)` **永不触发** ⇒ **任何主窗体构造异常都被判绿** | **P1** | `CONFIRMED`（**独立复核者 LM-065~LM-069 复核产出**；**主审独立复现**：见 §4.6.6） | ✅ **已修复**（`1a94378`）：两份工作流改用 `Start-Process -PassThru` + `WaitForExit(180000)` 取**真实**退出码（超时 ⇒ 判失败）。**主审负向自证**（直接执行**工作流里的那段脚本本身**，非副本）：基线退出码 0（耗时 3912 ms，真的在等）⇒ 变异（R01 空引用放回）退出码 **1 并打印真实 NRE 堆栈** ⇒ 字节还原 SHA-256 `3C84A169…` 逐位一致 ⇒ 退出码 0。**待独立复核**（第二轮已派发） |
 | **LM-091** | CI 用例发现数阈值**低于**实测总数（`ci.yml` / `release.yml` 均 1396，实测 1487），且 `ci.yml` 注释里"阈值 == 当前实测总数（删用例会变红）"的声明**不成立**（删 91 条仍绿）；分解里的 `58` 已过时（Updater.Tests 现为 73） | P3 | `CONFIRMED`（**独立复核者在其基线 `9e3ba32` 上实测**；主审在 `176e78e` 已自行修正并被复核者确认吻合） | ✅ **已修复**（`176e78e`）：`ci.yml` 与 `release.yml` 两处 `MIN_TEST_TOTAL` 同步上调至 **1487**（= 被推送分支 `43538bb` 的实测总数），注释与分解同步更新；两处**逐字一致**（主审复核确认） |
 | **LM-092** | 启动检查门禁的 `Start-Process -ArgumentList` **不给含空格的元素加引号** ⇒ `GITHUB_WORKSPACE` 含空格时输出目录被拆成多个 argv（探针报 `Unknown argument 'with'.`，退出码 **64**）⇒ 门禁**误报红**（fail-closed，非假绿）；且失败信息误称"MainForm 构造期抛异常" | P3 | `CONFIRMED`（**LM-090 第二轮独立复核产出**；**主审独立复现**：本机 PS 7.6.6 上实测 —— 数组直接给含空格路径 ⇒ 退出码 **64**；手工加引号 ⇒ 退出码 **0** 且产物落在正确路径） | ✅ **已修复**（`3cb9e00`）：`-ArgumentList @('--scenario=startup', ('"{0}"' -f $out))` 手工加引号（Windows 路径不含 `"` ⇒ 安全）；失败信息改为列出**退出码契约**（0=构造成功 / 1=构造期抛异常 / 2=环境不具备 / 64=参数错误）。**主审四组合自证**（执行工作流抽取出的真脚本）：健康×无空格 = **0** / 健康×含空格 = **0** / 变异×无空格 = **1** / 变异×含空格 = **1**；还原后 SHA-256 `3C84A169…` 逐位一致。★ GitHub 托管 runner（`D:\a\<repo>\<repo>`）无空格 ⇒ **默认不触发**；自托管 runner / 本地含空格路径会命中 |
+| **LM-093** | **LM-074 返工带出的次生缺陷（假告警）**：`UIController.StopGpuPresentation` 的**双路登记**（事件回调 `OnGpuCapturePolicyCleanupRequired` + `LastCapturePolicyCleanup` 兜底）里，事件回调已把记录登记成功，兜底路径再 `Add` **同一实例** ⇒ 被 `CapturePolicyCleanupLedger.Add` 的 INV-4 检查拒绝 ⇒ LM-074 新增的留痕逻辑把这次**拒绝**一律记成 `gpu_capture_policy_cleanup_registration_rejected` ⇒ **每一次正常移交都误报**；且 `CleanupWarningCode` 是**单槽** ⇒ 误报会挤掉 `gpu_capture_policy_cleanup_superseded` 这类真正需要人看的告警 | P3 | `CONFIRMED`（**主审复核 LM-074 返工 diff 时发现**，源码级推演已闭合：`HandOffCapturePolicyCleanup` 置 `LastCapturePolicyCleanup` 后**不清空** ⇒ 兜底必然二次登记；`Add` 的 INV-4 判据 `existing.Generation == cleanup.Generation && !existing.IsTerminal` 对**同一实例**同样命中） | 🔧 **修复中**（批次 A 内闭环）。**主审裁决**：修在 ledger 层 —— `Add` 的判定顺序改为「**先**判同一实例是否已在册 ⇒ 幂等返回 `true`（不触发任何被拒诊断）→ 再判终态 → 最后才是 INV-4（**不同**条目撞同代次才算真被拒，才写 `RegistrationRejectedCode`）」。★ INV-4 的不变量是"同一代次至多一条 `Pending`" ⇒ 重复登记**同一条**不违反它；`Add` 的返回值语义改为"这条责任**已在册**"。★ 顺带修正 `UIController.StopGpuPresentation` XML 文档里"双路并存安全 —— `Add` 对同一代次幂等"的错误说法（`Add` 实际并不幂等，旧代码只是忽略了 `false`） |
 
 **当前无 P0。** 若任一执行步骤新发现 P0，立即挂起其他任务优先处理。
 
 **编号规则：** `LM-` 缺陷 / `SEC-` 安全 / `BASE-` 基线 / `ENV-` 环境事实 / `GPU-` GPU 切换专项。第三方评审使用的 `LM-018`、`LM-019` 与 `LM-003b`、`LM-003c` 指同一处代码，已合并并保留别名以便交叉引用；`LM-005/006` 为同一协议缺陷的两个侧面。
 
-> **编号占用现状（2026-10-23 第八次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-092`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-093` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用，`LM-057`–`LM-059` 由 LM-045 独立复核产出，`LM-060` 由 GPU T03 变异自证过程实测产出，`LM-061`–`LM-064` 由 GPU 独立复核产出，**`LM-065`–`LM-089` 由 2026-10-23 独立审查报告产出**，对应报告编号 R01–R25；**`LM-090`–`LM-091` 由 LM-065~LM-069 第一轮独立复核产出**，`LM-090` 由第二轮复核追加确认；**`LM-092` 由 LM-090 第二轮独立复核产出**）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
+> **编号占用现状（2026-10-23 第九次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-093`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-094` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用，`LM-057`–`LM-059` 由 LM-045 独立复核产出，`LM-060` 由 GPU T03 变异自证过程实测产出，`LM-061`–`LM-064` 由 GPU 独立复核产出，**`LM-065`–`LM-089` 由 2026-10-23 独立审查报告产出**，对应报告编号 R01–R25；**`LM-090`–`LM-091` 由 LM-065~LM-069 第一轮独立复核产出**，`LM-090` 由第二轮复核追加确认；**`LM-092` 由 LM-090 第二轮独立复核产出**；**`LM-093` 由主审复核 LM-074 返工 diff 时发现**）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
 
 ### 4.1 根因更正记录 · LM-001（原"永久停摆"前提已证伪）
 
@@ -1086,6 +1087,46 @@ R01 一路穿过了全部 1396 条用例与**连续 8 次绿色 CI** ⇒ 证明"
   4. **触发**：明确恢复**只能由显式的用户动作触发**；**禁止**在 `Tick` 里自动触发（合同 §6.4 禁止每帧重试）。推荐落点：`UIController` 收到 `gpu_capture_policy_cleanup_unresolved` 拒绝码时安排一次恢复（该拒绝码只可能来自用户显式发起的 WDA 取得）。
   5. **精确原值不丢失**：任何路径都**不得**把残留 0x11 当成"外部原值"（这正是 R10 的危害本体）；同代次被放行时仍必须按合同 §7.3 R3 **重读**原值。
 - **钉住用例**：① 同代次耗尽 ⇒ 新的 WDA 取得被拒绝且错误码可区分；② 不同代次 ⇒ 不受阻；③ 明确恢复成功后 ⇒ 闸门解除且**原策略真的被写回**（精确原值，不是残留值）；④ 旧 `Failed` 条目在明确恢复后**不再重试**（§6.3）。
+
+---
+
+### 4.9 P2 批次 A（LM-070~LM-074 + LM-093）修复与集成记录（2026-10-23）
+
+**派工结构**：批次 A 的预估触及文件**大量重叠**（`src/UI/UIController.cs` 被 **4 项**触及）⇒ **串行派工**，共 3 个 worker、8 个提交，全部集成到 `fix/p2-batch-a`（批次基线 `6eac90c` ⇒ 批次头 `50f8fb5`，+3124 / -45 行，14 个文件）。
+
+| 缺陷 | 报告 | 裁决要点（§4.8.1） | 实现落点 | 提交（主分支） | 钉住用例 | 变异自证 |
+|---|---|---|---|---|---|---|
+| LM-070 | R06 | 判别式 `theme.Rendering?.IsGpuRequested`；**原生 legacy 主题不得套回退配色**，GPU 主题被迫回退**应当**套 `fallbackStyle` | `LegacyFallbackStyleBridge.IsGpuTheme`（新增）；`UIController.RefreshLegacyFallbackTheme` / `CompleteLegacyTransition` 两处分支 | `ff4e026` | 5 | 2 |
+| LM-071 | R07 | 派生主题**共享**源主题 5 个运行期字体**同一实例**；释放责任仍在源主题；旧主题字体释放**推迟**到派生主题重算之后 | `BuildDerivedTheme` 显式复制 5 个字体**字段**；`ApplyTheme` 的 `DisposeFonts()` 移到 `RefreshLegacyFallbackTheme(t)` 之后 | `79844af` | 5 | 2 |
+| LM-072 | R08 | **临时停机 ≠ 用户关闭**：`Enabled` 标志保留；`SetEnabled(true)` 不得被早退挡掉；目标 legacy 就绪后按配置恢复；单一捕获所有者；状态行反映真实状态 | `LiveGlassController.StopForHandleRecreate` / `RestoreIfEnabled`（新增）、`SetEnabled` 早退修正、`StatusText` 三态；`MainForm_Transparent.OnHandleDestroyed` 改调临时停机；`UIController.CompleteLegacyTransition` 收尾恢复 | `151dd32` | 8 | 3 |
+| LM-073 | R09 | **四个** WDA 施加入口（`Start` / `TryReconfigure` live 分支 / `Resume` / `NotifyOutputChanged`）**共用同一个闸门**；释放分支不受约束；**不得**改 `TryReconfigure` 的 public 签名 | `GpuPresentationHostController.TryBlockCapturePolicyOwnership`（新增私有闸门）+ 四个入口接入 | `bb05bc0` | 5 | 4 |
+| LM-074 | R10 | 同代次「**未达成清理目标**」（`Pending` ∨ `Failed`∧`AffinityChangedBySession`）⇒ **占用**闸门；错误码可区分；解除路径 = 受控重建（代次推进）**或**明确恢复（新建携带**精确原值**的责任，旧责任如实保持 `Failed`+`exhausted` 并打「已被接管」标记） | `CapturePolicyCleanupLedger.GetBlockingReasonForGeneration` / `HasUnresolvedForGeneration` / `TryRearmForExplicitRecovery` / `TryScheduleExplicitRecoveryForRejectedCode`（均新增）；`WindowCapturePolicyCleanup.ReclaimedByExplicitRecovery`（新增标记位）；宿主新增 `CapturePolicyCleanupBlockingProbe`（不改既有探针类型） | `74a0967` + `5e980ff` + `214a47e` | 12 | 8 |
+| **LM-093** | — | **主审复核 LM-074 返工 diff 时发现**：双路登记（事件回调 + `LastCapturePolicyCleanup` 兜底）把**同一实例**二次登记 ⇒ 被 INV-4 拒绝 ⇒ 新增的留痕逻辑把**每一次正常移交**都误记成 `gpu_capture_policy_cleanup_registration_rejected`，并挤掉 `CleanupWarningCode` 单槽里更有意义的 `gpu_capture_policy_cleanup_superseded`。裁决：修在 ledger 层 —— `Add` 的判定顺序改为「**先**判同一实例是否已在册 ⇒ 幂等返回 `true`（不触发任何被拒诊断）→ 再判终态 → 最后才是 INV-4（**不同**条目撞同代次才算真被拒）」 | `CapturePolicyCleanupLedger.Add` 判定顺序 + `UIController.StopGpuPresentation` XML 文档更正 | `50f8fb5` | 4 | 2 |
+
+**★ 合同处置**：LM-074 触及的合同张力**按 §4.8.1 (5) 裁决为「不修订合同」** —— 合同 §6.3「终态不可回退」约束的是**那一条清理责任自身**（不再重试、不再触碰 HWND），不是「闸门必须放行」；§6.4「耗尽后不阻塞新代次（INV-2）」说的是**宿主生命周期**与**不同代次**；支配条款是计划 §4.5 :202（合同 §6.5 `:424` 引用）"同一 HWND 上清理未完成时禁止叠加新的 affinity 所有者" ⇒ 改**闸门判据**，不改**状态机语义**。**合同文档 `docs/superpowers/plans/2026-10-23-gpu-transition-t02-contract.md` 一字未改**（`git diff 6eac90c..HEAD -- <合同>` 为空）。
+
+**★ 主审复核实际拦下的问题（4 项 + 1 项新登记）** —— 均为**读 diff 读出来的**，非 worker 自查：
+1. `Failed → Completed` 是**不实记账**（"清理成功"与"原策略始终没被写回"矛盾）⇒ 改为 `ReclaimedByExplicitRecovery` 标记位，`State` / `TerminalReason` 一字不动。
+2. `NotifyOutputChanged` 的早退顺序被前移 ⇒ 宿主未运行时从非 owner 线程调用会**抛 `InvalidOperationException`**（改变既有行为）⇒ 已复原（闸门改用 IL 结构护栏钉住）。
+3. 「明确恢复」与宿主停止移交的**先后顺序**必须固定 ⇒ 顺序反了，移交先占坑、恢复被拒 ⇒ 写回的是**误采残留 0x11 的值** ⇒ R10 的危害原样复活。
+4. 明确恢复的触发点漏了 `Start` 分支 ⇒ 最常见的「切 legacy 再切回 GPU」流程（`canReconfigure == false` ⇒ 走不到 `TryReconfigure`）根本不会安排恢复 ⇒ 解除路径在主流程里几乎不可达 ⇒ 已补回。
+5. **LM-093**（新登记，占用编号 `LM-093`，下一个空号 `LM-094`）：正常移交上的假「登记被拒」告警。
+
+**★ 已知取舍（主审接受并记档，不是遗漏）**：
+- **闸门前移**（`TryReconfigure` / `Resume`）：闸门回答的是"能否取得 WDA 所有权"，是所有 WDA 施加路径的共同前置条件；拒绝原因不得被通用的 `gpu_presentation_not_reconfigurable` 掩盖。
+- **「明确恢复」由事件驱动的 WDA 取得尝试触发**（用户切换主题 / 开关 live / **DPI 变化**等），**严禁** `Tick` / ledger `Pump` 里每帧触发（合同 §6.4「禁止每帧重试」）。★ "DPI 变化也会触发一次恢复"是**已知取舍**。
+- **同一 HWND 的累计恢复写入次数可能超过 6 次**（6 + 最多 6）：每条责任**独立预算** + 事件驱动 ⇒ 已知取舍；若将来要求"全生命周期累计不超过 6 次"，需给 ledger 加跨责任的累计计数（当前没有）。
+
+**★ `NOT_VERIFIED` / `BLOCKED_ENV`（不计入通过）**：
+- `NotifyOutputChanged` 入口的**运行时行为**（仅 IL 结构护栏钉住闸门位置）—— 无真实 D3D11，`GpuSceneRenderer` 是 sealed 且无法伪造。
+- 真实 GPU / 桌面会话下的端到端行为（真实 flip-model 画面解冻、受控重建实机时序、首帧失败实机时序、运行故障→恢复耗尽的完整链路、WDA 恢复失败交互、DPI/跨屏/隐藏窗口故障回退）。
+- `UIController` 完整触发链路（`ApplyGpuRenderingRoute` → 恢复安排 → ledger 重建 → `Tick` 的 `Pump` 写回）在真实窗体 + GPU 宿主下的行为（结构有 IL 护栏、两端各有纯 CLR 用例，但**串起来**无自动化断言）。
+- DPI 变化触发一次恢复的实际链路。
+- 真实浏览器跨源读取、端到端登录 / WS 握手 —— `BLOCKED_ENV`。
+
+**★ 不得项核查（主审亲自跑）**：本批**未删除任何 public 成员**（`git diff 6eac90c..HEAD -- src/` 中无 `-` 开头的 public 行）；契约 6 常量逐字未改（`PluginSandboxLimits.MaxStepsPerExecution=16` / `MaxTargetsPerStep=64` / `MaxExecutionDurationMs=30000` / `MaxConcurrentRequests=8` / `MaxResponseBytes=2*1024*1024` / `MaxRegexMatchTimeoutMs=500`）；`docs/superpowers/plans/**` 与合同文档零改动；未删除测试、未降低断言；全部改动文件 **CRLF、无 BOM**。
+
+**★ 测试与阈值**：批次基线 **1487**（1395 + 73 + 19）⇒ 批次头 **1526**（1433 + 73 + 19），净增 **+39**（LM-070 5 + LM-071 5 + LM-072 8 + LM-073 5 + LM-074 12 + LM-093 4）。主审**亲自**在集成后的主分支上跑全量：`dotnet build --no-incremental` **0 错误** + `dotnet test --no-build` ⇒ **1525 通过 / 0 失败 / 1 跳过（合计 1526）**，与 worker 报告逐位一致。两个工作流的 `MIN_TEST_TOTAL` 同步上调至 **1526**（= 被推送分支的实测总数），两处**逐字一致**；`MAX_SKIPPED_TESTS` 与其余 4 个门禁参数未动。
 
 ---
 
