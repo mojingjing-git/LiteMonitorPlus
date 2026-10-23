@@ -410,6 +410,12 @@ namespace LiteMonitor.src.Plugins
             return hosts;
         }
 
+        /// <summary>
+        /// [LM-080] authority 的**终止符**：路径分隔符、查询串起始、片段起始。
+        /// <para>主机名**不可能**包含 <c>?</c> 或 <c>#</c> ⇒ 它们出现即表示 authority 已经结束。</para>
+        /// </summary>
+        private static readonly char[] AuthorityTerminators = { '/', '?', '#' };
+
         private static void AddDeclaredHost(HashSet<string> hosts, string urlTemplate)
         {
             if (string.IsNullOrWhiteSpace(urlTemplate)) return;
@@ -419,8 +425,18 @@ namespace LiteMonitor.src.Plugins
             if (schemeEnd < 0) return;
 
             string rest = trimmed.Substring(schemeEnd + 3);
-            int slash = rest.IndexOf('/');
-            string authority = slash >= 0 ? rest.Substring(0, slash) : rest;
+
+            // [LM-080] authority 在 '/'、'?'、'#' 三者中**最先出现**的位置结束。
+            // 修复前只按 '/' 截断 ⇒ 无路径 URL（"https://host?x=1" / "https://host#frag"）的
+            // **查询串 / 片段被当成了主机名的一部分** ⇒ 声明集合里出现一枚垃圾串
+            // （该主机的带凭据请求被一律拒绝；危害方向偏严 / fail-closed，不会误放行）。
+            int authorityEnd = rest.Length;
+            foreach (char terminator in AuthorityTerminators)
+            {
+                int idx = rest.IndexOf(terminator);
+                if (idx >= 0 && idx < authorityEnd) authorityEnd = idx;
+            }
+            string authority = rest.Substring(0, authorityEnd);
 
             // 主机来自模板 → 不是插件的显式声明
             if (authority.Contains("{{")) return;
