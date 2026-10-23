@@ -208,10 +208,37 @@ namespace LiteMonitor.Tests
             Assert.Contains("5000", text, StringComparison.Ordinal);   // 端口仍可显示（配置值）
         }
 
+        /// <summary>
+        /// LM-075-④：IPv6 监听地址的显示文本必须带方括号，且端口正确。
+        /// </summary>
+        /// <remarks>
+        /// ★ 局域网模式下 <c>LiteWebServer.Start</c> 建的是 <c>IPAddress.IPv6Any</c>（DualMode，
+        ///   同时接受 IPv4 连接）⇒ 真实端点的地址是 <c>::</c>。
+        /// ★ 不加方括号就会拼出 ":::8080" —— 用户一眼看过去像非法地址。
+        ///   IPv4 维持原样（127.0.0.1:8080），不得回归。
+        /// </remarks>
+        [Fact]
+        public void LM075_IPv6监听地址的显示文本必须带方括号且端口正确()
+        {
+            var v6 = new IPEndPoint(IPAddress.IPv6Any, 8080);
+            string text6 = AppActions.DescribeListenAddress(
+                endpoint: v6, running: true, configuredPort: 5000, isChinese: false);
+
+            Assert.Contains("[::]:8080", text6, StringComparison.Ordinal);
+            Assert.DoesNotContain(":::", text6, StringComparison.Ordinal);
+
+            // ★ IPv4 的写法不得被牵连
+            var v4 = new IPEndPoint(IPAddress.Loopback, 8080);
+            string text4 = AppActions.DescribeListenAddress(
+                endpoint: v4, running: true, configuredPort: 5000, isChinese: false);
+
+            Assert.Contains("127.0.0.1:8080", text4, StringComparison.Ordinal);
+            Assert.DoesNotContain("[", text4, StringComparison.Ordinal);
+        }
+
         // ================================================================
         //  LM-076 · WS 连接不绑定会话 ⇒ 注销 / 过期后仍在收监控数据
         // ================================================================
-
         /// <summary>
         /// LM-076-①：注销之后，**已建立**的 WebSocket 不得再收到监控数据。
         /// </summary>

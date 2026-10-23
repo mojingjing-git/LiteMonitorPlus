@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Net;
+using System.Net.Sockets;
 using System.Windows.Forms;
 using LiteMonitor.src.UI;
 using LiteMonitor.src.SystemServices;
@@ -376,15 +377,26 @@ namespace LiteMonitor.src.Core.Actions
         ///   **不**拿配置草稿冒充事实。
         /// ★ 抽成纯函数是为了能脱离 WinForms 控件单测这条规则；
         ///   界面侧（<c>MainPanelPage.BuildListenAddressText</c>）只做取端点与转发的薄壳。
+        /// ★ 可见性：**internal**（不是 public）—— 显示辅助不该变成新的公开开关；
+        ///   测试程序集通过 <c>InternalsVisibleTo("LiteMonitor.Tests")</c> 访问它。
         /// </remarks>
-        public static string DescribeListenAddress(IPEndPoint? endpoint, bool running, int configuredPort, bool isChinese)
+        internal static string DescribeListenAddress(IPEndPoint? endpoint, bool running, int configuredPort, bool isChinese)
         {
-            string address = endpoint != null ? endpoint.Address.ToString() : "-";
-            int port = endpoint != null ? endpoint.Port : configuredPort;
             string state = running
                 ? (isChinese ? "运行中" : "running")
                 : (isChinese ? "未运行" : "not running");
-            return $"{address}:{port} ({state})";
+
+            if (endpoint == null) return $"-:{configuredPort} ({state})";
+
+            // ★ IPv6 地址必须加方括号：[::]:8080。
+            //   局域网模式下服务绑的是 IPAddress.IPv6Any（DualMode，同时接受 IPv4 连接），
+            //   不加括号会拼出 ":::8080" —— 用户一眼看过去像非法地址。
+            //   IPv4 维持原样：127.0.0.1:8080。
+            string host = endpoint.Address.AddressFamily == AddressFamily.InterNetworkV6
+                ? "[" + endpoint.Address + "]"
+                : endpoint.Address.ToString();
+
+            return $"{host}:{endpoint.Port} ({state})";
         }
 
         // --- 内部辅助 ---

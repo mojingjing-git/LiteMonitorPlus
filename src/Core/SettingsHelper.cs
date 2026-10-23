@@ -176,9 +176,26 @@ namespace LiteMonitor
             return s;
         }
 
-        public static void Save(this Settings settings)
+        /// <summary>
+        /// 保存配置，并**如实报告**是否真的写成功。
+        /// </summary>
+        /// <remarks>
+        /// ★ 为什么要**新增**这个入口，而不是把 <see cref="Save"/> 改成返回 bool：
+        ///   <see cref="Save"/> 是**扩展方法**且被**多处**调用（UI / 插件 / 菜单 / 自动保存 …）。
+        ///   改它的返回类型会动到既有 public 成员的签名；把它改成会抛异常的版本，
+        ///   还会把"原来静默失败"的调用点悄悄变成"现在会抛异常"—— 那会造成回归。
+        ///   这里新增一个**能报告结果**的入口，把"写没写成"这条信息交给真正需要它的调用方
+        ///   （如 <c>Settings.EnsureWebPasswordMigrated</c>）；
+        ///   <see cref="Save"/> 保持原有语义（静默失败、不抛异常）**逐位不变**。
+        /// ★ <see cref="GlobalBlockSave"/> 为真（禁止保存）⇒ 返回 **false**（不是 true）。
+        /// ★ 任何 IO / 序列化异常 ⇒ 返回 **false**（不是"吞掉异常后假装成功"）。
+        /// ★ 可见性：**internal**（不是 public）—— 本仓约定"测试接缝收为 internal + InternalsVisibleTo"，
+        ///   不新增对外公开的保存入口；消费方只有同程序集内的
+        ///   <c>Settings.EnsureWebPasswordMigrated</c>。
+        /// </remarks>
+        internal static bool TrySave(this Settings settings)
         {
-            if (GlobalBlockSave) return;
+            if (GlobalBlockSave) return false;
 
             try
             {
@@ -187,11 +204,25 @@ namespace LiteMonitor
                 {
                     AtomicWrite(json);
                 }
+                return true;
             }
             catch
             {
                 CleanupTempFile();
+                return false;
             }
+        }
+
+        /// <summary>
+        /// 保存配置（既有入口）：失败时**静默**，不抛异常。
+        /// </summary>
+        /// <remarks>
+        /// ★ 语义与改造前**逐位一致**：禁止保存 ⇒ 直接返回；IO 失败 ⇒ 清理临时文件后返回。
+        ///   需要知道"写没写成"的调用方请改用 <see cref="TrySave"/>。
+        /// </remarks>
+        public static void Save(this Settings settings)
+        {
+            TrySave(settings);
         }
 
         public static void DeleteStoredSettings()
