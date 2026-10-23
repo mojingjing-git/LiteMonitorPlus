@@ -1423,7 +1423,7 @@ namespace LiteMonitor
             //   ★ 主审裁决 ④的约束：只有**真正发起过 TryReconfigure**
             //     （canReconfigure == true）且拿到 gpu_capture_policy_cleanup_unresolved
             //     码时才安排恢复；canReconfigure == false 时 reconfigureErrorCode 恒为 null
-            //     ⇒ 本调用**不触发**任何恢复。
+            //     ⇒ 本调用**不触发**任何恢复（该场景由下面的 Start 失败分支负责）。
             //   ★★★ 顺序至关重要（必须排在 StopGpuPresentation() **之前**）：
             //     先安排明确恢复 ⇒ ledger 里先有一条携带**精确原值**的 Pending 责任；
             //     随后宿主停止时的移交若因 INV-4（同代次已有非终态责任）被拒，
@@ -1455,15 +1455,40 @@ namespace LiteMonitor
                     //   §8.4 的启动守卫恒为假 ⇒ Tick 兜底失效）。
                     _transition.PublishStable(decision.Route);
                 }
+                else
+                {
+                    // ★★★【LM-074】这里**必须**安排明确恢复（主审裁决 · 补漏）：
+                    //   这是用户真正会撞上的那个点 ——
+                    //   "GPU live 运行时恢复失败耗尽 ⇒ 用户切到 legacy 主题（宿主释放）
+                    //     ⇒ 用户切回 GPU 主题 ⇒ canReconfigure == false（宿主是 null）
+                    //     ⇒ 走不到 TryReconfigure ⇒ 第一个触发点不触发
+                    //     ⇒ 新建宿主后 Start 被闸门拒绝（unresolved）"。
+                    //   若这里不安排恢复，残留的 0x11 会一直留着
+                    //   ⇒ "明确恢复"这条解除路径在**最常见的用户流程**里几乎不可达。
+                    //
+                    //   ★ 三条"不误触发"的保证（缺一不可）：
+                    //   ① ScheduleExplicitCapturePolicyRecovery 内部**逐字比较**拒绝码，
+                    //      只有 gpu_capture_policy_cleanup_unresolved 才动作；
+                    //      gpu_capture_policy_cleanup_pending（还在正常重试）、
+                    //      gpu_presentation_not_reconfigurable 及其它任何失败码**一律不触发**。
+                    //   ② ledger 的重建入口幂等且拒绝叠加（同代次已有非终态责任 ⇒ 拒绝；
+                    //      无可重建条目 ⇒ 拒绝）⇒ 反复触发不会堆积条目。
+                    //   ③ 恢复本身只做**记账**（新建一条带精确原值的责任），**不触碰 HWND**；
+                    //      真正的写回由 ledger 的退避重试完成（合同 §6.4）。
+                    //
+                    //   ★ 与前一个触发点的关系：上面的 TryReconfigure 分支里，
+                    //   "安排恢复"必须排在 StopGpuPresentation() **之前**
+                    //   （先建的那条责任携带**精确原值**）；
+                    //   本触发点位于宿主停止**之后**，属另一条路径，两者不冲突 ——
+                    //   但若两条路径都命中，ledger 的 INV-4 只会保留**先建**的那条
+                    //   （即携带精确原值的那条）。
+                    ScheduleExplicitCapturePolicyRecovery(_gpuFallbackCode);
+                }
                 // ★★【R02 / 合同 §4.4 / U11】启动失败 ⇒ **不再**在这里"只标记 Stable"：
                 //   失败已经由统一调度入口排进队列，由 UI 安全点执行**完整**的 legacy 转换
                 //   （合同 §4 步 2–9：受控 HWND 重建 + 布局/DPI 恢复 + 窗口状态恢复 + 一次有效重绘）。
                 //   ★ 在那之前阶段停在 Stopping ⇒ §8.4 的启动守卫恒为假
                 //   ⇒ 普通 Tick 不会把 GPU 再拉起来（合同 §4.4 :188）。
-                //   ★【LM-074 · 主审裁决 ④】这里**不**安排明确恢复：
-                //   启动被闸门拒绝只作为回退原因记进 _gpuFallbackCode；
-                //   恢复只由上面的 TryReconfigure 拒绝路径触发
-                //   （canReconfigure == false 时不触发恢复）。
             }
             else
             {
@@ -1474,13 +1499,17 @@ namespace LiteMonitor
         }
 
         /// <summary>
-        /// 【LM-074】用户显式发起的 WDA 取得被"**未解决**的清理责任"拒绝 ⇒
-        /// 安排**一次**明确恢复（合同 §6.4 的"用户显式重试"）。
-        /// <para>★ 触发路径是**用户的显式动作**（切换主题 / 开关 live ⇒
-        /// <see cref="ApplyGpuRenderingRoute"/>）收到拒绝码
+        /// 【LM-074】WDA 取得被"**未解决**的清理责任"拒绝 ⇒ 安排**一次**明确恢复
+        /// （合同 §6.4 的"用户显式重试"）。
+        /// <para>★ 触发路径是**事件驱动**的 WDA 取得尝试（用户切换主题 / 开关 live /
+        /// DPI 变化等 ⇒ <see cref="ApplyGpuRenderingRoute"/>）收到拒绝码
         /// <c>gpu_capture_policy_cleanup_unresolved</c>；
         /// <b>严禁</b>在 <c>Tick</c> / ledger 的 <c>Pump</c> 里自动触发
         /// （合同 §6.4"禁止每帧重试"）。</para>
+        /// <para>★ 只有 <c>gpu_capture_policy_cleanup_unresolved</c> 会动作
+        /// （判据在 <see cref="CapturePolicyCleanupLedger.TryScheduleExplicitRecoveryForRejectedCode"/>）：
+        /// <c>gpu_capture_policy_cleanup_pending</c>（还在正常重试）、
+        /// <c>gpu_presentation_not_reconfigurable</c> 及其它任何失败码**一律不触发**。</para>
         /// <para>★ 防重复触发：ledger 的重建入口对"同代次已有非终态责任"直接拒绝（INV-4）
         /// ⇒ 用户反复点击不会无限堆积条目。</para>
         /// <para>★ 恢复动作本身只做 ledger 记账（不触碰 HWND）⇒ 真正的写回由
@@ -1488,15 +1517,8 @@ namespace LiteMonitor
         /// </summary>
         private void ScheduleExplicitCapturePolicyRecovery(string? errorCode)
         {
-            if (!string.Equals(
-                    errorCode,
-                    CapturePolicyCleanupLedger.UnresolvedBlockingErrorCode,
-                    StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            _captureCleanup.TryRearmForExplicitRecovery(
+            _captureCleanup.TryScheduleExplicitRecoveryForRejectedCode(
+                errorCode,
                 WindowHandleGeneration.Instance.Current,
                 DateTimeOffset.UtcNow,
                 out _);

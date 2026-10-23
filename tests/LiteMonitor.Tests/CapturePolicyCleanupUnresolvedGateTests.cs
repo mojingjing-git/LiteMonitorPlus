@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.ExceptionServices;
 using LiteMonitor.Rendering.Configuration;
 using LiteMonitor.Rendering.Contracts;
@@ -488,6 +490,112 @@ public sealed class CapturePolicyCleanupUnresolvedGateTests
     }
 
     // ================================================================
+    // 4d. 只有"未解决"的拒绝码才安排恢复；其它拒绝码一律不触发
+    // ================================================================
+
+    [Fact]
+    public void LM074_只有未解决拒绝码才安排恢复而其它拒绝码不安排()
+    {
+        RecordingRestoreProbe probe = new() { Succeed = false };
+        WindowHandleGeneration generations = new();
+        CapturePolicyCleanupLedger ledger = CreateLedger(generations, probe);
+        long generation = generations.Current;
+
+        // 同代次已有 Failed + unresolved（精确原值 0x22）。
+        ledger.Add(new WindowCapturePolicyCleanup
+        {
+            Generation = generation,
+            WindowHandle = new IntPtr(0x1234),
+            OriginalAffinity = 0x22u,
+            AffinityChangedBySession = true,
+        });
+        Exhaust(ledger, T0);
+        Assert.Equal(1, ledger.Entries.Count);
+
+        // ★ 其它拒绝码**一律不安排恢复**（不新增任何清理责任）。
+        Assert.False(ledger.TryScheduleExplicitRecoveryForRejectedCode(
+            "gpu_capture_policy_cleanup_pending", generation, T0, out _));
+        Assert.False(ledger.TryScheduleExplicitRecoveryForRejectedCode(
+            "gpu_presentation_not_reconfigurable", generation, T0, out _));
+        Assert.False(ledger.TryScheduleExplicitRecoveryForRejectedCode(
+            "gpu_presentation_start_failed", generation, T0, out _));
+        Assert.False(ledger.TryScheduleExplicitRecoveryForRejectedCode(
+            null, generation, T0, out _));
+        Assert.Single(ledger.Entries);
+
+        // ★ 只有 unresolved 码才安排（重建一条携带**精确原值**的 Pending 责任）。
+        Assert.True(ledger.TryScheduleExplicitRecoveryForRejectedCode(
+            "gpu_capture_policy_cleanup_unresolved", generation, T0, out _));
+        Assert.Equal(2, ledger.Entries.Count);
+        WindowCapturePolicyCleanup rearmed = ledger.Entries[^1];
+        Assert.Equal(CapturePolicyCleanupState.Pending, rearmed.State);
+        Assert.Equal(0x22u, rearmed.OriginalAffinity);
+        Assert.NotEqual(0x11u, rearmed.OriginalAffinity);
+
+        // ★ 再触发一次 ⇒ **不叠加**（INV-4）⇒ 反复触发不会堆积条目。
+        Assert.False(ledger.TryScheduleExplicitRecoveryForRejectedCode(
+            "gpu_capture_policy_cleanup_unresolved",
+            generation,
+            T0,
+            out string? rearmErrorCode));
+        Assert.Equal("gpu_capture_policy_cleanup_already_pending", rearmErrorCode);
+        Assert.Equal(2, ledger.Entries.Count);
+    }
+
+    // ================================================================
+    // 4e. Start 失败分支必须安排明确恢复（IL 结构护栏）
+    // ================================================================
+
+    [Fact]
+    public void LM074_Start失败分支必须安排一次明确恢复且读的是回退原因码()
+    {
+        // ★ 为什么用 IL 护栏：UIController 的这条链路需要真实 WinForms 窗体 + GPU 宿主，
+        //   无头环境里构造不出来；"StartGpuPresentation() 失败分支里存在对恢复入口的调用、
+        //   且该调用读的是回退原因码"是**结构性质**，用 IL 顺序断言钉住更稳。
+        MethodInfo method = typeof(UIController).GetMethod(
+            "ApplyGpuRenderingRoute",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        IlInspector.Disassembly body = IlInspector.Disassemble(method!);
+
+        List<int> scheduleOffsets = CallOffsetsOf(
+            body,
+            typeof(UIController),
+            "ScheduleExplicitCapturePolicyRecovery");
+        int startAt = CallOffsetOf(body, typeof(UIController), "StartGpuPresentation");
+
+        Assert.True(
+            startAt >= 0,
+            "UIController.ApplyGpuRenderingRoute 里找不到 StartGpuPresentation —— 护栏前提被破坏。");
+        Assert.True(
+            scheduleOffsets.Count >= 2,
+            "UIController.ApplyGpuRenderingRoute 必须有**两个**恢复触发点："
+            + "① TryReconfigure 拒绝路径（宿主在场）与 ② StartGpuPresentation() 失败分支"
+            + "（宿主缺席，用户切回 GPU 主题时必经）—— "
+            + "缺② ⇒ 'GPU live 恢复耗尽 ⇒ 切 legacy ⇒ 切回 GPU'这条主流程里"
+            + "明确恢复几乎不可达（LM-074）。");
+
+        List<int> beforeStart = scheduleOffsets.FindAll(offset => offset < startAt);
+        List<int> afterStart = scheduleOffsets.FindAll(offset => offset > startAt);
+
+        Assert.True(
+            beforeStart.Count == 1,
+            "TryReconfigure 拒绝路径的恢复触发必须恰好有一个且排在 StartGpuPresentation **之前** —— "
+            + "先建的那条责任携带**精确原值**（LM-074）。");
+        Assert.True(
+            afterStart.Count == 1,
+            "StartGpuPresentation() 失败分支必须安排一次明确恢复 —— "
+            + "该分支读的是 _gpuFallbackCode（闸门的 unresolved 拒绝码只在这里出现）（LM-074）。");
+
+        int fallbackReadAt = FieldReadOffsetOf(body, "_gpuFallbackCode");
+        Assert.True(
+            fallbackReadAt >= 0 && fallbackReadAt < afterStart[0],
+            "StartGpuPresentation() 失败分支的恢复调用必须**读** _gpuFallbackCode —— "
+            + "闸门的 unresolved 拒绝码由 StartGpuPresentation 记进该字段（LM-074）。");
+    }
+
+    // ================================================================
     // 辅助
     // ================================================================
 
@@ -531,6 +639,88 @@ public sealed class CapturePolicyCleanupUnresolvedGateTests
             cursor = cursor.AddSeconds(5);
             ledger.Pump(cursor);
         }
+    }
+
+    /// <summary>
+    /// 找到"调用了 <paramref name="declaringType"/>.<paramref name="name"/>"的第一条指令偏移；
+    /// 找不到返回 -1。
+    /// </summary>
+    private static int CallOffsetOf(
+        IlInspector.Disassembly body,
+        Type declaringType,
+        string name)
+    {
+        foreach (IlInspector.IlInstruction instruction in body.Instructions)
+        {
+            if (instruction.OpCode != OpCodes.Call && instruction.OpCode != OpCodes.Callvirt)
+            {
+                continue;
+            }
+
+            if (instruction.Target is not MethodInfo called)
+            {
+                continue;
+            }
+
+            if (called.DeclaringType == declaringType && called.Name == name)
+            {
+                return instruction.Offset;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// 找到"调用了 <paramref name="declaringType"/>.<paramref name="name"/>"的**全部**指令偏移。
+    /// </summary>
+    private static List<int> CallOffsetsOf(
+        IlInspector.Disassembly body,
+        Type declaringType,
+        string name)
+    {
+        List<int> offsets = new();
+        foreach (IlInspector.IlInstruction instruction in body.Instructions)
+        {
+            if (instruction.OpCode != OpCodes.Call && instruction.OpCode != OpCodes.Callvirt)
+            {
+                continue;
+            }
+
+            if (instruction.Target is not MethodInfo called)
+            {
+                continue;
+            }
+
+            if (called.DeclaringType == declaringType && called.Name == name)
+            {
+                offsets.Add(instruction.Offset);
+            }
+        }
+
+        return offsets;
+    }
+
+    /// <summary>
+    /// 找到"读取字段 <paramref name="name"/>"（<c>ldfld</c>）的第一条指令偏移；
+    /// 找不到返回 -1。
+    /// </summary>
+    private static int FieldReadOffsetOf(IlInspector.Disassembly body, string name)
+    {
+        foreach (IlInspector.IlInstruction instruction in body.Instructions)
+        {
+            if (instruction.OpCode != OpCodes.Ldfld)
+            {
+                continue;
+            }
+
+            if (instruction.Field is FieldInfo field && field.Name == name)
+            {
+                return instruction.Offset;
+            }
+        }
+
+        return -1;
     }
 
     private static CapturePolicyCleanupLedger CreateLedger(

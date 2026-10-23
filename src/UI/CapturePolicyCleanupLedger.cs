@@ -312,6 +312,37 @@ namespace LiteMonitor
         }
 
         /// <summary>
+        /// 【LM-074】按**拒绝码**决定是否安排一次明确恢复。
+        /// <para>★ 只有 <see cref="UnresolvedBlockingErrorCode"/> 才会动作 ——
+        /// "还在按合同 §6.4 重试"（<see cref="PendingBlockingErrorCode"/>）、
+        /// "宿主不可重配置"（<c>gpu_presentation_not_reconfigurable</c>）
+        /// 及其它**任何**失败码一律**不触发** ⇒ 不会误触发恢复。</para>
+        /// <para>★ 恢复本身只做**记账**（新建一条带**精确原值**的责任），**不触碰 HWND**；
+        /// 真正的写回由 ledger 的退避重试完成（合同 §6.4）。</para>
+        /// <para>★ 幂等：同代次已有非终态责任时重建入口直接拒绝（INV-4）
+        /// ⇒ 反复触发不会堆积条目。</para>
+        /// </summary>
+        /// <returns><c>true</c> = 本次真的安排了一次恢复（重建了一条新的清理责任）。</returns>
+        internal bool TryScheduleExplicitRecoveryForRejectedCode(
+            string? errorCode,
+            long generation,
+            DateTimeOffset now,
+            out string? rearmErrorCode)
+        {
+            rearmErrorCode = null;
+
+            if (!string.Equals(
+                    errorCode,
+                    UnresolvedBlockingErrorCode,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return TryRearmForExplicitRecovery(generation, now, out rearmErrorCode);
+        }
+
+        /// <summary>
         /// 【合同 §6.4】驱动一次退避重试（由 UI Tick 调用；<b>仅当</b> <c>Now &gt;= NextAttemptAt</c> 才尝试）。
         /// <para>★ 判定顺序不可交换（合同 §7.4）：先比代次，**只有同代次**才允许调用 <c>IsWindow</c>。</para>
         /// <para>★ 禁止每帧重试：退避未到 ⇒ 直接返回。</para>
