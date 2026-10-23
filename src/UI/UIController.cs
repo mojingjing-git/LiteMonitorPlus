@@ -655,8 +655,11 @@ namespace LiteMonitor
         /// 停止之后 <c>_gpuPresentation</c> **无条件**是 <c>null</c>；未完成的 affinity 恢复责任
         /// 由 ledger 独立持有（合同 §6.2 的所有权形状）。</para>
         /// <para>★ 移交出口已接入：宿主释放会话时会把未完成的清理责任移交给 ledger
-        /// （<c>CapturePolicyCleanupRequired</c> 事件 + <c>LastCapturePolicyCleanup</c> 兜底），
-        /// 双路并存安全 —— <see cref="CapturePolicyCleanupLedger.Add"/> 对同一代次幂等。</para>
+        /// （<c>CapturePolicyCleanupRequired</c> 事件 + <c>LastCapturePolicyCleanup</c> 兜底）。
+        /// ★【LM-093】双路并存**安全**：两条路径登记的是<b>同一实例</b>
+        /// ⇒ <see cref="CapturePolicyCleanupLedger.Add"/> 对<b>同一实例</b>幂等
+        /// （返回"已在册"、不新增条目、<b>不</b>产生"登记被拒"诊断）；
+        /// 只有<b>不同</b>条目撞同代次才被 INV-4 拒绝并留痕。</para>
         /// </summary>
         public void StopGpuPresentation()
         {

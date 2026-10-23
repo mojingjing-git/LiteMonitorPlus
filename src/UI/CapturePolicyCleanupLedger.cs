@@ -122,14 +122,37 @@ namespace LiteMonitor
         internal string? CleanupWarningCode { get; private set; }
 
         /// <summary>
-        /// 【合同 §6.2 INV-4 / §6.3】登记一条清理责任。
-        /// <para>同一代次（同一 HWND）**至多一条** <c>Pending</c>：重复登记直接拒绝。</para>
+        /// 【合同 §6.2 INV-4 / §6.3 / LM-093】登记一条清理责任。
+        /// <para><b>返回值语义</b>（LM-093 修正）：<c>true</c> = "这条责任<b>已在册</b>"
+        /// （本次调用可能**没有**新增条目）；<c>false</c> = 拒绝登记。</para>
+        /// <para><b>判定顺序（不可交换）</b>：
+        /// ① <b>同一实例</b>已在册 ⇒ 幂等返回 <c>true</c>
+        /// （<b>不</b>写任何"登记被拒"诊断）；
+        /// ② 终态（Completed / Failed）⇒ 拒绝登记（终态不可回退，合同 §6.3）；
+        /// ③ INV-4（同代次已有<b>不同</b>的非终态条目）⇒ 拒绝 ⇒ 这才是<b>真被拒</b>，
+        /// 写 <see cref="RegistrationRejectedCode"/> + <see cref="CleanupWarningCode"/>。</para>
+        /// <para>★ 为什么①必须先判：契约 INV-4 的不变量是"**同一代次至多一条 Pending**"
+        /// ⇒ 重复登记<b>同一条</b>记录<b>不违反</b>它。owner B 的双路移交
+        /// （<c>CapturePolicyCleanupRequired</c> 事件 + <c>LastCapturePolicyCleanup</c> 兜底）
+        /// 登记的是<b>同一实例</b> ⇒ 若②③先判，<b>每一次正常移交</b>都会被误记成
+        /// "登记被拒"，还会把<b>单槽</b>的 <see cref="CleanupWarningCode"/> 占掉
+        /// （挤掉 <see cref="SupersededWarningCode"/> 这类真正需要人看的告警）。</para>
         /// </summary>
-        /// <returns><c>true</c> = 已登记。</returns>
+        /// <returns><c>true</c> = 这条责任<b>已在册</b>。</returns>
         internal bool Add(WindowCapturePolicyCleanup cleanup)
         {
             ArgumentNullException.ThrowIfNull(cleanup);
 
+            // ── ① 同一实例已在册 ⇒ 幂等（不新增条目、不产生任何被拒诊断）──
+            foreach (WindowCapturePolicyCleanup existing in _entries)
+            {
+                if (ReferenceEquals(existing, cleanup))
+                {
+                    return true;
+                }
+            }
+
+            // ── ② 终态不可回退（合同 §6.3）──
             if (cleanup.State == CapturePolicyCleanupState.Completed ||
                 cleanup.State == CapturePolicyCleanupState.Failed)
             {
@@ -137,12 +160,13 @@ namespace LiteMonitor
                 return false;
             }
 
+            // ── ③ INV-4：同一代次已有**不同**的非终态条目 ⇒ 这才是真被拒 ──
             foreach (WindowCapturePolicyCleanup existing in _entries)
             {
                 if (existing.Generation == cleanup.Generation && !existing.IsTerminal)
                 {
                     // INV-4：同一代次至多一条 Pending。
-                    // ★【LM-074】被拒的移交**不得静默丢弃** ⇒ 留下可观测的诊断
+                    // ★【LM-074】真被拒**不得静默丢弃** ⇒ 留下可观测的诊断
                     //   （诊断码 + 告警通道），由 owner B 写进协调器的 CleanupWarningCode。
                     RegistrationRejectedCode = RegistrationRejectedWarningCode;
                     CleanupWarningCode = RegistrationRejectedWarningCode;
