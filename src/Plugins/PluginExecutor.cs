@@ -487,6 +487,22 @@ namespace LiteMonitor.src.Plugins
                         // [LM-009] 共享请求**不**绑定实例作用域令牌：C1 契约要求"取消一个等待者
                         // 不得取消共享任务"，若把 scope.Token 绑进去，一个实例的到期会连带
                         // 打断其他等待者正在复用的请求。总时长改由**等待者侧**监听 scope.Token 约束。
+                        // [LM-078] **调用侧**凭据目标校验：每个调用方在**加入租约之前**，
+                        // 用**自己的** declaredHosts 各校验一次。
+                        // 原缺陷：凭据目标校验只发生在 FetchRawAsync（唯一 HTTP 出网点）内部，
+                        // 而它**只对创建租约的那个调用方**执行 —— 命中已有租约时自己的
+                        // valueFactory 永不被求值（见 GetOrStartInflight 的注释：
+                        // "落败的 factory 产物永不被求值"）⇒ 白名单更严的第二个调用方
+                        // **直接复用**别人的响应，自己的白名单从未被检查（fail-open）。
+                        // 修法（**不改键、不改摘要**）：把"按调用方策略"的校验**前移到调用侧** ——
+                        // 每个等待者各自履责，共享任务本体不变（S1.0 契约 C3.4）。
+                        // 契约 C1/C2/C4 与 PluginRequestIdentityTests.I7 锁死"在途键逐字等于摘要"，
+                        // 因此**不得**把允许目标/凭据策略塞进在途键或摘要里。
+                        if (declaredHosts != null)
+                        {
+                            PluginSandbox.EnsureCredentialTargetAllowed(url, resolvedHeaders, declaredHosts);
+                        }
+
                         var task = GetOrStartInflight(inflightKey, () =>
                             FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, System.Threading.CancellationToken.None, proxy, scope, declaredHosts, scopeCancelsRequest: false));
 
