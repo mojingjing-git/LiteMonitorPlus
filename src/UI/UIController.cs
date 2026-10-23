@@ -1428,9 +1428,21 @@ namespace LiteMonitor
         /// 【GPU T03 / 合同 §4.6 / GPU T05】主题重新加载后重算**派生**回退样式。
         /// <para>★ 未处于 legacy 回退态（<c>_legacyFallbackTheme == null</c>）⇒ **不**引入派生样式，
         /// 保持"只有从 GPU 退出到 legacy 时才用回退样式"的产品语义。</para>
+        /// <para>★【LM-070 / R06】重载进来的主题**本身**不是 GPU 主题（原生 legacy 主题）
+        /// ⇒ **不得**套用任何回退配色 ⇒ **清空**派生覆盖并返回。
+        /// R06 说的"覆盖一直挂到重新进入 GPU 或重启"就修在这里：原实现只要
+        /// <c>_legacyFallbackTheme != null</c> 就会拿新主题重算覆盖，而原生旧主题的
+        /// <c>fallbackStyle</c> 解析结果是**中性默认值** ⇒ 旧主题自身配色被整组盖掉。</para>
         /// </summary>
         private void RefreshLegacyFallbackTheme(Theme theme)
         {
+            // ★【LM-070 / R06】目标主题**本身**不是 GPU 主题 ⇒ 不套回退配色。
+            if (!LegacyFallbackStyleBridge.IsGpuTheme(theme))
+            {
+                _legacyFallbackTheme = null;
+                return;
+            }
+
             if (_legacyFallbackTheme is null) return;
 
             LegacyFallbackStyle style = LegacyFallbackStyleBridge.Resolve(
@@ -1529,20 +1541,30 @@ namespace LiteMonitor
                 _layoutDirty = true;
                 _hxLayout = null;
 
-                // ★【合同 §4.6 / GPU T05】legacy 回退外观：解析 resolver 的输出，生成**派生**样式副本，
-                //   驱动 legacy 渲染。★ 绝不改 theme.Color / ThemeManager.Current / 任何写盘路径。
-                LegacyFallbackStyle fallbackStyle = LegacyFallbackStyleBridge.Resolve(
-                    theme.Rendering, out IReadOnlyList<string> fallbackDiagnostics);
-                foreach (string diagnostic in fallbackDiagnostics)
+                // ★【LM-070 / R06】目标主题**本身**不是 GPU 主题（原生 legacy 主题）
+                //   ⇒ **不得**套用任何回退配色 ⇒ 清空派生覆盖，直接用主题自身。
+                if (!LegacyFallbackStyleBridge.IsGpuTheme(theme))
                 {
-                    // 非致命诊断（合同 §5.3 规则 1：不得进 Validate() 错误列表；
-                    // §5.3 规则 2：不得覆盖既有故障根因）。
-                    _transition.RecordNonFatalDiagnostic(diagnostic);
+                    _legacyFallbackTheme = null;
+                    _form.BackColor = ThemeManager.ParseColor(theme.Color.Background);
                 }
+                else
+                {
+                    // ★【合同 §4.6 / GPU T05】legacy 回退外观：解析 resolver 的输出，生成**派生**样式副本，
+                    //   驱动 legacy 渲染。★ 绝不改 theme.Color / ThemeManager.Current / 任何写盘路径。
+                    LegacyFallbackStyle fallbackStyle = LegacyFallbackStyleBridge.Resolve(
+                        theme.Rendering, out IReadOnlyList<string> fallbackDiagnostics);
+                    foreach (string diagnostic in fallbackDiagnostics)
+                    {
+                        // 非致命诊断（合同 §5.3 规则 1：不得进 Validate() 错误列表；
+                        // §5.3 规则 2：不得覆盖既有故障根因）。
+                        _transition.RecordNonFatalDiagnostic(diagnostic);
+                    }
 
-                _legacyFallbackTheme = LegacyFallbackStyleBridge.BuildDerivedTheme(
-                    theme, fallbackStyle);
-                _form.BackColor = ThemeManager.ParseColor(_legacyFallbackTheme.Color.Background);
+                    _legacyFallbackTheme = LegacyFallbackStyleBridge.BuildDerivedTheme(
+                        theme, fallbackStyle);
+                    _form.BackColor = ThemeManager.ParseColor(_legacyFallbackTheme.Color.Background);
+                }
             }
             _transition.RecordLayoutRestore(layoutOk);
             if (!layoutOk)

@@ -798,6 +798,21 @@ namespace LiteMonitor
         }
 
         /// <summary>
+        /// 【LM-070 / R06】目标主题**本身**是不是 GPU 主题（判别式）。
+        /// <para>★ 判据只看主题自身的 <c>rendering.backend</c>：<c>theme.Rendering == null</c>
+        /// （原生 legacy 主题）或 <c>IsGpuRequested == false</c> ⇒ **不是** GPU 主题。</para>
+        /// <para>★ 用它区分两种"回到 legacy"的情形：
+        ///   <list type="bullet">
+        ///   <item>GPU 主题**被迫回退**（safe_mode / gpu_effects_opt_in_required / 运行期 GPU 故障）
+        ///     ⇒ <b>应当</b>套用 <c>rendering.fallbackStyle</c>；</item>
+        ///   <item><b>原生 legacy 主题</b> ⇒ <b>不得</b>套任何回退配色 ⇒ 直接用主题本身。</item>
+        ///   </list></para>
+        /// <para>★ 纯函数（不碰主题、不产生诊断）⇒ 可被确定性单测覆盖。</para>
+        /// </summary>
+        internal static bool IsGpuTheme(Theme? theme) =>
+            theme?.Rendering?.IsGpuRequested == true;
+
+        /// <summary>
         /// 用回退样式生成一份**派生**主题副本（源主题**不被修改**）。
         /// <para>★ 复制策略：逐个 public 可写属性做**浅拷贝**，只把 <c>Color</c> 换成派生副本 ——
         /// 其余子配置按引用共享（与既有运行时副本口径一致：Layout 已经是缩放后的同一份）。</para>
