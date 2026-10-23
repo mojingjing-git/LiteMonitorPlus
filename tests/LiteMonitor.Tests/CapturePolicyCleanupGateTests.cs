@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.ExceptionServices;
 using LiteMonitor.Rendering.Configuration;
 using LiteMonitor.Rendering.Contracts;
@@ -229,44 +230,38 @@ public sealed class CapturePolicyCleanupGateTests
     [Fact]
     public void LM073_NotifyOutputChanged重新施加WDA排除时同一代次仍有未完成清理必须被拒绝()
     {
-        RunSta(() =>
-        {
-            string directory = TemporaryDirectory();
-            try
-            {
-                RecordingWindowAdapter adapter = new(originalAffinity: 0);
-                using Form form = new();
-                _ = form.Handle;
-                WindowHandleGeneration generations = new();
-                using GpuPresentationHostController host = new(
-                    form,
-                    MaterialKind.LiquidGlass,
-                    liveBackgroundRequested: true,
-                    startupGuard: new GpuStartupGuard(directory, @"C:\apps\A"),
-                    windowAdapter: adapter,
-                    handleGeneration: generations);
+        // ★ 为什么用 IL 结构护栏而不是行为测试：生产的 NotifyOutputChanged 既有早退判断
+        //   要求 `_renderer != null`（真实 GPU 渲染器，无头测试拿不到），
+        //   确定性单测里无法驱动到闸门分支 ⇒ 改为钉住**结构性质**：
+        //   "闸门检查位于任何 SetCapturePolicy 施加之前"。
+        //   ★ 既有早退顺序（宿主未运行时静默返回、绝不抛异常）不在本护栏范围内，
+        //   由生产代码的顺序保证。
+        MethodInfo method = typeof(GpuPresentationHostController).GetMethod(
+            "NotifyOutputChanged",
+            BindingFlags.Instance | BindingFlags.Public);
+        Assert.NotNull(method);
 
-                CapturePolicyCleanupLedger ledger = CreateLedger(generations);
-                ledger.Add(new WindowCapturePolicyCleanup
-                {
-                    Generation = generations.Current,
-                    WindowHandle = new IntPtr(0x1234),
-                    OriginalAffinity = 0,
-                    AffinityChangedBySession = true,
-                });
-                host.CapturePolicyCleanupPendingProbe = ledger.HasPendingForGeneration;
+        IlInspector.Disassembly body = IlInspector.Disassemble(method!);
 
-                host.NotifyOutputChanged(force: true);
+        int gateAt = CallOffsetOf(
+            body,
+            typeof(GpuPresentationHostController),
+            "TryBlockCapturePolicyOwnership");
+        int applyAt = CallOffsetOf(body, typeof(PresentationSession), "SetCapturePolicy");
 
-                Assert.Equal("gpu_capture_policy_cleanup_pending", host.LastErrorCode);
-                Assert.DoesNotContain(adapter.SetHistory, entry => entry.Affinity == 0x11u);
-                Assert.Empty(adapter.SetHistory);
-            }
-            finally
-            {
-                Directory.Delete(directory, recursive: true);
-            }
-        });
+        Assert.True(
+            gateAt >= 0,
+            "GpuPresentationHostController.NotifyOutputChanged 必须查 WDA 取得闸门 —— "
+            + "显示器变化后重新施加 WDA 排除也是'取得所有权'，必须与 Start / TryReconfigure / "
+            + "Resume 共用同一个闸门（LM-073）。");
+        Assert.True(
+            applyAt >= 0,
+            "GpuPresentationHostController.NotifyOutputChanged 里找不到 SetCapturePolicy —— "
+            + "护栏前提被破坏。");
+        Assert.True(
+            gateAt < applyAt,
+            "闸门检查必须位于 SetCapturePolicy 施加**之前** —— "
+            + "否则同一 HWND 上会叠加第二个 affinity 所有者（LM-073）。");
     }
 
     // ================================================================
@@ -314,6 +309,36 @@ public sealed class CapturePolicyCleanupGateTests
             BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(field);
         field.SetValue(host, true);
+    }
+
+    /// <summary>
+    /// 找到"调用了 <paramref name="declaringType"/>.<paramref name="name"/>"的第一条指令偏移；
+    /// 找不到返回 -1。
+    /// </summary>
+    private static int CallOffsetOf(
+        IlInspector.Disassembly body,
+        Type declaringType,
+        string name)
+    {
+        foreach (IlInspector.IlInstruction instruction in body.Instructions)
+        {
+            if (instruction.OpCode != OpCodes.Call && instruction.OpCode != OpCodes.Callvirt)
+            {
+                continue;
+            }
+
+            if (instruction.Target is not MethodInfo called)
+            {
+                continue;
+            }
+
+            if (called.DeclaringType == declaringType && called.Name == name)
+            {
+                return instruction.Offset;
+            }
+        }
+
+        return -1;
     }
 
     private static CapturePolicyCleanupLedger CreateLedger(WindowHandleGeneration generations)

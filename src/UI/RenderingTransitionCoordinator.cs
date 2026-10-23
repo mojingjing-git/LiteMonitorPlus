@@ -394,6 +394,21 @@ namespace LiteMonitor
         }
 
         /// <summary>
+        /// 【LM-074】记录清理侧的**告警**（<c>CleanupWarningCode</c>）—— 信息级。
+        /// <para>★ 合同 §5.3 规则 2：写清理诊断**不得**清空呈现根因；
+        /// 本方法只写告警通道，与 <see cref="RecordCleanupState"/> 的错误通道互不覆盖。</para>
+        /// <para>★ 落点：ledger 因 INV-4 拒绝一条清理责任移交时，把诊断码写进这里
+        /// ⇒ "移交被拒"**不静默**。</para>
+        /// </summary>
+        internal void RecordCleanupWarning(string? cleanupWarningCode)
+        {
+            if (!string.IsNullOrEmpty(cleanupWarningCode))
+            {
+                SetCleanupWarning(cleanupWarningCode);
+            }
+        }
+
+        /// <summary>
         /// 【合同 §4 步 4】进入受控重建阶段。
         /// <para>★ 步 4 的禁止动作（计划 §4.3 :169）：不得在 <c>OnPaint</c> /
         /// <c>WndProc</c> 的销毁回调 / GPU 帧绘制栈内递归执行本步。</para>

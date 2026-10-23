@@ -515,10 +515,17 @@ namespace LiteMonitor
         /// </summary>
         private void OnGpuCapturePolicyCleanupRequired(WindowCapturePolicyCleanup cleanup)
         {
-            _captureCleanup.Add(cleanup);
+            bool registered = _captureCleanup.Add(cleanup);
             _transition.RecordCleanupState(
                 _captureCleanup.State,
                 _captureCleanup.CleanupErrorCode);
+
+            // ★【LM-074】移交被拒（INV-4：同代次已有非终态责任）⇒ **不得静默丢弃**。
+            //   被拒的那条往往正是"误采残留 0x11 为原值"的记录 ⇒ 必须留下可观测诊断。
+            if (!registered)
+            {
+                _transition.RecordCleanupWarning(_captureCleanup.RegistrationRejectedCode);
+            }
         }
 
         // ================================================================
@@ -668,7 +675,13 @@ namespace LiteMonitor
                     WindowCapturePolicyCleanup? handedOff = host.LastCapturePolicyCleanup;
                     if (handedOff is not null)
                     {
-                        _captureCleanup.Add(handedOff);
+                        // ★【LM-074】移交被拒（INV-4）⇒ 留痕，不得静默丢弃。
+                        bool registered = _captureCleanup.Add(handedOff);
+                        if (!registered)
+                        {
+                            _transition.RecordCleanupWarning(
+                                _captureCleanup.RegistrationRejectedCode);
+                        }
                     }
                 }
                 finally
@@ -1407,6 +1420,17 @@ namespace LiteMonitor
 
             // ★【LM-074】用户的 live / 主题切换被"**未解决**的清理责任"拒绝
             //   ⇒ 安排**一次**明确恢复（合同 §6.4 的"用户显式重试"）。
+            //   ★ 主审裁决 ④的约束：只有**真正发起过 TryReconfigure**
+            //     （canReconfigure == true）且拿到 gpu_capture_policy_cleanup_unresolved
+            //     码时才安排恢复；canReconfigure == false 时 reconfigureErrorCode 恒为 null
+            //     ⇒ 本调用**不触发**任何恢复。
+            //   ★★★ 顺序至关重要（必须排在 StopGpuPresentation() **之前**）：
+            //     先安排明确恢复 ⇒ ledger 里先有一条携带**精确原值**的 Pending 责任；
+            //     随后宿主停止时的移交若因 INV-4（同代次已有非终态责任）被拒，
+            //     被拒的那条往往是"误采残留 0x11 为原值"的记录，
+            //     而**先建**的重建责任携带的是精确原值 ⇒ 最终写回的是正确值。
+            //     若顺序反过来（先停后恢复）⇒ 移交先占坑、恢复被拒 ⇒ 写回误采值
+            //     ⇒ 报告 R10 的危害原样复活。
             ScheduleExplicitCapturePolicyRecovery(reconfigureErrorCode);
 
             // A suspended host can be reconfigured without replacing its device
@@ -1431,17 +1455,15 @@ namespace LiteMonitor
                     //   §8.4 的启动守卫恒为假 ⇒ Tick 兜底失效）。
                     _transition.PublishStable(decision.Route);
                 }
-                else
-                {
-                    // ★【LM-074】启动同样被闸门拒绝 ⇒ 安排**一次**明确恢复。
-                    //   （拒绝码已由 StartGpuPresentation 记进 _gpuFallbackCode。）
-                    ScheduleExplicitCapturePolicyRecovery(_gpuFallbackCode);
-                }
                 // ★★【R02 / 合同 §4.4 / U11】启动失败 ⇒ **不再**在这里"只标记 Stable"：
                 //   失败已经由统一调度入口排进队列，由 UI 安全点执行**完整**的 legacy 转换
                 //   （合同 §4 步 2–9：受控 HWND 重建 + 布局/DPI 恢复 + 窗口状态恢复 + 一次有效重绘）。
                 //   ★ 在那之前阶段停在 Stopping ⇒ §8.4 的启动守卫恒为假
                 //   ⇒ 普通 Tick 不会把 GPU 再拉起来（合同 §4.4 :188）。
+                //   ★【LM-074 · 主审裁决 ④】这里**不**安排明确恢复：
+                //   启动被闸门拒绝只作为回退原因记进 _gpuFallbackCode；
+                //   恢复只由上面的 TryReconfigure 拒绝路径触发
+                //   （canReconfigure == false 时不触发恢复）。
             }
             else
             {

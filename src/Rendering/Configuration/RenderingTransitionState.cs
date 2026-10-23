@@ -215,8 +215,31 @@ public sealed class WindowCapturePolicyCleanup
         return true;
     }
 
-    /// <summary>【LM-074】"已被明确恢复接管"的终结原因。</summary>
-    internal const string RearmedTerminalReason = "rearmed_by_explicit_recovery";
+    /// <summary>
+    /// 【LM-074】本责任是否已被"**明确恢复**"接管。
+    /// <para>★ 语义：该责任的**原策略始终没有被写回**（事实是 <c>Failed</c>），
+    /// 只是"谁负责恢复"换成了新的清理责任 ⇒ <b>本标记不改变记账</b>：
+    /// <see cref="State"/> 仍是 <c>Failed</c>、<see cref="TerminalReason"/> 仍是
+    /// <c>exhausted</c>（如实记录历史），旧条目仍然终态、不再重试、不再触碰 HWND。</para>
+    /// <para>★ 作用：让闸门判据不再把"已被接管"的旧条目算作"该代次仍被占用"
+    /// ⇒ 新责任接管后，同代次的闸门由**新责任**（Pending）继续把关。</para>
+    /// </summary>
+    internal bool ReclaimedByExplicitRecovery { get; private set; }
+
+    /// <summary>
+    /// 【LM-074】明确恢复接管：给已终结的条目打上"已被接管"标记。
+    /// <para>★ <b>不改动</b> <see cref="State"/> 与 <see cref="TerminalReason"/> ——
+    /// "清理成功"与"被接管"是两件事，前者必须是事实。</para>
+    /// </summary>
+    /// <returns><c>true</c> = 本次调用首次打上标记；<c>false</c> = 未终结或已打过标记（幂等）。</returns>
+    internal bool TryMarkReclaimedByExplicitRecovery()
+    {
+        if (!IsTerminal) return false;
+        if (ReclaimedByExplicitRecovery) return false;
+
+        ReclaimedByExplicitRecovery = true;
+        return true;
+    }
 
     /// <summary>
     /// 【LM-074】本责任是否由"明确恢复"重建而来。
@@ -235,24 +258,6 @@ public sealed class WindowCapturePolicyCleanup
         if (IsTerminal) return false;
 
         NextAttemptAt = now;
-        return true;
-    }
-
-    /// <summary>
-    /// 【LM-074】明确恢复接管：把**已终结**的条目重新终结为
-    /// <c>Completed</c> + <c>rearmed_by_explicit_recovery</c>。
-    /// <para>★ 合同 §6.3"终态不可回退"的**实质**是"不再重试、不再触碰 HWND"：
-    /// 本方法**不复活**该条目 —— 它仍然是终态、ledger 不会再重试它、
-    /// 也不会再对它做任何 Win32 调用；只是把终结原因改写为"已由明确恢复接管"，
-    /// 让它不再占用该代次的 WDA 闸门。</para>
-    /// </summary>
-    internal bool TryMarkRearmedByExplicitRecovery()
-    {
-        if (!IsTerminal) return false;
-        if (TerminalReason == RearmedTerminalReason) return false;
-
-        State = CapturePolicyCleanupState.Completed;
-        TerminalReason = RearmedTerminalReason;
         return true;
     }
 }

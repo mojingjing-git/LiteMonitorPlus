@@ -227,19 +227,128 @@ public sealed class CapturePolicyCleanupUnresolvedGateTests
             T0,
             out _));
 
-        // 旧条目**仍然终态**，且不再增长尝试次数。
+        // ★ 旧条目**如实记账**：仍然是 Failed + exhausted（原策略始终没被写回），
+        //   只是"已被明确恢复接管" ⇒ 它不再占用该代次的闸门。
         Assert.True(staleEntry.IsTerminal);
-        Assert.Equal("rearmed_by_explicit_recovery", staleEntry.TerminalReason);
+        Assert.Equal(CapturePolicyCleanupState.Failed, staleEntry.State);
+        Assert.Equal("exhausted", staleEntry.TerminalReason);
+        Assert.True(staleEntry.ReclaimedByExplicitRecovery);
 
         probe.Succeed = true;
         ledger.Pump(T0.AddSeconds(1));
         ledger.Pump(T0.AddSeconds(2));
 
+        // ★ 旧条目不再重试：尝试次数不再增长。
         Assert.Equal(attemptsBefore, staleEntry.Attempts);
         Assert.True(staleEntry.IsTerminal);
+        Assert.Equal(CapturePolicyCleanupState.Failed, staleEntry.State);
 
         // 恢复动作只发生在**新的**责任上（旧条目不得再触碰 HWND）。
         Assert.All(probe.Calls.Skip(callsBefore), call => Assert.Equal(0, call.attemptsAtCall));
+    }
+
+    // ================================================================
+    // 4b. 明确恢复后闸门解除，且旧条目的**失败记账未被改写**
+    // ================================================================
+
+    [Fact]
+    public void LM074_明确恢复成功后闸门解除且旧条目的失败记账未被改写()
+    {
+        RecordingRestoreProbe probe = new() { Succeed = false };
+        WindowHandleGeneration generations = new();
+        CapturePolicyCleanupLedger ledger = CreateLedger(generations, probe);
+
+        ledger.Add(new WindowCapturePolicyCleanup
+        {
+            Generation = generations.Current,
+            WindowHandle = new IntPtr(0x1234),
+            OriginalAffinity = 0x22u,
+            AffinityChangedBySession = true,
+        });
+        Exhaust(ledger, T0);
+
+        WindowCapturePolicyCleanup staleEntry = ledger.Entries[0];
+        Assert.Equal(CapturePolicyCleanupState.Failed, staleEntry.State);
+
+        Assert.True(ledger.TryRearmForExplicitRecovery(
+            generations.Current,
+            T0,
+            out _));
+
+        // 重建责任接管期间闸门仍关闭（由**新责任**把关）。
+        Assert.Equal("gpu_capture_policy_cleanup_pending",
+            ledger.GetBlockingReasonForGeneration(generations.Current));
+
+        // 新责任恢复成功 ⇒ 闸门解除。
+        probe.Succeed = true;
+        ledger.Pump(T0.AddSeconds(1));
+        Assert.Null(ledger.GetBlockingReasonForGeneration(generations.Current));
+        Assert.False(ledger.HasUnresolvedForGeneration(generations.Current));
+
+        // ★★ 旧条目的**失败记账不得被改写成成功**：它仍然是 Failed + exhausted，
+        //    只是打了"已被接管"标记（防止有人再把 Failed 改回 Completed —— 那是不实记账：
+        //    原策略始终没有被写回，残留仍在 HWND 上）。
+        Assert.Equal(CapturePolicyCleanupState.Failed, staleEntry.State);
+        Assert.NotEqual(CapturePolicyCleanupState.Completed, staleEntry.State);
+        Assert.Equal("exhausted", staleEntry.TerminalReason);
+        Assert.True(staleEntry.ReclaimedByExplicitRecovery);
+    }
+
+    // ================================================================
+    // 4c. 明确恢复必须**先于**宿主停止移交；被拒的移交必须留痕
+    // ================================================================
+
+    [Fact]
+    public void LM074_明确恢复先于宿主停止移交且被拒的移交有留痕()
+    {
+        RecordingRestoreProbe probe = new() { Succeed = false };
+        WindowHandleGeneration generations = new();
+        CapturePolicyCleanupLedger ledger = CreateLedger(generations, probe);
+        long generation = generations.Current;
+
+        // ① 同代次已有 Failed + unresolved（精确原值 0x22）。
+        ledger.Add(new WindowCapturePolicyCleanup
+        {
+            Generation = generation,
+            WindowHandle = new IntPtr(0x1234),
+            OriginalAffinity = 0x22u,
+            AffinityChangedBySession = true,
+        });
+        Exhaust(ledger, T0);
+        Assert.Equal("gpu_capture_policy_cleanup_unresolved",
+            ledger.GetBlockingReasonForGeneration(generation));
+
+        // ② **先**安排明确恢复 ⇒ 重建责任携带**精确原值**（不是残留值）。
+        Assert.True(ledger.TryRearmForExplicitRecovery(generation, T0, out _));
+        WindowCapturePolicyCleanup rearmed = ledger.Entries[^1];
+        Assert.Equal(0x22u, rearmed.OriginalAffinity);
+        Assert.NotEqual(0x11u, rearmed.OriginalAffinity);
+
+        // ③ **随后**宿主停止移交一条同代次记录（它误采了残留 0x11 当原值）
+        //    ⇒ 被 INV-4 拒绝（同代次已有非终态责任）。
+        bool handedOff = ledger.Add(new WindowCapturePolicyCleanup
+        {
+            Generation = generation,
+            WindowHandle = new IntPtr(0x1234),
+            OriginalAffinity = 0x11u,
+            AffinityChangedBySession = true,
+        });
+        Assert.False(handedOff);
+
+        // ③' 被拒的移交**必须留痕**（不得静默丢弃）。
+        Assert.Equal(
+            "gpu_capture_policy_cleanup_registration_rejected",
+            ledger.RegistrationRejectedCode);
+        Assert.Equal(
+            "gpu_capture_policy_cleanup_registration_rejected",
+            ledger.CleanupWarningCode);
+
+        // ④ 后续写回的是**精确原值**（0x22），绝不是残留值（0x11）。
+        probe.Succeed = true;
+        ledger.Pump(T0.AddSeconds(1));
+        Assert.NotEmpty(probe.Calls);
+        Assert.Equal(0x22u, probe.Calls[^1].originalAffinity);
+        Assert.DoesNotContain(probe.Calls, call => call.originalAffinity == 0x11u);
     }
 
     // ================================================================

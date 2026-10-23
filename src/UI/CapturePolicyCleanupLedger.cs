@@ -73,6 +73,21 @@ namespace LiteMonitor
         internal const string RearmFailedErrorCode =
             "gpu_capture_policy_cleanup_rearm_failed";
 
+        /// <summary>
+        /// 【LM-074】清理责任**登记被拒**的诊断码（INV-4：同代次已有非终态责任）。
+        /// <para>★ 被拒的移交**不得静默丢弃** —— 它往往正是那条"误采残留值当原值"的记录。</para>
+        /// </summary>
+        internal const string RegistrationRejectedWarningCode =
+            "gpu_capture_policy_cleanup_registration_rejected";
+
+        /// <summary>
+        /// 【LM-074】最近一次"清理责任登记被拒"的诊断码；从未被拒过则为 <c>null</c>。
+        /// <para>★ 落点：<see cref="Add"/> 因 INV-4 拒绝一条移交时写入；
+        /// owner B（<c>UIController</c>）把它写进协调器的
+        /// <c>RenderingTransitionState.CleanupWarningCode</c> ⇒ 被拒不静默。</para>
+        /// </summary>
+        internal string? RegistrationRejectedCode { get; private set; }
+
         private readonly List<WindowCapturePolicyCleanup> _entries = new();
         private readonly Func<long> _currentGeneration;
         private readonly Func<IntPtr, bool> _isWindowAlive;
@@ -127,6 +142,10 @@ namespace LiteMonitor
                 if (existing.Generation == cleanup.Generation && !existing.IsTerminal)
                 {
                     // INV-4：同一代次至多一条 Pending。
+                    // ★【LM-074】被拒的移交**不得静默丢弃** ⇒ 留下可观测的诊断
+                    //   （诊断码 + 告警通道），由 owner B 写进协调器的 CleanupWarningCode。
+                    RegistrationRejectedCode = RegistrationRejectedWarningCode;
+                    CleanupWarningCode = RegistrationRejectedWarningCode;
                     return false;
                 }
             }
@@ -169,6 +188,9 @@ namespace LiteMonitor
         /// <c>WDA_EXCLUDEFROMCAPTURE</c> ⇒ 同代次**不得**叠加新的 affinity 所有者
         /// （合同 §6.2 INV-6 / §4.5 :202 的支配条款）。</para>
         /// <para>★ <c>Failed</c> 且本程序**没改过** affinity ⇒ 没有残留 ⇒ **不占用**。</para>
+        /// <para>★ <c>Failed</c> 但**已被明确恢复接管**
+        /// （<see cref="WindowCapturePolicyCleanup.ReclaimedByExplicitRecovery"/>）⇒
+        /// 恢复责任已经换人 ⇒ 由**新责任**（Pending）继续把关 ⇒ **不占用**。</para>
         /// </summary>
         /// <returns>阻断原因码；<c>null</c> = 该代次未被占用。</returns>
         internal string? GetBlockingReasonForGeneration(long generation)
@@ -189,7 +211,8 @@ namespace LiteMonitor
                 }
 
                 if (entry.State == CapturePolicyCleanupState.Failed &&
-                    entry.AffinityChangedBySession)
+                    entry.AffinityChangedBySession &&
+                    !entry.ReclaimedByExplicitRecovery)
                 {
                     unresolved = true;
                 }
@@ -281,8 +304,10 @@ namespace LiteMonitor
                 return false;
             }
 
-            // 旧责任终结为"已由明确恢复接管"（仍然不再重试、不再触碰 HWND）。
-            failed.TryMarkRearmedByExplicitRecovery();
+            // 旧责任**保持 Failed / exhausted**（如实记账：原策略始终没被写回），
+            // 只打上"已被接管"标记 ⇒ 不再占用该代次的闸门；
+            // 它仍然终态、ledger 不会再重试它、也不会再对它做任何 Win32 调用。
+            failed.TryMarkReclaimedByExplicitRecovery();
             return true;
         }
 

@@ -726,10 +726,14 @@ public sealed class GpuPresentationHostController : IDisposable
     public void NotifyOutputChanged(bool force = false)
     {
         PresentationSession? presentation = _sessionOwner.Session;
-        if (_disposed || _suspended || !_liveBackgroundRequested) return;
+        if (_disposed || _suspended || !_liveBackgroundRequested ||
+            _renderer is null || presentation is null) return;
         EnsureOwnerThread();
+        if (!force && _renderer.IsCaptureOutputCurrent) return;
 
         // ★【LM-073 / 合同 §6.2 INV-6】重新施加 WDA 排除之前必须先过**同一个**闸门。
+        //   ★ 闸门位于既有早退判断**之后**、任何 SetCapturePolicy **之前**：
+        //   既有的早退顺序（宿主未运行时静默返回、绝不抛异常）**一字未改**。
         //   ★ 拒绝时**不得**停止 live 捕获、**不得**触碰 HWND 的 affinity
         //   （本方法可能在 GPU 帧绘制栈内被调用 ⇒ 只记录错误码，不做重量级动作）。
         if (TryBlockCapturePolicyOwnership(
@@ -741,9 +745,6 @@ public sealed class GpuPresentationHostController : IDisposable
             _lastErrorMessage = blockMessage;
             return;
         }
-
-        if (_renderer is null || presentation is null) return;
-        if (!force && _renderer.IsCaptureOutputCurrent) return;
 
         _renderer.StopLiveCapture();
         _liveCaptureStarted = false;
