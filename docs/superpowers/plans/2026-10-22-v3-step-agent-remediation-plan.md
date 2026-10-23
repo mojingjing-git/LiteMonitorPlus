@@ -1023,6 +1023,70 @@ R01 一路穿过了全部 1396 条用例与**连续 8 次绿色 CI** ⇒ 证明"
 
 ★ **共同结论**：5 项**全部成立**、**全部无针对性测试覆盖** ⇒ 修复时每项至少补 **1 条会变红的钉住用例**。LM-070~LM-073 属**确定性代码缺陷**（静态可闭合）；LM-073/LM-074 的**最终观感**（自捕获、截图不可见）依赖真实 HWND + 真实 GPU/WDA 时序 ⇒ 修复后仍按纪律 6 标 `NOT_VERIFIED`。★ **主审新增发现（报告未提）**：LM-073 的 `Resume` 与 `NotifyOutputChanged` 也是取 WDA 入口且同样无 pending 检查 ⇒ 修复范围**不得**只覆盖 `TryReconfigure`。
 
+### 4.8.1 主审裁决 —— P2 批次 A（LM-070~LM-074）修复口径（2026-10-23）
+
+**裁决性质**：本节是**主审对修复口径的最终裁决**。worker 的实现必须逐条对齐；与审查报告原文冲突时**以本节为准**，并把差异写进交付说明。
+
+#### (1) LM-070（R06）：原生旧主题**不得**被套上 GPU 回退配色
+
+- **判别式**：目标主题**本身**是不是 GPU 主题 ⇒ `theme.Rendering?.IsGpuRequested == true`（`src/Rendering/Configuration/ThemeRenderingConfig.cs:58-59`）。
+- **规则**：
+  - GPU 主题**被迫回退**到 legacy（`safe_mode` / `gpu_effects_opt_in_required` / 运行时 GPU 故障）⇒ **应当**套用 `rendering.fallbackStyle`（未声明时走中性可读默认值，合同 §9.5）。
+  - **原生 legacy 主题**（`theme.Rendering == null`，或 `IsGpuRequested == false`）⇒ **不得**套用任何回退配色 ⇒ 直接使用主题本身。
+- **落点（两处，缺一不可）**：
+  1. `src/UI/UIController.cs:1534-1545`（`CompleteLegacyTransition`）：目标主题不是 GPU 主题 ⇒ `_legacyFallbackTheme = null`（清空派生覆盖）。
+  2. `src/UI/UIController.cs:1432-1439`（`RefreshLegacyFallbackTheme`）：重载进来的主题不是 GPU 主题 ⇒ **清空** `_legacyFallbackTheme` 并返回 —— R06 说的"覆盖一直挂到重新进入 GPU 或重启"就修在这里。
+- **禁止**：不得改动 `LegacyFallbackStyleResolver` 与 `LegacyFallbackStyleBridge.BuildDerivedTheme` 的既有语义（既有回退样式用例必须仍绿）—— 分支只加在**调用点**。
+- **钉住用例**：① GPU 主题被迫回退 ⇒ 派生主题的 6 个色槽 == `fallbackStyle`；② 原生旧主题 ⇒ `CurrentRenderTheme` **就是** `ThemeManager.Current`（同一实例）、其色槽**未被**中性默认值覆盖；③ 原生旧主题 ⇒ 6 个色槽与源主题逐个相等。
+
+#### (2) LM-071（R07）：派生主题必须带上**运行期字体**
+
+- **【事实】**：`Theme` 的 5 个运行期字体是**字段**（`src/Core/ThemeManager.cs:370-374`），而 `DeriveConfig`（`src/UI/RenderingTransitionCoordinator.cs:836-850`）只复制 **public 属性** ⇒ 派生主题的 5 个字体全部退回 `SystemFonts.CaptionFont` ⇒ `UIRenderer` / `HorizontalLayout` 用默认字体绘制。
+- **裁决：共享引用，不新建**。
+  1. `BuildDerivedTheme` 必须**显式**把源主题的 5 个运行期字体**字段**复制给派生主题（**同一 Font 实例**）。
+  2. **释放责任仍在源主题**（`ThemeManager.Current`）；派生主题**不得**调用 `DisposeFonts()`。
+  3. `src/UI/UIController.cs:191-194`（`oldTheme.DisposeFonts()`）**必须**推迟到 `RefreshLegacyFallbackTheme(t)`（`:254`）**之后** —— 否则旧主题的字体被释放，而派生主题仍引用它们（悬垂引用）。
+- **禁止**：派生主题**不得**自己 `BuildFonts()` / `Scale()`（会二次缩放；且纯 CLR 的协调器拿不到 dpi×user 系数）。
+- **钉住用例**：① 派生主题的 5 个字体字段与源主题 `Assert.Same`（同一实例）；② 换肤（旧主题 `DisposeFonts()`）之后，派生主题引用的字体**未被释放**（可用 `Font.IsSystemFont` 之外的存活断言或引用计数式断言）；③ 派生主题**不得**释放源主题的字体。
+
+#### (3) LM-072（R08）：受控重建后必须**按配置**恢复实时玻璃
+
+- **【事实】**：`MainForm_Transparent.OnHandleDestroyed`（`:498-508`）调 `StopLiveGlass()` ⇒ `UIController.StopLiveGlass`（`:320`）⇒ `LiveGlassController.SetEnabled(false)`（`:190-205`）⇒ **`Enabled` 标志被清成 false**；`HandleCreated`（`:355`）⇒ `OnHandleChanged`（`:307-311`）⇒ `RefreshRequest`（`:351-354`）在 `_service == null` 时**直接返回** ⇒ 服务永不重启；即便补一次 `SetEnabled(true)`，也会被 `:193` 的 `Enabled == enabled` 早退挡掉。
+- **裁决：临时停机 ≠ 用户关闭**。
+  1. **句柄销毁路径不得清 `Enabled` 标志** —— 只停服务，保留 `Enabled`（配置仍为开）。⚠️ `OnFormClosed`（`:605`）是**真关闭**，必须与句柄销毁**区分开**（真关闭才允许整停）。
+  2. `LiveGlassController` 必须能在"配置为开但服务已停"时**按配置重启**（`SetEnabled(true)` 在 `Enabled` 已为 true 且 `_service == null` 时**不得**早退跳过重启）。
+  3. **恢复时机**：目标 legacy **就绪之后**（GPU→legacy 转换步 6–9 完成时）按 `_cfg.LiveGlassEnabled` 恢复；**不得**在句柄重建过程中恢复（那时句柄尚未就绪）。
+  4. **单一捕获所有者**：GPU 宿主必须在 live glass 恢复**之前**已停止（转换步 3 已 `StopGpuPresentation`）⇒ 不得出现两个捕获所有者。
+  5. **状态一致性**：`LiveGlassStatusText` 必须反映真实状态（服务停了就要说停了），设置页复选框与状态行不得自相矛盾。
+- **钉住用例**：① 临时停机后 `Enabled` 仍为 true；② 配置为开且服务已停 ⇒ `SetEnabled(true)` **确实重启**服务（不是早退）；③ 转换完成后按配置恢复；④ 用户显式关闭 ⇒ `Enabled == false` 且**不**被自动拉起。
+
+#### (4) LM-073（R09）：**全部** WDA 取得入口共用同一个闸门
+
+- **【事实】**：WDA 取得入口共 **4 个** —— `GpuPresentationHostController.Start`（`:281-288`，**唯一**有 pending 闸门）、`TryReconfigure`（`:554` 释放 / `:566` 取得）、`Resume`（`:474`）、`NotifyOutputChanged`（`:695`）。R09 的可复现场景：旧 live 会话恢复失败并移交 ledger（Pending）⇒ 同 HWND 可先启动 **fixed 宿主**（`Start` 的闸门只在 `policy == WdaExcludeFromCapture` 时生效 ⇒ fixed 放行）⇒ 之后开启 live 走 `TryReconfigure` ⇒ **无闸门** ⇒ 施加 0x11 ⇒ 新会话把遗留 0x11 当"外部原值" ⇒ 随后 ledger 恢复原策略 ⇒ **撤掉正在使用的排除** ⇒ 自捕获。
+- **裁决**：
+  1. 所有"**要施加** `WDA_EXCLUDEFROMCAPTURE`"的入口在施加前查同一个闸门：`Start`、`TryReconfigure` 的 live 分支、`Resume`、`NotifyOutputChanged`。
+  2. `TryReconfigure` 的 `SetCapturePolicy(None)` 分支（`:554`）是**释放** WDA ⇒ **不受**闸门约束。
+  3. 命中闸门 ⇒ 拒绝 + 明确错误码。
+  4. **不得**改 `TryReconfigure` 的 **public 签名**（加参数即破坏 API）⇒ 闸门复用**已注入**的 `CapturePolicyCleanupPendingProbe`。
+- **钉住用例**：pending → fixed → live 的状态组合下，live 取得必须被拒绝（三个入口各 1 条）。
+
+#### (5) LM-074（R10）：同代次"未达成清理目标" ⇒ 阻止新所有者；**契约不修订**
+
+- **★ 契约张力裁决：不修订合同。** 三条理由：
+  1. 合同 §6.3「终态不可回退」约束的是**那一条清理责任自身**（不再重试、不再触碰 HWND），**不是**"闸门必须放行"。
+  2. 合同 §6.4「耗尽后不阻塞新代次（INV-2）」说的是**宿主生命周期**（`StopGpuPresentation()` 之后 `_gpuPresentation == null` 无条件成立）与**不同代次**（新 HWND ⇒ 新代次不受阻）⇒ **不豁免同一代次叠加新所有者**。
+  3. 支配条款是计划 §4.5 :202（合同 §6.5 `:424` 原文引用）："**同一 HWND 上清理未完成时禁止叠加新的 affinity 所有者**"。"清理未完成" = **未达成清理目标**；`Failed(exhausted)` 正是"永远达不成" ⇒ 同代次**仍被占用**。
+  ⇒ ⇒ 张力在"**闸门语义**"，不在"**状态机语义**" ⇒ 合同**一字不改**，改的是闸门判据。
+- **修复口径**：
+  1. **判据**：`CapturePolicyCleanupLedger` 增加"该代次是否仍被占用"的查询 ⇒ 同代次存在 `Pending` 条目，**或** `Failed` 且 `AffinityChangedBySession == true` 的条目 ⇒ 仍被占用。（`Failed` 且 `AffinityChangedBySession == false` ⇒ 没改过 affinity ⇒ 无残留 ⇒ 不占用。）`HasPendingForGeneration` 的既有语义**不得**改写（既有调用点与用例依赖它）⇒ **新增**方法并列。
+  2. **入口**：LM-073 的 4 个入口统一改用新判据；命中 ⇒ 拒绝 + **可区分**的错误码（`Pending` ⇒ 既有 `gpu_capture_policy_cleanup_pending`；`Failed` ⇒ 新增 `gpu_capture_policy_cleanup_unresolved`）。
+  3. **解除路径（必须存在且被测）**：
+     - **受控重建 / 代次推进** ⇒ 自动解除（新代次不受阻；残留随旧 HWND 一起消失）。
+     - **明确恢复** ⇒ ledger 新增"对同代次 `Failed`（且 `AffinityChangedBySession == true`）条目**重建一条新的清理责任**"的入口：新责任**沿用精确原值 `OriginalAffinity` 与同一 `WindowHandle`**、`Attempts` 归零；**旧条目不再重试、不再触碰 HWND**（终结为 `Completed("rearmed_by_explicit_recovery")`）⇒ **不违反 §6.3**；新责任走 §6.4 的退避重试预算 ⇒ 成功后**真正恢复原策略** ⇒ 闸门自然解除。
+  4. **触发**：明确恢复**只能由显式的用户动作触发**；**禁止**在 `Tick` 里自动触发（合同 §6.4 禁止每帧重试）。推荐落点：`UIController` 收到 `gpu_capture_policy_cleanup_unresolved` 拒绝码时安排一次恢复（该拒绝码只可能来自用户显式发起的 WDA 取得）。
+  5. **精确原值不丢失**：任何路径都**不得**把残留 0x11 当成"外部原值"（这正是 R10 的危害本体）；同代次被放行时仍必须按合同 §7.3 R3 **重读**原值。
+- **钉住用例**：① 同代次耗尽 ⇒ 新的 WDA 取得被拒绝且错误码可区分；② 不同代次 ⇒ 不受阻；③ 明确恢复成功后 ⇒ 闸门解除且**原策略真的被写回**（精确原值，不是残留值）；④ 旧 `Failed` 条目在明确恢复后**不再重试**（§6.3）。
+
 ---
 
 ## 5. 执行步骤
