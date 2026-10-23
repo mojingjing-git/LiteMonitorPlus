@@ -216,11 +216,11 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | LM-072 | R08 · 受控重建后未按配置恢复旧 M2 实时玻璃（`LiveGlassController` 只 `RefreshRequest`，服务为 null 即返回） | P2 | `CONFIRMED`（**批次 A 主审独立复核**：`OnHandleDestroyed` → `StopLiveGlass`（`UIController.cs:320`）→ `LiveGlassController.SetEnabled(false)`（`:190-205`）→ `StopService()`（`:267-284`）⇒ `_service = null`（`:272`）；重建后 `RefreshRequest`（`:351-354`）`svc is null` 即 return；而 `SetEnabled(true)` 全仓**只有**构造期（`UIController.cs:162`）与用户手动（`:297`）两处 ⇒ **无人按配置恢复** ⇒ 设置页复选框仍显示"开"而状态行显示"未启用"（UI 自相矛盾）） | 批次 A 待修（+ `src/UI/MainForm_Transparent.cs` / `LiveGlassLifecycleTests.cs`）；★ **无测试覆盖**（既有 4 条只覆盖租约交接/位置变化/几何暂停/请求身份）；★ 难点：`SetEnabled` 有 `Enabled==enabled` **早退** ⇒ "临时停机"必须**不改** `Enabled` 标志，否则恢复时被早退跳过；恢复须等 legacy 就绪后再启（避免与 GPU 实时捕获并行抓屏，违反单一捕获所有者约束）；新增用例须走 STA |
 | LM-073 | R09 · `TryReconfigure` 取得 WDA 所有权时**绕过** pending 清理检查（只有 `Start` 查 pending） | P2 | `CONFIRMED`（**批次 A 主审独立复核**，并**扩大范围**）：`CapturePolicyCleanupPendingProbe` 全库**只在 `Start`（`GpuPresentationHostController.cs:282`）被检查**；`TryReconfigure`（`:513`）的 `SetCapturePolicy`（`:554`/`:566`）**无**检查 ⇒ 同一 HWND 同代次的 pending 清理责任被绕过，新会话把残留 `0x11` 当作"外部原值" ⇒ `_affinityChangedBySession` 保持 **false** ⇒ **不承担恢复责任**；★ **主审新增发现（报告未提）**：`Resume`（`:474`）与 `NotifyOutputChanged`（`:695`）也是取 WDA 入口，**同样无检查** ⇒ 修复须覆盖**三个**入口 | 批次 A 待修（+ `src/UI/UIController.cs` / `GpuPresentationTransitionTests.cs` / `RenderingTransitionCoordinatorTests.cs`）；★ **全库无任何 `TryReconfigure` 用例**；★ 难点：`TryReconfigure` 是 **public** ⇒ 加参数即改**公共签名**；更稳的是内部复用已注入的探针（不改签名）；拒绝时的错误码需裁决 |
 | LM-074 | R10 · 恢复重试耗尽被记为 `Failed` 后 `HasPendingForGeneration` 返回 false ⇒ 同 HWND 可再取新 WDA 所有权，原策略却未恢复 | P2 | `CONFIRMED`（**批次 A 主审独立复核**：`Pump` 耗尽后 `TryMarkFailed("exhausted")`（`CapturePolicyCleanupLedger.cs:190`）⇒ `IsTerminal`（`RenderingTransitionState.cs:156-157`，**含 `Failed`**）⇒ `HasPendingForGeneration`（`:125-136`）的 `!entry.IsTerminal` 判据不再命中 ⇒ **同代次耗尽后无任何解除入口** ⇒ INV-6 闸门放行新所有者，但原策略（通常 WDA_NONE）**从未恢复** ⇒ `0x11` 残留至 HWND 销毁 ⇒ 窗口在录屏/截图里持续不可见） | 批次 A 待修（+ `src/Rendering/Configuration/RenderingTransitionState.cs` / `RenderingTransitionCoordinatorTests.cs`）；★ 既有测试只断言 `State==Failed` / `TerminalReason=="exhausted"`，**未断言**耗尽后 `HasPendingForGeneration` 的行为 ⇒ 该不变式**无覆盖**；★ 难点：改 `HasPendingForGeneration` 会放大 `Start` 的拦截面；**合同 §6.3"终态不可回退"与"同代次 Failed 必须阻止新所有者"存在张力 ⇒ 需主审裁决是否属契约修订** |
-| LM-075 | R11 · 修改监听范围（Loopback/LAN）不重绑服务；界面"实际监听地址"读**草稿** `BindMode` 而非真实端点 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（网页批次；与 LM-067 同模块） |
-| LM-076 | R12 · WS 连接只保存服务代次、**不绑定会话** ⇒ 注销/过期后已建立的 WS 继续收到数据 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（网页批次） |
-| LM-077 | R13 · 口令迁移 `EnsureWebPasswordMigrated` 调 `Save` 后直接返回 true，而 `Save` 在禁止保存时**直接返回**、遇 IO 错误**吞异常** ⇒ 旧明文可能仍在磁盘 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（网页批次） |
-| LM-078 | R14 · 请求合并键只有请求摘要，**不含允许目标/凭据策略** ⇒ 不同白名单的调用者可能复用他人的响应 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（插件沙箱批次） |
-| LM-079 | R15 · `StripPort`（`PluginExecutor.cs:847`）对 IPv6 字面量按**最后一个冒号**截断 ⇒ `[fd00::1]` 与 `[fd00::2]` 都化成 `[fd00:` ⇒ **地址碰撞** | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11；★ 与 LM-058 是**同一类缺陷的另一处**，LM-058 当时判为"偏严方向"，**本项方向相反 ⇒ fail-open，更严重**） | 排队（插件沙箱批次） |
+| LM-075 | R11 · 修改监听范围（Loopback/LAN）不重绑服务；界面"实际监听地址"读**草稿** `BindMode` 而非真实端点 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 B，提交 `7ef594c` + `f66cb0b`）：修法要点与证据见 **§4.12** |
+| LM-076 | R12 · WS 连接只保存服务代次、**不绑定会话** ⇒ 注销/过期后已建立的 WS 继续收到数据 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 B，提交 `dc6488a`）：修法要点与证据见 **§4.12** |
+| LM-077 | R13 · 口令迁移 `EnsureWebPasswordMigrated` 调 `Save` 后直接返回 true，而 `Save` 在禁止保存时**直接返回**、遇 IO 错误**吞异常** ⇒ 旧明文可能仍在磁盘 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 B，提交 `d8f3661`）：修法要点与证据见 **§4.12** |
+| LM-078 | R14 · 请求合并键只有请求摘要，**不含允许目标/凭据策略** ⇒ 不同白名单的调用者可能复用他人的响应 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 B，提交 `dd50295`）：修法要点与证据见 **§4.12** |
+| LM-079 | R15 · `StripPort`（`PluginExecutor.cs:847`）对 IPv6 字面量按**最后一个冒号**截断 ⇒ `[fd00::1]` 与 `[fd00::2]` 都化成 `[fd00:` ⇒ **地址碰撞** | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11；★ 与 LM-058 是**同一类缺陷的另一处**，LM-058 当时判为"偏严方向"，**本项方向相反 ⇒ fail-open，更严重**） | ✅ **已修复并集成**（P2 批次 B，提交 `703083f`）：修法要点与证据见 **§4.12** |
 | LM-080 | R16 · `AddDeclaredHost`（`PluginProcessor.cs:421`）只按 `/` 截 authority，**不处理 `?`/`#`** ⇒ 无路径 URL 的查询串被当作主机名 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（插件沙箱批次） |
 | LM-081 | R17 · 手动重定向按状态码**无条件**把方法设为 GET（`PluginExecutor.cs:1006`）⇒ HEAD 语义丢失 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（插件沙箱批次） |
 | LM-082 | R18 · 原生 Crypto 请求按**实例 ID** 而非**执行作用域**合并；旧任务未收尾即被新执行复用 ⇒ 跨代次取消相互影响 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（插件沙箱批次） |
@@ -241,12 +241,13 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | **LM-095** | **受控重建失败时实时玻璃停在"暂停"，且状态行的"自动恢复"承诺落空**：LM-072 把句柄销毁改成"临时停机"（保留 `Enabled`），但**按配置恢复的唯一调用点**是 `UIController.CompleteLegacyTransition` 末尾的 `_liveGlass?.RestoreIfEnabled()`；而受控重建**失败**时 `RunGpuToLegacyTransition` 在 `FailHandleRecreate()` 后直接 `return` ⇒ `CompleteLegacyTransition` 不执行 ⇒ `RestoreIfEnabled()` 永不调用 ⇒ 服务保持停止，而状态行仍显示"实时玻璃已暂停（窗口句柄重建中），**重建完成后自动恢复**。"—— 重建已失败，"自动恢复"永远不发生 | P2 | `CONFIRMED`（**批次 A 独立复核产出**，主审回源码复核成立：`src/UI/UIController.cs:1611-1618` 早退 + `:1727-1730` 唯一恢复调用点 + `src/UI/LiveGlassController.cs:151-154` 虚假承诺文案） | ✅ **已修复**（本轮）：新增 `LiveGlassController.HandleRecreateFailed(handleAlive)`（句柄仍在 ⇒ 按配置恢复；句柄已失效 ⇒ 保持停止并如实说明"重建失败，需手动重开"）；`UIController` 失败分支改为调用它并读 `MainForm.IsClosing`（关闭流程中不得拉起捕获，合同 §4 / U10）；`MainForm` 新增 `internal bool IsClosing`。**新增 4 条用例**（3 条行为 + 1 条 IL 接线护栏）；**主审变异自证** MA1/MA2/MA3 **3/3 全杀**且 SHA-256 逐位一致还原 |
 | **LM-096** | **同代次"明确恢复"的重建次数无上限** ⇒ 单 HWND 累计 affinity 写入次数可**远超**"6 + 最多 6"：`TryRearmForExplicitRecovery` 每次都从同代次里挑**第一条** `Failed && AffinityChangedBySession` 的条目重建新责任，**不检查该条目是否已被 `ReclaimedByExplicitRecovery` 标记** ⇒ 同一条旧责任可被反复接管，每轮新建一条拥有独立 6 次预算的新责任 | P3 | `CONFIRMED`（**批次 A 独立复核产出**，主审回源码复核成立：`src/UI/CapturePolicyCleanupLedger.cs:277-299` 的挑选条件不含 `ReclaimedByExplicitRecovery`；⇒ **主审 §4.9 原记录的"6 + 最多 6"口径是错的**，已在 §4.9 更正） | ⏸️ **裁决：不改代码**（见 §4.10 主审裁决）。理由：① 重复写入的是**同一个** affinity 值，实质危害远低于"原策略永不恢复"；② 若加"每代次重建 ≤ 1"封顶，会把 R10 的实质危害（原策略始终没被写回 ⇒ 窗口在录屏/截图里持续不可见）从"有机会恢复"变成"必然不恢复" ⇒ **净风险更大**；③ 真正的缺陷是**台账口径**（已更正）。`_entries` 只增不减的缓慢增长作为**已知残留**记档 |
 | **LM-097** | **`TryRearmForExplicitRecovery` 的 XML 文档与代码相反（埋雷）**：文档仍写"旧条目……终结为 `Completed("rearmed_by_explicit_recovery")`"，而代码**保持旧条目为 `Failed`/`exhausted`**、只打 `ReclaimedByExplicitRecovery` 标记 ⇒ 后来者按文档"对齐"代码会把"原策略**始终没有被写回**"这一事实抹掉 ⇒ 闸门误判"已恢复" ⇒ **R10 的危害原样复活** | P3 | `CONFIRMED`（**批次 A 独立复核产出**，主审回源码复核成立：`src/UI/CapturePolicyCleanupLedger.cs:263-265`（文档）vs `:331-334`（代码）；这正是主审 §4.9 第 1 条"不实记账"问题的**文档侧残留**） | ✅ **已修复**（本轮）：XML 文档改为与 `ReclaimedByExplicitRecovery` 说明一致（"旧条目**保持** `Failed`/`exhausted`（如实记账：原策略始终没被写回），只打接管标记；仍然终态、不再重试、不再触碰 HWND"），并**显式写明"不得改成 `Completed`"及其后果**。纯文档改动，行为不变（⇒ 本项**不产生**测试用例，以台账核对确认；这是它与 LM-095 的区别） |
+| **LM-098** | **口令迁移成功后**内存里的明文仍保留** ⇒ 每次登录重复写盘，且「迁移早已完成」时的一次写盘失败会**永久拒绝登录**：`WebPasswordJsonConverter`（`Settings.cs:858`）只在**写盘时**把 `WebServerPassword` 写成 `""`，**不修改内存字段**（`Settings.cs:196-197`）⇒ 迁移成功后 `Settings.WebServerPassword` 仍非空 ⇒ 登录路径 `WebSessionManager.cs:1469` 的 `!string.IsNullOrEmpty(cfg.WebServerPassword)` 恒为真 ⇒ **每次登录都重跑一次迁移（重新落盘）**；且此时若配置目录不可写，`EnsureWebPasswordMigrated`（`Settings.cs:553`）如实返回 `false` ⇒ 登录被拒 500 —— 尽管**磁盘上早已没有明文** | P3 | `CONFIRMED`（**主审复核 LM-077 时发现**，回源码核实：`Settings.cs:196-197`（字段带 converter）+ `:858`（converter 写盘置空）+ `:553`（迁移据写盘结果判定）+ `SettingsHelper.cs:196-198`（`TrySave`）+ `WebSessionManager.cs:1469`（登录路径前置条件）） | ⏸️ **登记为已知残留，本轮不改**（理由见 §4.12.7）：① 重复写盘是**幂等**的（写出的内容与上次一致），对低频登录无实际影响；② 「迁移早已完成仍被拒」属于 **fail-closed 的过度收紧**，**不产生凭据泄露**；③ 正确修法（迁移成功后清空内存明文）会改变 `WebServerPassword` 的内存语义，影响面超出 LM-077 的修复边界 ⇒ 另立批次处理 |
 
 **当前无 P0。** 若任一执行步骤新发现 P0，立即挂起其他任务优先处理。
 
 **编号规则：** `LM-` 缺陷 / `SEC-` 安全 / `BASE-` 基线 / `ENV-` 环境事实 / `GPU-` GPU 切换专项。第三方评审使用的 `LM-018`、`LM-019` 与 `LM-003b`、`LM-003c` 指同一处代码，已合并并保留别名以便交叉引用；`LM-005/006` 为同一协议缺陷的两个侧面。
 
-> **编号占用现状（2026-10-23 第十一次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-097`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-098` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用，`LM-057`–`LM-059` 由 LM-045 独立复核产出，`LM-060` 由 GPU T03 变异自证过程实测产出，`LM-061`–`LM-064` 由 GPU 独立复核产出，**`LM-065`–`LM-089` 由 2026-10-23 独立审查报告产出**，对应报告编号 R01–R25；**`LM-090`–`LM-091` 由 LM-065~LM-069 第一轮独立复核产出**，`LM-090` 由第二轮复核追加确认；**`LM-092` 由 LM-090 第二轮独立复核产出**；**`LM-093` 由主审复核 LM-074 返工 diff 时发现**；**`LM-094` 由主审复核 LM-079 时发现**；**`LM-095`–`LM-097` 由批次 A 独立复核产出**）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
+> **编号占用现状（2026-10-23 第十二次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-098`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-099` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用，`LM-057`–`LM-059` 由 LM-045 独立复核产出，`LM-060` 由 GPU T03 变异自证过程实测产出，`LM-061`–`LM-064` 由 GPU 独立复核产出，**`LM-065`–`LM-089` 由 2026-10-23 独立审查报告产出**，对应报告编号 R01–R25；**`LM-090`–`LM-091` 由 LM-065~LM-069 第一轮独立复核产出**，`LM-090` 由第二轮复核追加确认；**`LM-092` 由 LM-090 第二轮独立复核产出**；**`LM-093` 由主审复核 LM-074 返工 diff 时发现**；**`LM-094` 由主审复核 LM-079 时发现**；**`LM-095`–`LM-097` 由批次 A 独立复核产出**；**`LM-098` 由主审复核 LM-077 时发现**）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
 
 ### 4.1 根因更正记录 · LM-001（原"永久停摆"前提已证伪）
 
@@ -1299,6 +1300,79 @@ DPI 变化路径、`PresentationSession.RecreateWindow` 的合同 §7.3 R1~R6（
 
 ---
 
+### 4.12 P2 批次 B（LM-075~LM-079）修复与集成记录（2026-10-23）
+
+**批次 B 全部 5 项（LM-075 / LM-076 / LM-077 / LM-078 / LM-079）已修复、已集成到 `fix/p2-batch-a`、已由主审独立复核通过。**
+
+#### 4.12.1 提交序列（保持线性历史，cherry-pick 自两个并行 worktree）
+
+| 提交 | 缺陷 | 来源 | 要点 |
+|---|---|---|---|
+| `dd50295` | LM-078 | B-2 | 调用侧前移凭据目标校验，修在途租约的白名单旁路 |
+| `703083f` | LM-079 | B-2 | `StripPort` 正确处理 IPv6 字面量，修地址碰撞 |
+| `7ef594c` | LM-075 | B-1 | 修改监听范围必须重绑服务；界面「实际监听地址」改读真实端点 |
+| `dc6488a` | LM-076 | B-1 | WebSocket 连接绑定主会话；注销/过期后已建立的 WS 立即断开 |
+| `f66cb0b` | LM-075 | B-1 | 复核返工 R1/R2 —— `DescribeListenAddress` 收为 `internal`；IPv6 地址加方括号 |
+| `d8f3661` | LM-077 | B-1 | 口令迁移必须如实报告写盘结果（失败即拒绝登录） |
+
+两个子批次的生产文件集合**互不相交**，与批次 A 的文件集合**同样不相交** ⇒ 并行安全；集成采用 `cherry-pick` 保持线性历史。
+
+#### 4.12.2 修法要点（逐项，均经主审回源码核实）
+
+- **LM-075**：`LiteWebServer` 新增 `internal WebServerBindMode? CurrentBindMode`（`LiteWebServer.cs:112`），在 `Start` 里**按真正用来建监听套接字的那份判定**记录（`:246` 的 `lanMode` ⇒ `:299`），`Stop` 时置 `null`（`:360`）⇒ 与 `CurrentListenEndpoint` **同源**；`AppActions.ApplyWebServerWithResult` 的重绑判据纳入监听范围变化（`AppActions.cs:293` 的 `bindModeChanged`，归一化口径与 `Start` **完全一致**：只有 `Lan` 算局域网，其余含 `Unset` 按仅本机）。界面侧 `MainPanelPage.BuildListenAddressText` 降为**薄壳转发**，`AppActions.DescribeListenAddress`（`:383`）成为「实际监听地址」的**唯一纯逻辑** —— 地址与端口**都**来自真实端点。★ 冷启动守卫（`AppActions.cs:305`）**未动**。
+- **LM-076**：`_wsClients` 的值由「运行代次（`int`）」改为 `WsClientBinding`（**运行代次 + 所属主会话 ID**）；票据消费（`TryConsumeTicket(..., out sessionId)`）与握手（`Handshake(..., out sessionId)`）把会话 ID 带出来；新增 `CloseSessionWebSockets(sessionId)` 反查并断开该会话的全部 WS；**四条失效路径全部接入**（`RevokeSession` / 绝对 TTL / 空闲 TTL / `PruneSessionsLocked`）；广播循环逐收件人校验会话存活（`TryTouchSessionForWebSocket`），会话没了即断开。
+- **LM-077**：新增 `internal static bool TrySave(this Settings)`（`SettingsHelper.cs:196`）—— 禁止保存 ⇒ `false`（`:198`）、任何 IO/序列化异常 ⇒ `false`、成功 ⇒ `true`；**既有 `public static void Save(this Settings)` 的签名与语义逐位不变**（静默失败、不抛异常）⇒ 20+ 处调用点没有被悄悄变成「现在会抛异常」；`Settings.EnsureWebPasswordMigrated` 改用**真实写盘结果**判定（`Settings.cs:553`），备份清理同样如实反映（`:561`）。
+- **LM-078**：**调用侧前移**凭据目标校验 —— 每个调用方在加入租约前用自己的 `declaredHosts` 各校验一次。★ **在途键与摘要一字未改**（S1.0 契约 C1/C2/C4 + `PluginRequestIdentityTests.cs:214` 要求在途键逐字等于摘要；`I6`/`R1` 要求同一身份只发一条 HTTP）⇒ 这是唯一正解。
+- **LM-079**：**只改三处** `StripPort`（`PluginExecutor.cs:870` / `PluginProcessor.cs:1060` / `CryptoNative.cs:194`），三处**逐字同构**；**未**顺带改 `PluginProcessor.AddDeclaredHost` 的端口截断（那是新登记的 **LM-094**，归批次 C，避免跨批次冲突）。
+
+#### 4.12.3 新增用例：17 条（`BatchB1WebSessionCredentialTests.cs` 11 条 + `BatchB2PluginHostPolicyTests.cs` 6 条）
+
+- LM-075（4 条）：只改监听范围也必须重绑（反证：重启 ⇒ 旧会话 401）/ 实际监听地址必须反映真实端点而不是配置草稿 / 没有真实端点时不得凭空显示监听地址 / IPv6 显示文本必须带方括号且端口正确。
+- LM-076（4 条）：注销后已建立的 WS 不再收到数据（**先断言真的收到过一帧**再注销）/ 空闲 TTL 到期 / 绝对 TTL 到期 / 清理过期会话。
+- LM-077（3 条）：保存被禁止 ⇒ 返回 `false` **且磁盘上旧明文仍在** / 写盘失败（独占锁制造 IO 故障）⇒ 返回 `false` 且旧明文仍在 / 迁移成功 ⇒ 返回 `true` 且**主文件与备份都没有旧明文**。
+- LM-078/LM-079（6 条）：见 B-2 交付记录。
+
+#### 4.12.4 主审独立复核（本轮，5 个自设计变异全杀）
+
+主审**未采信**实现者自述，自行回源码核实并自设计变异；**锚点与实现者用过的不重合**：
+
+| 变异 | 锚点 | 期望 | 实测 | 还原 SHA-256 |
+|---|---|---|---|---|
+| MB-A | `LiteWebServer.cs:299` 的 `CurrentBindMode` 赋值改为恒 `Loopback`（事实源断链） | 红 | **红 2 / 绿 9** | 逐位一致 ✅ |
+| MB-B | `WebSessionManager.CloseSessionWebSockets` 去掉 `RemoveClient(client)`（需求计数泄漏） | 红 | **红 1 / 绿 10** | 逐位一致 ✅ |
+| MB-C | `SettingsHelper.TrySave` 的 `GlobalBlockSave` 分支改为 `return true` | 红 | **红 1 / 绿 10** | 逐位一致 ✅ |
+| MB-D | `SettingsHelper.TrySave` 的 `catch` 块改为 `return true`（IO 失败被当成成功） | 红 | **红 1 / 绿 10** | 逐位一致 ✅ |
+| MB-E | `MainPanelPage.BuildListenAddressText` 的端点改为**配置草稿**冒充事实 | 红 | **红 1 / 绿 10** | 逐位一致 ✅ |
+
+⇒ **5 / 5 全杀**，每次还原后 SHA-256 与变异前**逐位一致**。★ MB-B 的还原哈希 `B3D79B540995ADA9B24B39995A43E00CC9B5652E5296A0970222E54CBA5DAF09` 与实现者自报的 LM-076 还原哈希**完全相同** ⇒ 交叉印证其字节级还原无误。证据：`.artifacts/b1-mutation/`（`MB-A.txt` ~ `MB-E.txt`）。
+
+**主审额外核实的两点**（不在实现者自述范围内）：
+
+1. **锁序无死锁**：逐处核对 `WebSessionManager` 的 `_clientsGate` / `_authGate` 取用 —— 广播循环（`:2386` 的 `foreach`）**不持有** `_clientsGate`；四条失效路径的 `CloseSessionWebSockets` 一律**在释放 `_authGate` 之后**调用；`RemoveClient` 是同线程重入 ⇒ **不存在 `clientsGate → authGate` 与 `authGate → clientsGate` 的嵌套**。
+2. **票据 → 会话 → WS 的绑定链完整**：`CreateTicket` 写入 `SessionId`（`WebSessionManager.cs:1095`）⇒ `TryConsumeTicket` 出参带出（`:1148`）⇒ `Handshake` 出参带出（`:2568`）⇒ `AddClientWithSession` 登记（`:1226`）⇒ `CloseSessionWebSockets` 反查（`:1039`）。
+
+#### 4.12.5 回归与阈值
+
+- 主审亲跑 CI 口径（**构建与测试串行**）：`dotnet build --no-incremental` **0 错误**；`dotnet test --no-build` ⇒ **1547 总 / 1546 通过 / 0 失败 / 1 跳过**（分工程：`LiteMonitor.Tests` 1455/1454/0/1、`LiteMonitor.Updater.Tests` 73/73/0/0、`LiteMonitor.GpuNonperformance.Tests` 19/19/0/0）。
+- 阈值：`MIN_TEST_TOTAL` **1530 → 1547**（= 被推送分支实测总数 1455+73+19）；`ci.yml` 与 `release.yml` **逐字一致**；另外 4 个门禁参数（`EXPECTED_TEST_ASSEMBLIES` / `MAX_SKIPPED_TESTS` / `MUST_EXECUTE_TEST_CLASS` / `MUST_EXECUTE_TEST_CLASS_MIN_COUNT`）**逐字一致**；只收紧不放宽；两个文件 **CRLF、无 BOM**。
+- ★ 口径说明：1526 → 1530 是 **LM-095** 的 +4；1530 → 1547 是**批次 B 的 +17**（LM-075 4 + LM-076 4 + LM-077 3 + LM-078 6；**LM-079 三处 `StripPort` 同构改动不加用例**）。
+
+#### 4.12.6 残留与未验证项（**不计入通过**）
+
+1. **LM-075 界面渲染整体** —— 用例在 STA 线程构造真实 `MainPanelPage` 并调用真实 `BuildListenAddressText`（非纯逻辑替身），但**未**覆盖 `OnShow()` 建卡后的实际控件渲染与 `RegisterRefresh` 的刷新时机 ⇒ `NOT_VERIFIED`。
+2. **LM-076 广播侧逐收件人加锁** —— 每轮广播对每个收件人取一次 `_authGate`。正确性优先（避免 TOCTOU），但收件人多时有额外锁开销 ⇒ 记为性能观察项，**未**改动。
+3. **LM-076「广播刷新会话空闲计时」这一副作用** —— 「正在收数据的连接即视为会话在使用」，避免只看 WS 的网页在空闲 TTL（2 分钟）到点被踢线（否则属回归）。★ 该副作用**目前没有单独的用例钉住** ⇒ 记为**覆盖缺口**（非缺陷）。
+4. **LM-076 空闲 TTL 与「清理过期会话」两条路径判据相同**（都判 `now - LastUsedTicks`）⇒ 生产环境由哪条路径关闭取决于竞态；用例 ④ 用「快照提供器抛异常」把广播侧存活判定排除，使清理路径成为唯一触发者 —— 属**隔离手段**，非生产形态。
+5. **LM-076 绝对 TTL 用例**依赖 100 秒步进 + HTTP 快照请求刷新「最后使用时刻」（共 17 步）⇒ 步进节奏若被外部时钟干预存在理论抖动风险。
+6. **LM-077 IO 故障注入**依赖 Windows 上对被独占锁文件执行 `File.Move(overwrite)` 必然抛 sharing violation（实测成立）⇒ 该前提在别的文件系统语义下不成立。
+7. **LM-076「重定向逐跳复核仍只对租约创建者生效」**（B-2 worker 如实标注为 `NOT_VERIFIED`）—— **未**在本轮解决。
+8. **LM-075 用户可见行为变化登记**：局域网模式下真实绑定的是 `IPAddress.IPv6Any`（DualMode，同时接受 IPv4 连接）⇒ 界面显示由旧版的 `0.0.0.0:8080` 变为 **`[::]:8080`**；服务未运行时显示由 `127.0.0.1:{端口}` 变为 **`-:{端口}`**（没有真实端点 ⇒ 不用配置草稿冒充事实）。两者都是**修复的预期结果**，非回归。
+
+#### 4.12.7 本轮新登记的缺陷
+
+**LM-098**（P3）—— 口令迁移成功后**内存里的明文仍保留** ⇒ 每次登录重复写盘，且「迁移早已完成」时的一次写盘失败会**永久拒绝登录**。详见 §4 缺陷表。**本轮不改**：① 重复写盘是**幂等**的（写出的内容与上次一致），对低频登录无实际影响；② 「迁移早已完成仍被拒」属于 **fail-closed 的过度收紧**，不产生凭据泄露；③ 正确修法（迁移成功后清空内存明文）会改变 `WebServerPassword` 的内存语义，影响面超出 LM-077 的修复边界 ⇒ 另立批次处理。
+
+---
 ## 5. 执行步骤
 
 ### M0 · 基线与可复现
