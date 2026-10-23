@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using LiteMonitor.src.Plugins;
+using LiteMonitor.src.Plugins.Native;
 using Xunit;
 
 namespace LiteMonitor.Tests
@@ -137,6 +138,131 @@ namespace LiteMonitor.Tests
         }
 
         // =====================================================================
+        // LM-079 —— StripPort 的 IPv6 地址碰撞
+        // =====================================================================
+
+        /// <summary>
+        /// LM-079 核心断言：声明了 <c>[fd00::1]</c> 时，请求 <c>[fd00::2]</c> **必须被拒**。
+        /// <para>
+        /// 原实现按**最后一个冒号**截断 ⇒ <c>"[fd00::1]"</c> 与 <c>"[fd00::2]"</c>
+        /// 都被化成 <c>"[fd00:"</c> ⇒ **地址碰撞**（fail-open）。
+        /// </para>
+        /// <para>三处口径各覆盖到：
+        /// ① <c>PluginProcessor.HostMatches</c>（经 <c>PluginSandbox.EnsureCredentialTargetAllowed</c>，public）；
+        /// ② <c>PluginExecutor.HostInAllowedSet</c>（重定向逐跳复核 / 原生目标校验）；
+        /// ③ <c>CryptoNative.IsHostAllowed</c>（原生回退目标校验）。</para>
+        /// </summary>
+        [Fact]
+        public void LM079_声明的IPv6主机不得匹配另一个IPv6地址()
+        {
+            var creds = H("Authorization", "Bearer lm079");
+
+            // ① PluginProcessor 口径（public API）
+            var ex = Assert.Throws<PluginSandboxException>(() =>
+                PluginSandbox.EnsureCredentialTargetAllowed("http://[fd00::2]/x", creds, Hosts("[fd00::1]")));
+            Assert.Equal(PluginSandboxReasons.CredentialTargetNotAllowed, ex.Reason);
+
+            // ② PluginExecutor 口径
+            Assert.False(HostInAllowedSet("[fd00::2]", Hosts("[fd00::1]")));
+
+            // ③ CryptoNative 口径
+            Assert.False(IsHostAllowed("[fd00::2]", Hosts("[fd00::1]")));
+
+            // 反向护栏：声明的主机**自己**必须仍然匹配（不得把 IPv6 一律拒掉）
+            PluginSandbox.EnsureCredentialTargetAllowed("http://[fd00::1]/x", creds, Hosts("[fd00::1]"));
+            Assert.True(HostInAllowedSet("[fd00::1]", Hosts("[fd00::1]")));
+            Assert.True(IsHostAllowed("[fd00::1]", Hosts("[fd00::1]")));
+        }
+
+        /// <summary>
+        /// LM-079 的**回归护栏**：IPv4 的 <c>host</c> 与 <c>host:port</c> 仍然等价（三处口径）。
+        /// <para>剥端口是既有正确行为，本次修复只改 IPv6 分支，IPv4 必须**逐位**不变。</para>
+        /// </summary>
+        [Fact]
+        public void LM079_IPv4的host与host_port仍然等价()
+        {
+            var creds = H("Authorization", "Bearer lm079");
+
+            // host 与 host:port 等价
+            PluginSandbox.EnsureCredentialTargetAllowed("http://api.example.com/x", creds, Hosts("api.example.com:8443"));
+            PluginSandbox.EnsureCredentialTargetAllowed("http://api.example.com:8443/x", creds, Hosts("api.example.com"));
+            Assert.True(HostInAllowedSet("api.example.com", Hosts("api.example.com:8443")));
+            Assert.True(HostInAllowedSet("api.example.com:8443", Hosts("api.example.com")));
+            Assert.True(IsHostAllowed("api.example.com", Hosts("api.example.com:8443")));
+            Assert.True(IsHostAllowed("api.example.com:8443", Hosts("api.example.com")));
+
+            // 不同主机仍然被拒
+            var ex = Assert.Throws<PluginSandboxException>(() =>
+                PluginSandbox.EnsureCredentialTargetAllowed("http://evil.example.com/x", creds, Hosts("api.example.com:8443")));
+            Assert.Equal(PluginSandboxReasons.CredentialTargetNotAllowed, ex.Reason);
+            Assert.False(HostInAllowedSet("api.example.com", Hosts("evil.example.com:8443")));
+            Assert.False(IsHostAllowed("api.example.com", Hosts("evil.example.com")));
+        }
+
+        /// <summary>
+        /// LM-079 的**正向护栏**：IPv6 字面量**整体带端口**时，整体就是主机名
+        /// （"<c>[fd00::1]:8080</c>" 的主机是 "<c>[fd00::1]</c>"），
+        /// 且仍然不得匹配另一个 IPv6 地址。
+        /// </summary>
+        [Fact]
+        public void LM079_IPv6字面量整体带端口时整体是主机名()
+        {
+            var creds = H("Authorization", "Bearer lm079");
+
+            // 端口被剥掉，方括号内容整体保留
+            PluginSandbox.EnsureCredentialTargetAllowed("http://[fd00::1]:8080/x", creds, Hosts("[fd00::1]"));
+            Assert.True(HostInAllowedSet("[fd00::1]", Hosts("[fd00::1]:8080")));
+            Assert.True(IsHostAllowed("[fd00::1]", Hosts("[fd00::1]:8080")));
+
+            // 仍然不得匹配另一个 IPv6 地址
+            var ex = Assert.Throws<PluginSandboxException>(() =>
+                PluginSandbox.EnsureCredentialTargetAllowed("http://[fd00::1]:8080/x", creds, Hosts("[fd00::2]")));
+            Assert.Equal(PluginSandboxReasons.CredentialTargetNotAllowed, ex.Reason);
+            Assert.False(HostInAllowedSet("[fd00::1]", Hosts("[fd00::2]:8080")));
+            Assert.False(IsHostAllowed("[fd00::1]", Hosts("[fd00::2]:8080")));
+        }
+
+        /// <summary>
+        /// LM-079 **端到端**：重定向到**另一个** IPv6 地址时，逐跳复核必须拒绝，
+        /// 且**那一跳请求根本不发出**。
+        /// <para>
+        /// 场景：首跳在 127.0.0.1（回环，可达），跳向**未声明**的 <c>[fd00::2]</c>；
+        /// 插件只声明了 <c>[fd00::1]</c>（IPv6 字面量整体是主机名）。
+        /// 修复前：<c>[fd00::1]</c> 与 <c>[fd00::2]</c> 都被截成 <c>"[fd00:"</c>
+        /// ⇒ 第二跳被**误判为已声明** ⇒ 请求被发往未声明的 IPv6 地址（fail-open）。
+        /// </para>
+        /// <para>两条路径分别覆盖两处口径：无凭据 ⇒ <c>PluginExecutor.HostInAllowedSet</c>；
+        /// 有凭据 ⇒ <c>PluginProcessor.HostMatches</c>。</para>
+        /// </summary>
+        [Fact]
+        public async Task LM079_端到端_重定向到另一个IPv6地址必须被逐跳复核拒绝()
+        {
+            using var server = new RedirectSandboxServer(_ => RedirectSandboxResponse.Redirect(302, "http://[fd00::2]/x"));
+            using var exec = new PluginExecutor();
+
+            // 无凭据 ⇒ 逐跳复核走 PluginExecutor.HostInAllowedSet 口径
+            var stepNoCred = NewStep(server.Url + "/redirect");
+            using (var scope = NewScope())
+            {
+                var ex = await Assert.ThrowsAsync<PluginSandboxException>(
+                    () => RunStepWithScopeAsync(exec, NewInstance("inst-lm079-nocred"), stepNoCred, scope, Hosts("[fd00::1]")));
+                Assert.Equal(PluginSandboxReasons.RedirectTargetNotAllowed, ex.Reason);
+            }
+
+            // 有凭据 ⇒ 逐跳复核走 PluginProcessor.HostMatches 口径
+            var stepCred = NewStep(server.Url + "/redirect", headers: H("Authorization", "Bearer lm079"));
+            using (var scope = NewScope())
+            {
+                var ex = await Assert.ThrowsAsync<PluginSandboxException>(
+                    () => RunStepWithScopeAsync(exec, NewInstance("inst-lm079-cred"), stepCred, scope, Hosts("127.0.0.1", "[fd00::1]")));
+                Assert.Equal(PluginSandboxReasons.CredentialTargetNotAllowed, ex.Reason);
+            }
+
+            // 只有**首跳**真的发出（第二跳根本没发出）⇒ 两个场景各 1 条
+            Assert.Equal(2, server.RequestCount);
+        }
+
+        // =====================================================================
         // 工具
         // =====================================================================
 
@@ -206,6 +332,26 @@ namespace LiteMonitor.Tests
 
         private static ConcurrentDictionary<string, Lazy<Task<string>>> Inflight(PluginExecutor exec)
             => (ConcurrentDictionary<string, Lazy<Task<string>>>)GetField(exec, "_inflightRequests");
+
+        /// <summary>
+        /// 产品的"主机是否在允许集合内"判定（PluginExecutor 侧；私有方法，签名与生产一致）。
+        /// </summary>
+        private static bool HostInAllowedSet(string host, HashSet<string> allowedHosts)
+        {
+            var m = typeof(PluginExecutor).GetMethod("HostInAllowedSet", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(m);
+            return (bool)m.Invoke(null, new object[] { host, allowedHosts });
+        }
+
+        /// <summary>
+        /// 产品的"主机是否在允许集合内"判定（CryptoNative 侧；私有方法，签名与生产一致）。
+        /// </summary>
+        private static bool IsHostAllowed(string host, HashSet<string> allowedHosts)
+        {
+            var m = typeof(CryptoNative).GetMethod("IsHostAllowed", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(m);
+            return (bool)m.Invoke(null, new object[] { host, allowedHosts });
+        }
 
         private static object GetField(object target, string name)
         {

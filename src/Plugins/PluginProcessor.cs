@@ -1048,10 +1048,34 @@ namespace LiteMonitor.src.Plugins
             return a.Length > 0 && string.Equals(a, h, StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// 去掉主机里的端口。
+        /// <para>[LM-079] **IPv6 字面量（带方括号）整体就是主机名**："[fd00::1]" / "[fd00::2]"
+        /// 只能**整体**带端口（"[fd00::1]:8080"），**不得**按最后一个冒号截断 ——
+        /// 否则两个不同的 IPv6 地址会被截成同一个 "[fd00:" ⇒ **地址碰撞**
+        /// （fail-open：声明了 [fd00::1] 却能把请求/凭据发往 [fd00::2]）。</para>
+        /// <para>非方括号形式：只有**单个**冒号才是 "host:port"；多个冒号是**裸 IPv6 字面量**，
+        /// 整体就是主机名（不得截出垃圾串）。</para>
+        /// </summary>
         private static string StripPort(string value)
         {
-            int colon = value.LastIndexOf(':');
-            if (colon > 0 && colon < value.Length - 1) return value.Substring(0, colon);
+            // 与原实现一致：null 会抛 NullReferenceException（调用方均已先行判空）。
+            if (value.Length == 0) return value;
+
+            // IPv6 字面量（带方括号）：方括号内整体是主机名，只可能整体带端口。
+            if (value[0] == '[')
+            {
+                int close = value.IndexOf(']');
+                if (close > 0) return value.Substring(0, close + 1);
+                return value;
+            }
+
+            // 非方括号形式：单个冒号才是 "host:port"；多个冒号 ⇒ 裸 IPv6 字面量，整体是主机名。
+            int colon = value.IndexOf(':');
+            if (colon > 0 && colon == value.LastIndexOf(':') && colon < value.Length - 1)
+            {
+                return value.Substring(0, colon);
+            }
             return value;
         }
     }
