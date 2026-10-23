@@ -277,13 +277,13 @@ public sealed class GpuPresentationHostController : IDisposable
             _capturePolicyFallbackCode = "wda_capture_policy_unsupported_on_layered_window";
         }
 
-        // 【合同 §6.2 INV-6】同一代次仍有未完成的清理 ⇒ 拒绝叠加新的 affinity 所有者。
+        // 【合同 §6.2 INV-6 / LM-073】同一代次仍有未完成的清理 ⇒ 拒绝叠加新的 affinity 所有者。
         if (effectiveCapturePolicy == WindowCapturePolicy.WdaExcludeFromCapture &&
-            CapturePolicyCleanupPendingProbe?.Invoke(_handleGeneration.Current) == true)
+            TryBlockCapturePolicyOwnership(
+                _handleGeneration.Current,
+                out errorCode,
+                out errorMessage))
         {
-            errorCode = "gpu_capture_policy_cleanup_pending";
-            errorMessage =
-                "The capture policy cleanup of this handle generation is still pending.";
             return false;
         }
 
@@ -456,6 +456,20 @@ public sealed class GpuPresentationHostController : IDisposable
         }
 
         EnsureOwnerThread();
+
+        // ★【LM-073 / 合同 §6.2 INV-6】Resume 会**重新施加** WDA 排除 ⇒ 必须先过同一个闸门。
+        //   拒绝时按既有失败路径处理（停止宿主 + 记录失败原因），不得留下"半恢复"的会话。
+        if (_liveBackgroundRequested &&
+            TryBlockCapturePolicyOwnership(
+                _handleGeneration.Current,
+                out string? blockCode,
+                out string? blockMessage))
+        {
+            StopCore();
+            EnterFallback(blockCode, blockMessage);
+            return;
+        }
+
         PresentationSession? presentation = _sessionOwner.Session;
         if (presentation is null || _renderer is null)
         {
@@ -522,6 +536,22 @@ public sealed class GpuPresentationHostController : IDisposable
     {
         ThrowIfDisposed();
         EnsureOwnerThread();
+
+        // ★【LM-073 / 合同 §6.2 INV-6 / §4.5 :202】取得 WDA 所有权前必须过**同一个**闸门。
+        //   闸门被放在"宿主是否可重配置"判定**之前**：闸门回答的是"能否取得 WDA 所有权"，
+        //   它是所有 WDA 施加路径的**共同前置条件** ⇒ 拒绝原因不得被通用的
+        //   "gpu_presentation_not_reconfigurable" 掩盖。
+        //   ★ 只有**施加**（liveBackgroundRequested = true）才受闸门约束；
+        //   **释放** WDA 的分支（liveBackgroundRequested = false）不受约束。
+        if (liveBackgroundRequested &&
+            TryBlockCapturePolicyOwnership(
+                _handleGeneration.Current,
+                out errorCode,
+                out errorMessage))
+        {
+            return false;
+        }
+
         PresentationSession? presentation = _sessionOwner.Session;
         if (_renderer is null ||
             presentation is null ||
@@ -685,9 +715,23 @@ public sealed class GpuPresentationHostController : IDisposable
     public void NotifyOutputChanged(bool force = false)
     {
         PresentationSession? presentation = _sessionOwner.Session;
-        if (_disposed || _suspended || !_liveBackgroundRequested ||
-            _renderer is null || presentation is null) return;
+        if (_disposed || _suspended || !_liveBackgroundRequested) return;
         EnsureOwnerThread();
+
+        // ★【LM-073 / 合同 §6.2 INV-6】重新施加 WDA 排除之前必须先过**同一个**闸门。
+        //   ★ 拒绝时**不得**停止 live 捕获、**不得**触碰 HWND 的 affinity
+        //   （本方法可能在 GPU 帧绘制栈内被调用 ⇒ 只记录错误码，不做重量级动作）。
+        if (TryBlockCapturePolicyOwnership(
+                _handleGeneration.Current,
+                out string? blockCode,
+                out string? blockMessage))
+        {
+            _lastErrorCode = blockCode;
+            _lastErrorMessage = blockMessage;
+            return;
+        }
+
+        if (_renderer is null || presentation is null) return;
         if (!force && _renderer.IsCaptureOutputCurrent) return;
 
         _renderer.StopLiveCapture();
@@ -870,6 +914,37 @@ public sealed class GpuPresentationHostController : IDisposable
 
             OnRenderFailure(exception);
         }
+    }
+
+    /// <summary>
+    /// 【LM-073 / 合同 §6.2 INV-6 / §4.5 :202】同一代次的 <b>WDA 取得闸门</b>。
+    /// <para>★ 唯一判据来源 = owner B 注入的 ledger 查询
+    /// （<see cref="CapturePolicyCleanupPendingProbe"/>）：同一 HWND（同一代次）仍有未完成的
+    /// affinity 清理 ⇒ <b>拒绝</b>叠加新的 affinity 所有者。</para>
+    /// <para>★ 四个"要施加 <c>WDA_EXCLUDEFROMCAPTURE</c>"的入口
+    /// （<c>Start</c> / <c>TryReconfigure</c> 的 live 分支 / <c>Resume</c> /
+    /// <c>NotifyOutputChanged</c>）<b>共用</b>本方法 ⇒ 不得各自另立判据。</para>
+    /// <para>★ <b>释放</b> WDA 的分支（<c>SetCapturePolicy(None)</c>）<b>不</b>受本闸门约束
+    /// —— 释放只会让 HWND 回到原策略，不会叠加第二个所有者。</para>
+    /// </summary>
+    /// <returns><c>true</c> = 命中闸门（调用方必须拒绝并返回 <paramref name="errorCode"/>）。</returns>
+    private bool TryBlockCapturePolicyOwnership(
+        long generation,
+        out string? errorCode,
+        out string? errorMessage)
+    {
+        errorCode = null;
+        errorMessage = null;
+
+        if (CapturePolicyCleanupPendingProbe?.Invoke(generation) != true)
+        {
+            return false;
+        }
+
+        errorCode = "gpu_capture_policy_cleanup_pending";
+        errorMessage =
+            "The capture policy cleanup of this handle generation is still pending.";
+        return true;
     }
 
     private void EnterFallback(string? errorCode, string? errorMessage)
