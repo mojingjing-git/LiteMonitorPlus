@@ -1041,9 +1041,13 @@ namespace LiteMonitor.src.Plugins
 
                         EnsureRedirectSchemeAllowed(current, next);
 
-                        // 方法/正文语义（与 .NET 原生重定向一致）：
-                        // 301/302/303 ⇒ 方法变 GET 且丢弃正文；307/308 ⇒ 保留方法与正文。
-                        if (RewritesMethodOnRedirect(response.StatusCode))
+                        // [LM-045][LM-081] 方法/正文语义（与 .NET 原生重定向一致）：
+                        // 301/302/303 ⇒ **仅当**当前方法既不是 GET 也不是 HEAD 时才改写为 GET
+                        // 并丢弃正文（.NET 原生实测：POST 被降级为 GET，而 **HEAD 保持 HEAD**、
+                        // GET 保持 GET）；307/308 ⇒ 一律保留方法与正文。
+                        // 修复前只看状态码 ⇒ HEAD 也被改成 GET（把"只要响应头"的请求变成
+                        // "把正文整个下载回来"，白耗 2 MiB 响应体上限与并发槽位）。
+                        if (RewritesMethodOnRedirect(response.StatusCode, currentMethod))
                         {
                             currentMethod = HttpMethod.Get;
                             currentBody = null;
@@ -1107,13 +1111,20 @@ namespace LiteMonitor.src.Plugins
                || status == System.Net.HttpStatusCode.PermanentRedirect;
 
         /// <summary>
-        /// [LM-045] 该重定向状态码是否**改写方法**（301 / 302 / 303 ⇒ 方法变 GET 且丢弃正文；
-        /// 307 / 308 ⇒ 保留方法与正文）。
+        /// [LM-045][LM-081] 该重定向状态码是否**改写方法**。
+        /// <para>301 / 302 / 303 ⇒ <b>仅当</b>当前方法既不是 GET 也不是 HEAD 时才改写为 GET
+        /// 并丢弃正文；GET / HEAD <b>保持原方法</b>；307 / 308 ⇒ 一律保留方法与正文。</para>
+        /// <para>★ 口径依据（.NET 原生重定向的**本机实测**：.NET SDK 8.0.426，裸 TcpListener
+        /// 自写 HTTP/1.1 响应）：301/302/303 上 **POST 被降级为 GET**，而 **HEAD 保持 HEAD**、
+        /// GET 保持 GET。修复前本实现**只看状态码**（把 HEAD 也改成 GET），与它自己注释里
+        /// "与 .NET 原生重定向一致"的说法直接矛盾。</para>
         /// </summary>
-        private static bool RewritesMethodOnRedirect(System.Net.HttpStatusCode status)
-            => status == System.Net.HttpStatusCode.MovedPermanently
-               || status == System.Net.HttpStatusCode.Found
-               || status == System.Net.HttpStatusCode.SeeOther;
+        private static bool RewritesMethodOnRedirect(System.Net.HttpStatusCode status, HttpMethod currentMethod)
+            => (status == System.Net.HttpStatusCode.MovedPermanently
+                || status == System.Net.HttpStatusCode.Found
+                || status == System.Net.HttpStatusCode.SeeOther)
+               && currentMethod != HttpMethod.Get
+               && currentMethod != HttpMethod.Head;
 
         /// <summary>
         /// [LM-045] 逐跳复核用的**允许主机集合**。
