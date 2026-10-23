@@ -209,8 +209,446 @@ namespace LiteMonitor.Tests
         }
 
         // ================================================================
+        //  LM-076 · WS 连接不绑定会话 ⇒ 注销 / 过期后仍在收监控数据
+        // ================================================================
+
+        /// <summary>
+        /// LM-076-①：注销之后，**已建立**的 WebSocket 不得再收到监控数据。
+        /// </summary>
+        /// <remarks>
+        /// ★ 盯的缺陷：WS 连接只记"服务代次"，不记"属于哪个会话"；
+        ///   <c>RevokeSession</c> 只删会话记录、<b>完全不动</b>已建立的 WS
+        ///   ⇒ 注销只挡住了后续 HTTP 请求，挡不住已在推送的 WS 数据流。
+        /// ★ 反证手法：注销**之前**必须真的收到过一帧（证明这条连接是活的），
+        ///   否则"注销后没数据"可能只是因为它本来就没在推数据（假绿）。
+        /// </remarks>
+        [Fact]
+        public async Task LM076_注销后已建立的WebSocket不再收到数据()
+        {
+            int port = FindFreePort();
+            _cfg.WebServerEnabled = true;
+            _cfg.WebServerPort = port;
+            _cfg.WebServerBindMode = WebServerBindMode.Loopback;
+            UsePassword("lm076-logout-password");
+
+            using var server = new LiteWebServer(
+                _cfg,
+                samplingRequester: _ => Task.FromResult(true),
+                demandApplier: _ => true);
+            server.ListenAddress = IPAddress.Loopback;
+
+            Assert.True(server.Start(out string err), "LiteWebServer 启动失败: " + err);
+            try
+            {
+                var login = await LoginAsync(port, "lm076-logout-password");
+                string ticket = await RequestTicketAsync(port, login.SessionId, login.Csrf);
+                Assert.False(string.IsNullOrEmpty(ticket));
+
+                using var ws = new WsClient();
+                await ws.ConnectAsync(port, ticket);
+                Assert.Contains("101", FirstLine(ws.HandshakeResponse));
+
+                // ★ 反证：注销之前这条连接**真的在收监控数据**
+                Assert.Equal(WsReadResult.Frame, await ws.ReadFrameAsync(15000));
+                Assert.True(await WaitForAsync(() => server.AuthenticatedConnectionCount == 1, 5000),
+                    "已鉴权的 WS 连接应当计入有效需求");
+
+                // 注销
+                string resp = await SendRawAsync(port, BuildLogoutRequest(port, login.SessionId, login.Csrf));
+                Assert.Contains("204", FirstLine(resp));
+
+                // ★ 已建立的 WS 必须被服务端断开（数据流停止）
+                Assert.Equal(WsReadResult.Closed, await ReadUntilClosedAsync(ws, 15000));
+                // ★ 断开之后不再有任何数据
+                Assert.Equal(WsReadResult.Closed, await ws.ReadFrameAsync(3000));
+                Assert.Equal(0, server.AuthenticatedConnectionCount);
+            }
+            finally
+            {
+                ResetLiteWebServerInstance();
+            }
+        }
+
+        /// <summary>
+        /// LM-076-②：会话**超过空闲期限**后，已建立的 WS 同样不得再收到监控数据。
+        /// </summary>
+        /// <remarks>
+        /// ★ 会话过期同样会泄露：只补"注销"那一处是不够的。
+        /// ★ 用**可注入的假时钟**制造过期（不靠长时间 Thread.Sleep）。
+        /// </remarks>
+        [Fact]
+        public async Task LM076_会话空闲超过空闲期限后已建立的WebSocket不再收到数据()
+        {
+            using var fx = new ManagerFixture(providerThrows: false);
+            UsePassword("lm076-idle-password");
+
+            var login = await LoginAsync(fx.Port, "lm076-idle-password");
+            string ticket = await RequestTicketAsync(fx.Port, login.SessionId, login.Csrf);
+
+            using var ws = new WsClient();
+            await ws.ConnectAsync(fx.Port, ticket);
+            Assert.Contains("101", FirstLine(ws.HandshakeResponse));
+
+            // ★ 反证：会话有效期间这条连接**真的在收监控数据**
+            Assert.Equal(WsReadResult.Frame, await ws.ReadFrameAsync(15000));
+
+            // ★ 假时钟跳过空闲 TTL（2 分钟）
+            fx.Clock.Advance(TimeSpan.FromMinutes(3));
+
+            // ★ 会话过期 ⇒ 已建立的 WS 必须被断开
+            Assert.Equal(WsReadResult.Closed, await ReadUntilClosedAsync(ws, 20000));
+            Assert.Equal(WsReadResult.Closed, await ws.ReadFrameAsync(3000));
+            Assert.Equal(0, fx.Manager.AuthenticatedConnectionCount);
+        }
+
+        /// <summary>
+        /// LM-076-③：会话**超过绝对期限**（30 分钟）后，已建立的 WS 同样不得再收到监控数据。
+        /// </summary>
+        /// <remarks>
+        /// ★ 绝对 TTL 与空闲 TTL 是两条独立的到期路径，都要覆盖。
+        /// ★ 现场刻意把"最后一次使用"放在离到期只有 1 分钟的位置：
+        ///   这样到期的是**绝对 TTL**（创建至今 30 分钟），而不是空闲 TTL（距上次使用 1 分钟，未到期）。
+        /// </remarks>
+        [Fact]
+        public async Task LM076_会话超过绝对期限后已建立的WebSocket不再收到数据()
+        {
+            using var fx = new ManagerFixture(providerThrows: false);
+            UsePassword("lm076-absolute-password");
+
+            var login = await LoginAsync(fx.Port, "lm076-absolute-password");
+            string ticket = await RequestTicketAsync(fx.Port, login.SessionId, login.Csrf);
+
+            using var ws = new WsClient();
+            await ws.ConnectAsync(fx.Port, ticket);
+            Assert.Contains("101", FirstLine(ws.HandshakeResponse));
+
+            // ★ 反证：这条连接真的在收监控数据
+            Assert.Equal(WsReadResult.Frame, await ws.ReadFrameAsync(15000));
+
+            // ★ 把"最后一次使用"推到离绝对到期只有 1 分钟的位置
+            await AdvanceClockAsync(fx.Clock, fx.Port, login.SessionId, TimeSpan.FromMinutes(29));
+
+            // ★ 再走 1 分 1 秒：距上次使用只有 1 分 1 秒（空闲 TTL 未到），
+            //   但距创建已满 30 分钟（**绝对 TTL** 到期）
+            fx.Clock.Advance(TimeSpan.FromSeconds(61));
+
+            Assert.Equal(WsReadResult.Closed, await ReadUntilClosedAsync(ws, 20000));
+            Assert.Equal(WsReadResult.Closed, await ws.ReadFrameAsync(3000));
+            Assert.Equal(0, fx.Manager.AuthenticatedConnectionCount);
+        }
+
+        /// <summary>
+        /// 把假时钟往前推，每步**不超过 100 秒**，每步之后用一次 HTTP 快照请求刷新会话的"最后使用时刻"。
+        /// </summary>
+        /// <remarks>
+        /// ★ 为什么不能一次跳到位：空闲 TTL 只有 2 分钟，一次大跳会把它一并跨过，
+        ///   于是"到期"的就不是绝对 TTL 了（测的就不是想测的那条路径）。
+        ///   每步 ≤ 100 秒 ⇒ 空闲 TTL 始终没到期；每步之后刷新一次"最后使用时刻"，
+        ///   于是会话始终有效，"最后使用时刻"始终贴着当前假时钟。
+        /// </remarks>
+        private static async Task AdvanceClockAsync(FakeClock clock, int port, string sessionId, TimeSpan total)
+        {
+            var step = TimeSpan.FromSeconds(100);
+            var remaining = total;
+            while (remaining > TimeSpan.Zero)
+            {
+                TimeSpan chunk = remaining < step ? remaining : step;
+                clock.Advance(chunk);
+                remaining -= chunk;
+
+                string resp = await SendRawAsync(port,
+                    $"GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    $"Cookie: lmsid={sessionId}\r\nConnection: close\r\n\r\n");
+                Assert.Contains("200", FirstLine(resp));
+            }
+        }
+
+        /// <summary>
+        /// LM-076-④：「清理过期会话」这条路径也必须断开对应的 WS。
+        /// </summary>
+        /// <remarks>
+        /// ★ 现场刻意让**广播里的会话存活判定不执行**：数据提供器直接抛异常 ⇒
+        ///   广播循环在"生产载荷"阶段就失败 ⇒ 永远走不到收件人枚举
+        ///   （收件人枚举里的会话存活判定与它顺带刷新的空闲计时都在那之后）。
+        ///   于是这里**唯一**能关掉这条 WS 的路径就是「清理过期会话」（PruneSessionsLocked）。
+        /// ★ 触发方式：假时钟跳过空闲 TTL 后再登录一次 —— 签发新会话时必然清理过期会话。
+        /// </remarks>
+        [Fact]
+        public async Task LM076_清理过期会话时已建立的WebSocket不再收到数据()
+        {
+            using var fx = new ManagerFixture(providerThrows: true);
+            UsePassword("lm076-prune-password");
+
+            var login = await LoginAsync(fx.Port, "lm076-prune-password");
+            string ticket = await RequestTicketAsync(fx.Port, login.SessionId, login.Csrf);
+
+            using var ws = new WsClient();
+            await ws.ConnectAsync(fx.Port, ticket);
+            Assert.Contains("101", FirstLine(ws.HandshakeResponse));
+            Assert.True(await WaitForAsync(() => fx.Manager.AuthenticatedConnectionCount == 1, 5000),
+                "已鉴权的 WS 连接应当计入有效需求");
+
+            // ★ 假时钟跳过空闲 TTL ⇒ 该会话变成"过期会话"
+            fx.Clock.Advance(TimeSpan.FromMinutes(3));
+
+            // ★ 再登录一次 ⇒ 签发新会话时必然清理过期会话
+            var second = await LoginAsync(fx.Port, "lm076-prune-password");
+            Assert.False(string.IsNullOrEmpty(second.SessionId));
+
+            // ★ 被清理掉的会话，它的 WS 必须一起断开
+            Assert.Equal(WsReadResult.Closed, await ReadUntilClosedAsync(ws, 20000));
+            Assert.Equal(WsReadResult.Closed, await ws.ReadFrameAsync(3000));
+            Assert.Equal(0, fx.Manager.AuthenticatedConnectionCount);
+        }
+
+        // ================================================================
         //  辅助
         // ================================================================
+
+        /// <summary>申请一次性票据。</summary>
+        private static async Task<string> RequestTicketAsync(int port, string sessionId, string csrf)
+        {
+            string resp = await SendRawAsync(port,
+                $"POST /api/auth/ticket HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: lmsid={sessionId}\r\n" +
+                $"X-LiteMonitor-CSRF: {csrf}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            Assert.Contains("200", FirstLine(resp));
+
+            using var doc = JsonDocument.Parse(ExtractBody(resp));
+            return doc.RootElement.TryGetProperty("ticket", out var el) ? (el.GetString() ?? "") : "";
+        }
+
+        private static string BuildLogoutRequest(int port, string sessionId, string csrf)
+        {
+            return $"POST /api/auth/logout HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: lmsid={sessionId}\r\n" +
+                   $"X-LiteMonitor-CSRF: {csrf}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        }
+
+        /// <summary>读一帧服务端推来的数据的结局。</summary>
+        private enum WsReadResult
+        {
+            /// <summary>收到一帧数据。</summary>
+            Frame,
+
+            /// <summary>连接已被服务端关闭（EOF / Close 帧 / 连接重置）。</summary>
+            Closed,
+
+            /// <summary>在期限内没有等到数据（连接仍然活着）。</summary>
+            Timeout,
+        }
+
+        /// <summary>
+        /// 一条真实的 WebSocket 连接：握手 + 读帧 + 等服务端关闭。
+        /// </summary>
+        /// <remarks>
+        /// ★ 服务端 → 客户端的帧**不带掩码**，所以长度字节直接就是载荷长度。
+        /// </remarks>
+        private sealed class WsClient : IDisposable
+        {
+            private readonly TcpClient _client = new TcpClient();
+            private NetworkStream? _stream;
+
+            /// <summary>握手响应（HTTP 头部分）。</summary>
+            public string HandshakeResponse = "";
+
+            public async Task ConnectAsync(int port, string ticket)
+            {
+                await _client.ConnectAsync(IPAddress.Loopback, port);
+                _stream = _client.GetStream();
+
+                string req =
+                    $"GET /ws?ticket={ticket} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n" +
+                    "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+                byte[] data = Encoding.UTF8.GetBytes(req);
+                await _stream.WriteAsync(data, 0, data.Length);
+                await _stream.FlushAsync();
+
+                var sb = new StringBuilder();
+                var buf = new byte[1024];
+                using var cts = new CancellationTokenSource(15000);
+                while (sb.ToString().IndexOf("\r\n\r\n", StringComparison.Ordinal) < 0)
+                {
+                    int n = await _stream.ReadAsync(buf.AsMemory(0, buf.Length), cts.Token);
+                    if (n <= 0) break;
+                    sb.Append(Encoding.UTF8.GetString(buf, 0, n));
+                }
+                HandshakeResponse = sb.ToString();
+            }
+
+            /// <summary>读一帧；返回 Frame / Closed / Timeout。</summary>
+            public async Task<WsReadResult> ReadFrameAsync(int timeoutMs = 8000)
+            {
+                using var cts = new CancellationTokenSource(timeoutMs);
+                try
+                {
+                    var hdr = new byte[2];
+                    if (!await ReadExactAsync(hdr, 2, cts.Token)) return WsReadResult.Closed;
+
+                    int opcode = hdr[0] & 0x0F;
+                    long len = hdr[1] & 0x7F;
+                    if (len == 126)
+                    {
+                        var ext = new byte[2];
+                        if (!await ReadExactAsync(ext, 2, cts.Token)) return WsReadResult.Closed;
+                        len = (ext[0] << 8) | ext[1];
+                    }
+                    else if (len == 127)
+                    {
+                        var ext = new byte[8];
+                        if (!await ReadExactAsync(ext, 8, cts.Token)) return WsReadResult.Closed;
+                        len = BitConverter.ToInt64(ext, 0);
+                    }
+
+                    var payload = new byte[len];
+                    if (len > 0 && !await ReadExactAsync(payload, (int)len, cts.Token)) return WsReadResult.Closed;
+
+                    if (opcode == 0x08) return WsReadResult.Closed;   // 服务端的 Close 帧
+                    return WsReadResult.Frame;
+                }
+                catch (OperationCanceledException) { return WsReadResult.Timeout; }
+                catch (IOException) { return WsReadResult.Closed; }
+                catch (SocketException) { return WsReadResult.Closed; }
+                catch (ObjectDisposedException) { return WsReadResult.Closed; }
+            }
+
+            private async Task<bool> ReadExactAsync(byte[] buffer, int count, CancellationToken token)
+            {
+                int total = 0;
+                while (total < count)
+                {
+                    int n = await _stream!.ReadAsync(buffer.AsMemory(total, count - total), token);
+                    if (n <= 0) return false;   // EOF
+                    total += n;
+                }
+                return true;
+            }
+
+            public void Dispose()
+            {
+                try { _client.Close(); } catch { }
+            }
+        }
+
+        /// <summary>一直读到服务端关闭连接为止。</summary>
+        private static async Task<WsReadResult> ReadUntilClosedAsync(WsClient ws, int timeoutMs)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            while (true)
+            {
+                int remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                if (remaining <= 0) return WsReadResult.Timeout;
+
+                WsReadResult r = await ws.ReadFrameAsync(Math.Min(remaining, 2000));
+                if (r == WsReadResult.Closed) return WsReadResult.Closed;
+                // Timeout = 暂时没数据但连接还活着 ⇒ 继续等
+            }
+        }
+
+        /// <summary>轮询等待某个条件成立。</summary>
+        private static async Task<bool> WaitForAsync(Func<bool> condition, int timeoutMs)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (condition()) return true;
+                await Task.Delay(25);
+            }
+            return condition();
+        }
+
+        /// <summary>可注入的单调时钟（TTL 用例不靠 Thread.Sleep）。</summary>
+        private sealed class FakeClock : TimeProvider
+        {
+            private long _ticks;
+            public FakeClock(long startTicks = 0) { _ticks = startTicks; }
+            public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+            public override long GetTimestamp() => Interlocked.Read(ref _ticks);
+            public override DateTimeOffset GetUtcNow() => new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            public void Advance(TimeSpan delta)
+                => Interlocked.Add(ref _ticks, (long)Math.Round(delta.TotalSeconds * TimestampFrequency));
+        }
+
+        /// <summary>
+        /// 直接构造 <see cref="WebSessionManager"/> + 回环宿主（用于需要假时钟的 TTL 用例）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 必须调用 <c>Manager.Start()</c>：否则连接登记会被拒（<c>AddClient</c> 要求服务在运行），
+        ///   广播循环也不会启动（收不到任何数据帧）。
+        /// </remarks>
+        private sealed class ManagerFixture : IDisposable
+        {
+            public FakeClock Clock { get; } = new FakeClock();
+            public WebSessionManager Manager { get; }
+            public LoopbackHost Host { get; }
+
+            public int Port => Host.Port;
+
+            public ManagerFixture(bool providerThrows)
+            {
+                Action<Utf8JsonWriter> provider = writer =>
+                {
+                    if (providerThrows)
+                    {
+                        // ★ 让广播循环在"生产载荷"阶段失败 ⇒ 永远走不到收件人枚举
+                        throw new InvalidOperationException("测试用：快照提供器故意失败");
+                    }
+                    writer.WriteStartObject();
+                    writer.WriteString("k", "test");
+                    writer.WriteEndObject();
+                };
+
+                Manager = new WebSessionManager(provider, demandState: null, timeProvider: Clock);
+                Manager.Start();
+                Host = new LoopbackHost(Manager);
+            }
+
+            public void Dispose()
+            {
+                try { Manager.Stop(); } catch { }
+                Host.Dispose();
+            }
+        }
+
+        /// <summary>回环 Web 宿主：接受连接后交给 WebSessionManager 处理。</summary>
+        private sealed class LoopbackHost : IDisposable
+        {
+            private readonly TcpListener _listener;
+            private readonly WebSessionManager _manager;
+
+            public int Port { get; }
+
+            public LoopbackHost(WebSessionManager manager)
+            {
+                _manager = manager;
+                _listener = new TcpListener(IPAddress.Loopback, 0);
+                _listener.Start();
+                Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+                _ = Task.Run(AcceptLoop);
+            }
+
+            private async Task AcceptLoop()
+            {
+                try
+                {
+                    while (true)
+                    {
+                        TcpClient client = await _listener.AcceptTcpClientAsync();
+                        _ = Task.Run(async () =>
+                        {
+                            try { await _manager.HandleClientAsync(client); }
+                            catch { }
+                        });
+                    }
+                }
+                catch { /* 监听器已停止 */ }
+            }
+
+            public void Dispose()
+            {
+                try { _listener.Stop(); } catch { }
+            }
+        }
+
 
         /// <summary>设置口令（只写哈希 + 盐，内存里不留明文 —— 与迁移后的生产状态一致）。</summary>
         private void UsePassword(string plain)

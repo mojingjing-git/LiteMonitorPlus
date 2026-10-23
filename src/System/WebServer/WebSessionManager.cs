@@ -341,6 +341,23 @@ namespace LiteMonitor.src.WebServer
     }
 
     /// <summary>
+    /// 一条已鉴权的 WebSocket 连接与它**所属的主会话**的绑定关系。
+    /// </summary>
+    /// <remarks>
+    /// ★ 存在的理由：会话失效（注销 / 绝对 TTL / 空闲 TTL / 清理过期会话）时，
+    ///   必须能**反查**"哪些 WS 连接属于这个会话"并把它们断开。
+    ///   只存代次做不到这件事 —— 代次只区分服务周期，不区分会话。
+    /// </remarks>
+    internal sealed class WsClientBinding
+    {
+        /// <summary>该连接登记时的运行代次（广播时按它筛收件人）。</summary>
+        public int Generation;
+
+        /// <summary>该连接所属的主会话 ID（握手时从票据带出来）；空串 = 未绑定会话。</summary>
+        public string SessionId = "";
+    }
+
+    /// <summary>
     /// 一次性票据记录（契约 W3）。
     /// </summary>
     internal sealed class WebTicketRecord
@@ -399,10 +416,14 @@ namespace LiteMonitor.src.WebServer
 
     public class WebSessionManager
     {
-        // ★ 值 = 该连接登记时的**运行代次**（不是无意义的 bool）：
-        //   广播收件人必须与广播循环所属的服务代次绑定 ——
-        //   旧代次的广播绝不能发给新代次（Stop → Start 之后才连上）的连接。
-        private readonly ConcurrentDictionary<TcpClient, int> _wsClients = new();
+        // ★ 值 = 该连接的绑定信息（**运行代次 + 所属主会话**）：
+        //   · 运行代次：广播收件人必须与广播循环所属的服务代次绑定 ——
+        //     旧代次的广播绝不能发给新代次（Stop → Start 之后才连上）的连接。
+        //   · 所属主会话：★ 只有代次**不够** —— 代次只回答"是不是这一轮服务周期建立的连接"，
+        //     回答不了"它的会话还在不在"。注销 / 绝对 TTL / 空闲 TTL / 清理过期会话
+        //     这四条路径都会让会话失效，而失效的会话**不得**继续收监控数据
+        //     （否则"注销"只挡住了后续 HTTP，挡不住已在推送的 WS 数据流）。
+        private readonly ConcurrentDictionary<TcpClient, WsClientBinding> _wsClients = new();
         private readonly Action<Utf8JsonWriter> _dataProvider;
         private readonly Func<Utf8JsonWriter, CancellationToken, Task>? _asyncDataProvider;
         private readonly WebSamplingRequester? _samplingRequester;
@@ -755,10 +776,11 @@ namespace LiteMonitor.src.WebServer
                 // 2. 协议分流
                 if (IsWebSocketUpgrade(requestStr))
                 {
-                    if (Handshake(stream, requestStr))
+                    if (Handshake(stream, requestStr, out string wsSessionId))
                     {
                         // 握手成功 = 已鉴权，登记为有效 Web 需求
-                        AddClient(client, connectionGeneration);
+                        // ★ 同时把**所属主会话**一起记下来：会话失效时才能反查并断开这条连接。
+                        AddClientWithSession(client, connectionGeneration, wsSessionId);
                         await ReceiveLoop(client); // 进入 WS 循环
                     }
                     else
@@ -847,11 +869,17 @@ namespace LiteMonitor.src.WebServer
                 PasswordFingerprint = passwordFingerprint ?? ""
             };
 
+            List<string> pruned;
             lock (_authGate)
             {
                 _sessions[record.Id] = record;
-                PruneSessionsLocked(now);
+                pruned = PruneSessionsLocked(now);
             }
+
+            // ★ 被清理掉的会话同样不得留着它的 WS 连接（会话没了，数据流也必须停）。
+            //   放在鉴权锁**之外**：关闭 socket 可能触发回调。
+            foreach (string id in pruned) CloseSessionWebSockets(id);
+
             return record;
         }
 
@@ -868,13 +896,17 @@ namespace LiteMonitor.src.WebServer
             if (string.IsNullOrEmpty(sessionId)) return false;
 
             bool revokeAll = false;
+            bool sessionGone = false;
             lock (_authGate)
             {
                 if (!_sessions.TryGetValue(sessionId, out var s)) return false;
 
-                if (s.Revoked) { _sessions.Remove(sessionId); return false; }
-
-                if (!string.Equals(s.PasswordFingerprint, passwordFingerprint ?? "", StringComparison.Ordinal))
+                if (s.Revoked)
+                {
+                    _sessions.Remove(sessionId);
+                    sessionGone = true;      // ★ 已撤销 ⇒ 它的 WS 也必须断开
+                }
+                else if (!string.Equals(s.PasswordFingerprint, passwordFingerprint ?? "", StringComparison.Ordinal))
                 {
                     // ★ 口令变了（或被清空）⇒ 全部会话与票据立即作废
                     revokeAll = true;
@@ -885,16 +917,18 @@ namespace LiteMonitor.src.WebServer
                     if (_sessionAbsoluteTtlTicks > 0 && now - s.CreatedTicks >= _sessionAbsoluteTtlTicks)
                     {
                         _sessions.Remove(sessionId);
-                        return false;      // 绝对 TTL 到期
+                        sessionGone = true;  // 绝对 TTL 到期
                     }
-                    if (_sessionIdleTtlTicks > 0 && now - s.LastUsedTicks >= _sessionIdleTtlTicks)
+                    else if (_sessionIdleTtlTicks > 0 && now - s.LastUsedTicks >= _sessionIdleTtlTicks)
                     {
                         _sessions.Remove(sessionId);
-                        return false;      // 空闲 TTL 到期
+                        sessionGone = true;  // 空闲 TTL 到期
                     }
-
-                    s.LastUsedTicks = now;    // 刷新空闲计时
-                    record = s;
+                    else
+                    {
+                        s.LastUsedTicks = now;    // 刷新空闲计时
+                        record = s;
+                    }
                 }
             }
 
@@ -903,10 +937,21 @@ namespace LiteMonitor.src.WebServer
                 RevokeAllAuthState();
                 return false;
             }
+
+            // ★ 会话没了（撤销 / 绝对 TTL / 空闲 TTL）⇒ 绑在它上面的 WS 必须一起断开，
+            //   否则已建立的 WS 继续收监控数据 ⇒ 会话过期同样会泄露。
+            if (sessionGone) CloseSessionWebSockets(sessionId);
+
             return record != null;
         }
 
         /// <summary>显式注销一个会话。</summary>
+        /// <remarks>
+        /// ★ 必须**同时断开**绑在这个会话上的 WebSocket 连接：
+        ///   否则用户点"注销"后，浏览器里**已建立的** WebSocket 不会被断开，
+        ///   广播循环会继续往它推监控数据 ⇒ 注销只挡住了后续 HTTP 请求，
+        ///   **挡不住已在推送的 WS 数据流**。
+        /// </remarks>
         private void RevokeSession(string sessionId)
         {
             if (string.IsNullOrEmpty(sessionId)) return;
@@ -918,6 +963,9 @@ namespace LiteMonitor.src.WebServer
                     _sessions.Remove(sessionId);
                 }
             }
+
+            // ★ 放在鉴权锁**之外**：关闭 socket 可能触发回调（ReceiveLoop 收尾 → RemoveClient）。
+            CloseSessionWebSockets(sessionId);
         }
 
         /// <summary>
@@ -945,8 +993,15 @@ namespace LiteMonitor.src.WebServer
             NotifyDemandChanged();
         }
 
-        /// <summary>清理过期 / 已撤销的会话记录。</summary>
-        private void PruneSessionsLocked(long now)
+        /// <summary>
+        /// 清理过期 / 已撤销的会话记录；返回**被清掉的会话 ID**列表。
+        /// </summary>
+        /// <remarks>
+        /// ★ 调用方（<see cref="CreateSession"/>）必须**在释放 _authGate 之后**再去断开这些会话的 WS：
+        ///   关闭 socket 可能触发回调（ReceiveLoop 收尾 → RemoveClient），不该在持有鉴权锁时做。
+        /// ★ 会话被清掉 ⇒ 它的 WS 必须一起断（会话过期同样会泄露数据）。
+        /// </remarks>
+        private List<string> PruneSessionsLocked(long now)
         {
             var expired = new List<string>();
             foreach (var kv in _sessions)
@@ -956,6 +1011,77 @@ namespace LiteMonitor.src.WebServer
                 if (_sessionIdleTtlTicks > 0 && now - kv.Value.LastUsedTicks >= _sessionIdleTtlTicks) { expired.Add(kv.Key); }
             }
             foreach (string id in expired) _sessions.Remove(id);
+            return expired;
+        }
+
+        /// <summary>
+        /// 断开并回收**属于指定会话**的全部 WebSocket 连接。
+        /// </summary>
+        /// <remarks>
+        /// ★ 调用时机 —— 会话失效的**四条路径**：
+        ///   <list type="number">
+        ///   <item>显式注销（<see cref="RevokeSession"/>）；</item>
+        ///   <item>绝对 TTL 到期（<see cref="TryGetSession"/>）；</item>
+        ///   <item>空闲 TTL 到期（<see cref="TryGetSession"/>）；</item>
+        ///   <item>清理过期会话（<see cref="PruneSessionsLocked"/>）。</item>
+        ///   </list>
+        ///   只补"注销"那一处**不够** —— 会话过期同样会让已建立的 WS 继续收数据。
+        /// ★ 只关**这个会话**的连接：别的会话的 WS 不受影响。
+        /// ★ 放在鉴权锁之外调用：关闭 socket 可能触发回调（ReceiveLoop 收尾 → RemoveClient）。
+        /// </remarks>
+        private void CloseSessionWebSockets(string sessionId)
+        {
+            if (string.IsNullOrEmpty(sessionId)) return;
+
+            var victims = new List<TcpClient>();
+            foreach (var entry in _wsClients)
+            {
+                if (!string.Equals(entry.Value.SessionId, sessionId, StringComparison.Ordinal)) continue;
+                victims.Add(entry.Key);
+            }
+
+            foreach (var client in victims)
+            {
+                // 先从集合里摘掉并回收需求，再关套接字（顺序反了会重复回收计数）
+                RemoveClient(client);
+                try { client.Close(); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// 广播前判定：这条 WS 连接绑定的会话是否仍然有效（有效则顺手刷新空闲计时）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 判定口径与会话表一致：撤销 / 绝对 TTL / 空闲 TTL。
+        ///   会话没了 ⇒ 这条 WS 不得再收到监控数据（否则"注销 / 过期"只挡住了 HTTP，挡不住数据流）。
+        /// ★ 顺带刷新空闲计时：**正在收监控数据的连接就是"会话正在被使用"** ——
+        ///   否则一个只用 WS 看数据的网页会在空闲 TTL（2 分钟）到点被踢掉线，
+        ///   而它明明还在正常收数据。
+        /// ★ 会话为空串（未绑定会话）⇒ 不受会话 TTL 约束，放行。
+        /// </remarks>
+        private bool TryTouchSessionForWebSocket(string sessionId)
+        {
+            if (string.IsNullOrEmpty(sessionId)) return true;
+
+            lock (_authGate)
+            {
+                if (!_sessions.TryGetValue(sessionId, out var s)) return false;
+                if (s.Revoked) return false;
+
+                long now = _time.GetTimestamp();
+                if (_sessionAbsoluteTtlTicks > 0 && now - s.CreatedTicks >= _sessionAbsoluteTtlTicks) return false;
+                if (_sessionIdleTtlTicks > 0 && now - s.LastUsedTicks >= _sessionIdleTtlTicks) return false;
+
+                s.LastUsedTicks = now;   // ★ 正在推数据 ⇒ 会话在被使用
+                return true;
+            }
+        }
+
+        /// <summary>断开并回收一条 WebSocket 连接（收件人失效 / 已断开时用）。</summary>
+        private void CloseWebSocketClient(TcpClient client)
+        {
+            RemoveClient(client);
+            try { client.Close(); } catch { }
         }
 
         /// <summary>签发一次性票据（30 秒有效、仅限 WS 握手、用过即废）。</summary>
@@ -988,12 +1114,19 @@ namespace LiteMonitor.src.WebServer
         /// <summary>
         /// 消费一张票据（一次性）：有效则返回 true，并把票据<b>立即作废</b>。
         /// </summary>
+        /// <param name="ticketId">票据 ID。</param>
+        /// <param name="passwordFingerprint">当前口令指纹。</param>
+        /// <param name="sessionId">
+        /// 出参：票据**所属的主会话 ID**（握手成功后 WS 连接就绑在它上面）。
+        /// 票据无效时输出空串。
+        /// </param>
         /// <remarks>
         /// ★ 过期 / 已用 / 口令指纹不匹配 / 申请它的会话已失效 ⇒ 一律拒绝。
         /// ★ 票据只用于 WS 握手；HTTP API 不接受它（路由层根本不看票据）。
         /// </remarks>
-        private bool TryConsumeTicket(string ticketId, string passwordFingerprint)
+        private bool TryConsumeTicket(string ticketId, string passwordFingerprint, out string sessionId)
         {
+            sessionId = "";
             if (string.IsNullOrEmpty(ticketId)) return false;
 
             lock (_authGate)
@@ -1012,6 +1145,7 @@ namespace LiteMonitor.src.WebServer
                 {
                     return false;
                 }
+                sessionId = t.SessionId ?? "";
                 return true;
             }
         }
@@ -1047,7 +1181,28 @@ namespace LiteMonitor.src.WebServer
         /// </summary>
         /// <param name="client">要登记的连接。</param>
         /// <param name="connectionGeneration">该连接建立时的运行代次（由 HandleClientAsync 捕获）。</param>
+        /// <remarks>
+        /// ★ 既有**私有接缝**，签名保持不变（<c>WebSamplingDemandTests</c> 反射调用它，
+        ///   用来构造"按代次登记"的场景）。它登记的连接**不绑定主会话**
+        ///   ⇒ 不受会话 TTL / 撤销约束（那些用例只关心代次）。
+        /// </remarks>
         private void AddClient(TcpClient client, int connectionGeneration)
+        {
+            AddClientWithSession(client, connectionGeneration, "");
+        }
+
+        /// <summary>
+        /// 登记一个已鉴权的 WebSocket 连接（同时计入需求），并**绑定它所属的主会话**。
+        /// </summary>
+        /// <remarks>
+        /// ★ 与 <see cref="AddClient"/> 的差别只有一个：多记了"属于哪个会话"。
+        ///   没有这条绑定，会话失效（注销 / 过期）时就**反查不到**该断哪条连接
+        ///   ⇒ 已建立的 WS 会继续收监控数据。
+        /// </remarks>
+        /// <param name="client">要登记的连接。</param>
+        /// <param name="connectionGeneration">该连接建立时的运行代次（由 HandleClientAsync 捕获）。</param>
+        /// <param name="sessionId">该连接**所属的主会话 ID**（握手时从票据带出来）。</param>
+        private void AddClientWithSession(TcpClient client, int connectionGeneration, string sessionId)
         {
             bool registered = false;
             lock (_clientsGate)
@@ -1062,9 +1217,14 @@ namespace LiteMonitor.src.WebServer
                     return;
                 }
 
-                // ★ 登记时把**该连接的运行代次**一起记下来：
-                //   广播时用它过滤收件人（旧代次的广播不得发给新代次的连接）。
-                if (_wsClients.TryAdd(client, connectionGeneration))
+                // ★ 登记时把**该连接的运行代次 + 所属主会话**一起记下来：
+                //   · 代次：广播时用它过滤收件人（旧代次的广播不得发给新代次的连接）。
+                //   · 会话：会话失效（注销 / 过期 / 清理）时靠它反查并断开这条连接。
+                if (_wsClients.TryAdd(client, new WsClientBinding
+                {
+                    Generation = connectionGeneration,
+                    SessionId = sessionId ?? ""
+                }))
                 {
                     _demand.AddAuthenticatedConnection();
                     registered = true;
@@ -2228,9 +2388,19 @@ namespace LiteMonitor.src.WebServer
                                 // ★ 收件人必须与广播循环所属的服务代次绑定：
                                 //   旧代次的广播不能把新代次（Stop → Start 之后才连上）的连接当收件人。
                                 //   这一层防的是"最后一次代次校验与真正枚举/发送之间"的窄窗口。
-                                if (entry.Value != generation) continue;
+                                if (entry.Value.Generation != generation) continue;
 
                                 var client = entry.Key;
+
+                                // ★ 收件人的**主会话**必须仍然有效：
+                                //   注销 / 绝对 TTL / 空闲 TTL 之后，已建立的 WS 不得再收到监控数据
+                                //   （否则撤销只挡住了后续 HTTP，挡不住已在推送的 WS 数据流）。
+                                if (!TryTouchSessionForWebSocket(entry.Value.SessionId))
+                                {
+                                    CloseWebSocketClient(client);
+                                    continue;
+                                }
+
                                 if (!client.Connected)
                                 {
                                     // 已断开的连接：回收需求
@@ -2368,8 +2538,9 @@ namespace LiteMonitor.src.WebServer
         ///   浏览器 WebSocket API 无法自定义 Authorization 头，票据短 TTL + 一次性 + 仅限 WS 三者叠加。
         /// ★ Host / Origin 校验与 HTTP 完全一致（同一套判定口径）。
         /// </remarks>
-        private bool Handshake(NetworkStream stream, string request)
+        private bool Handshake(NetworkStream stream, string request, out string sessionId)
         {
+            sessionId = "";
             try
             {
                 HttpRequestInfo info = ParseRequest(request);
@@ -2391,8 +2562,10 @@ namespace LiteMonitor.src.WebServer
 
                 // ③ 票据：一次性、30 秒、仅限 WS。
                 //   ★ L0 下同样必须走票据流程（协议口径统一，不开第二套口子）。
+                //   ★ 票据里带着**申请它的主会话 ID** ⇒ 握手成功后这条 WS 就绑在那个会话上，
+                //     会话一失效（注销 / 过期）就能反查并断开它。
                 string? ticket = GetSingleQueryValue(info, "ticket");
-                if (ticket == null || !TryConsumeTicket(ticket, policy.PasswordFingerprint))
+                if (ticket == null || !TryConsumeTicket(ticket, policy.PasswordFingerprint, out sessionId))
                 {
                     SendErrorResponse(stream, 401, "票据无效、已过期或已被使用。", info, policy);
                     return false;
