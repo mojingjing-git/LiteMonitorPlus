@@ -123,6 +123,17 @@ namespace LiteMonitor.src.Plugins
         /// <summary>单次下载允许的最大跳转次数（每一跳都会重新校验地址）。</summary>
         public const int MaxDownloadRedirects = 5;
 
+        /// <summary>
+        /// 单次下载的期限（毫秒）：覆盖**响应头 + 正文**的整段下载。
+        /// <para>
+        /// ★ LM-084：<see cref="HttpClient.Timeout"/> 只约束到**响应头**
+        ///   （下载走 <see cref="HttpCompletionOption.ResponseHeadersRead"/>），
+        ///   正文读取不受它约束 ⇒ 没有调用方令牌时就是无限等待。
+        ///   这个期限是对**正文读取**的兜底，与索引拉取的 30 秒超时同一量级。
+        /// </para>
+        /// </summary>
+        internal const int DefaultDownloadTimeoutMs = 30_000;
+
         /// <summary>下载地址的最大长度。超长一律拒绝，避免拿超长串做前缀匹配。</summary>
         public const int MaxDownloadUrlLength = 2048;
 
@@ -601,50 +612,81 @@ namespace LiteMonitor.src.Plugins
         /// 下载插件内容（LM-007）：自行逐跳处理重定向，**每一跳都重新校验地址**，
         /// 并且限制实际读取的字节数。
         /// </summary>
-        internal static async Task<byte[]> DownloadBytesAsync(Uri initialUri, CancellationToken ct = default)
+        internal static Task<byte[]> DownloadBytesAsync(Uri initialUri, CancellationToken ct = default)
+            => DownloadBytesAsync(initialUri, ct, TimeSpan.FromMilliseconds(DefaultDownloadTimeoutMs));
+
+        /// <summary>
+        /// 下载插件内容（LM-084）：**整次下载（含正文读取）都有期限**。
+        /// <para>
+        /// ★ LM-084 的根因：<see cref="HttpClient.Timeout"/> 只约束到**响应头**
+        ///   （下载走的是 <see cref="HttpCompletionOption.ResponseHeadersRead"/>），
+        ///   正文读取**不受**它约束；没有调用方令牌时就是**无限等待** ⇒ 市场页 _busy 永久卡死。
+        /// </para>
+        /// <para>
+        /// ★ 期限令牌与调用方令牌用 linked CTS 合并 ⇒ **取最早**：
+        ///   · 用户主动取消 ⇒ 立刻中断（不能被降级成"只能等超时"）；
+        ///   · 期限先到 ⇒ 按超时中止（报可读的错，而不是静默卡住）。
+        /// </para>
+        /// </summary>
+        internal static async Task<byte[]> DownloadBytesAsync(Uri initialUri, CancellationToken ct, TimeSpan deadline)
         {
             using HttpClient client = CreateDownloadClient();
 
-            Uri current = initialUri;
-            for (int hop = 0; ; hop++)
+            // ★ LM-084：给整次下载（含正文）加一个明确期限，并与调用方令牌取最早。
+            using var deadlineCts = new CancellationTokenSource(deadline);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, deadlineCts.Token);
+            CancellationToken token = linked.Token;
+
+            try
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, current);
-                using var response = await client.SendAsync(
-                    request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-
-                if (IsRedirectStatus(response.StatusCode))
+                Uri current = initialUri;
+                for (int hop = 0; ; hop++)
                 {
-                    if (hop >= MaxDownloadRedirects)
+                    using var request = new HttpRequestMessage(HttpMethod.Get, current);
+                    using var response = await client.SendAsync(
+                        request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+
+                    if (IsRedirectStatus(response.StatusCode))
                     {
-                        throw new PluginMarketException(MarketErrorReason.BadSource,
-                            $"下载重定向次数超过上限（{MaxDownloadRedirects} 次）");
+                        if (hop >= MaxDownloadRedirects)
+                        {
+                            throw new PluginMarketException(MarketErrorReason.BadSource,
+                                $"下载重定向次数超过上限（{MaxDownloadRedirects} 次）");
+                        }
+
+                        Uri? location = response.Headers.Location;
+                        if (location == null)
+                        {
+                            throw new PluginMarketException(MarketErrorReason.BadSource,
+                                "重定向响应没有 Location 头");
+                        }
+
+                        Uri next = location.IsAbsoluteUri ? location : new Uri(current, location);
+                        if (!TryResolveAllowedDownloadUri(next.AbsoluteUri, out Uri allowedNext, out string reason))
+                        {
+                            throw new PluginMarketException(MarketErrorReason.BadSource,
+                                "重定向目标不在允许的插件源范围内：" + reason);
+                        }
+
+                        current = allowedNext;
+                        continue;
                     }
 
-                    Uri? location = response.Headers.Location;
-                    if (location == null)
+                    if (!response.IsSuccessStatusCode)
                     {
-                        throw new PluginMarketException(MarketErrorReason.BadSource,
-                            "重定向响应没有 Location 头");
+                        throw new PluginMarketException(MarketErrorReason.Unknown,
+                            $"下载失败：HTTP {(int)response.StatusCode}");
                     }
 
-                    Uri next = location.IsAbsoluteUri ? location : new Uri(current, location);
-                    if (!TryResolveAllowedDownloadUri(next.AbsoluteUri, out Uri allowedNext, out string reason))
-                    {
-                        throw new PluginMarketException(MarketErrorReason.BadSource,
-                            "重定向目标不在允许的插件源范围内：" + reason);
-                    }
-
-                    current = allowedNext;
-                    continue;
+                    return await ReadBodyWithLimitAsync(response, token).ConfigureAwait(false);
                 }
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    throw new PluginMarketException(MarketErrorReason.Unknown,
-                        $"下载失败：HTTP {(int)response.StatusCode}");
-                }
-
-                return await ReadBodyWithLimitAsync(response, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested && deadlineCts.IsCancellationRequested)
+            {
+                // ★ 只有"期限先到"才报超时。
+                //   调用方主动取消时**保留取消语义**（不能把"用户主动取消"降级成"只能等超时"）。
+                throw new PluginMarketException(MarketErrorReason.Unknown,
+                    "下载超时（超过 " + (long)deadline.TotalMilliseconds + " 毫秒仍未完成），已中止");
             }
         }
 
@@ -683,6 +725,10 @@ namespace LiteMonitor.src.Plugins
 
         /// <summary>
         /// 读取响应体，**实际读取的字节数**超过 <see cref="MaxDownloadBytes"/> 即中止并失败。
+        /// <para>
+        /// ★ LM-084：传入的 <paramref name="ct"/> 必须**同时**带上"调用方令牌"与"下载期限"，
+        ///   否则这里的正文读取就是无限等待（HttpClient.Timeout 约束不到它）。
+        /// </para>
         /// </summary>
         private static async Task<byte[]> ReadBodyWithLimitAsync(HttpResponseMessage response, CancellationToken ct)
         {
