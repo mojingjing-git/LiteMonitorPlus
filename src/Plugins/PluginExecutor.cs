@@ -912,6 +912,29 @@ namespace LiteMonitor.src.Plugins
         private int _maxResponseBytes = DefaultMaxResponseBytes;
 
         /// <summary>
+        /// [LM-081] 把步骤声明的方法字符串映射成 <see cref="HttpMethod"/>。
+        /// <para>白名单：GET / POST / HEAD / PUT / DELETE / PATCH / OPTIONS；
+        /// 其余（含空值、含未知方法）⇒ 回落 GET（既有默认行为不变）。</para>
+        /// <para>★ 为什么必须"真的发得出" PUT / DELETE：.NET 原生重定向对**不同方法**的语义
+        /// **逐状态码不同**（301/302 只降级 POST，303 降级一切非 GET/HEAD）⇒ 执行器必须能发出
+        /// 这些方法，否则这条语义既无从观测、也无从对齐（修复前本方法把一切非 POST/HEAD 的方法
+        /// 一律发成 GET，PUT / DELETE 步骤因此根本无法被观测）。</para>
+        /// </summary>
+        private static HttpMethod ResolveHttpMethod(string methodStr)
+        {
+            switch ((methodStr ?? "").Trim().ToUpperInvariant())
+            {
+                case "POST": return HttpMethod.Post;
+                case "HEAD": return HttpMethod.Head;
+                case "PUT": return HttpMethod.Put;
+                case "DELETE": return HttpMethod.Delete;
+                case "PATCH": return HttpMethod.Patch;
+                case "OPTIONS": return HttpMethod.Options;
+                default: return HttpMethod.Get;
+            }
+        }
+
+        /// <summary>
         /// 唯一的 HTTP 出网点。
         /// <para>[LM-009] 这里接入沙箱：</para>
         /// <list type="bullet">
@@ -932,9 +955,9 @@ namespace LiteMonitor.src.Plugins
         /// 共享在途请求必须传 false（C1 契约：取消一个等待者不得取消共享任务）。</param>
         private async Task<string> FetchRawAsync(string methodStr, string url, string body, Dictionary<string, string> headers, string encoding, System.Threading.CancellationToken token, string proxy = null, PluginSandboxScope scope = null, HashSet<string> allowedHosts = null, bool scopeCancelsRequest = true)
         {
-            HttpMethod method = HttpMethod.Get;
-            if (methodStr?.ToUpper() == "POST") method = HttpMethod.Post;
-            else if (methodStr?.ToUpper() == "HEAD") method = HttpMethod.Head;
+            // [LM-081] 方法映射：步骤声明什么方法就发什么方法（白名单见 ResolveHttpMethod；
+            // 其余 ⇒ GET，既有默认不变）。
+            HttpMethod method = ResolveHttpMethod(methodStr);
             
             // Log($"[Start] {method} {url} Proxy:{proxy ?? "None"}");
 
@@ -1055,12 +1078,13 @@ namespace LiteMonitor.src.Plugins
 
                         EnsureRedirectSchemeAllowed(current, next);
 
-                        // [LM-045][LM-081] 方法/正文语义（与 .NET 原生重定向一致）：
-                        // 301/302/303 ⇒ **仅当**当前方法既不是 GET 也不是 HEAD 时才改写为 GET
-                        // 并丢弃正文（.NET 原生实测：POST 被降级为 GET，而 **HEAD 保持 HEAD**、
-                        // GET 保持 GET）；307/308 ⇒ 一律保留方法与正文。
-                        // 修复前只看状态码 ⇒ HEAD 也被改成 GET（把"只要响应头"的请求变成
-                        // "把正文整个下载回来"，白耗 2 MiB 响应体上限与并发槽位）。
+                        // [LM-045][LM-081] 方法/正文语义（严格对齐 .NET 原生重定向的**逐状态码**实测）：
+                        //   301/302 ⇒ **只有 POST** 被降级为 GET（并丢弃正文）；
+                        //              PUT / DELETE / HEAD 等其他方法**保持原方法与正文**；
+                        //   303     ⇒ **非 GET/HEAD** 一律降级为 GET（并丢弃正文）；GET/HEAD 保持；
+                        //   307/308 ⇒ 全部保持原方法与正文。
+                        // 修复前只看状态码 ⇒ HEAD 也被改写；第一次修复仍把 301/302 上的
+                        // PUT / DELETE 改写掉 ⇒ 两者都是"自称与 .NET 一致而实际不一致"的同一类残留。
                         if (RewritesMethodOnRedirect(response.StatusCode, currentMethod))
                         {
                             currentMethod = HttpMethod.Get;
@@ -1126,19 +1150,39 @@ namespace LiteMonitor.src.Plugins
 
         /// <summary>
         /// [LM-045][LM-081] 该重定向状态码是否**改写方法**。
-        /// <para>301 / 302 / 303 ⇒ <b>仅当</b>当前方法既不是 GET 也不是 HEAD 时才改写为 GET
-        /// 并丢弃正文；GET / HEAD <b>保持原方法</b>；307 / 308 ⇒ 一律保留方法与正文。</para>
-        /// <para>★ 口径依据（.NET 原生重定向的**本机实测**：.NET SDK 8.0.426，裸 TcpListener
-        /// 自写 HTTP/1.1 响应）：301/302/303 上 **POST 被降级为 GET**，而 **HEAD 保持 HEAD**、
-        /// GET 保持 GET。修复前本实现**只看状态码**（把 HEAD 也改成 GET），与它自己注释里
-        /// "与 .NET 原生重定向一致"的说法直接矛盾。</para>
+        /// <para>★ 口径 = .NET 原生重定向的**本机实测**、**逐状态码**
+        /// （.NET SDK 8.0.426，裸 TcpListener 自写 HTTP/1.1 响应，只监听回环）：
+        /// <list type="bullet">
+        /// <item><b>301 / 302</b>：<b>只有 POST</b> 被降级为 GET（并丢弃正文）；
+        /// <b>PUT / DELETE / HEAD 等其他方法一律保持原方法</b>（正文也保留并重发）。</item>
+        /// <item><b>303</b>：<b>非 GET / HEAD</b> 的方法一律降级为 GET（并丢弃正文）；
+        /// GET / HEAD 保持。</item>
+        /// <item><b>307 / 308</b>：全部方法保持原方法与正文。</item>
+        /// </list>
+        /// </para>
+        /// <para>★ 修复历史（同一缺陷的两轮残留）：
+        /// ① 原实现**只看状态码** ⇒ HEAD 也被改成 GET（LM-081 首发缺陷）；
+        /// ② 第一次修复放宽成"非 GET/HEAD 即降级" ⇒ 301/302 上的 PUT / DELETE 仍被改写掉
+        /// （主审补测 .NET 原生后发现）—— 两者都是"自称与 .NET 一致而实际不一致"的同一类残留。</para>
         /// </summary>
         private static bool RewritesMethodOnRedirect(System.Net.HttpStatusCode status, HttpMethod currentMethod)
-            => (status == System.Net.HttpStatusCode.MovedPermanently
-                || status == System.Net.HttpStatusCode.Found
-                || status == System.Net.HttpStatusCode.SeeOther)
-               && currentMethod != HttpMethod.Get
-               && currentMethod != HttpMethod.Head;
+        {
+            // 301 / 302：只有 POST 被降级为 GET（并丢弃正文）；其他方法保持原方法与正文。
+            if (status == System.Net.HttpStatusCode.MovedPermanently ||
+                status == System.Net.HttpStatusCode.Found)
+            {
+                return currentMethod == HttpMethod.Post;
+            }
+
+            // 303：非 GET / HEAD 一律降级为 GET（并丢弃正文）。
+            if (status == System.Net.HttpStatusCode.SeeOther)
+            {
+                return currentMethod != HttpMethod.Get && currentMethod != HttpMethod.Head;
+            }
+
+            // 307 / 308：全部保持原方法与正文。
+            return false;
+        }
 
         /// <summary>
         /// [LM-045] 逐跳复核用的**允许主机集合**。
