@@ -444,11 +444,44 @@ namespace LiteMonitor.src.Plugins
             int at = authority.LastIndexOf('@');
             if (at >= 0) authority = authority.Substring(at + 1);
 
-            int colon = authority.IndexOf(':');
-            if (colon >= 0) authority = authority.Substring(0, colon);
+            // [LM-094] 端口截断：**IPv6 字面量（带方括号）整体就是主机名** ——
+            // 方括号内的冒号**不是**端口分隔符（与 PluginSandbox 侧 StripPort 的 IPv6 语义一致：
+            // 同一个口径，避免出现第四种不一致实现）。
+            // 修复前按**第一个**冒号截断 ⇒ "[fd00::1]" 被截成 "[fd00"（一枚畸形串）⇒
+            // 该 IPv6 主机永远无法被正确声明（带凭据请求被一律拒绝；偏严 / fail-closed）。
+            authority = StripAuthorityPort(authority);
 
             authority = authority.Trim();
             if (authority.Length > 0) hosts.Add(authority);
+        }
+
+        /// <summary>
+        /// [LM-094] 去掉 authority 里的端口。
+        /// <para><b>IPv6 字面量（带方括号）整体就是主机名</b>："[fd00::1]" / "[fd00::1]:8080"
+        /// 的主机都是 "[fd00::1]" —— <b>方括号内的冒号不是端口分隔符</b>
+        /// （与 <see cref="PluginSandbox"/> 侧 <c>StripPort</c> 的 IPv6 语义一致）。</para>
+        /// <para>非方括号形式：<b>单个</b>冒号是 "host:port"（按冒号截断，既有行为逐字不变）；
+        /// <b>多个</b>冒号是裸 IPv6 字面量，整体就是主机名（不得截出垃圾串）。</para>
+        /// </summary>
+        private static string StripAuthorityPort(string authority)
+        {
+            if (string.IsNullOrEmpty(authority)) return authority;
+
+            // IPv6 字面量（带方括号）：方括号内整体是主机名，只可能整体带端口。
+            if (authority[0] == '[')
+            {
+                int close = authority.IndexOf(']');
+                if (close > 0) return authority.Substring(0, close + 1);
+                return authority;
+            }
+
+            // 非方括号形式：多个冒号 ⇒ 裸 IPv6 字面量，整体就是主机名。
+            int colon = authority.IndexOf(':');
+            if (colon < 0) return authority;
+            if (colon != authority.LastIndexOf(':')) return authority;
+
+            // 单个冒号 ⇒ "host:port"（既有截断行为逐字不变）。
+            return authority.Substring(0, colon);
         }
     }
 
