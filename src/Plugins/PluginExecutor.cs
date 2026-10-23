@@ -476,7 +476,10 @@ namespace LiteMonitor.src.Plugins
                     // 进程级并发槽位 / 响应体 2 MiB 上限 / 总时长可中止 / 允许目标校验。
                     if (url.StartsWith("native://"))
                     {
-                        resultRaw = await ExecuteNativeAsync(url, context, step, scope, declaredHosts, inst?.Id ?? "");
+                        // [LM-082] 原生在途去重的**作用域键** = **执行作用域标识**（不是实例 ID）：
+                        // 同一实例的**不同代次**（不同执行作用域）**不共享**在途请求 ⇒
+                        // "一个代次到期"不会连带打断另一个代次正在复用的同一请求。
+                        resultRaw = await ExecuteNativeAsync(url, context, step, scope, declaredHosts, NativeInflightScopeKey(scope));
                     }
                     else
                     {
@@ -702,6 +705,17 @@ namespace LiteMonitor.src.Plugins
 
             throw new Exception($"Unknown native host: {uri.Host}");
         }
+
+        /// <summary>
+        /// [LM-082] 原生在途去重的**作用域键**：**执行作用域标识**（<see cref="PluginSandboxScope.ScopeId"/>）。
+        /// <para>★ 口径：按**执行作用域**归并，而不是按**实例 ID**归并 ——
+        /// 同一实例的两次执行（两个代次）各有各的作用域标识 ⇒ 它们的在途请求**不共享** ⇒
+        /// "一个代次到期"不会连带打断另一个代次正在复用的同一请求。</para>
+        /// <para>没有作用域（生产路径不会出现）时用一次性标识 ⇒ 绝不与别的调用共享在途请求
+        /// （宁可多发一条，也不得跨作用域互相取消）。</para>
+        /// </summary>
+        private static string NativeInflightScopeKey(PluginSandboxScope scope)
+            => scope?.ScopeId ?? ("no-scope-" + Guid.NewGuid().ToString("N"));
 
         /// <summary>[LM-039] 解析 native:// URL 的查询参数（键不区分大小写）。</summary>
         private static Dictionary<string, string> ParseNativeArgs(Uri uri)

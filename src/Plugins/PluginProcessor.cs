@@ -660,6 +660,9 @@ namespace LiteMonitor.src.Plugins
             _deadlineUtc = DateTime.UtcNow + maxDuration;
             _cts.CancelAfter(maxDuration);
 
+            // [LM-082] 每次执行一个**唯一**的作用域标识（目标级作用域继承它，见下方私有构造）。
+            ScopeId = Guid.NewGuid().ToString("N");
+
             MaxDuration = maxDuration;
             MaxSteps = maxSteps;
             MaxTargets = maxTargets;
@@ -678,6 +681,10 @@ namespace LiteMonitor.src.Plugins
             _cts = owner._cts;            // 共享：同一把取消令牌 ⇒ 总时长仍是"按实例计"
             _ownsCts = false;              // 目标级作用域不拥有 CTS，释放时不连带释放实例级的
             _deadlineUtc = owner._deadlineUtc;
+
+            // [LM-082] 目标级作用域与实例级作用域**共享同一个执行作用域标识**
+            // ⇒ 同一次执行内的各 target 仍然按"执行作用域"归并，不同执行（不同代次）不共享。
+            ScopeId = owner.ScopeId;
 
             MaxDuration = owner.MaxDuration;
             MaxSteps = owner.MaxSteps;
@@ -720,6 +727,14 @@ namespace LiteMonitor.src.Plugins
 
         /// <summary>作用域令牌：与外部取消联动，并在总时长到期时自动取消（网络等待因此可被中止）。</summary>
         public CancellationToken Token => _cts.Token;
+
+        /// <summary>
+        /// [LM-082] 作用域标识：<b>同一次执行</b>内的所有作用域（实例级 + 目标级）共享同一个标识；
+        /// 不同执行（不同代次）各有各的标识。
+        /// <para>用于"按<b>执行作用域</b>归并"（原生在途去重）：不同执行作用域**不共享**在途请求，
+        /// 避免"一个作用域到期"连带打断另一个作用域正在复用的同一请求。</para>
+        /// </summary>
+        public string ScopeId { get; }
 
         /// <summary>总时长到期时刻（UTC）。</summary>
         public DateTime DeadlineUtc => _deadlineUtc;
