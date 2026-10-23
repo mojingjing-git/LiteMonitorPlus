@@ -1614,6 +1614,11 @@ namespace LiteMonitor
                     // 合同 §4 步 4 失败语义：Phase=Failed + 保留可控重试入口；
                     // **禁止**显示"已成功恢复"（计划 §4.3 :179）。
                     _transition.FailHandleRecreate();
+                    // ★【LM-095】重建失败 ⇒ 状态行里"重建完成后自动恢复"的承诺**永远兑现不了**
+                    //   ⇒ 必须如实收尾（合同 §7「降级不静默」）：
+                    //   · 句柄仍在、且不在关闭流程中 ⇒ 临时停机的语义依然成立 ⇒ 按配置把实时玻璃拉回来；
+                    //   · 否则（句柄已失效 / 正在关闭）⇒ 保持停止，但状态行必须说清楚"重建失败，需手动重开"。
+                    _liveGlass?.HandleRecreateFailed(mainForm.IsHandleCreated && !mainForm.IsClosing);
                     return;
                 }
 

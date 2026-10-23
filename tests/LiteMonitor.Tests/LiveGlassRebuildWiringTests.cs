@@ -119,6 +119,47 @@ namespace LiteMonitor.Tests
                 + "两个捕获所有者并存会重复抓屏、击穿 CPU 预算（合同 §13.2，LM-072）。");
         }
 
+        /// <summary>
+        /// 【LM-095】受控重建**失败**的分支必须调用失败收尾入口
+        /// （<c>HandleRecreateFailed</c>），且收尾必须发生在失败判定
+        /// （<c>FailHandleRecreate</c>）**之后**。
+        /// <para>★ 为什么用 IL 护栏而不是行为测试：重建失败需要**真实**的 HWND 重建失败路径，
+        ///   无头环境无法复现；而"失败分支有没有做收尾"是**结构性质**，
+        ///   用 IL 断言钉住更稳定、也更贴近缺陷本身。</para>
+        /// <para>★ 修复前的后果：失败分支直接 <c>return</c> ⇒ 状态行一直承诺
+        ///   "重建完成后自动恢复"，而重建已经失败了 ⇒ 承诺永远兑现不了（LM-095）。</para>
+        /// </summary>
+        [Fact]
+        public void 重建失败分支必须做失败收尾而不是直接返回()
+        {
+            IlInspector.Disassembly body = IlInspector.Disassemble(
+                RequireMethod(typeof(UIController), "RunGpuToLegacyTransition"));
+
+            int failAt = CallOffsetOf(body, typeof(RenderingTransitionCoordinator), "FailHandleRecreate");
+            int handleFailedAt = CallOffsetOf(body, typeof(LiveGlassController), "HandleRecreateFailed");
+
+            Assert.True(
+                failAt >= 0,
+                "UIController.RunGpuToLegacyTransition 里找不到 FailHandleRecreate —— 护栏前提被破坏。");
+
+            Assert.True(
+                handleFailedAt >= 0,
+                "UIController.RunGpuToLegacyTransition 的重建失败分支必须调用 "
+                + "LiveGlassController.HandleRecreateFailed —— 否则状态行会一直承诺"
+                + "『重建完成后自动恢复』，而重建已经失败了，承诺永远兑现不了（LM-095）。");
+
+            Assert.True(
+                failAt < handleFailedAt,
+                "失败收尾必须发生在失败判定之后 —— 先判失败、再按『句柄是否还在』如实收尾（LM-095）。");
+
+            // 关闭流程拥有最高优先级：关闭过程中不得把捕获服务拉回来（合同 §4 全局约束 / U10）。
+            int closingAt = CallOffsetOf(body, typeof(MainForm), "get_IsClosing");
+            Assert.True(
+                closingAt >= 0,
+                "UIController.RunGpuToLegacyTransition 必须读取 MainForm.IsClosing —— "
+                + "关闭流程中不得把捕获服务拉回来（合同 §4 全局约束 / U10）。");
+        }
+
         // ---------------------------------------------------------------- 辅助
 
         private static MethodInfo RequireMethod(Type type, string name)

@@ -39,6 +39,13 @@ namespace LiteMonitor
         /// </summary>
         private bool _isClosing;
 
+        /// <summary>
+        /// 【LM-095】关闭流程是否已经开始（<see cref="OnFormClosing"/> 之后为 true）。
+        /// <para>★ 关闭拥有**最高优先级**：关闭过程中不得重建 HWND、也不得把捕获服务拉回来
+        /// （合同 §4 全局约束 / U10）。</para>
+        /// </summary>
+        internal bool IsClosing => _isClosing;
+
         // 防止 Win11 自动隐藏无边框 + 无任务栏窗口
         protected override CreateParams CreateParams
         {

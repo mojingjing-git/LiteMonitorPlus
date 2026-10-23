@@ -366,6 +366,137 @@ namespace LiteMonitor.Tests
             });
         }
 
+        /// <summary>
+        /// 【LM-095】受控重建**失败**（句柄已失效）⇒ 状态行**不得**继续承诺
+        /// "重建完成后自动恢复" —— 那句承诺永远不会兑现（重建已经失败了）。
+        /// <para>★ 后果（修复前）：玻璃静默失效、设置页复选框仍显示"开"，
+        /// 而状态行骗用户说"会自动恢复" ⇒ 用户一直等不到恢复。</para>
+        /// </summary>
+        [Fact]
+        public void 重建失败且句柄已失效_状态行不得再承诺自动恢复()
+        {
+            RunOnSta(() =>
+            {
+                var factory = new RecordingServiceFactory();
+                LiveGlassController? controller = null;
+                try
+                {
+                    using Form form = CreateOffscreenForm();
+                    ThemeAppearanceOptions options = CreateOptions(form);
+                    controller = new LiveGlassController(form, () => options, factory.Create);
+
+                    controller.SetEnabled(true);
+                    Assert.True(controller.Enabled);
+                    Assert.NotNull(controller.CaptureService);
+
+                    // 句柄销毁（受控重建）⇒ 临时停机
+                    factory.Backends[0].StopProducing();
+                    controller.StopForHandleRecreate();
+                    Assert.Null(controller.CaptureService);
+                    Assert.Contains("重建完成后自动恢复", controller.StatusText);
+
+                    // ★ 重建失败（句柄已失效）⇒ 必须如实收尾。
+                    controller.HandleRecreateFailed(handleAlive: false);
+
+                    // 不得再承诺"自动恢复"。
+                    Assert.DoesNotContain("自动恢复", controller.StatusText);
+                    // 必须说清楚"重建失败"。
+                    Assert.Contains("重建失败", controller.StatusText);
+                    // 句柄已失效 ⇒ 不得对着无效句柄抓屏 ⇒ 服务保持停止。
+                    Assert.Null(controller.CaptureService);
+                    Assert.False(controller.IsRunning);
+                    // 配置态开关不变（用户没关它）。
+                    Assert.True(controller.Enabled);
+                }
+                finally
+                {
+                    factory.StopAll();
+                    controller?.Dispose();
+                }
+            });
+        }
+
+        /// <summary>
+        /// 【LM-095】受控重建**失败**但句柄仍然有效 ⇒ 临时停机的语义依然成立
+        /// ⇒ 必须按配置把实时玻璃拉回来（而不是让用户手动重开）。
+        /// </summary>
+        [Fact]
+        public void 重建失败但句柄仍在_必须按配置把实时玻璃拉回来()
+        {
+            RunOnSta(() =>
+            {
+                var factory = new RecordingServiceFactory();
+                LiveGlassController? controller = null;
+                try
+                {
+                    using Form form = CreateOffscreenForm();
+                    ThemeAppearanceOptions options = CreateOptions(form);
+                    controller = new LiveGlassController(form, () => options, factory.Create);
+
+                    controller.SetEnabled(true);
+                    BackdropCaptureService first = controller.CaptureService;
+                    Assert.NotNull(first);
+
+                    factory.Backends[0].StopProducing();
+                    controller.StopForHandleRecreate();
+                    Assert.Null(controller.CaptureService);
+
+                    // ★ 重建失败，但句柄还在（重建请求被拒 / 旧句柄未被销毁）⇒ 可以恢复。
+                    controller.HandleRecreateFailed(handleAlive: true);
+
+                    BackdropCaptureService second = controller.CaptureService;
+                    Assert.NotNull(second);
+                    Assert.NotSame(first, second);
+                    Assert.True(controller.IsRunning);
+                    Assert.True(factory.Backends[1].WaitForCaptureStarted(1, TimeSpan.FromSeconds(5)));
+                    // 恢复之后状态行不再说"已暂停"，也不说"重建失败"。
+                    Assert.DoesNotContain("重建失败", controller.StatusText);
+                    Assert.DoesNotContain("自动恢复", controller.StatusText);
+                }
+                finally
+                {
+                    factory.StopAll();
+                    controller?.Dispose();
+                }
+            });
+        }
+
+        /// <summary>
+        /// 【LM-095】用户本就关着实时玻璃时，重建失败的收尾**不得**把它拉起来，
+        /// 也不得把状态改成"重建失败"（用户没在用它）。
+        /// </summary>
+        [Fact]
+        public void 重建失败时用户已关闭的实时玻璃不得被拉起()
+        {
+            RunOnSta(() =>
+            {
+                var factory = new RecordingServiceFactory();
+                LiveGlassController? controller = null;
+                try
+                {
+                    using Form form = CreateOffscreenForm();
+                    ThemeAppearanceOptions options = CreateOptions(form);
+                    controller = new LiveGlassController(form, () => options, factory.Create);
+
+                    controller.SetEnabled(true);
+                    controller.SetEnabled(false);
+                    Assert.False(controller.Enabled);
+
+                    controller.HandleRecreateFailed(handleAlive: true);
+
+                    Assert.False(controller.Enabled);
+                    Assert.Null(controller.CaptureService);
+                    Assert.Contains("未启用", controller.StatusText);
+                    Assert.Single(factory.Backends);
+                }
+                finally
+                {
+                    factory.StopAll();
+                    controller?.Dispose();
+                }
+            });
+        }
+
         [Fact]
         public void RequestIdentityRejectsBoundsOrClientGeometryCounterChanges()
         {

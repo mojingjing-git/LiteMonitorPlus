@@ -275,6 +275,38 @@ namespace LiteMonitor
             StartService();
         }
 
+        /// <summary>
+        /// 【LM-095】受控重建**失败**时的收尾。
+        /// <para>★ 重建失败 ⇒ 状态行里"重建完成后自动恢复"的承诺**永远兑现不了**
+        ///   ⇒ 不得继续这样承诺（合同 §7「降级不静默」）。</para>
+        /// <para>★ 句柄仍有效（<paramref name="handleAlive"/> == true）⇒ 临时停机的语义
+        ///   （"句柄没了不能抓屏，重建后按配置恢复"）依然成立 —— 句柄没坏 ⇒
+        ///   按配置把服务拉回来是正确的。</para>
+        /// <para>★ 句柄已失效 ⇒ 不得对着无效句柄抓屏 ⇒ 保持停止，并如实说明
+        ///   "重建失败，需手动重开"。</para>
+        /// </summary>
+        internal void HandleRecreateFailed(bool handleAlive)
+        {
+            if (_disposed) return;
+
+            // 重建已经失败了 ⇒ 不再处于"临时停机"（不会再有"重建完成后自动恢复"）。
+            _stoppedForHandleRecreate = false;
+
+            // 用户本就关着 ⇒ 无需任何收尾（状态行会显示"未启用"）。
+            if (!Enabled) return;
+
+            if (handleAlive)
+            {
+                // 句柄还在 ⇒ 按配置把服务拉回来
+                // （RestoreIfEnabled 内部会对"句柄尚未就绪"优雅降级，不会抛异常）。
+                RestoreIfEnabled();
+                return;
+            }
+
+            // 句柄已失效 ⇒ 不能对着无效句柄抓屏 ⇒ 保持停止，如实说明原因。
+            _lastError = "实时玻璃已停止（窗口句柄重建失败），请手动重新开启。";
+        }
+
         private void StartService()
         {
             if (_service is not null) return;

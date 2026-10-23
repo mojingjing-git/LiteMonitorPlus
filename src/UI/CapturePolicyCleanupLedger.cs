@@ -260,9 +260,13 @@ namespace LiteMonitor
         /// 同一 <see cref="WindowCapturePolicyCleanup.WindowHandle"/>、同一
         /// <see cref="WindowCapturePolicyCleanup.Generation"/>；<c>Attempts</c> 归零；
         /// <c>NextAttemptAt</c> = 立即。</para>
-        /// <para>★ 旧条目**不再重试、也不再触碰 HWND**（终结为
-        /// <c>Completed("rearmed_by_explicit_recovery")</c>）⇒ **不违反**合同 §6.3
-        /// "终态不可回退"。</para>
+        /// <para>★ 旧条目**保持 <c>Failed</c> / <c>exhausted</c>（如实记账：原策略始终没被写回）**，
+        /// 只被打上"已被接管"标记（<see cref="WindowCapturePolicyCleanup.ReclaimedByExplicitRecovery"/>）
+        /// ⇒ 它仍然**终态**、ledger 不会再重试它、也不会再对它做任何 Win32 调用
+        /// ⇒ **不违反**合同 §6.3 "终态不可回退"。</para>
+        /// <para>★【LM-097】**不得**把旧条目改成 <c>Completed("rearmed_by_explicit_recovery")</c>：
+        ///   那会把"原策略始终没有被写回"这一事实抹掉 ⇒ 闸门误判为"已恢复"
+        ///   ⇒ R10 的危害（窗口在录屏/截图里持续不可见）原样复活。</para>
         /// <para>★ 同代次已有非终态条目时**必须拒绝**（否则会叠加第二条 Pending，违反 INV-4），
         /// ⇒ 用户反复点击不会无限堆积条目。</para>
         /// </summary>
