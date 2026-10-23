@@ -957,6 +957,8 @@ R01 一路穿过了全部 1396 条用例与**连续 8 次绿色 CI** ⇒ 证明"
 
 **★ 教训（写进台账）**：**"流水线绿"不等于"门禁有效"**。凡是用 `$LASTEXITCODE` 判定的地方，都必须确认被调用程序是**控制台**程序；GUI 子系统 exe 必须用 `Start-Process -PassThru` + `WaitForExit` 取退出码。凡是"新加的门禁"，除了"它能绿"，还必须证明"**它能红**"—— 变异自证是门禁本身的准入条件，不是可选检查。
 
+**★ CI 侧重新取证**（修复后）：`39879199466` @`410192a` = **success**（18 步全 success）；「生产主窗体启动检查」步骤耗时 **21 秒**（00:40:18 → 00:40:39）—— 旧写法在本地只需 **23 ms** 就返回 ⇒ 这次是真的在等探针进程结束；日志里「生产主窗体启动检查退出码: 0」现在来自 `$proc.ExitCode`，是**真实**退出码。
+
 ---
 
 ## 5. 执行步骤
@@ -1398,7 +1400,7 @@ R01 一路穿过了全部 1396 条用例与**连续 8 次绿色 CI** ⇒ 证明"
 | 解决方案测试发现 | **1487**（CI 口径） | `dotnet test LiteMonitor.sln` | **不再是 0** —— BASE-003 已闭环（`0366268` 三个测试工程入 `.sln`）；`assert-test-counts.ps1` 把「发现 0」变红 |
 | 两点 / 三点分支差异 | 484 / 522，共同祖先 `169e90a2…` | `git diff --name-only master branch` / `master...branch` | 已实测（BASE-002 起点；**本轮未重测**） |
 | Release 构建 | **成功** | `dotnet build LiteMonitor.sln -c Release` | 6 次 CI 全部 success（CI 内含 `dotnet build LiteMonitor.sln -c Release`，`.github/workflows/ci.yml:159`）。本地曾被运行中的 `LiteMonitor++.exe` 锁住输出目录（ENV-001，**非代码缺陷**，实例已自行退出） |
-| 远端 GitHub Actions | 本轮 **1 次 failure → 修正后连续 9 次 success**（快照截至 `176e78e`） | `gh run list --repo mojingjing-git/LiteMonitorPlus --limit 8` | `39877330711` @`176e78e` = **success**（阈值校正提交）；`39876338644` @`43538bb` = **success**（**审查批 R02 集成**提交，17 步全 success，含「生产主窗体启动检查（R01）」退出码 **0** 与"强制校验测试发现数"门禁：合计 **1487** / 通过 **1486** / 失败 **0** / 跳过 **1**）；`39875058697` @`794a9ab` = success（R04 集成，1457 条）；`39874691878` @`acdcd3f` = cancelled（被后续 push 取消，正常）；`39872880204` @`2625f0a` = success；`39872199423` @`a157c1b` = success；`39857370637` @`be3dffd` = success；`39856338946` @`7a2ea69` = success（发现 1396 条）；`39847068945` @`427b35d` = success；`39845677635` @`7283b91` = success；`39844871915` @`cf1c8ee` = success；`39844039100` @`9e384e0` = success；`39836128969` @`61465ba` = success；`39834352321` @`b1a8b42` = **failure**（根因：阈值按**集成分支**实测 1316 设置，而被推送的 `b1a8b42` 实测仅 **1295** ⇒ 门禁**正确**报红，**不是**门禁缺陷） |
+| 远端 GitHub Actions | 本轮 **1 次 failure → 修正后连续 10 次 success**（快照截至 `410192a`） | `gh run list --repo mojingjing-git/LiteMonitorPlus --limit 8` | `39879199466` @`410192a` = **success**（**LM-090 修复 + 台账**，18 步全 success；启动检查步骤耗时 **21 秒** ⇒ 真的在等探针，退出码 0 是**真实**退出码；门禁：合计 **1487** / 通过 **1486** / 失败 **0** / 跳过 **1**，阈值 **1487**）；`39877889929` @`086ae62` = success（§8 基线回写）；`39877330711` @`176e78e` = success（阈值校正，合计 1487 / 阈值 1487）；`39876338644` @`43538bb` = success（R02 集成）；`39875058697` @`794a9ab` = success（R04 集成，1457 条）；`39874691878` @`acdcd3f` = cancelled（被后续 push 取消，正常）；`39872880204` @`2625f0a` = success；`39872199423` @`a157c1b` = success；`39857370637` @`be3dffd` = success；`39856338946` @`7a2ea69` = success（发现 1396 条）；`39847068945` @`427b35d` = success；`39845677635` @`7283b91` = success；`39844871915` @`cf1c8ee` = success；`39844039100` @`9e384e0` = success；`39836128969` @`61465ba` = success；`39834352321` @`b1a8b42` = **failure**（根因：阈值按**集成分支**实测 1316 设置，而被推送的 `b1a8b42` 实测仅 **1295** ⇒ 门禁**正确**报红，**不是**门禁缺陷） |
 | 远端 Release | **仍为 0**（本批不发布） | `gh release list` | 已实测；发布准入见 §9 |
 | 本地 HEAD vs 远端 `origin/fix/audit-remediation-v3` | 本轮推送后**齐平**（`176e78e`） | `git log --oneline origin/fix/audit-remediation-v3..HEAD` | 已实测（`git rev-parse HEAD` 与 `git rev-parse origin/fix/audit-remediation-v3` 同为 `176e78e6236cee89c809b43b018e5d190fff43ed`）；`master` 本地与远端恒为 `23a6c5c`（**本批未合并**；合并须等本批收敛 + CI 绿 + 独立复核通过） |
 
