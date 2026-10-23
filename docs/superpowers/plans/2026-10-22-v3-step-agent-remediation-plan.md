@@ -221,22 +221,22 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 | LM-077 | R13 · 口令迁移 `EnsureWebPasswordMigrated` 调 `Save` 后直接返回 true，而 `Save` 在禁止保存时**直接返回**、遇 IO 错误**吞异常** ⇒ 旧明文可能仍在磁盘 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 B，提交 `d8f3661`）：修法要点与证据见 **§4.12** |
 | LM-078 | R14 · 请求合并键只有请求摘要，**不含允许目标/凭据策略** ⇒ 不同白名单的调用者可能复用他人的响应 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 B，提交 `dd50295`）：修法要点与证据见 **§4.12** |
 | LM-079 | R15 · `StripPort`（`PluginExecutor.cs:847`）对 IPv6 字面量按**最后一个冒号**截断 ⇒ `[fd00::1]` 与 `[fd00::2]` 都化成 `[fd00:` ⇒ **地址碰撞** | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11；★ 与 LM-058 是**同一类缺陷的另一处**，LM-058 当时判为"偏严方向"，**本项方向相反 ⇒ fail-open，更严重**） | ✅ **已修复并集成**（P2 批次 B，提交 `703083f`）：修法要点与证据见 **§4.12** |
-| LM-080 | R16 · `AddDeclaredHost`（`PluginProcessor.cs:421`）只按 `/` 截 authority，**不处理 `?`/`#`** ⇒ 无路径 URL 的查询串被当作主机名 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（插件沙箱批次） |
-| LM-081 | R17 · 手动重定向按状态码**无条件**把方法设为 GET（`PluginExecutor.cs:1006`）⇒ HEAD 语义丢失 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（插件沙箱批次） |
-| LM-082 | R18 · 原生 Crypto 请求按**实例 ID** 而非**执行作用域**合并；旧任务未收尾即被新执行复用 ⇒ 跨代次取消相互影响 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（插件沙箱批次） |
-| LM-083 | R19 · 插件事务恢复晚于首次加载与调度 ⇒ 磁盘回滚了但**内存仍运行新版本** | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（市场批次；与 LM-068 同模块） |
-| LM-084 | R20 · 市场改用 `ResponseHeadersRead` 后，30 秒超时只约束到**响应头**；正文读取用调用方 `ct` ⇒ "头成功、正文停滞"可无限等待 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（市场批次） |
-| LM-085 | R21 · 旧配置首存时主文件被加密，但 `AtomicWrite` 把旧主文件**原样**复制成 `settings.json.bak` ⇒ 备份里仍有插件密钥**明文** | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（凭据批次） |
-| LM-086 | R22 · T01 探针 `PumpScene` 在 `Task.Run` 内调用需 UI 线程的 `UpdateScene` ⇒ 抛 `InvalidOperationException` 且任务未等待 ⇒ 持续送帧失败未被报告 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（验证工具批次） |
-| LM-087 | R23 · 真实 MainForm 隔离门在 `OnShown` 启动服务**之前**检查 ⇒ 生产 `OnShown` 开启监听的副作用未被约束 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（验证工具批次） |
-| LM-088 | R24 · 探针找不到源码时 `guard` 为 null，但 `unchanged` 初值为 true ⇒ 仍输出"源码未漂移" | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（验证工具批次） |
-| LM-089 | R25 · `release.yml` **没有**接入 `generate-dependency-manifest.ps1 -Mode Check` 门禁 ⇒ 依赖漏列时 CI 会红而**发布流水线仍会**构建/签名/上传草稿 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | 排队（发布门禁批次） |
+| LM-080 | R16 · `AddDeclaredHost`（`PluginProcessor.cs:421`）只按 `/` 截 authority，**不处理 `?`/`#`** ⇒ 无路径 URL 的查询串被当作主机名 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 C，提交 `628dfcd`）：修法要点与证据见 **§4.13** |
+| LM-081 | R17 · 手动重定向按状态码**无条件**把方法设为 GET（`PluginExecutor.cs:1006`）⇒ HEAD 语义丢失 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 C，提交 `63c5e0a` + `cb33cfd`(R4) + `9d36f1a`(R5)）：修法要点与证据见 **§4.13** |
+| LM-082 | R18 · 原生 Crypto 请求按**实例 ID** 而非**执行作用域**合并；旧任务未收尾即被新执行复用 ⇒ 跨代次取消相互影响 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 C，提交 `4de5db9`）：修法要点与证据见 **§4.13** |
+| LM-083 | R19 · 插件事务恢复晚于首次加载与调度 ⇒ 磁盘回滚了但**内存仍运行新版本** | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 D，提交 `cc9ca91`）：修法要点与证据见 **§4.13** |
+| LM-084 | R20 · 市场改用 `ResponseHeadersRead` 后，30 秒超时只约束到**响应头**；正文读取用调用方 `ct` ⇒ "头成功、正文停滞"可无限等待 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 D，提交 `d77c074`）：修法要点与证据见 **§4.13** |
+| LM-085 | R21 · 旧配置首存时主文件被加密，但 `AtomicWrite` 把旧主文件**原样**复制成 `settings.json.bak` ⇒ 备份里仍有插件密钥**明文** | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 D，提交 `8a44f07`）：修法要点与证据见 **§4.13** |
+| LM-086 | R22 · T01 探针 `PumpScene` 在 `Task.Run` 内调用需 UI 线程的 `UpdateScene` ⇒ 抛 `InvalidOperationException` 且任务未等待 ⇒ 持续送帧失败未被报告 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 E，提交 `c70fc33`）：修法要点与证据见 **§4.13** |
+| LM-087 | R23 · 真实 MainForm 隔离门在 `OnShown` 启动服务**之前**检查 ⇒ 生产 `OnShown` 开启监听的副作用未被约束 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 E，提交 `61d37c7`）：修法要点与证据见 **§4.13** |
+| LM-088 | R24 · 探针找不到源码时 `guard` 为 null，但 `unchanged` 初值为 true ⇒ 仍输出"源码未漂移" | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 E，提交 `79252c4`）：修法要点与证据见 **§4.13** |
+| LM-089 | R25 · `release.yml` **没有**接入 `generate-dependency-manifest.ps1 -Mode Check` 门禁 ⇒ 依赖漏列时 CI 会红而**发布流水线仍会**构建/签名/上传草稿 | P2 | `CONFIRMED`（**主审逐条回源码复核：成立**，2026-10-23；证据见 §4.11） | ✅ **已修复并集成**（P2 批次 E，提交 `b5d80fe`）：修法要点与证据见 **§4.13** |
 | **LM-090** | **启动检查 CI 门禁假绿**：探针 `GpuHostLifecycleProbe.csproj` 是 `<OutputType>WinExe</OutputType>`（GUI 子系统）⇒ PowerShell 的 `&` 对 GUI 程序**不等待**且**不更新** `$LASTEXITCODE`；而门禁前一步恰是 `dotnet build`（把 `$LASTEXITCODE` 置 **0**）⇒ `$code` 恒为 0 ⇒ `if ($code -ne 0)` **永不触发** ⇒ **任何主窗体构造异常都被判绿** | **P1** | `CONFIRMED`（**独立复核者 LM-065~LM-069 复核产出**；**主审独立复现**：见 §4.6.6） | ✅ **已修复**（`1a94378`）：两份工作流改用 `Start-Process -PassThru` + `WaitForExit(180000)` 取**真实**退出码（超时 ⇒ 判失败）。**主审负向自证**（直接执行**工作流里的那段脚本本身**，非副本）：基线退出码 0（耗时 3912 ms，真的在等）⇒ 变异（R01 空引用放回）退出码 **1 并打印真实 NRE 堆栈** ⇒ 字节还原 SHA-256 `3C84A169…` 逐位一致 ⇒ 退出码 0。**待独立复核**（第二轮已派发） |
 | **LM-091** | CI 用例发现数阈值**低于**实测总数（`ci.yml` / `release.yml` 均 1396，实测 1487），且 `ci.yml` 注释里"阈值 == 当前实测总数（删用例会变红）"的声明**不成立**（删 91 条仍绿）；分解里的 `58` 已过时（Updater.Tests 现为 73） | P3 | `CONFIRMED`（**独立复核者在其基线 `9e3ba32` 上实测**；主审在 `176e78e` 已自行修正并被复核者确认吻合） | ✅ **已修复**（`176e78e`）：`ci.yml` 与 `release.yml` 两处 `MIN_TEST_TOTAL` 同步上调至 **1487**（= 被推送分支 `43538bb` 的实测总数），注释与分解同步更新；两处**逐字一致**（主审复核确认） |
 | **LM-092** | 启动检查门禁的 `Start-Process -ArgumentList` **不给含空格的元素加引号** ⇒ `GITHUB_WORKSPACE` 含空格时输出目录被拆成多个 argv（探针报 `Unknown argument 'with'.`，退出码 **64**）⇒ 门禁**误报红**（fail-closed，非假绿）；且失败信息误称"MainForm 构造期抛异常" | P3 | `CONFIRMED`（**LM-090 第二轮独立复核产出**；**主审独立复现**：本机 PS 7.6.6 上实测 —— 数组直接给含空格路径 ⇒ 退出码 **64**；手工加引号 ⇒ 退出码 **0** 且产物落在正确路径） | ✅ **已修复**（`3cb9e00`）：`-ArgumentList @('--scenario=startup', ('"{0}"' -f $out))` 手工加引号（Windows 路径不含 `"` ⇒ 安全）；失败信息改为列出**退出码契约**（0=构造成功 / 1=构造期抛异常 / 2=环境不具备 / 64=参数错误）。**主审四组合自证**（执行工作流抽取出的真脚本）：健康×无空格 = **0** / 健康×含空格 = **0** / 变异×无空格 = **1** / 变异×含空格 = **1**；还原后 SHA-256 `3C84A169…` 逐位一致。★ GitHub 托管 runner（`D:\a\<repo>\<repo>`）无空格 ⇒ **默认不触发**；自托管 runner / 本地含空格路径会命中 |
 | **LM-093** | **LM-074 返工带出的次生缺陷（假告警）**：`UIController.StopGpuPresentation` 的**双路登记**（事件回调 `OnGpuCapturePolicyCleanupRequired` + `LastCapturePolicyCleanup` 兜底）里，事件回调已把记录登记成功，兜底路径再 `Add` **同一实例** ⇒ 被 `CapturePolicyCleanupLedger.Add` 的 INV-4 检查拒绝 ⇒ LM-074 新增的留痕逻辑把这次**拒绝**一律记成 `gpu_capture_policy_cleanup_registration_rejected` ⇒ **每一次正常移交都误报**；且 `CleanupWarningCode` 是**单槽** ⇒ 误报会挤掉 `gpu_capture_policy_cleanup_superseded` 这类真正需要人看的告警 | P3 | `CONFIRMED`（**主审复核 LM-074 返工 diff 时发现**，源码级推演已闭合：`HandOffCapturePolicyCleanup` 置 `LastCapturePolicyCleanup` 后**不清空** ⇒ 兜底必然二次登记；`Add` 的 INV-4 判据 `existing.Generation == cleanup.Generation && !existing.IsTerminal` 对**同一实例**同样命中） | ✅ **已修复**（`50f8fb5`）：修在 ledger 层 —— `Add` 的判定顺序改为「**先**判同一实例是否已在册 ⇒ 幂等返回 `true`（不触发任何被拒诊断）→ 再判终态 → 最后才是 INV-4（**不同**条目撞同代次才算真被拒，才写 `RegistrationRejectedCode`）」。★ INV-4 的不变量是"同一代次至多一条 `Pending`" ⇒ 重复登记**同一条**不违反它；`Add` 的返回值语义改为"这条责任**已在册**"。★ 顺带修正 `UIController.StopGpuPresentation` XML 文档里"双路并存安全 —— `Add` 对同一代次幂等"的错误说法（`Add` 实际并不幂等，旧代码只是忽略了 `false`）。**批次 A 独立复核判定 `PASS`**（6 条自写用例 + M4 变异） |
 
-| **LM-094** | **`AddDeclaredHost` 的端口截断对 IPv6 字面量同样不成立**：`PluginProcessor.AddDeclaredHost`（`:431-432`）用 `authority.IndexOf(':')` 截端口 ⇒ 形如 `[fd00::1]` 的 IPv6 字面量被截成 **`"[fd00"`** ⇒ 声明主机集合里是一枚**畸形串** ⇒ 该 IPv6 主机永远无法被正确声明（带凭据请求被一律拒绝） | P3 | `CONFIRMED`（**主审复核 LM-079 时发现**：与 LM-079 同族但**不同处** —— LM-079 是三处 `StripPort` 按**最后一个冒号**截断，本项是 `AddDeclaredHost` 按**第一个冒号**截断；★ 方向**偏严**（不会误放行，只是 IPv6 声明不可用）） | 排队（插件沙箱批次；★ **LM-079 的修复不得顺带改这里** —— 避免与批次 C 的 LM-080（同一个函数）冲突） |
+| **LM-094** | **`AddDeclaredHost` 的端口截断对 IPv6 字面量同样不成立**：`PluginProcessor.AddDeclaredHost`（`:431-432`）用 `authority.IndexOf(':')` 截端口 ⇒ 形如 `[fd00::1]` 的 IPv6 字面量被截成 **`"[fd00"`** ⇒ 声明主机集合里是一枚**畸形串** ⇒ 该 IPv6 主机永远无法被正确声明（带凭据请求被一律拒绝） | P3 | `CONFIRMED`（**主审复核 LM-079 时发现**：与 LM-079 同族但**不同处** —— LM-079 是三处 `StripPort` 按**最后一个冒号**截断，本项是 `AddDeclaredHost` 按**第一个冒号**截断；★ 方向**偏严**（不会误放行，只是 IPv6 声明不可用）） | ✅ **已修复并集成**（P2 批次 C，提交 `a2302b1`）：修法要点与证据见 **§4.13**（★ 与 LM-080 同函数不同语句，两项均已改且互不干扰；与 LM-079 修好的 `PluginSandbox.StripPort` **IPv6 语义一致**） |
 
 | **LM-095** | **受控重建失败时实时玻璃停在"暂停"，且状态行的"自动恢复"承诺落空**：LM-072 把句柄销毁改成"临时停机"（保留 `Enabled`），但**按配置恢复的唯一调用点**是 `UIController.CompleteLegacyTransition` 末尾的 `_liveGlass?.RestoreIfEnabled()`；而受控重建**失败**时 `RunGpuToLegacyTransition` 在 `FailHandleRecreate()` 后直接 `return` ⇒ `CompleteLegacyTransition` 不执行 ⇒ `RestoreIfEnabled()` 永不调用 ⇒ 服务保持停止，而状态行仍显示"实时玻璃已暂停（窗口句柄重建中），**重建完成后自动恢复**。"—— 重建已失败，"自动恢复"永远不发生 | P2 | `CONFIRMED`（**批次 A 独立复核产出**，主审回源码复核成立：`src/UI/UIController.cs:1611-1618` 早退 + `:1727-1730` 唯一恢复调用点 + `src/UI/LiveGlassController.cs:151-154` 虚假承诺文案） | ✅ **已修复**（本轮）：新增 `LiveGlassController.HandleRecreateFailed(handleAlive)`（句柄仍在 ⇒ 按配置恢复；句柄已失效 ⇒ 保持停止并如实说明"重建失败，需手动重开"）；`UIController` 失败分支改为调用它并读 `MainForm.IsClosing`（关闭流程中不得拉起捕获，合同 §4 / U10）；`MainForm` 新增 `internal bool IsClosing`。**新增 4 条用例**（3 条行为 + 1 条 IL 接线护栏）；**主审变异自证** MA1/MA2/MA3 **3/3 全杀**且 SHA-256 逐位一致还原 |
 | **LM-096** | **同代次"明确恢复"的重建次数无上限** ⇒ 单 HWND 累计 affinity 写入次数可**远超**"6 + 最多 6"：`TryRearmForExplicitRecovery` 每次都从同代次里挑**第一条** `Failed && AffinityChangedBySession` 的条目重建新责任，**不检查该条目是否已被 `ReclaimedByExplicitRecovery` 标记** ⇒ 同一条旧责任可被反复接管，每轮新建一条拥有独立 6 次预算的新责任 | P3 | `CONFIRMED`（**批次 A 独立复核产出**，主审回源码复核成立：`src/UI/CapturePolicyCleanupLedger.cs:277-299` 的挑选条件不含 `ReclaimedByExplicitRecovery`；⇒ **主审 §4.9 原记录的"6 + 最多 6"口径是错的**，已在 §4.9 更正） | ⏸️ **裁决：不改代码**（见 §4.10 主审裁决）。理由：① 重复写入的是**同一个** affinity 值，实质危害远低于"原策略永不恢复"；② 若加"每代次重建 ≤ 1"封顶，会把 R10 的实质危害（原策略始终没被写回 ⇒ 窗口在录屏/截图里持续不可见）从"有机会恢复"变成"必然不恢复" ⇒ **净风险更大**；③ 真正的缺陷是**台账口径**（已更正）。`_entries` 只增不减的缓慢增长作为**已知残留**记档 |
@@ -247,7 +247,7 @@ V3.0 是三次评审的收敛结果，不是全新撰写：
 
 **编号规则：** `LM-` 缺陷 / `SEC-` 安全 / `BASE-` 基线 / `ENV-` 环境事实 / `GPU-` GPU 切换专项。第三方评审使用的 `LM-018`、`LM-019` 与 `LM-003b`、`LM-003c` 指同一处代码，已合并并保留别名以便交叉引用；`LM-005/006` 为同一协议缺陷的两个侧面。
 
-> **编号占用现状（2026-10-23 第十二次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-098`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-099` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用，`LM-057`–`LM-059` 由 LM-045 独立复核产出，`LM-060` 由 GPU T03 变异自证过程实测产出，`LM-061`–`LM-064` 由 GPU 独立复核产出，**`LM-065`–`LM-089` 由 2026-10-23 独立审查报告产出**，对应报告编号 R01–R25；**`LM-090`–`LM-091` 由 LM-065~LM-069 第一轮独立复核产出**，`LM-090` 由第二轮复核追加确认；**`LM-092` 由 LM-090 第二轮独立复核产出**；**`LM-093` 由主审复核 LM-074 返工 diff 时发现**；**`LM-094` 由主审复核 LM-079 时发现**；**`LM-095`–`LM-097` 由批次 A 独立复核产出**；**`LM-098` 由主审复核 LM-077 时发现**）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
+> **编号占用现状（2026-10-23 第十三次核对）**：已占用 `LM-001`–`LM-021`、`LM-023`、`LM-024`、`LM-030`–`LM-098`。`LM-022` 与 `LM-025`–`LM-029` 为**从未使用的空号**（经 `Select-String` 全文检索 + `git log --grep` 双向确认），保持空置不复用。**新增缺陷从 `LM-099` 起顺延，不得复用已关闭编号**（`LM-045`–`LM-052` 于上一轮占用，`LM-053`–`LM-056` 于本轮占用，`LM-057`–`LM-059` 由 LM-045 独立复核产出，`LM-060` 由 GPU T03 变异自证过程实测产出，`LM-061`–`LM-064` 由 GPU 独立复核产出，**`LM-065`–`LM-089` 由 2026-10-23 独立审查报告产出**，对应报告编号 R01–R25；**`LM-090`–`LM-091` 由 LM-065~LM-069 第一轮独立复核产出**，`LM-090` 由第二轮复核追加确认；**`LM-092` 由 LM-090 第二轮独立复核产出**；**`LM-093` 由主审复核 LM-074 返工 diff 时发现**；**`LM-094` 由主审复核 LM-079 时发现**；**`LM-095`–`LM-097` 由批次 A 独立复核产出**；**`LM-098` 由主审复核 LM-077 时发现**）。 GPU 专项独立编号 `GPU-001`–`GPU-005`（`GPU-0xx` 此前未占用）。
 
 ### 4.1 根因更正记录 · LM-001（原"永久停摆"前提已证伪）
 
@@ -1371,6 +1371,150 @@ DPI 变化路径、`PresentationSession.RecreateWindow` 的合同 §7.3 R1~R6（
 #### 4.12.7 本轮新登记的缺陷
 
 **LM-098**（P3）—— 口令迁移成功后**内存里的明文仍保留** ⇒ 每次登录重复写盘，且「迁移早已完成」时的一次写盘失败会**永久拒绝登录**。详见 §4 缺陷表。**本轮不改**：① 重复写盘是**幂等**的（写出的内容与上次一致），对低频登录无实际影响；② 「迁移早已完成仍被拒」属于 **fail-closed 的过度收紧**，不产生凭据泄露；③ 正确修法（迁移成功后清空内存明文）会改变 `WebServerPassword` 的内存语义，影响面超出 LM-077 的修复边界 ⇒ 另立批次处理。
+
+---
+### 4.13 P2 批次 C / D / E（LM-080~LM-089 + LM-094）修复与集成记录（2026-10-23）
+
+**P2 全部 20 项（LM-070~LM-089）至此全部修复并集成。批次 C/D/E 共 12 项（LM-080~LM-089 + LM-094），由三个 worker 在三个**文件所有权互不相交**的 worktree 里并行施工，主审逐项回源码复核 + 自设计独立变异。**
+
+#### 4.13.1 三批的文件所有权（并行前提，主审实测）
+
+| 批次 | 缺陷 | 生产文件 | 新增用例 |
+|---|---|---|---|
+| **C** | LM-080 / LM-081 / LM-082 / LM-094 | `PluginProcessor.cs` / `PluginExecutor.cs` / `CryptoNative.cs` | 58 条 |
+| **D** | LM-083 / LM-084 / LM-085 | `Settings.cs` / `SettingsHelper.cs` / `PluginMarket.cs` / `PluginManager.cs` / `MainForm_Transparent.cs` | 12 条 |
+
+★ 批次 D 另有第 4 个提交（`52d0c4a`）：**只动测试** —— 新用例改为**不重建共享配置单例**（见 §4.13.5 末段）。
+| **E** | LM-086 / LM-087 / LM-088 / LM-089 | `tools/GpuHostLifecycleProbe/**` / `LiteMonitor.Tests.csproj` / 探针 `AssemblyInfo.cs` / `release.yml` | 15 条 |
+
+⇒ 三批之间**零文件重叠** ⇒ 并行安全；集成按 **C → E → D** 顺序 `cherry-pick`（保持线性历史）。
+
+#### 4.13.2 修法要点（主审逐项回源码核实）
+
+- **LM-080**：`AddDeclaredHost` 取 authority 时在 `'/'`、`'?'`、`'#'` **三者中最先出现处**结束 ⇒ 无路径 URL 的查询串/片段不再被当成主机名。
+- **LM-094**：端口截断改走新增私有助手 `StripAuthorityPort` —— **方括号内的冒号不是端口分隔符**（`[fd00::1]` / `[fd00::1]:8080` 的主机都是 `[fd00::1]`），非方括号的多冒号是裸 IPv6 整体保留，单冒号 `host:port` 行为**逐字不变**。与 LM-079 修好的 `PluginSandbox.StripPort` **IPv6 语义一致**。
+- **LM-081**：`RewritesMethodOnRedirect` 判据改为**逐状态码**对齐 .NET 原生（见 4.13.4）。
+- **LM-082**：`PluginSandboxScope` 新增 `ScopeId`（**每次执行一个 GUID**，目标级作用域继承 owner 的）⇒ 原生在途去重改为**按执行作用域**归并；`CryptoNative` 的共享任务改绑**自己的**中止令牌启动，等待者各自用**自己的**取消令牌决定是否继续等，**所有等待者都放弃**时才中止共享任务（及时释放进程级并发槽位）。
+- **LM-083**：`PluginManager.LoadPlugins` **开头**先 `RecoverMarketTransactions(directoryPath)` ⇒ **结构性兜底**，任何调用方都绕不过；`MainForm` 构造函数里再显式排一次"先恢复、后 `LoadPlugins`/`Start`"（顺序一眼可见）。恢复失败**不阻断**加载，但**绝不跳过**恢复。
+- **LM-084**：`DownloadBytesAsync` 新增 `internal DefaultDownloadTimeoutMs = 30_000`（覆盖**响应头 + 正文**整段下载）；期限令牌与调用方令牌用 **linked CTS 合并 ⇒ 取最早**；`catch (OperationCanceledException) when (!ct.IsCancellationRequested && deadlineCts.IsCancellationRequested)` ⇒ **只有期限先到**才报超时，**用户主动取消保留取消语义**（不被降级成"只能等超时"）。
+- **LM-085**：`AtomicWrite` 不再 `File.Copy` 旧主文件，改走 `WriteSanitizedBackup`（读回旧主文件 → `Settings.SanitizeSettingsJsonForBackup` 脱敏/加密 → 写备份）；脱敏规则与 `PluginSecretDictionaryConverter.WriteDict` **逐条一致**（secret key 且非已保护且非空 ⇒ DPAPI 加密），**DPAPI 失败 ⇒ 从备份里去掉该值，绝不写明文**；脱敏失败 ⇒ **不写备份**（绝不退回"原样复制"）。`WebServerPassword` 脱敏成空串。
+- **LM-086**：探针"持续送帧"改用 `System.Windows.Forms.Timer`（**必然**在 UI 线程触发），成功/失败**如实计数**；送帧失败 ⇒ 退出码 **5**；证据文件的 `exitCode` 与**进程真实退出码**一致。
+- **LM-087**：隔离门抽成纯函数 `IsolationGate.EvaluateBeforeRun / EvaluateAfterRun`；判据从"此刻有没有在监听"升级为"**配置会不会让它开** + 运行后复查"；门在 `Application.Run` **之前**求值并拒绝（消息循环不启动 ⇒ 生产 `OnShown` 永不执行）；读不到配置时**保守按"会启动"处理**；失败 ⇒ 退出码 **4**。
+- **LM-088**：新增 `sourceHashVerified` 与 `sourceHashStatus`；**没做比对**时 `sourceHashChanged` 必须是 **`null`**（"不知道"）而不是 `false`（"没漂移"），并给出退出码 **6**（`NOT_VERIFIED` 必须非零）。
+- **LM-089**：`release.yml` 接入与 `ci.yml` **逐字同构**的依赖清单门禁步骤（位置也相同：启动检查之后、跑测试之前）；**未改门禁判据，未改 `ci.yml`**。
+
+#### 4.13.3 主审独立变异自证（**13 个锚点，无一与实现者重合**）
+
+| 变异 | 锚点 | 缺陷 | 实测 | 还原 SHA-256 |
+|---|---|---|---|---|
+| MC-A | `AddDeclaredHost` 内 authority 截断结果赋值（完全不截断） | LM-080 | **红 4/6** | 逐位一致 ✅ |
+| MC-B | `StripAuthorityPort` **函数体内部**（去掉方括号处理） | LM-094 | **红 1/6** | 逐位一致 ✅ |
+| MC-C | `ScopeId` 的**生成处**（退化成常量） | LM-082 | **红 1/4** | 逐位一致 ✅ |
+| MC-D | 重定向循环的**调用点**（不再调用方法降级判据） | LM-081 | **红 3/42** | 逐位一致 ✅ |
+| ME-A | `WriteEvidence` 里抬退出码的判定 | LM-086 | **红 1/4** | 逐位一致 ✅ |
+| ME-B | `EvaluateAfterRun` 的运行后复查 | LM-087 | **红 1/5** | 逐位一致 ✅ |
+| ME-C | "未验证 ⇒ 退出码 6"的判定 | LM-088 | **红 2/3** | 逐位一致 ✅ |
+| ME-D | `release.yml` 门禁的**步骤名**（内容不动） | LM-089 | **红 2/3** | 逐位一致 ✅ |
+| MD-A~MD-D | 见 4.13.5 | LM-083/084/085 | 见 4.13.5 | 逐位一致 ✅ |
+
+⇒ **全部被杀，每次还原后 SHA-256 与变异前逐位一致**。★ MC-D / ME-D 的还原哈希与实现者自报的还原哈希**完全相同** ⇒ 交叉印证实现者的字节级还原无误。证据：`.artifacts/c-mutation/`、`.artifacts/e-mutation/`、`.artifacts/d-mutation/`。
+
+#### 4.13.4 ★ 主审推翻实现者的两处（LM-081）
+
+**① 判据与 .NET 原生不一致（R4 返工）**
+
+实现者把"PUT/DELETE 在重定向后如何处理"标为 `NOT_VERIFIED`，并按"非 GET/HEAD 即降级为 GET"实现。主审**补跑扩展探针**（`.artifacts/lm081-probe-ext/`，本机 .NET SDK 8.0.426，裸 `TcpListener` 自写 HTTP/1.1，只监听 127.0.0.1:18100 回环，不触外网），实测：
+
+```
+301 PUT    -> observed=[PUT /301 | PUT /final]        finalMethod=PUT      ← 保持 PUT！
+301 DELETE -> observed=[DELETE /301 | DELETE /final] finalMethod=DELETE   ← 保持 DELETE！
+302 PUT    -> finalMethod=PUT
+302 DELETE -> finalMethod=DELETE
+303 PUT    -> observed=[PUT /303 | GET /final]        finalMethod=GET      ← 只有 303 才降级
+303 DELETE -> observed=[DELETE /303 | GET /final]     finalMethod=GET
+307 / 308  => 全部方法保持原方法与正文
+```
+
+⇒ **.NET 原生是逐状态码不同**：**301/302 只有 POST 被降级为 GET**（PUT/DELETE/HEAD 等保持原方法与正文）；**303 才把非 GET/HEAD 一律降级**；**307/308 全部保持**。
+⇒ 实现者的判据 `(301||302||303) && method != GET && method != HEAD` 在 **301/302 + PUT/DELETE** 上与 .NET 不一致 ⇒ 仍是"自称与 .NET 一致而实际不一致"的**同一类残留**。
+⇒ 已返工为逐状态码口径：301/302 仅 POST 降级；303 非 GET/HEAD 降级；307/308 一律保持；注释写入逐状态码实测口径与两份证据文件名。
+
+**② 顺带扩大插件可发 HTTP 方法白名单（R5 返工，回退）**
+
+实现者为让用例能端到端断言"服务端收到 PUT"，新增 `ResolveHttpMethod`（白名单 GET/POST/HEAD/**PUT/DELETE/PATCH/OPTIONS**）。主审回源码核实修复前真实行为（`cb4450a:src/Plugins/PluginExecutor.cs`）：
+
+```csharp
+HttpMethod method = HttpMethod.Get;
+if (methodStr?.ToUpper() == "POST") method = HttpMethod.Post;
+else if (methodStr?.ToUpper() == "HEAD") method = HttpMethod.Head;
+// 其余一律 GET
+```
+
+⇒ **修复前本仓只发得出 GET / POST / HEAD** ⇒ 生产路径上**根本不存在 PUT/DELETE 请求** ⇒ "301/302 上 PUT 保持原方法"在生产中**不可达**。
+⇒ 扩大后第三方插件可对**已声明主机**发 DELETE/PUT/PATCH/OPTIONS —— 这是**新的、更具破坏性的能力**，属需**单独评估与授权**的安全变更，**搭车进一个 P2 缺陷修复不可接受**。
+⇒ 已**完整回退**（`ResolveHttpMethod` 删除、方法解析恢复原样、全仓 `HttpMethod.Put/Delete/Patch/Options` **0 命中**）；PUT/DELETE 的断言改为**谓词级**（反射直接调用生产用的同一个私有判据），并**如实标注"生产不可达，防御性对齐"**；HEAD/GET/POST 三条**生产可达**的端到端断言**一条未减**。
+
+★ **这两个问题实现者自审发现不了** —— 其用例集恰好只覆盖 HEAD/GET/POST。这正是"实现者自审不算数、必须主审独立复核 + 本机实测兜底"的价值。
+
+#### 4.13.5 批次 D 的主审独立变异
+
+| 变异 | 锚点（**与实现者不重合**） | 缺陷 | 实测 | 还原 SHA-256 |
+|---|---|---|---|---|
+| MD-A | `PluginManager.LoadPlugins` 里的 `RecoverMarketTransactions(directoryPath)` **调用点**（摘掉结构性兜底） | LM-083 | **红 2/5** | 逐位一致 ✅ |
+| MD-B | `PluginMarket` 里 **linked CTS 的创建表达式**（期限令牌不再并入） | LM-084 | **红 1/3** | 逐位一致 ✅ |
+| MD-C | `Settings.SanitizeSettingsJsonForBackup` 里的**凭据加密调用**（不再加密） | LM-085 | **红 2/4** | 逐位一致 ✅ |
+| MD-D | `SettingsHelper.WriteSanitizedBackup` 里的**脱敏函数调用点**（退回原样复制旧主文件） | LM-085 | **红 3/4** | 逐位一致 ✅ |
+
+⇒ **4/4 全杀**，每次还原后 SHA-256 与变异前**逐位一致**。证据：`.artifacts/d-mutation/`。
+
+★ **另记一条主审观察（测试污染类）**：批次 D 的新用例初版用 `Settings.Load(forceReload: true)` 读取配置 —— 这会**重建共享配置单例**，
+把「监听范围」的解析结果**冻结**在当时的文件状态上（文件里若是 `WebServerEnabled=true` 且**没有**监听范围字段 ⇒ 解析成**局域网**模式），
+从而让**同批次里的网页服务用例**起不来，甚至可能让服务真的开成局域网监听。
+实现者在收尾自查中自行发现并改为**不碰单例**的 `SettingsHelper.Load(forceReload: true)`。
+★ 口径登记：本仓「`Settings` 单例 + `cfgfile` 集合」是既有雷区（`SettingsRecoveryTests` / `WebSessionProtocolTests` 均受其约束），
+**新增测试文件若要读写配置，必须避免重建共享单例**。
+
+#### 4.13.6 回归与阈值
+
+- 主审亲跑 CI 口径（**构建与测试串行**）：`dotnet build --no-incremental` **0 错误**；
+  `dotnet test --no-build` ⇒ **1632 总 / 1631 通过 / 0 失败 / 1 跳过**
+  （分工程：`LiteMonitor.Tests` 1540/1539/0/1、`LiteMonitor.Updater.Tests` 73/73/0/0、`LiteMonitor.GpuNonperformance.Tests` 19/19/0/0）。
+- 增量核对：1547（批次 B 终态）+ **58**（批次 C：LM-080 6 + LM-094 6 + LM-081 42 + LM-082 4）
+  + **12**（批次 D：LM-083 5 + LM-084 3 + LM-085 4）+ **15**（批次 E：LM-086 4 + LM-087 5 + LM-088 3 + LM-089 3）
+  = **1632**，与实测**逐位吻合**，无既有用例回归。
+- 阈值：`MIN_TEST_TOTAL` **1547 → 1632**（= 被推送分支实测总数 1540+73+19）；`ci.yml` 与 `release.yml` **逐字一致**；
+  另外 4 个门禁参数（`EXPECTED_TEST_ASSEMBLIES` / `MAX_SKIPPED_TESTS` / `MUST_EXECUTE_TEST_CLASS` /
+  `MUST_EXECUTE_TEST_CLASS_MIN_COUNT`）**逐字一致**；只收紧不放宽；两个文件 **CRLF、无 BOM**。
+- 集成顺序 **C → E → D**，全部 `cherry-pick` 保持**线性历史**（批次 C 6 提交 + 批次 E 4 提交 + 批次 D 4 提交 = 14 提交）。
+
+#### 4.13.7 残留与未验证项（**不计入通过**）
+
+1. **LM-081 的 .NET 对照由主审两份探针提供**（`.artifacts/lm081-probe/` 与 `.artifacts/lm081-probe-ext/`），
+   实现者**未亲自重跑**；且 PUT/DELETE 判据**生产不可达**（`FetchRawAsync` 只发 GET/POST/HEAD）⇒ 属**防御性对齐**，
+   生产可达的 HEAD/GET/POST 另有端到端证据。
+2. **LM-081 带正文的 PUT/DELETE 在 301/302 上"正文保留并重发"**未覆盖 —— 本仓**只有 POST 步骤附带正文**（既有行为未改），
+   且 PUT/DELETE 生产不可达 ⇒ 该维度在生产中不存在。
+3. **LM-094 无 `[::1]` 回环服务器的端到端** —— 仅覆盖"声明集合 + 凭据目标校验"层面。
+4. **LM-082 未覆盖 `PluginManager` 真实重启（代次推进）路径** —— 用例以"同一实例的两个执行作用域"模拟跨代次。
+5. **`PluginProcessor.StripAuthorityPort` 与 `PluginSandbox.StripPort` 在退化输入（`"host:"`、`":8080"`）上语义不同**
+   （前者按冒号截断、后者保留原串）⇒ **不影响任何真实 URI**（`Uri.Host` 不带尾冒号），但**未写专门用例锁定**。
+6. **LM-086 未在无 GPU 环境验证"泵成功但 GPU 不可用"的组合** —— 已用真实 `s1` 场景端到端跑通
+   （`scenePump={"sent":5,"failed":0,"required":true,"ok":true}`、真实退出码 0）。
+7. **LM-087 `mainform` 场景端到端未跑** —— 该场景会构造生产 `MainForm` 并写用户 `settings.json`（真实副作用）；
+   门逻辑与求值顺序由 5 条用例覆盖（含 **IL 顺序断言**）。
+8. **LM-088 未构造"源码真的漂移"的运行** —— 需要写 `src/Rendering/**`（本批禁改）；已用真实 `s1` 验证正常路径
+   `sourceHashStatus = VERIFIED_UNCHANGED`。
+9. **LM-089 未在真实 GitHub Actions runner 上执行该步骤**、未本地执行 `generate-dependency-manifest.ps1 -Mode Check`
+   ⇒ `BLOCKED_ENV`（本机无 runner）。
+10. **探针工程不在 `LiteMonitor.sln` 中** —— 现在它只因**被测试工程引用**才被 `dotnet build LiteMonitor.sln` 间接构建；
+    若将来移除该引用，探针将不再随 CI 构建 ⇒ 登记为**已知结构风险**（非本批引入）。
+11. **★ 登记 NOTE：新增 public 成员** —— `PluginSandboxScope.ScopeId`（只读，外部不可改写）与
+    `PluginManager.RecoverMarketTransactions`（`public`）是本批新增的 public 成员。
+    `ScopeId` 与该类型既有成员（`Token`/`DeadlineUtc`/`MaxDuration`）同为 public 且**只读**，不构成
+    "可被外部随意改写的 public 开关" ⇒ **本轮不要求收窄**；若后续要求，可一并收为 `internal`。
+12. **★ 登记 NOTE：新增测试文件污染共享配置单例的雷区** —— 见 §4.13.5 末段；
+    本仓「`Settings` 单例 + `cfgfile` 集合」是既有约束，**新增测试若要读写配置，必须避免重建共享单例**
+    （用 `SettingsHelper.Load(forceReload: true)` 而不是 `Settings.Load(forceReload: true)`）。
 
 ---
 ## 5. 执行步骤
