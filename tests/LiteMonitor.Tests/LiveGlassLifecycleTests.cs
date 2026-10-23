@@ -179,6 +179,193 @@ namespace LiteMonitor.Tests
             });
         }
 
+        // ================================================================
+        // 【LM-072 / R08】受控重建后按配置恢复实时玻璃
+        // ================================================================
+
+        /// <summary>
+        /// ① 句柄销毁（受控重建）是**临时停机**，不是用户关闭：
+        /// 配置态的开关必须留着，服务才可能被恢复。
+        /// <para>★ 修复前：句柄销毁走的是 <c>SetEnabled(false)</c> ⇒
+        /// <c>Enabled</c> 被清成 false ⇒ 重建完成后没有任何东西会把它拉回来。</para>
+        /// </summary>
+        [Fact]
+        public void HandleRecreateTemporaryStopKeepsTheConfiguredSwitchOn()
+        {
+            RunOnSta(() =>
+            {
+                var factory = new RecordingServiceFactory();
+                LiveGlassController? controller = null;
+                try
+                {
+                    using Form form = CreateOffscreenForm();
+                    ThemeAppearanceOptions options = CreateOptions(form);
+                    controller = new LiveGlassController(form, () => options, factory.Create);
+
+                    controller.SetEnabled(true);
+                    Assert.True(controller.Enabled);
+                    Assert.NotNull(controller.CaptureService);
+                    Assert.True(factory.Backends[0].WaitForCaptureStarted(1, TimeSpan.FromSeconds(5)));
+
+                    string statusWhileRunning = controller.StatusText;
+
+                    // 模拟句柄销毁（受控重建）：捕获必须停，但配置态的开关必须留着。
+                    factory.Backends[0].StopProducing();
+                    controller.StopForHandleRecreate();
+
+                    // ★ LM-072：临时停机 ≠ 用户关闭 —— Enabled 必须仍然是 true。
+                    Assert.True(controller.Enabled);
+                    Assert.Null(controller.CaptureService);
+                    Assert.False(controller.IsRunning);
+
+                    // ★ 裁决 5：状态行必须反映**真实**状态（服务停了就要说停了）。
+                    Assert.NotEqual(statusWhileRunning, controller.StatusText);
+                    Assert.DoesNotContain("未启用", controller.StatusText);
+                }
+                finally
+                {
+                    factory.StopAll();
+                    controller?.Dispose();
+                }
+            });
+        }
+
+        /// <summary>
+        /// ② 配置为"开"但服务已经停了 ⇒ <c>SetEnabled(true)</c> 必须真的把服务拉回来。
+        /// <para>★ 修复前：<c>SetEnabled</c> 的 <c>if (Enabled == enabled) return;</c>
+        /// 早退把重启整个挡掉 ⇒ "设置页显示已开启，捕获却只能手动重开"。</para>
+        /// </summary>
+        [Fact]
+        public void SetEnabledTrueRestartsTheServiceWhenTheConfiguredSwitchStaysOn()
+        {
+            RunOnSta(() =>
+            {
+                var factory = new RecordingServiceFactory
+                {
+                    // 第一次交出一个**已释放**的服务 ⇒ 启动必然失败
+                    // ⇒ 落到"配置为开、服务为空"的真实状态（修复前唯一的此类入口）。
+                    PoisonNextService = true,
+                };
+                LiveGlassController? controller = null;
+                try
+                {
+                    using Form form = CreateOffscreenForm();
+                    ThemeAppearanceOptions options = CreateOptions(form);
+                    controller = new LiveGlassController(form, () => options, factory.Create);
+
+                    controller.SetEnabled(true);
+
+                    // 启动失败：配置仍为开，但服务已经停了。
+                    Assert.True(controller.Enabled);
+                    Assert.Null(controller.CaptureService);
+                    Assert.False(controller.IsRunning);
+
+                    // ★ LM-072：配置没变（仍是开）⇒ 必须按配置重启服务。
+                    controller.SetEnabled(true);
+
+                    Assert.NotNull(controller.CaptureService);
+                    Assert.True(controller.IsRunning);
+                    Assert.True(factory.Backends[1].WaitForCaptureStarted(1, TimeSpan.FromSeconds(5)));
+                }
+                finally
+                {
+                    factory.StopAll();
+                    controller?.Dispose();
+                }
+            });
+        }
+
+        /// <summary>
+        /// ③ 回归护栏：用户**显式关闭** ⇒ <c>Enabled == false</c>，且"按配置恢复"不得把它拉起来。
+        /// </summary>
+        [Fact]
+        public void ExplicitUserCloseStaysOffAndIsNeverRestoredAutomatically()
+        {
+            RunOnSta(() =>
+            {
+                var factory = new RecordingServiceFactory();
+                LiveGlassController? controller = null;
+                try
+                {
+                    using Form form = CreateOffscreenForm();
+                    ThemeAppearanceOptions options = CreateOptions(form);
+                    controller = new LiveGlassController(form, () => options, factory.Create);
+
+                    controller.SetEnabled(true);
+                    Assert.True(controller.Enabled);
+                    Assert.True(factory.Backends[0].WaitForCaptureStarted(1, TimeSpan.FromSeconds(5)));
+
+                    factory.Backends[0].StopProducing();
+                    controller.SetEnabled(false);
+
+                    Assert.False(controller.Enabled);
+                    Assert.Null(controller.CaptureService);
+                    Assert.False(controller.IsRunning);
+                    Assert.Contains("未启用", controller.StatusText);
+
+                    // ★ 按配置恢复：配置已经是"关" ⇒ 绝不允许把服务拉起来。
+                    controller.RestoreIfEnabled();
+
+                    Assert.False(controller.Enabled);
+                    Assert.Null(controller.CaptureService);
+                    Assert.Single(factory.Backends);
+                }
+                finally
+                {
+                    factory.StopAll();
+                    controller?.Dispose();
+                }
+            });
+        }
+
+        /// <summary>
+        /// ④ "按配置恢复"的入口存在且行为正确：配置为开且服务已停 ⇒ 恢复后服务重新起来。
+        /// </summary>
+        [Fact]
+        public void RestoreIfEnabledBringsTheServiceBackAfterATemporaryStop()
+        {
+            RunOnSta(() =>
+            {
+                var factory = new RecordingServiceFactory();
+                LiveGlassController? controller = null;
+                try
+                {
+                    using Form form = CreateOffscreenForm();
+                    ThemeAppearanceOptions options = CreateOptions(form);
+                    controller = new LiveGlassController(form, () => options, factory.Create);
+
+                    controller.SetEnabled(true);
+                    BackdropCaptureService first = controller.CaptureService;
+                    Assert.NotNull(first);
+                    Assert.True(factory.Backends[0].WaitForCaptureStarted(1, TimeSpan.FromSeconds(5)));
+
+                    factory.Backends[0].StopProducing();
+                    controller.StopForHandleRecreate();
+                    Assert.Null(controller.CaptureService);
+                    Assert.True(controller.Enabled);
+
+                    string statusWhilePaused = controller.StatusText;
+
+                    // ★ 按配置恢复。
+                    controller.RestoreIfEnabled();
+
+                    BackdropCaptureService second = controller.CaptureService;
+                    Assert.NotNull(second);
+                    Assert.NotSame(first, second);
+                    Assert.True(controller.IsRunning);
+                    Assert.True(factory.Backends[1].WaitForCaptureStarted(1, TimeSpan.FromSeconds(5)));
+
+                    // 恢复之后状态行必须回到"服务在跑"，不再是"已暂停"。
+                    Assert.NotEqual(statusWhilePaused, controller.StatusText);
+                }
+                finally
+                {
+                    factory.StopAll();
+                    controller?.Dispose();
+                }
+            });
+        }
+
         [Fact]
         public void RequestIdentityRejectsBoundsOrClientGeometryCounterChanges()
         {
@@ -283,6 +470,49 @@ namespace LiteMonitor.Tests
             if (error is not null)
             {
                 ExceptionDispatchInfo.Capture(error).Throw();
+            }
+        }
+
+        /// <summary>
+        /// 【LM-072 / R08】可注入的捕获服务工厂。
+        /// <para>★ 每次调用都返回**新的** <see cref="BackdropCaptureService"/>（旧的已被
+        /// <c>StopService</c> 释放过），并把对应的合成后端记录下来供断言使用。</para>
+        /// </summary>
+        private sealed class RecordingServiceFactory
+        {
+            private readonly List<SyntheticBackdropBackend> _backends = new();
+
+            /// <summary>已创建出来的合成后端（按创建顺序）。</summary>
+            public IReadOnlyList<SyntheticBackdropBackend> Backends => _backends;
+
+            /// <summary>
+            /// 下一次创建时交出一个**已释放**的服务 ⇒ <c>Start()</c> 必然抛
+            /// <see cref="ObjectDisposedException"/> ⇒ 落到"配置为开、服务为空"的真实状态。
+            /// </summary>
+            public bool PoisonNextService { get; set; }
+
+            public BackdropCaptureService Create()
+            {
+                var backend = new SyntheticBackdropBackend();
+                _backends.Add(backend);
+
+                var service = new BackdropCaptureService(backend);
+                if (PoisonNextService)
+                {
+                    PoisonNextService = false;
+                    service.Dispose();
+                }
+
+                return service;
+            }
+
+            /// <summary>让所有合成后端立刻停止产出（避免停服务时等满超时）。</summary>
+            public void StopAll()
+            {
+                foreach (SyntheticBackdropBackend backend in _backends)
+                {
+                    backend.StopProducing();
+                }
             }
         }
 

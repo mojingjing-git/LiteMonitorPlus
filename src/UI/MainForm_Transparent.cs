@@ -502,7 +502,10 @@ namespace LiteMonitor
             _windowAppearance?.OnHandleDestroyed();
             // ★ A16：句柄没了 ⇒ 捕获必须停（否则会对着已失效的句柄抓屏）。
             //   句柄重建后由 HandleCreated 事件重新接上。
-            _ui?.StopLiveGlass();
+            // ★【LM-072 / R08】句柄销毁是**临时停机**，不是用户关闭：
+            //   只停服务、**保留**配置态的开关；重建完成后由 UIController 按配置恢复。
+            //   （真关闭在 OnFormClosed 里整停 —— 那时才允许把开关置 false。）
+            _ui?.StopLiveGlassForHandleRecreate();
             _ui?.StopGpuPresentation();
             base.OnHandleDestroyed(e);
         }

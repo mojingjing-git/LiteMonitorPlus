@@ -319,8 +319,20 @@ namespace LiteMonitor
         /// <summary>主题 / DPI 变化（主题代次随外观运行时自增）。</summary>
         public void NotifyLiveGlassAppearanceChanged() => _liveGlass?.OnAppearanceChanged();
 
-        /// <summary>停止实时玻璃（窗口退出 / 句柄销毁时调用）。</summary>
+        /// <summary>
+        /// 停止实时玻璃（**整停**：服务 + 配置态开关）—— 窗口**真退出**时调用。
+        /// <para>★【LM-072 / R08】句柄销毁**不走**这里（那是临时停机，
+        ///   见 <see cref="StopLiveGlassForHandleRecreate"/>）——
+        ///   只有真关闭才允许把配置态开关清成 false。</para>
+        /// </summary>
         public void StopLiveGlass() => _liveGlass?.SetEnabled(false);
+
+        /// <summary>
+        /// 【LM-072 / R08】句柄重建 ⇒ 实时玻璃**临时停机**。
+        /// <para>★ 临时停机 ≠ 用户关闭：只停捕获服务，**保留**配置态的开关
+        ///   （配置仍为"开"，重建完成后按配置恢复，见 <see cref="LiveGlassController.RestoreIfEnabled"/>）。</para>
+        /// </summary>
+        public void StopLiveGlassForHandleRecreate() => _liveGlass?.StopForHandleRecreate();
 
         /// <summary>
         /// 【GPU T03 / 合同 §8.2 / §4 步 5】窗口句柄创建事件。
@@ -1611,6 +1623,16 @@ namespace LiteMonitor
             _gpuRoute = decision;
             if (_gpuPresentation is null) _gpuFallbackCode = decision.FallbackCode;
             _transition.PublishStable(RenderingRoute.Legacy);
+
+            // ───────── 步 6 – 9 收尾：按配置恢复实时玻璃（LM-072 / R08）─────────
+            // ★ 受控重建期间句柄没了 ⇒ 捕获服务被**临时停机**（配置态的开关仍为开）。
+            //   目标 legacy 已就绪 ⇒ 此处按配置把服务拉回来；
+            //   **不得**在句柄重建过程中恢复（那时句柄尚未就绪，捕获请求是不完整的）。
+            // ★ GPU 宿主已在步 3 停止 ⇒ 此刻只有实时玻璃一个捕获所有者（合同 §13.2）。
+            if (_cfg.LiveGlassEnabled)
+            {
+                _liveGlass?.RestoreIfEnabled();
+            }
         }
 
         /// <summary>
