@@ -1486,6 +1486,20 @@ else if (methodStr?.ToUpper() == "HEAD") method = HttpMethod.Head;
   另外 4 个门禁参数（`EXPECTED_TEST_ASSEMBLIES` / `MAX_SKIPPED_TESTS` / `MUST_EXECUTE_TEST_CLASS` /
   `MUST_EXECUTE_TEST_CLASS_MIN_COUNT`）**逐字一致**；只收紧不放宽；两个文件 **CRLF、无 BOM**。
 - 集成顺序 **C → E → D**，全部 `cherry-pick` 保持**线性历史**（批次 C 6 提交 + 批次 E 4 提交 + 批次 D 4 提交 = 14 提交）。
+- ★ **CI 取证**：run **`39914647089`** @ `8796c3f` = **success**（作业「构建 / 测试 / 打包」）。
+  门禁「强制校验测试发现数」在**真实 GitHub Actions runner** 上的实际输出：
+  **发现 1632 条用例（通过 1631 / 失败 0 / 跳过 1），阈值 1632** ⇒ 阈值**等于**被推送分支的实测总数
+  （若阈值被调低或用例被删，该行会变红）。跳过数上限 `MAX_SKIPPED_TESTS=1` 实际跳过 **1** 条
+  （`MarketE2ETests.端到端_拉索引_安装_校验_卸载`，联网 E2E，门控 `LITEMONITOR_E2E=1`，CI 故意不设）；
+  必须真正执行的 `MarketIndexContractTests` **发现 6 条 / 通过 6 条 / 跳过 0 条** ✓。
+  日志存档：`.artifacts/ci-run-39914647089.log`。
+- ★ **推送前门禁自证**（不依赖 runner）：主审本机**直接执行 `ci.yml` 里那段脚本本身**，
+  参数按 YAML 去引号语义**机械解析**（不手抄）后按 `ci.yml` 的调用形状传入 ⇒
+  输出与真实 runner **逐字一致**（`发现 1632 条用例（通过 1631 / 失败 0 / 跳过 1），阈值 1632`），退出码 **0**。
+  证据：`.artifacts/pre-push-gate.log`；回归证据：`.artifacts/pre-push-regression.log`。
+  ★ 附带一次**真实假失败**：自证脚本首版把 YAML 的单引号当**字面量**传参 ⇒ 门禁以
+  「缺少测试程序集 ''LiteMonitor.Tests'」判红 ⇒ 反证该门禁对参数**敏感**（假绿禁令确实有效），
+  修正解析语义后转绿 —— **非门禁缺陷**，如实记录。
 
 #### 4.13.7 残留与未验证项（**不计入通过**）
 
@@ -1506,6 +1520,8 @@ else if (methodStr?.ToUpper() == "HEAD") method = HttpMethod.Head;
    `sourceHashStatus = VERIFIED_UNCHANGED`。
 9. **LM-089 未在真实 GitHub Actions runner 上执行该步骤**、未本地执行 `generate-dependency-manifest.ps1 -Mode Check`
    ⇒ `BLOCKED_ENV`（本机无 runner）。
+   ★ 澄清：run `39914647089` 走的是 **`ci.yml`**，**不覆盖** `release.yml` 的步骤（发布工作流只在打 tag 时触发）；
+   本轮 CI 全绿**不构成** LM-089 的运行时证据，该项**仍为** `BLOCKED_ENV`。
 10. **探针工程不在 `LiteMonitor.sln` 中** —— 现在它只因**被测试工程引用**才被 `dotnet build LiteMonitor.sln` 间接构建；
     若将来移除该引用，探针将不再随 CI 构建 ⇒ 登记为**已知结构风险**（非本批引入）。
 11. **★ 登记 NOTE：新增 public 成员** —— `PluginSandboxScope.ScopeId`（只读，外部不可改写）与
@@ -1515,6 +1531,17 @@ else if (methodStr?.ToUpper() == "HEAD") method = HttpMethod.Head;
 12. **★ 登记 NOTE：新增测试文件污染共享配置单例的雷区** —— 见 §4.13.5 末段；
     本仓「`Settings` 单例 + `cfgfile` 集合」是既有约束，**新增测试若要读写配置，必须避免重建共享单例**
     （用 `SettingsHelper.Load(forceReload: true)` 而不是 `Settings.Load(forceReload: true)`）。
+13. **★ 登记 NOTE：独立复核者自写的验证用例未整合进主线** —— 主审在收尾核查中发现，
+    14 个独立复核产出（`VerifierLm065~069Tests.cs`、`IndependentBatchAAppearanceVerificationTests.cs`、
+    `IndependentBatchACapturePolicyVerificationTests.cs`、`VerifierGpuClosureTests.cs`、`VerifierIl.cs`、
+    `VerifierP1UpdaterAuditTests.cs`、`VerifyLm045Independent*` 等）**只存在于各自的 worktree**，
+    主线 `fix/p2-batch-a` 内**没有**这些文件 ⇒ 这层独立复核护栏**未沉淀为持续回归**。
+    ★ 已做**无损保全**：把这些未跟踪文件连同 LM-045 的 12 份变异规格、48 份变异日志、12 份备份，
+    用**显式路径**（非 `git add -A`）提交进各自 worktree 的临时分支
+    （`verify/batch-a` `3000ad1`、`verify/gpu-t03-t05` `b559a9c`、`verify/p1-batch-audit` `ba5267a`、
+    `verify/lm045-ownerA` `0843d06` 等）⇒ 内容已固化进 git 历史，不会因清理目录而丢失。
+    ★ **整合进主线本轮不做**：这批用例**未经独立复核**（可能含复核者刻意留下的断言），
+    贸然整合会引入红 ⇒ 建议另立小批次，单独评估后再整合。
 
 ---
 ## 5. 执行步骤
