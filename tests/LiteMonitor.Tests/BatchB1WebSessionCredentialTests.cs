@@ -38,6 +38,12 @@ namespace LiteMonitor.Tests
         private bool _oldEnabled;
         private int _oldPort;
 
+        // settings.json / settings.json.bak 的沙箱（LM-077 的迁移用例要真的动文件）
+        private static readonly string MainPath = SettingsHelper.FilePath;
+        private static readonly string BackupPath = Path.Combine(
+            Path.GetDirectoryName(SettingsHelper.FilePath) ?? ".", "settings.json.bak");
+        private readonly string _sandbox;
+
         public BatchB1WebSessionCredentialTests()
         {
             _cfg = Settings.Load();
@@ -47,13 +53,23 @@ namespace LiteMonitor.Tests
             _oldBindMode = _cfg.WebServerBindMode;
             _oldEnabled = _cfg.WebServerEnabled;
             _oldPort = _cfg.WebServerPort;
+
+            _sandbox = Path.Combine(Path.GetTempPath(), "lmsettings-b1-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(_sandbox);
+
+            // 迁移类用例会真的改写 settings.json ⇒ 先把原文件备份到沙箱
+            if (File.Exists(MainPath)) File.Copy(MainPath, Path.Combine(_sandbox, "main.json"), true);
+            if (File.Exists(BackupPath)) File.Copy(BackupPath, Path.Combine(_sandbox, "backup.json"), true);
         }
 
         public void Dispose()
         {
             try
             {
-                _cfg = Settings.Load();
+                SettingsHelper.GlobalBlockSave = false;
+                RestoreSettingsFiles();
+
+                _cfg = Settings.Load(forceReload: true);
                 _cfg.WebServerPassword = _oldPassword;
                 _cfg.WebServerPasswordHash = _oldHash;
                 _cfg.WebServerPasswordSalt = _oldSalt;
@@ -65,7 +81,29 @@ namespace LiteMonitor.Tests
             finally
             {
                 ResetLiteWebServerInstance();
+                try { if (Directory.Exists(_sandbox)) Directory.Delete(_sandbox, true); } catch { }
             }
+        }
+
+        /// <summary>把 settings.json / settings.json.bak 还原成用例开始前的样子。</summary>
+        private void RestoreSettingsFiles()
+        {
+            string savedMain = Path.Combine(_sandbox, "main.json");
+            string savedBackup = Path.Combine(_sandbox, "backup.json");
+
+            try
+            {
+                if (File.Exists(savedMain)) File.Copy(savedMain, MainPath, true);
+                else if (File.Exists(MainPath)) File.Delete(MainPath);
+            }
+            catch { }
+
+            try
+            {
+                if (File.Exists(savedBackup)) File.Copy(savedBackup, BackupPath, true);
+                else if (File.Exists(BackupPath)) File.Delete(BackupPath);
+            }
+            catch { }
         }
 
         // ================================================================
@@ -429,6 +467,97 @@ namespace LiteMonitor.Tests
         }
 
         // ================================================================
+        //  LM-077 · 口令迁移在写盘失败时仍报成功（旧明文留在磁盘上）
+        // ================================================================
+
+        /// <summary>
+        /// LM-077-①：**保存被禁止**时，口令迁移必须如实返回 false。
+        /// </summary>
+        /// <remarks>
+        /// ★ 盯的缺陷：<c>Save</c> 在 <c>GlobalBlockSave</c> 为真时**直接返回**（void、无任何信号），
+        ///   <c>EnsureWebPasswordMigrated</c> 随后无条件 <c>return true</c>
+        ///   ⇒ 调用方（登录路径）以为迁移成功、放行登录，而**旧明文口令仍留在磁盘上**。
+        /// ★ 断言不只看返回值：还要看磁盘 —— 迁移没发生 ⇒ 旧明文必须还在（不能出现"假成功"）。
+        /// </remarks>
+        [Fact]
+        public void LM077_保存被禁止时口令迁移必须返回false()
+        {
+            WriteLegacyPlaintextSettings("legacy-plain-forbidden");
+
+            Settings cfg = Settings.Load(forceReload: true);
+            Assert.Equal("legacy-plain-forbidden", cfg.WebServerPassword);
+
+            // ★ 禁止保存（模拟"配置暂时读不到"或"重置配置"兜底）
+            SettingsHelper.GlobalBlockSave = true;
+
+            bool migrated = cfg.EnsureWebPasswordMigrated();
+
+            Assert.False(migrated,
+                "保存被禁止时迁移必须如实返回 false（否则登录被放行，而旧明文口令仍留在磁盘上）");
+
+            // ★ 迁移确实没有发生：旧明文仍在磁盘上
+            Assert.Contains("legacy-plain-forbidden", File.ReadAllText(MainPath), StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// LM-077-②：**写盘失败**（IO 故障）时，口令迁移必须如实返回 false。
+        /// </summary>
+        /// <remarks>
+        /// ★ 盯的缺陷：<c>Save</c> 把 IO 异常**吞掉**（catch 里只清理临时文件），
+        ///   返回 void ⇒ 调用方无从得知写没写成 ⇒ 一律走 <c>return true</c>。
+        /// ★ 现场用**独占锁**制造 IO 故障：主文件被独占 ⇒ 原子写入的最后一步（替换主文件）必然失败。
+        /// </remarks>
+        [Fact]
+        public void LM077_写盘失败时口令迁移必须返回false()
+        {
+            WriteLegacyPlaintextSettings("legacy-plain-iofailure");
+
+            Settings cfg = Settings.Load(forceReload: true);
+            Assert.Equal("legacy-plain-iofailure", cfg.WebServerPassword);
+
+            // ★ 独占锁住主文件 ⇒ 写盘必然失败
+            using (new FileStream(MainPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                bool migrated = cfg.EnsureWebPasswordMigrated();
+
+                Assert.False(migrated,
+                    "写盘失败时迁移必须如实返回 false（否则登录被放行，而旧明文口令仍留在磁盘上）");
+            }
+
+            // ★ 迁移确实没有发生：旧明文仍在磁盘上
+            Assert.Contains("legacy-plain-iofailure", File.ReadAllText(MainPath), StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// LM-077-③：迁移成功时返回 true，且**磁盘上没有旧明文**（主文件与备份都没有）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 这是"迁移到底干了什么"的正向断言：明文被转成哈希 + 盐落盘，
+        ///   备份里那份旧明文也必须被清掉（只清主文件等于没清）。
+        /// </remarks>
+        [Fact]
+        public void LM077_迁移成功时返回true且磁盘上没有旧明文()
+        {
+            WriteLegacyPlaintextSettings("legacy-plain-migrate");
+
+            Settings cfg = Settings.Load(forceReload: true);
+            Assert.Equal("legacy-plain-migrate", cfg.WebServerPassword);
+
+            bool migrated = cfg.EnsureWebPasswordMigrated();
+            Assert.True(migrated, "写盘成功时迁移必须返回 true");
+
+            // ★ 主文件：没有旧明文，但有哈希 + 盐
+            string main = File.ReadAllText(MainPath);
+            Assert.DoesNotContain("legacy-plain-migrate", main, StringComparison.Ordinal);
+            Assert.Contains("WebServerPasswordHash", main, StringComparison.Ordinal);
+            Assert.Contains("WebServerPasswordSalt", main, StringComparison.Ordinal);
+
+            // ★ 备份：同样不得留着旧明文（备份是"上一份有效内容"，它同样含明文）
+            Assert.True(File.Exists(BackupPath), "前置条件不成立：本次落盘应当刷新出备份文件");
+            Assert.DoesNotContain("legacy-plain-migrate", File.ReadAllText(BackupPath), StringComparison.Ordinal);
+        }
+
+        // ================================================================
         //  辅助
         // ================================================================
 
@@ -683,6 +812,15 @@ namespace LiteMonitor.Tests
             _cfg.WebServerPasswordSalt = Settings.CreateWebPasswordSalt();
             _cfg.WebServerPasswordHash = Settings.ComputeWebPasswordHash(plain, _cfg.WebServerPasswordSalt);
             _cfg.WebServerPassword = "";
+        }
+
+        /// <summary>
+        /// 造一份"旧配置"：口令仍以**明文**躺在 settings.json 里（迁移前的真实形态）。
+        /// </summary>
+        private static void WriteLegacyPlaintextSettings(string plain)
+        {
+            File.WriteAllText(MainPath,
+                "{\"WebServerEnabled\":false,\"WebServerPort\":5000,\"WebServerPassword\":\"" + plain + "\"}");
         }
 
         /// <summary>

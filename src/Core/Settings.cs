@@ -546,10 +546,23 @@ namespace LiteMonitor
                     if (string.IsNullOrEmpty(hash)) return false;
 
                     // 落盘：写盘时明文被转换器强制写成 ""（只有哈希 + 盐进磁盘）
-                    SettingsHelper.Save(this);
+                    // ★ 必须看**真实的写盘结果**：以前 Save 返回 void 且吞掉 IO 异常，
+                    //   写盘失败也会一路走到 "return true" ⇒
+                    //   ① 旧明文口令仍然留在 settings.json 上（凭据泄露方向），
+                    //   ② 调用方（登录路径）还以为迁移成功 ⇒ "迁移失败 ⇒ 拒绝登录"的承诺落空。
+                    if (!SettingsHelper.TrySave(this))
+                    {
+                        Debug.WriteLine("[Settings] Web 口令迁移失败：配置未能写入磁盘（保存被禁止或 IO 失败）。");
+                        return false;
+                    }
 
                     // 备份里同样有明文 ⇒ 一并处理（契约 W9 / P2）
-                    SanitizeBackupFile();
+                    // ★ 备份清理失败同样必须**如实反映**：备份里留着旧明文 = 凭据仍留在磁盘上。
+                    if (!SanitizeBackupFile())
+                    {
+                        Debug.WriteLine("[Settings] Web 口令迁移失败：备份中的旧明文口令未能清除。");
+                        return false;
+                    }
                     return true;
                 }
                 catch (Exception ex)
@@ -568,15 +581,17 @@ namespace LiteMonitor
         /// ★ 处理策略：能解析 ⇒ 删掉 <c>WebServerPassword</c> 字段后写回；
         ///   解析不了（已损坏）⇒ 这份备份已经不能作为回滚材料，直接删除，
         ///   避免明文继续留在磁盘上（契约允许"重新生成或删除"）。
+        /// ★ 返回值：**true** = 备份里已没有明文（或本来就没有）；**false** = 明文仍可能留在磁盘上。
+        ///   调用方必须把它如实反映出去（见 <see cref="EnsureWebPasswordMigrated"/>）。
         /// </remarks>
-        private static void SanitizeBackupFile()
+        private static bool SanitizeBackupFile()
         {
             string path = BackupFilePath;
             try
             {
-                if (!File.Exists(path)) return;
+                if (!File.Exists(path)) return true;                      // 没有备份 ⇒ 无明文可清
                 string text = File.ReadAllText(path);
-                if (!text.Contains("WebServerPassword")) return;   // 没有该字段 ⇒ 无需处理
+                if (!text.Contains("WebServerPassword")) return true;     // 没有该字段 ⇒ 无需处理
 
                 JsonNode root = JsonNode.Parse(text);
                 if (root is JsonObject obj)
@@ -588,13 +603,16 @@ namespace LiteMonitor
                 {
                     File.Delete(path);   // 不是 JSON 对象 ⇒ 不可用 ⇒ 删除
                 }
+                return true;
             }
             catch (JsonException)
             {
-                try { File.Delete(path); } catch { }
+                // 备份已损坏 ⇒ 删掉它（明文不得继续留在磁盘上）；删不掉就是失败，如实返回 false
+                try { File.Delete(path); return true; }
+                catch { return false; }
             }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
         }
 
         /// <summary>生成一份随机的盐（base64）。</summary>
