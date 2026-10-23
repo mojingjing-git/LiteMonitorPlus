@@ -356,12 +356,33 @@ namespace LiteMonitor
             //    主文件已损坏还去复制它，会把备份里那份好配置一起毁掉。
             if (File.Exists(FilePath) && TryLoadFile(FilePath, out _) != null)
             {
-                try { File.Copy(FilePath, _backupPath, true); }
+                // ★★ LM-085：备份**不得**是旧主文件的「原样副本」——
+                //   原样复制会把**加密前**的明文凭据（插件凭据 / Web 口令）留在磁盘上的
+                //   第二个文件里，备份的泄露面比主文件还大。
+                //   这里改成：读回旧主文件 → 过一遍脱敏/加密 → 再写进备份，
+                //   于是备份内容与主文件**同级**（凭据一律是 DPAPI 密文、口令一律为空）。
+                //   ★ 脱敏失败 ⇒ **不写备份**（绝不退回「原样复制」）：宁可备份陈旧，
+                //   也不能让明文凭据继续留在磁盘上。
+                try { WriteSanitizedBackup(FilePath, _backupPath); }
                 catch { }
             }
 
             // 4. 最后替换主文件
             File.Move(_tempPath, FilePath, true);
+        }
+
+        /// <summary>
+        /// 写备份（LM-085）：备份内容必须**已经过密 / 脱敏处理**。
+        /// <para>
+        /// ★ 失败时**不退回原样复制** —— 原样复制 = 明文凭据继续留在磁盘上。
+        ///   写不出备份 ⇒ 保持旧备份不动（宁可备份陈旧，也不留明文）。
+        /// </para>
+        /// </summary>
+        private static void WriteSanitizedBackup(string sourcePath, string backupPath)
+        {
+            string raw = File.ReadAllText(sourcePath);
+            string sanitized = Settings.SanitizeSettingsJsonForBackup(raw);
+            File.WriteAllText(backupPath, sanitized);
         }
 
         private static void CleanupTempFile()
