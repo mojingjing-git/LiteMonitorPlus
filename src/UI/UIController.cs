@@ -186,13 +186,6 @@ namespace LiteMonitor
             ThemeManager.Load(name);
             var t = ThemeManager.Current;
 
-            // 4. 安全释放旧主题的字体
-            // 此时 Current 已经是新主题了，Paint 事件只会用新字体，所以释放旧的是安全的
-            if (oldTheme != null && oldTheme != t)
-            {
-                oldTheme.DisposeFonts();
-            }
-
             // ... 后续缩放逻辑保持不变 ...
             float dpiScale = GetCurrentDpiScale();   
             float userScale = (float)_cfg.UIScale;    
@@ -252,6 +245,16 @@ namespace LiteMonitor
             // ★【合同 §4.6 / GPU T05】主题被重新加载 ⇒ 派生回退样式必须跟着重算
             //   （否则派生副本会持有旧主题的 Layout / Rendering）。
             RefreshLegacyFallbackTheme(t);
+
+            // 4. 安全释放旧主题的字体
+            //   ★【LM-071 / R07】必须**晚于** RefreshLegacyFallbackTheme(t)：
+            //     派生主题与源主题**共享同一批 Font 实例**（见 LegacyFallbackStyleBridge.BuildDerivedTheme），
+            //     先释放旧主题的字体 ⇒ 派生主题仍引用它们 ⇒ 悬垂引用。
+            //   此时 Current 已经是新主题、派生覆盖也已重算或清空 ⇒ 释放旧的是安全的。
+            if (oldTheme != null && oldTheme != t)
+            {
+                oldTheme.DisposeFonts();
+            }
 
             _form.BackColor = ThemeManager.ParseColor(CurrentRenderTheme.Color.Background);
 

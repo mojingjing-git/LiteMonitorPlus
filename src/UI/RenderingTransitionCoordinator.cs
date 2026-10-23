@@ -824,6 +824,13 @@ namespace LiteMonitor
         /// "保留告警语义和进度值"。</para>
         /// <para>★ 也不占用 <c>TextGroup</c>：分组标题色与 <c>MutedText</c> 同源会塌陷层级。
         /// 正文可读性对比度仍由 <c>TextPrimary</c> 承担（合同 §9.5 的对比度口径针对正文与次要文字）。</para>
+        /// <para>★【LM-071 / R07】运行期字体是**字段**（不是属性）⇒ 上面的"逐个 public 属性"浅拷贝
+        /// **拿不到**它们 ⇒ 派生主题的 5 个字体会退回 <c>SystemFonts.CaptionFont</c>
+        /// （字号 / 字体 / 粗体 / 高 DPI 缩放全丢）。这里显式**共享**源主题的同一批 <see cref="System.Drawing.Font"/>
+        /// 实例：<b>不新建</b>、<b>不 BuildFonts()</b>、<b>不 Scale()</b>（后两者会二次缩放，
+        /// 且纯 CLR 的协调器拿不到 dpi×user 系数）。
+        /// <b>释放责任仍在源主题</b>（<c>ThemeManager.Current</c>）—— 派生主题**不得**调用
+        /// <c>DisposeFonts()</c>，否则共享实例会被一起释放（悬垂引用）。</para>
         /// </summary>
         internal static Theme BuildDerivedTheme(Theme source, LegacyFallbackStyle style)
         {
@@ -842,6 +849,14 @@ namespace LiteMonitor
 
             Theme derived = DeriveConfig(source);
             derived.Color = colors;
+
+            // ★【LM-071】共享源主题的 5 个运行期字体字段（同一 Font 实例）。
+            derived.FontTitle = source.FontTitle;
+            derived.FontGroup = source.FontGroup;
+            derived.FontItem = source.FontItem;
+            derived.FontValue = source.FontValue;
+            derived.FontTaskbar = source.FontTaskbar;
+
             return derived;
         }
 
