@@ -11,11 +11,20 @@ using Xunit;
 namespace LiteMonitor.Tests
 {
     /// <summary>
+    /// 插件市场用例会碰进程级静态（<c>PluginMarket.HttpHandlerOverride</c>、配置单例）
+    /// ⇒ 归入禁并行 collection，避免与其它市场用例互相污染。
+    /// </summary>
+    [CollectionDefinition("marketrecovery", DisableParallelization = true)]
+    public class BatchD1MarketRecoveryCollection
+    {
+    }
+
+    /// <summary>
     /// P2 批次 D · LM-083 护栏：安装事务的**恢复**必须排在**任何加载 / 调度之前**。
     ///
     /// <para><b>缺陷（修复前）：</b></para>
     /// <list type="bullet">
-    /// <item><c>PluginMarket</c> 把启动恢复挂在**静态构造函数**上 ⇒ 恢复发生在"类型首次被碰到"的那一刻；</item>
+    /// <item><c>PluginMarket</c> 把启动恢复挂在**静态构造函数</c>上 ⇒ 恢复发生在"类型首次被碰到"的那一刻；</item>
     /// <item><c>PluginManager</c> 全文**零** <c>PluginMarket</c> 引用 ⇒ 加载路径根本不会触发恢复；</item>
     /// <item>主窗体的启动顺序是「先 <c>LoadPlugins</c> + <c>Start</c>，后 <c>PluginSelfCheck.RunOnce</c>」
     ///       ⇒ 第一次碰到 <c>PluginMarket</c> 是自检那一刻 ⇒ **恢复晚于加载与调度**。</item>
@@ -31,57 +40,14 @@ namespace LiteMonitor.Tests
     ///
     /// <para>★ 顺序用 <b>IL 反汇编</b>断言（与 <c>MainFormStartupOrderTests</c> 同一手法）：
     ///   它看的是**真实编译产物的先后顺序**，不依赖任何运行期时序，因此不会假绿。</para>
+    ///
+    /// <para>★ 本类**绝不碰共享配置**：既不写 settings.json，也不重建配置单例
+    ///   （重建单例会把"监听范围"的解析结果**冻结**在当时的文件状态上，
+    ///   从而污染同批次里的网页服务用例）。详见 <see cref="WithIsolatedSettings"/>。</para>
     /// </summary>
-    [Collection("cfgfile")]
-    public class BatchD1MarketRecoveryOrderingTests : IDisposable
+    [Collection("marketrecovery")]
+    public class BatchD1MarketRecoveryOrderingTests
     {
-        // ---------------- settings.json / settings.json.bak 现场（LoadPlugins 会碰配置）----------------
-        private static readonly string MainPath = LiteMonitor.SettingsHelper.FilePath;
-        private static readonly string BackupPath = Path.Combine(
-            Path.GetDirectoryName(LiteMonitor.SettingsHelper.FilePath) ?? ".", "settings.json.bak");
-        private readonly string _sandbox;
-        private readonly bool _mainExisted;
-        private readonly bool _backupExisted;
-        private readonly string _savedMain;
-        private readonly string _savedBackup;
-
-        public BatchD1MarketRecoveryOrderingTests()
-        {
-            _sandbox = Path.Combine(Path.GetTempPath(), "lm-lm083-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_sandbox);
-
-            _mainExisted = File.Exists(MainPath);
-            _backupExisted = File.Exists(BackupPath);
-            _savedMain = Path.Combine(_sandbox, "main.json");
-            _savedBackup = Path.Combine(_sandbox, "backup.json");
-            if (_mainExisted) File.Copy(MainPath, _savedMain, true);
-            if (_backupExisted) File.Copy(BackupPath, _savedBackup, true);
-
-            // 上一个用例可能留下禁写状态；本组用例从干净状态开始
-            LiteMonitor.SettingsHelper.GlobalBlockSave = false;
-        }
-
-        public void Dispose()
-        {
-            try
-            {
-                LiteMonitor.SettingsHelper.GlobalBlockSave = false;
-
-                if (_mainExisted) File.Copy(_savedMain, MainPath, true);
-                else if (File.Exists(MainPath)) File.Delete(MainPath);
-
-                if (_backupExisted) File.Copy(_savedBackup, BackupPath, true);
-                else if (File.Exists(BackupPath)) File.Delete(BackupPath);
-
-                // 让内存里的配置单例回到磁盘上的样子
-                LiteMonitor.Settings.Load(forceReload: true);
-            }
-            catch { /* 还原失败不应掩盖用例本身的失败 */ }
-            finally
-            {
-                try { if (Directory.Exists(_sandbox)) Directory.Delete(_sandbox, true); } catch { }
-            }
-        }
 
         // ================================================================
         //  ① 顺序：插件管理器必须"先恢复、后枚举"
@@ -220,14 +186,18 @@ namespace LiteMonitor.Tests
                 Assert.Equal("2.0", ReadVersion(target));
 
                 // 生产路径：加载插件（内部先对账、后加载）
-                var manager = new PluginManager();
-                manager.LoadPlugins(dir);
+                PluginTemplate? tmpl = null;
+                WithIsolatedSettings(() =>
+                {
+                    var manager = new PluginManager();
+                    manager.LoadPlugins(dir);
+                    tmpl = manager.GetAllTemplates().FirstOrDefault(t => t.Id == "demo_lm083");
+                });
 
                 // 磁盘已回滚到旧版本
                 Assert.Equal("1.0", ReadVersion(target));
 
                 // ★ 内存里跑的必须是**旧版本**（不是磁盘上曾经出现过的那个新版本）
-                PluginTemplate? tmpl = manager.GetAllTemplates().FirstOrDefault(t => t.Id == "demo_lm083");
                 Assert.True(tmpl != null, "回滚后应当仍然能加载到该插件（旧版本）。");
                 Assert.Equal("1.0", tmpl!.Meta.Version);
             }
@@ -253,7 +223,7 @@ namespace LiteMonitor.Tests
                 string shaBefore = Sha256File(target);
 
                 var manager = new PluginManager();
-                manager.LoadPlugins(dir);
+                WithIsolatedSettings(() => manager.LoadPlugins(dir));
 
                 Assert.Equal(shaBefore, Sha256File(target));
                 Assert.Equal("1.0", ReadVersion(target));
@@ -269,6 +239,41 @@ namespace LiteMonitor.Tests
         // ================================================================
         //  辅助
         // ================================================================
+
+        /// <summary>
+        /// 在**不碰共享配置**的前提下执行一段会加载插件的代码。
+        /// <para>
+        /// ★ 为什么要隔离：<c>PluginManager.LoadPlugins</c> 读完模板后会"自动同步配置"
+        ///   —— 它会把**当前配置单例**写回 settings.json、并可能删掉用户已有的插件实例。
+        ///   测试里真写用户的 settings.json / 真删别人的实例，会污染同集合里的其它用例
+        ///   （例如把 <c>WebServerEnabled</c> 写进磁盘，让网页服务用例直接起不来）。
+        /// </para>
+        /// <para>
+        /// ★ 所以这里：① 先把配置单例备好（后续调用不再读盘）；② 临时把插件实例换成空列表；
+        ///   ③ 临时禁写（让那次"自动同步"不落盘）；④ 结束后原样还原。
+        /// </para>
+        /// </summary>
+        private static void WithIsolatedSettings(Action body)
+        {
+            // ★ 用 Settings.Load()（**不** forceReload）：只取**已经存在**的单例，
+            //   绝不重建它 —— 重建会把"监听范围"的解析结果冻结在当时的文件状态上
+            //   （文件里若是 WebServerEnabled=true 且没有监听范围字段 ⇒ 解析成局域网模式），
+            //   从而让后面网页服务用例直接起不来。
+            LiteMonitor.Settings cfg = LiteMonitor.Settings.Load();
+            List<PluginInstanceConfig> savedInstances = cfg.PluginInstances;
+            bool savedBlock = LiteMonitor.SettingsHelper.GlobalBlockSave;
+            try
+            {
+                cfg.PluginInstances = new List<PluginInstanceConfig>();
+                LiteMonitor.SettingsHelper.GlobalBlockSave = true;   // 禁止这次加载把配置写回磁盘
+                body();
+            }
+            finally
+            {
+                LiteMonitor.SettingsHelper.GlobalBlockSave = savedBlock;
+                cfg.PluginInstances = savedInstances;
+            }
+        }
 
         private static int FindCallOffset(IlInspector.Disassembly body, Func<MethodBase, bool> match)
         {

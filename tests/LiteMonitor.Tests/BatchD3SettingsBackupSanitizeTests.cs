@@ -71,7 +71,7 @@ namespace LiteMonitor.Tests
                 if (_backupExisted) File.Copy(_savedBackup, BackupPath, true);
                 else if (File.Exists(BackupPath)) File.Delete(BackupPath);
 
-                LiteMonitor.Settings.Load(forceReload: true);
+
             }
             catch { /* 还原失败不应掩盖用例本身的失败 */ }
             finally
@@ -94,7 +94,7 @@ namespace LiteMonitor.Tests
             // 旧配置：插件凭据仍是**明文**（加密前的真实形态）
             File.WriteAllText(MainPath, LegacySettingsJson(Secret));
 
-            LiteMonitor.Settings cfg = LiteMonitor.Settings.Load(forceReload: true);
+            LiteMonitor.Settings cfg = LiteMonitor.SettingsHelper.Load(forceReload: true);
             Assert.Equal(Secret, cfg.PluginInstances[0].InputValues["api_key"]);
 
             cfg.Save();
@@ -124,7 +124,7 @@ namespace LiteMonitor.Tests
         {
             File.WriteAllText(MainPath, LegacySettingsJson(Secret));
 
-            LiteMonitor.Settings cfg = LiteMonitor.Settings.Load(forceReload: true);
+            LiteMonitor.Settings cfg = LiteMonitor.SettingsHelper.Load(forceReload: true);
             cfg.Save();
 
             Assert.True(File.Exists(BackupPath), "前置条件不成立：本次落盘应当刷新出备份文件。");
@@ -153,7 +153,7 @@ namespace LiteMonitor.Tests
             File.WriteAllText(MainPath,
                 "{\"WebServerEnabled\":false,\"WebServerPort\":5000,\"WebServerPassword\":\"" + plainPwd + "\"}");
 
-            LiteMonitor.Settings cfg = LiteMonitor.Settings.Load(forceReload: true);
+            LiteMonitor.Settings cfg = LiteMonitor.SettingsHelper.Load(forceReload: true);
             Assert.Equal(plainPwd, cfg.WebServerPassword);
 
             cfg.Save();
@@ -179,7 +179,7 @@ namespace LiteMonitor.Tests
             File.WriteAllText(MainPath,
                 "{\"PreferredDisk\":\"" + marker + "\",\"PluginInstances\":[]}");
 
-            LiteMonitor.Settings cfg = LiteMonitor.Settings.Load(forceReload: true);
+            LiteMonitor.Settings cfg = LiteMonitor.SettingsHelper.Load(forceReload: true);
             cfg.PreferredDisk = marker + "-v2";
             cfg.Save();
 
