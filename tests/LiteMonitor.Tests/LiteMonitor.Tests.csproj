@@ -17,6 +17,17 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\LiteMonitor.csproj" />
+    <!--
+      ★ 探针工程（GpuHostLifecycleProbe，WinExe）作为**被引用工程**接入。
+        理由：LM-086 / LM-087 / LM-088 的回归护栏必须能**真的调用**探针内部的
+        "持续送帧通道"（ScenePump）、"隔离门判定"（IsolationGate）与
+        "源码漂移比对"（CandidateHashGuard）—— 只读源码文本的断言太弱
+        （改个变量名就失效，也测不出"失败会不会被如实报告"）。
+        探针的内部成员通过 tools/GpuHostLifecycleProbe/Properties/AssemblyInfo.cs
+        的 InternalsVisibleTo 暴露给本工程，**不扩大对外公开面**。
+        探针不引用任何测试框架 ⇒ dotnet test 不会把它当成测试工程。
+    -->
+    <ProjectReference Include="..\..\tools\GpuHostLifecycleProbe\GpuHostLifecycleProbe.csproj" />
   </ItemGroup>
 
   <!--

@@ -476,7 +476,10 @@ namespace LiteMonitor.src.Plugins
                     // 进程级并发槽位 / 响应体 2 MiB 上限 / 总时长可中止 / 允许目标校验。
                     if (url.StartsWith("native://"))
                     {
-                        resultRaw = await ExecuteNativeAsync(url, context, step, scope, declaredHosts, inst?.Id ?? "");
+                        // [LM-082] 原生在途去重的**作用域键** = **执行作用域标识**（不是实例 ID）：
+                        // 同一实例的**不同代次**（不同执行作用域）**不共享**在途请求 ⇒
+                        // "一个代次到期"不会连带打断另一个代次正在复用的同一请求。
+                        resultRaw = await ExecuteNativeAsync(url, context, step, scope, declaredHosts, NativeInflightScopeKey(scope));
                     }
                     else
                     {
@@ -487,6 +490,22 @@ namespace LiteMonitor.src.Plugins
                         // [LM-009] 共享请求**不**绑定实例作用域令牌：C1 契约要求"取消一个等待者
                         // 不得取消共享任务"，若把 scope.Token 绑进去，一个实例的到期会连带
                         // 打断其他等待者正在复用的请求。总时长改由**等待者侧**监听 scope.Token 约束。
+                        // [LM-078] **调用侧**凭据目标校验：每个调用方在**加入租约之前**，
+                        // 用**自己的** declaredHosts 各校验一次。
+                        // 原缺陷：凭据目标校验只发生在 FetchRawAsync（唯一 HTTP 出网点）内部，
+                        // 而它**只对创建租约的那个调用方**执行 —— 命中已有租约时自己的
+                        // valueFactory 永不被求值（见 GetOrStartInflight 的注释：
+                        // "落败的 factory 产物永不被求值"）⇒ 白名单更严的第二个调用方
+                        // **直接复用**别人的响应，自己的白名单从未被检查（fail-open）。
+                        // 修法（**不改键、不改摘要**）：把"按调用方策略"的校验**前移到调用侧** ——
+                        // 每个等待者各自履责，共享任务本体不变（S1.0 契约 C3.4）。
+                        // 契约 C1/C2/C4 与 PluginRequestIdentityTests.I7 锁死"在途键逐字等于摘要"，
+                        // 因此**不得**把允许目标/凭据策略塞进在途键或摘要里。
+                        if (declaredHosts != null)
+                        {
+                            PluginSandbox.EnsureCredentialTargetAllowed(url, resolvedHeaders, declaredHosts);
+                        }
+
                         var task = GetOrStartInflight(inflightKey, () =>
                             FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, System.Threading.CancellationToken.None, proxy, scope, declaredHosts, scopeCancelsRequest: false));
 
@@ -687,6 +706,17 @@ namespace LiteMonitor.src.Plugins
             throw new Exception($"Unknown native host: {uri.Host}");
         }
 
+        /// <summary>
+        /// [LM-082] 原生在途去重的**作用域键**：**执行作用域标识**（<see cref="PluginSandboxScope.ScopeId"/>）。
+        /// <para>★ 口径：按**执行作用域**归并，而不是按**实例 ID**归并 ——
+        /// 同一实例的两次执行（两个代次）各有各的作用域标识 ⇒ 它们的在途请求**不共享** ⇒
+        /// "一个代次到期"不会连带打断另一个代次正在复用的同一请求。</para>
+        /// <para>没有作用域（生产路径不会出现）时用一次性标识 ⇒ 绝不与别的调用共享在途请求
+        /// （宁可多发一条，也不得跨作用域互相取消）。</para>
+        /// </summary>
+        private static string NativeInflightScopeKey(PluginSandboxScope scope)
+            => scope?.ScopeId ?? ("no-scope-" + Guid.NewGuid().ToString("N"));
+
         /// <summary>[LM-039] 解析 native:// URL 的查询参数（键不区分大小写）。</summary>
         private static Dictionary<string, string> ParseNativeArgs(Uri uri)
         {
@@ -842,10 +872,34 @@ namespace LiteMonitor.src.Plugins
             return false;
         }
 
+        /// <summary>
+        /// 去掉主机里的端口。
+        /// <para>[LM-079] **IPv6 字面量（带方括号）整体就是主机名**："[fd00::1]" / "[fd00::2]"
+        /// 只能**整体**带端口（"[fd00::1]:8080"），**不得**按最后一个冒号截断 ——
+        /// 否则两个不同的 IPv6 地址会被截成同一个 "[fd00:" ⇒ **地址碰撞**
+        /// （fail-open：声明了 [fd00::1] 却能把请求/凭据发往 [fd00::2]）。</para>
+        /// <para>非方括号形式：只有**单个**冒号才是 "host:port"；多个冒号是**裸 IPv6 字面量**，
+        /// 整体就是主机名（不得截出垃圾串）。</para>
+        /// </summary>
         private static string StripPort(string value)
         {
-            int colon = value.LastIndexOf(':');
-            if (colon > 0 && colon < value.Length - 1) return value.Substring(0, colon);
+            // 与原实现一致：null 会抛 NullReferenceException（调用方均已先行判空）。
+            if (value.Length == 0) return value;
+
+            // IPv6 字面量（带方括号）：方括号内整体是主机名，只可能整体带端口。
+            if (value[0] == '[')
+            {
+                int close = value.IndexOf(']');
+                if (close > 0) return value.Substring(0, close + 1);
+                return value;
+            }
+
+            // 非方括号形式：单个冒号才是 "host:port"；多个冒号 ⇒ 裸 IPv6 字面量，整体是主机名。
+            int colon = value.IndexOf(':');
+            if (colon > 0 && colon == value.LastIndexOf(':') && colon < value.Length - 1)
+            {
+                return value.Substring(0, colon);
+            }
             return value;
         }
 
@@ -878,6 +932,10 @@ namespace LiteMonitor.src.Plugins
         /// 共享在途请求必须传 false（C1 契约：取消一个等待者不得取消共享任务）。</param>
         private async Task<string> FetchRawAsync(string methodStr, string url, string body, Dictionary<string, string> headers, string encoding, System.Threading.CancellationToken token, string proxy = null, PluginSandboxScope scope = null, HashSet<string> allowedHosts = null, bool scopeCancelsRequest = true)
         {
+            // 方法解析：**只支持 GET / POST / HEAD**，其余一律回落 GET（既有行为，逐字不变）。
+            // ★ LM-081 的判据对齐**不**扩大插件可发的方法面：第三方插件仍只能发
+            //   GET / POST / HEAD（插件市场里的插件是第三方代码，扩大方法面属于需要
+            //   单独评估与授权的安全变更，不搭车进缺陷修复）。
             HttpMethod method = HttpMethod.Get;
             if (methodStr?.ToUpper() == "POST") method = HttpMethod.Post;
             else if (methodStr?.ToUpper() == "HEAD") method = HttpMethod.Head;
@@ -1001,9 +1059,14 @@ namespace LiteMonitor.src.Plugins
 
                         EnsureRedirectSchemeAllowed(current, next);
 
-                        // 方法/正文语义（与 .NET 原生重定向一致）：
-                        // 301/302/303 ⇒ 方法变 GET 且丢弃正文；307/308 ⇒ 保留方法与正文。
-                        if (RewritesMethodOnRedirect(response.StatusCode))
+                        // [LM-045][LM-081] 方法/正文语义（严格对齐 .NET 原生重定向的**逐状态码**实测）：
+                        //   301/302 ⇒ **只有 POST** 被降级为 GET（并丢弃正文）；
+                        //              PUT / DELETE / HEAD 等其他方法**保持原方法与正文**；
+                        //   303     ⇒ **非 GET/HEAD** 一律降级为 GET（并丢弃正文）；GET/HEAD 保持；
+                        //   307/308 ⇒ 全部保持原方法与正文。
+                        // 修复前只看状态码 ⇒ HEAD 也被改写；第一次修复仍把 301/302 上的
+                        // PUT / DELETE 改写掉 ⇒ 两者都是"自称与 .NET 一致而实际不一致"的同一类残留。
+                        if (RewritesMethodOnRedirect(response.StatusCode, currentMethod))
                         {
                             currentMethod = HttpMethod.Get;
                             currentBody = null;
@@ -1067,13 +1130,40 @@ namespace LiteMonitor.src.Plugins
                || status == System.Net.HttpStatusCode.PermanentRedirect;
 
         /// <summary>
-        /// [LM-045] 该重定向状态码是否**改写方法**（301 / 302 / 303 ⇒ 方法变 GET 且丢弃正文；
-        /// 307 / 308 ⇒ 保留方法与正文）。
+        /// [LM-045][LM-081] 该重定向状态码是否**改写方法**。
+        /// <para>★ 口径 = .NET 原生重定向的**本机实测**、**逐状态码**
+        /// （.NET SDK 8.0.426，裸 TcpListener 自写 HTTP/1.1 响应，只监听回环）：
+        /// <list type="bullet">
+        /// <item><b>301 / 302</b>：<b>只有 POST</b> 被降级为 GET（并丢弃正文）；
+        /// <b>PUT / DELETE / HEAD 等其他方法一律保持原方法</b>（正文也保留并重发）。</item>
+        /// <item><b>303</b>：<b>非 GET / HEAD</b> 的方法一律降级为 GET（并丢弃正文）；
+        /// GET / HEAD 保持。</item>
+        /// <item><b>307 / 308</b>：全部方法保持原方法与正文。</item>
+        /// </list>
+        /// </para>
+        /// <para>★ 修复历史（同一缺陷的两轮残留）：
+        /// ① 原实现**只看状态码** ⇒ HEAD 也被改成 GET（LM-081 首发缺陷）；
+        /// ② 第一次修复放宽成"非 GET/HEAD 即降级" ⇒ 301/302 上的 PUT / DELETE 仍被改写掉
+        /// （主审补测 .NET 原生后发现）—— 两者都是"自称与 .NET 一致而实际不一致"的同一类残留。</para>
         /// </summary>
-        private static bool RewritesMethodOnRedirect(System.Net.HttpStatusCode status)
-            => status == System.Net.HttpStatusCode.MovedPermanently
-               || status == System.Net.HttpStatusCode.Found
-               || status == System.Net.HttpStatusCode.SeeOther;
+        private static bool RewritesMethodOnRedirect(System.Net.HttpStatusCode status, HttpMethod currentMethod)
+        {
+            // 301 / 302：只有 POST 被降级为 GET（并丢弃正文）；其他方法保持原方法与正文。
+            if (status == System.Net.HttpStatusCode.MovedPermanently ||
+                status == System.Net.HttpStatusCode.Found)
+            {
+                return currentMethod == HttpMethod.Post;
+            }
+
+            // 303：非 GET / HEAD 一律降级为 GET（并丢弃正文）。
+            if (status == System.Net.HttpStatusCode.SeeOther)
+            {
+                return currentMethod != HttpMethod.Get && currentMethod != HttpMethod.Head;
+            }
+
+            // 307 / 308：全部保持原方法与正文。
+            return false;
+        }
 
         /// <summary>
         /// [LM-045] 逐跳复核用的**允许主机集合**。

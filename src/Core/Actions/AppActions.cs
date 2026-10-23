@@ -1,5 +1,7 @@
 using System;
 using System.Drawing;
+using System.Net;
+using System.Net.Sockets;
 using System.Windows.Forms;
 using LiteMonitor.src.UI;
 using LiteMonitor.src.SystemServices;
@@ -279,6 +281,18 @@ namespace LiteMonitor.src.Core.Actions
             string currentFingerprint = server.CurrentCredentialFingerprint;
             bool credentialChanged = !string.Equals(targetFingerprint, currentFingerprint, StringComparison.Ordinal);
 
+            // ★ 监听范围是否变了：比的是"配置要的"与"运行中**实际生效**的"。
+            //   只改监听范围（不动端口、不动凭据）同样必须重绑 ——
+            //   否则用户把「局域网」收回「仅本机」，socket 仍绑在 0.0.0.0 上
+            //   （对外暴露状态与界面显示相反：界面写着 127.0.0.1，实际却是全网卡）。
+            //   反向（仅本机 → 局域网）同样要重绑，否则服务仍旧只监听 127.0.0.1。
+            // ★ 归一化口径与 LiteWebServer.Start 完全一致：只有 Lan 才是局域网，其余（含 Unset）按仅本机。
+            WebServerBindMode targetBindMode = cfg.WebServerBindMode == WebServerBindMode.Lan
+                ? WebServerBindMode.Lan
+                : WebServerBindMode.Loopback;
+            bool bindModeChanged = server.CurrentBindMode.HasValue
+                && server.CurrentBindMode.Value != targetBindMode;
+
             // ★ 运行时监听策略：配置要求监听局域网，**或**运行时实际绑在非回环地址上
             bool runtimeLanExposed = server.IsLanExposed;
 
@@ -313,9 +327,9 @@ namespace LiteMonitor.src.Core.Actions
                         System.Diagnostics.Debug.WriteLine("WebServer start failed: " + err);
                     }
                 }
-                else if (targetPort != currentPort || credentialChanged)
+                else if (targetPort != currentPort || credentialChanged || bindModeChanged)
                 {
-                    // ★ 端口变更 或 **凭据变更**（含"凭据被清掉"）均触发重启
+                    // ★ 端口变更 / **凭据变更**（含"凭据被清掉"）/ **监听范围变更** 均触发重启
                     //   ⇒ 重启会撤销全部会话 / 票据 / WS 连接
                     server.Stop();
                     if (!server.Start(out string err))
@@ -328,7 +342,7 @@ namespace LiteMonitor.src.Core.Actions
                         result.Restarted = true;
                     }
                 }
-                // else：端口与凭据都没变 ⇒ **不**重启（避免每次"应用设置"都断连）
+                // else：端口、凭据与监听范围都没变 ⇒ **不**重启（避免每次"应用设置"都断连）
             }
             else
             {
@@ -341,6 +355,48 @@ namespace LiteMonitor.src.Core.Actions
 
             result.ServiceRunning = server.IsRunning;
             return result;
+        }
+
+        /// <summary>
+        /// 构造"实际监听地址"的显示文本（契约 W11：设置界面必须显示**真实**监听地址与端口）。
+        /// </summary>
+        /// <param name="endpoint">
+        /// **真实监听端点**（<c>LiteWebServer.CurrentListenEndpoint</c>）；null ⇒ 没有可显示的端点。
+        /// </param>
+        /// <param name="running">服务当前是否在运行。</param>
+        /// <param name="configuredPort">配置里的端口（仅在**没有真实端点**时作为端口显示值）。</param>
+        /// <param name="isChinese">界面文案用中文还是英文。</param>
+        /// <remarks>
+        /// ★ 事实来源**只有端点一个**：地址与端口都来自
+        ///   <see cref="LiteWebServer.CurrentListenEndpoint"/>（真实绑定结果）。
+        ///   以前界面把地址取自**配置草稿** <c>Settings.WebServerBindMode</c>、端口却取自运行态，
+        ///   口径不一致 ⇒ "用户改了但还没点应用"时界面会按草稿显示：
+        ///   LAN → 仅本机 时界面写着 127.0.0.1，而 socket 其实还绑在 0.0.0.0 上
+        ///   ⇒ **对外暴露状态与界面显示相反**（安全向）。
+        /// ★ 没有真实端点（未运行 / 运行中但端点不可得）⇒ 地址显示 "-"，
+        ///   **不**拿配置草稿冒充事实。
+        /// ★ 抽成纯函数是为了能脱离 WinForms 控件单测这条规则；
+        ///   界面侧（<c>MainPanelPage.BuildListenAddressText</c>）只做取端点与转发的薄壳。
+        /// ★ 可见性：**internal**（不是 public）—— 显示辅助不该变成新的公开开关；
+        ///   测试程序集通过 <c>InternalsVisibleTo("LiteMonitor.Tests")</c> 访问它。
+        /// </remarks>
+        internal static string DescribeListenAddress(IPEndPoint? endpoint, bool running, int configuredPort, bool isChinese)
+        {
+            string state = running
+                ? (isChinese ? "运行中" : "running")
+                : (isChinese ? "未运行" : "not running");
+
+            if (endpoint == null) return $"-:{configuredPort} ({state})";
+
+            // ★ IPv6 地址必须加方括号：[::]:8080。
+            //   局域网模式下服务绑的是 IPAddress.IPv6Any（DualMode，同时接受 IPv4 连接），
+            //   不加括号会拼出 ":::8080" —— 用户一眼看过去像非法地址。
+            //   IPv4 维持原样：127.0.0.1:8080。
+            string host = endpoint.Address.AddressFamily == AddressFamily.InterNetworkV6
+                ? "[" + endpoint.Address + "]"
+                : endpoint.Address.ToString();
+
+            return $"{host}:{endpoint.Port} ({state})";
         }
 
         // --- 内部辅助 ---
@@ -367,7 +423,7 @@ namespace LiteMonitor.src.Core.Actions
         /// <summary>应用完成后服务是否在运行。</summary>
         public bool ServiceRunning { get; set; }
 
-        /// <summary>本次应用是否**重启**了服务（端口或凭据变化）。</summary>
+        /// <summary>本次应用是否**重启**了服务（端口、凭据或监听范围变化）。</summary>
         public bool Restarted { get; set; }
 
         /// <summary>本次应用是否拒绝了「局域网模式 + 无有效凭据」（服务已被停止）。</summary>

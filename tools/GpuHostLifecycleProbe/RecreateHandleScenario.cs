@@ -122,6 +122,92 @@ internal sealed record RecreateAssertion(
     string Note);
 
 /// <summary>
+/// Sends scene snapshots to the GPU host **on the UI thread** and records what
+/// really happened.
+///
+/// ★ LM-086：原实现在 <c>Task.Run</c> 里送帧，而
+/// <c>GpuPresentationHostController.UpdateScene</c> 强制要求**宿主拥有者线程**
+/// （<c>EnsureOwnerThread</c> ⇒ 抛 <see cref="InvalidOperationException"/>）。
+/// 那个任务又被 <c>_ = Task.Run(...)</c> **丢弃** ⇒ 异常从未被观察 ⇒
+/// "持续送帧"一次都没成功，实验却照样退出 0（**假绿**）。
+/// ⇒ 这里改用 WinForms 定时器（**必然**在拥有消息循环的 UI 线程上触发），
+/// 并把成功 / 失败**如实计数**，让调用方能把"送帧失败"变成非零退出码。
+/// </summary>
+internal sealed class ScenePump : IDisposable
+{
+    private readonly Action _send;
+    private readonly System.Windows.Forms.Timer _timer;
+    private bool _disposed;
+
+    public ScenePump(Action send, int intervalMs = 120)
+    {
+        _send = send ?? throw new ArgumentNullException(nameof(send));
+        _timer = new System.Windows.Forms.Timer { Interval = intervalMs };
+        _timer.Tick += OnTick;
+    }
+
+    /// <summary>成功送帧的次数。</summary>
+    public int SuccessCount { get; private set; }
+
+    /// <summary>送帧失败的次数。</summary>
+    public int FailureCount { get; private set; }
+
+    /// <summary>最近一次送帧失败的全部细节（异常 + 堆栈）。</summary>
+    public string? LastFailure { get; private set; }
+
+    /// <summary>定时器当前是否在跑。</summary>
+    public bool Running => _timer.Enabled;
+
+    public void Start()
+    {
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(ScenePump));
+        }
+
+        _timer.Start();
+    }
+
+    public void Stop()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _timer.Stop();
+    }
+
+    private void OnTick(object? sender, EventArgs e)
+    {
+        try
+        {
+            _send();
+            SuccessCount++;
+        }
+        catch (Exception exception)
+        {
+            // ★ 失败必须被**记录**：把异常吞掉再继续跑 = 假绿。
+            FailureCount++;
+            LastFailure = exception.ToString();
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _timer.Tick -= OnTick;
+        _timer.Stop();
+        _timer.Dispose();
+    }
+}
+
+/// <summary>
 /// The T01 A/B experiment: GPU frames, then "stop the GPU but keep the HWND"
 /// (control arm A) versus "stop the GPU and recreate the HWND" (experiment arm
 /// B). Both arms run in the same process, on the same window, with continuous
@@ -131,15 +217,30 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
 {
     private const int SamplePadding = 16;
 
+    /// <summary>
+    /// 进程退出码：**持续送帧失败**（LM-086）。
+    /// <para>0 = 通过；1 = 运行异常；2 = 源码漂移；3 = 超时；4 = 隔离门失败；
+    /// 5 = 持续送帧失败；6 = 源码漂移比对**未做**（NOT_VERIFIED）；64 = 参数错误；70 = 未处理异常。</para>
+    /// </summary>
+    internal const int ScenePumpFailureExitCode = 5;
+
+    /// <summary>
+    /// 进程退出码：**源码漂移比对未做**（LM-088，NOT_VERIFIED）。
+    /// <para>找不到源码 ⇒ 根本没有做比对 ⇒ 这一项**不能**当成"通过"（假绿）。</para>
+    /// </summary>
+    internal const int SourceHashNotVerifiedExitCode = 6;
+
     private readonly Form _form;
     private readonly Action _recreateHandle;
     private readonly string _output;
     private readonly string _scenarioId;
     private readonly CandidateHashGuard? _guard;
+    private readonly ScenePump _scenePump;
     private readonly List<object> _steps = new();
     private readonly List<HandleEventRecord> _handleEvents = new();
     private readonly List<GpuPhaseRecord> _gpuPhases = new();
 
+    private CancellationTokenRegistration _scenePumpRegistration;
     private GpuPresentationHostController? _host;
     private int _frameIndex;
     private Color? _forcedColor;
@@ -162,9 +263,33 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
         _scenarioId = scenarioId;
         _guard = guard;
 
+        // ★ LM-086：送帧通道被单独抽出来（UI 线程定时器），失败可以被计数。
+        _scenePump = new ScenePump(SendScene);
+        SendSceneToHost = host =>
+        {
+            if (host is null)
+            {
+                return;
+            }
+
+            host.UpdateScene(BuildScene(host.Generations));
+        };
+
         _form.HandleCreated += OnHandleCreated;
         _form.HandleDestroyed += OnHandleDestroyed;
     }
+
+    /// <summary>
+    /// 送一帧场景到 GPU 宿主。默认实现走生产路径（<c>UpdateScene</c>）。
+    /// <para>★ 它**只能**在宿主拥有者线程（UI 线程）上调用 —— 测试可以替换成
+    /// 会抛异常的版本，用来验证"送帧失败必须被如实报告、不得退出 0"。
+    /// <paramref name="host"/> 为 <c>null</c> 表示"此刻没有 GPU 宿主"
+    /// （默认实现此时什么都不做；注入的测试版本可以把"没有宿主"也当成失败）。</para>
+    /// </summary>
+    internal Action<GpuPresentationHostController?> SendSceneToHost { get; set; }
+
+    /// <summary>持续送帧通道（LM-086）。</summary>
+    internal ScenePump ScenePump => _scenePump;
 
     public string OutputDirectory => _output;
 
@@ -389,27 +514,48 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
         _steps.Add(new { step = "gpu-start", phase, accepted = true, errorCode, errorMessage });
     }
 
-    private void PumpScene(CancellationToken cancellationToken)
+    /// <summary>
+    /// Starts the continuous scene pump.
+    ///
+    /// ★ LM-086：这**必须**跑在 UI 线程（GPU 宿主的拥有者线程）上。
+    ///   原实现用 <c>Task.Run</c> 在后台线程调 <c>UpdateScene</c> ⇒
+    ///   <c>EnsureOwnerThread</c> 抛 <see cref="InvalidOperationException"/> ⇒
+    ///   任务被丢弃 ⇒ 异常从未被观察 ⇒ "持续送帧"一次都没成功却退出 0（假绿）。
+    ///   现在改用 WinForms 定时器：它**必然**在拥有消息循环的 UI 线程上触发，
+    ///   失败会被 <see cref="ScenePump"/> 计数并最终变成非零退出码。
+    /// </summary>
+    internal void PumpScene(CancellationToken cancellationToken)
     {
-        _ = Task.Run(async () =>
+        StopScenePump();
+        _scenePump.Start();
+        if (cancellationToken.CanBeCanceled)
         {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                try
+            _scenePumpRegistration = cancellationToken.Register(
+                static state =>
                 {
-                    _host?.UpdateScene(BuildScene(_host.Generations));
-                    await Task.Delay(120, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
-                catch (ObjectDisposedException)
-                {
-                    return;
-                }
-            }
-        });
+                    try
+                    {
+                        ((ScenePump)state!).Stop();
+                    }
+                    catch (Exception)
+                    {
+                        // 停止失败不影响主流程：主流程自己也会 StopScenePump。
+                    }
+                },
+                _scenePump);
+        }
+    }
+
+    private void StopScenePump()
+    {
+        _scenePumpRegistration.Dispose();
+        _scenePumpRegistration = default;
+        _scenePump.Stop();
+    }
+
+    private void SendScene()
+    {
+        SendSceneToHost(_host);
     }
 
     private async Task WaitForFirstPresentAsync(string phase, CancellationToken cancellationToken)
@@ -489,6 +635,10 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
 
     private void StopGpu()
     {
+        // ★ LM-086：先停送帧，再拆宿主 —— 否则定时器可能在宿主被 Dispose
+        //   之后才触发，把一次正常的收尾记成"送帧失败"。
+        StopScenePump();
+
         if (_host is null)
         {
             return;
@@ -712,12 +862,39 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
     /// <summary>Writes the evidence file and returns the process exit code.</summary>
     public int WriteEvidence(string scenarioId, int exitCode, string? failure)
     {
-        bool unchanged = true;
+        // ★ LM-086：收尾时确保送帧通道已经停下（失败计数才是最终值）。
+        StopScenePump();
+
+        // ★ LM-088：比对**没做**时必须**如实说没做**。
+        //   原实现让 `unchanged` 保持初值 true ⇒ 输出 `sourceHashChanged = false`
+        //   （读起来就是"源码未漂移"），而实际上**根本没有做比对** ——
+        //   「候选二进制是否与当前源码一致」这一项在没有源码的机器上会**恒绿**。
+        bool sourceHashVerified = _guard is not null;
+        bool unchanged = false;
         IReadOnlyDictionary<string, string>? endHashes = null;
         if (_guard is not null)
         {
             unchanged = _guard.VerifyUnchanged(out endHashes);
         }
+
+        // ★ 没做比对 ⇒ `sourceHashChanged` 必须是 **null**（"不知道"），
+        //   绝不能是 false（"没漂移"）。
+        bool? sourceHashChanged = sourceHashVerified ? !unchanged : null;
+        string sourceHashStatus = sourceHashVerified
+            ? (unchanged ? "VERIFIED_UNCHANGED" : "VERIFIED_CHANGED")
+            : "NOT_VERIFIED_NO_SOURCE";
+
+        // ★ LM-086：持续送帧的**真实**结果。
+        //   `required` = 这次运行真的进过 GPU 阶段（否则"持续送帧"不是本实验的前提）。
+        int scenePumpSent = _scenePump.SuccessCount;
+        int scenePumpFailed = _scenePump.FailureCount;
+        bool scenePumpRequired = _gpuPhases.Count > 0;
+        bool scenePumpOk = scenePumpFailed == 0 && (!scenePumpRequired || scenePumpSent > 0);
+        string? scenePumpProblem = scenePumpFailed > 0
+            ? "The continuous scene pump failed " + scenePumpFailed + " time(s): " + _scenePump.LastFailure
+            : scenePumpRequired && scenePumpSent == 0
+                ? "The continuous scene pump never delivered a single frame."
+                : null;
 
         bool roundARecovered = RoundA is not null && RoundA.AllFramesMatched && RoundA.AdjacentFramesDiffer;
         bool roundBRecovered = RoundB is not null && RoundB.AllFramesMatched && RoundB.AdjacentFramesDiffer;
@@ -735,6 +912,26 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
         }
 
         string path = Path.Combine(_output, $"t01-{scenarioId}.json");
+
+        // ★ 证据文件里的 exitCode 必须与**进程真实退出码**一致 ——
+        //   否则"文件说成功、进程说失败"本身就是一种假绿。
+        int finalExitCode = exitCode;
+        if (sourceHashVerified && !unchanged && finalExitCode == 0)
+        {
+            finalExitCode = 2;
+        }
+
+        if (!scenePumpOk && finalExitCode == 0)
+        {
+            finalExitCode = ScenePumpFailureExitCode;
+        }
+
+        // ★ LM-088：比对没做 ⇒ 不能算"通过"（NOT_VERIFIED 必须有非零退出码）。
+        if (!sourceHashVerified && finalExitCode == 0)
+        {
+            finalExitCode = SourceHashNotVerifiedExitCode;
+        }
+
         try
         {
             File.WriteAllText(
@@ -744,11 +941,22 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
                     {
                         task = "GPU-T01-recreate-handle",
                         scenario = scenarioId,
-                        exitCode,
+                        exitCode = finalExitCode,
                         failure,
                         finishedAt = DateTimeOffset.Now,
-                        sourceHashChanged = !unchanged,
+                        sourceHashChanged = sourceHashChanged,
+                        sourceHashVerified = sourceHashVerified,
+                        sourceHashStatus = sourceHashStatus,
                         candidateHashesAtEnd = endHashes,
+                        scenePump = new
+                        {
+                            sent = scenePumpSent,
+                            failed = scenePumpFailed,
+                            required = scenePumpRequired,
+                            ok = scenePumpOk,
+                            problem = scenePumpProblem,
+                            lastError = _scenePump.LastFailure
+                        },
                         verdict = new
                         {
                             result = verdict,
@@ -764,6 +972,9 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
                                 ? null
                                 : RoundA.Frames[0].Observed.ToArgb().ToString("X8"),
                             recreatePassed = Recreate?.Passed,
+                            scenePumpOk = scenePumpOk,
+                            sourceHashVerified = sourceHashVerified,
+                            sourceHashStatus = sourceHashStatus,
                             pixelCriterion = new
                             {
                                 tolerancePerChannel = DesktopObservation.ChannelTolerance,
@@ -798,24 +1009,24 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
                     {
                         task = "GPU-T01-recreate-handle",
                         scenario = scenarioId,
-                        exitCode,
+                        exitCode = finalExitCode,
                         failure,
                         serializationError = exception.Message,
                         verdict = verdict,
                         roundA_gdiRecovered = roundARecovered,
                         roundB_gdiRecovered = roundBRecovered,
                         recreatePassed = Recreate?.Passed,
-                        sourceHashChanged = !unchanged
+                        sourceHashChanged = sourceHashChanged,
+                        sourceHashVerified = sourceHashVerified,
+                        sourceHashStatus = sourceHashStatus,
+                        scenePumpOk = scenePumpOk,
+                        scenePumpSent,
+                        scenePumpFailed
                     },
                     new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-            return exitCode == 0 ? 1 : exitCode;
+            return finalExitCode == 0 ? 1 : finalExitCode;
         }
 
-        if (!unchanged && exitCode == 0)
-        {
-            return 2;
-        }
-
-        return exitCode;
+        return finalExitCode;
     }
 }

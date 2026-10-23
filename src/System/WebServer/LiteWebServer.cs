@@ -99,6 +99,19 @@ namespace LiteMonitor.src.WebServer
         internal IPEndPoint? CurrentListenEndpoint { get; private set; }
 
         /// <summary>
+        /// 当前运行中的监听**实际生效的监听范围**（未运行时为 null）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 判定"监听范围有没有变"必须比**运行态**，不能只比配置：
+        ///   <c>Settings.WebServerBindMode</c> 是**待生效的草稿**（设置界面改下拉框就会立刻改它，
+        ///   而"应用设置"之前服务还绑在旧地址上）。
+        /// ★ 这个值在 <see cref="Start"/> 里按**真正用来建监听套接字的那份判定**记录，
+        ///   因此它与 <see cref="CurrentListenEndpoint"/> 是同一份事实、不会各说各话。
+        /// ★ 未运行 ⇒ null（没有监听 ⇒ 没有生效的监听范围）。
+        /// </remarks>
+        internal WebServerBindMode? CurrentBindMode { get; private set; }
+
+        /// <summary>
         /// 当前是否**对局域网暴露**（实际监听在非回环地址上）。
         /// </summary>
         /// <remarks>
@@ -281,6 +294,10 @@ namespace LiteMonitor.src.WebServer
                 // ★ 记录真实监听端点（供"监听范围"断言核对事实而不是配置）
                 CurrentListenEndpoint = listener.LocalEndpoint as IPEndPoint;
 
+                // ★ 记录**实际生效**的监听范围（与上面建监听套接字用的判定同源）：
+                //   "只改监听范围"必须能触发重绑，就靠它和配置比对（见 AppActions.ApplyWebServerWithResult）。
+                CurrentBindMode = lanMode ? WebServerBindMode.Lan : WebServerBindMode.Loopback;
+
                 // ★ Host / Origin 校验需要知道真实监听端口
                 _sessionManager.ListenPort = port;
 
@@ -340,6 +357,7 @@ namespace LiteMonitor.src.WebServer
             try { _listener?.Stop(); } catch { }
             _listener = null;
             CurrentListenEndpoint = null;
+            CurrentBindMode = null;
 
             // ★ 端口未知 ⇒ Host / Origin 的端口校验不再生效（下次 Start 会重新写入）
             _sessionManager.ListenPort = null;

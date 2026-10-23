@@ -546,10 +546,23 @@ namespace LiteMonitor
                     if (string.IsNullOrEmpty(hash)) return false;
 
                     // 落盘：写盘时明文被转换器强制写成 ""（只有哈希 + 盐进磁盘）
-                    SettingsHelper.Save(this);
+                    // ★ 必须看**真实的写盘结果**：以前 Save 返回 void 且吞掉 IO 异常，
+                    //   写盘失败也会一路走到 "return true" ⇒
+                    //   ① 旧明文口令仍然留在 settings.json 上（凭据泄露方向），
+                    //   ② 调用方（登录路径）还以为迁移成功 ⇒ "迁移失败 ⇒ 拒绝登录"的承诺落空。
+                    if (!SettingsHelper.TrySave(this))
+                    {
+                        Debug.WriteLine("[Settings] Web 口令迁移失败：配置未能写入磁盘（保存被禁止或 IO 失败）。");
+                        return false;
+                    }
 
                     // 备份里同样有明文 ⇒ 一并处理（契约 W9 / P2）
-                    SanitizeBackupFile();
+                    // ★ 备份清理失败同样必须**如实反映**：备份里留着旧明文 = 凭据仍留在磁盘上。
+                    if (!SanitizeBackupFile())
+                    {
+                        Debug.WriteLine("[Settings] Web 口令迁移失败：备份中的旧明文口令未能清除。");
+                        return false;
+                    }
                     return true;
                 }
                 catch (Exception ex)
@@ -568,15 +581,17 @@ namespace LiteMonitor
         /// ★ 处理策略：能解析 ⇒ 删掉 <c>WebServerPassword</c> 字段后写回；
         ///   解析不了（已损坏）⇒ 这份备份已经不能作为回滚材料，直接删除，
         ///   避免明文继续留在磁盘上（契约允许"重新生成或删除"）。
+        /// ★ 返回值：**true** = 备份里已没有明文（或本来就没有）；**false** = 明文仍可能留在磁盘上。
+        ///   调用方必须把它如实反映出去（见 <see cref="EnsureWebPasswordMigrated"/>）。
         /// </remarks>
-        private static void SanitizeBackupFile()
+        private static bool SanitizeBackupFile()
         {
             string path = BackupFilePath;
             try
             {
-                if (!File.Exists(path)) return;
+                if (!File.Exists(path)) return true;                      // 没有备份 ⇒ 无明文可清
                 string text = File.ReadAllText(path);
-                if (!text.Contains("WebServerPassword")) return;   // 没有该字段 ⇒ 无需处理
+                if (!text.Contains("WebServerPassword")) return true;     // 没有该字段 ⇒ 无需处理
 
                 JsonNode root = JsonNode.Parse(text);
                 if (root is JsonObject obj)
@@ -588,13 +603,123 @@ namespace LiteMonitor
                 {
                     File.Delete(path);   // 不是 JSON 对象 ⇒ 不可用 ⇒ 删除
                 }
+                return true;
             }
             catch (JsonException)
             {
-                try { File.Delete(path); } catch { }
+                // 备份已损坏 ⇒ 删掉它（明文不得继续留在磁盘上）；删不掉就是失败，如实返回 false
+                try { File.Delete(path); return true; }
+                catch { return false; }
             }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+        }
+
+        /// <summary>
+        /// 把配置 JSON 处理成**可以安全落进备份**的内容（LM-085）。
+        /// <para>
+        /// ★ 背景：<c>SettingsHelper.AtomicWrite</c> 过去把**旧主文件原样**复制成备份。
+        ///   而旧主文件可能是**加密前**的形态 —— 插件凭据是明文、Web 口令是明文 ——
+        ///   于是"明文凭据"被原样留在磁盘上的**第二个文件**里，
+        ///   备份的泄露面比主文件还大（fail-open）。
+        /// </para>
+        /// <para>
+        /// ★ 这里只做两件事，**其余字段逐字保留**（备份仍然是"上一份有效内容"，仍是可回滚材料）：
+        ///   <list type="number">
+        ///   <item>插件凭据（<c>PluginInstances[].InputValues</c> 与 <c>Targets[]</c> 里
+        ///         "看起来是凭据"的参数）⇒ 明文一律用 DPAPI 加密；已是密文的原样保留；</item>
+        ///   <item>Web 口令（<c>WebServerPassword</c>）⇒ 脱敏成空串
+        ///         （主文件的契约本就是"口令永不落盘"，备份必须与主文件同级）。</item>
+        ///   </list>
+        /// </para>
+        /// <para>
+        /// ★ DPAPI 失败时**绝不写明文**：宁可把这个值从备份里去掉（备份少一个凭据），
+        ///   也不能把明文再落到磁盘上。
+        /// </para>
+        /// </summary>
+        internal static string SanitizeSettingsJsonForBackup(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return json;
+
+            JsonNode? root = JsonNode.Parse(json);
+            if (root is not JsonObject obj) return json;   // 不是 JSON 对象 => 原样返回（由调用方裁决）
+
+            // ① Web 口令：脱敏成空串（与主文件 WebPasswordJsonConverter 的契约一致）
+            if (obj.TryGetPropertyValue("WebServerPassword", out JsonNode? pwdNode) &&
+                pwdNode is JsonValue pwdValue &&
+                pwdValue.TryGetValue<string>(out string? plainPwd) &&
+                !string.IsNullOrEmpty(plainPwd))
+            {
+                obj["WebServerPassword"] = "";
+            }
+
+            // ② 插件凭据：明文一律 DPAPI 加密
+            if (obj.TryGetPropertyValue("PluginInstances", out JsonNode? instancesNode) &&
+                instancesNode is JsonArray instances)
+            {
+                foreach (JsonNode? instance in instances)
+                {
+                    if (instance is not JsonObject instanceObj) continue;
+
+                    SanitizeSecretValues(instanceObj, "InputValues");
+
+                    if (instanceObj.TryGetPropertyValue("Targets", out JsonNode? targetsNode) &&
+                        targetsNode is JsonArray targets)
+                    {
+                        foreach (JsonNode? target in targets)
+                        {
+                            if (target is JsonObject targetObj) SanitizeSecretValues(targetObj, null);
+                        }
+                    }
+                }
+            }
+
+            return obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        }
+
+        /// <summary>
+        /// 把一个"参数字典"里的凭据值改成 DPAPI 密文（LM-085）。
+        /// <para>
+        /// ★ <paramref name="propertyName"/> 为 null 时就地处理该对象本身（<c>Targets</c> 的每个元素），
+        ///   否则处理它下面的那个属性（<c>InputValues</c>）。
+        /// </para>
+        /// </summary>
+        private static void SanitizeSecretValues(JsonObject owner, string? propertyName)
+        {
+            JsonObject map;
+            if (propertyName == null)
+            {
+                map = owner;
+            }
+            else
+            {
+                if (!owner.TryGetPropertyValue(propertyName, out JsonNode? node) || node is not JsonObject obj) return;
+                map = obj;
+            }
+
+            // 先把键抄出来：下面要改 map 本身，不能一边遍历一边改
+            var keys = new List<string>();
+            foreach (KeyValuePair<string, JsonNode?> kv in map) keys.Add(kv.Key);
+
+            foreach (string key in keys)
+            {
+                if (!PluginSecretDictionaryConverter.IsSecretKey(key)) continue;
+
+                JsonNode? node = map[key];
+                if (node is not JsonValue value) continue;
+                if (!value.TryGetValue<string>(out string? text) || string.IsNullOrEmpty(text)) continue;
+                if (ProtectedSecret.IsProtected(text)) continue;   // 已经是密文 => 原样保留
+
+                try
+                {
+                    map[key] = ProtectedSecret.Protect(text);
+                }
+                catch (Exception)
+                {
+                    // DPAPI 失败 ⇒ 绝不能把明文写进备份：宁可这个值不备份
+                    map.Remove(key);
+                }
+            }
         }
 
         /// <summary>生成一份随机的盐（base64）。</summary>

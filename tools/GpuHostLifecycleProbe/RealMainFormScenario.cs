@@ -7,6 +7,103 @@ using LiteMonitor.src.WebServer;
 namespace GpuHostLifecycleProbe;
 
 /// <summary>
+/// The isolation gate of the real-MainForm arm (LM-087).
+/// </summary>
+/// <remarks>
+/// ★ LM-087：生产 <c>MainForm.OnShown</c> 会在**首次显示**时启动网页服务
+///   （<c>src/UI/MainForm_Transparent.cs</c>：<c>if (_cfg.WebServerEnabled)</c> ⇒
+///   <c>LiteWebServer.Instance?.Start(...)</c>）。
+///   ⇒ 隔离门**不能**只看"此刻有没有人在监听"（服务还没启动 ⇒ 门通过），
+///   必须约束**服务会不会被启动**：配置里开着网页服务 ⇒ 生产 OnShown 一定会开监听。
+///   ⇒ 判定必须在 <c>Application.Run</c> **之前**求值（消息循环一跑，OnShown 就执行了），
+///   这样"拒绝"才真的拦得住副作用。
+/// </remarks>
+internal sealed record IsolationGateResult(
+    bool TrayIconHidden,
+    bool WebServerNotListeningBefore,
+    bool WebServerDisabledInConfig,
+    bool? WebServerNotListeningAfter,
+    bool Passed,
+    string Reason);
+
+/// <summary>
+/// 隔离门的**纯判定**逻辑（LM-087）。
+/// <para>抽成纯函数是为了让"拒绝"这条路径可以被真正地断言 ——
+/// 而不是只能靠读源码文本猜测。</para>
+/// </summary>
+internal static class IsolationGate
+{
+    /// <summary>
+    /// Evaluates the gate **before** the message loop starts.
+    /// </summary>
+    /// <param name="trayIconVisible">托盘图标是否可见（<c>null</c> = 读不到）。</param>
+    /// <param name="webServerRunning">此刻是否已经有网页服务在监听。</param>
+    /// <param name="webServerEnabledInConfig">
+    /// 生产配置里的网页服务开关。★ 这是**决定性**的一项：它为 true 时，
+    /// 生产 <c>OnShown</c> 一定会开监听 ⇒ 隔离承诺无法成立 ⇒ 必须拒绝。
+    /// </param>
+    internal static IsolationGateResult EvaluateBeforeRun(
+        bool? trayIconVisible,
+        bool webServerRunning,
+        bool webServerEnabledInConfig)
+    {
+        bool trayHidden = trayIconVisible == false;
+        bool notListening = !webServerRunning;
+        bool disabled = !webServerEnabledInConfig;
+
+        // ★ "配置里开着网页服务"本身就是**拒绝**的理由 ——
+        //   原实现只检查"此刻有没有在监听"，于是门通过 → OnShown 真的开了监听。
+        bool passed = trayHidden && notListening && disabled;
+
+        List<string> reasons = [];
+        if (!trayHidden)
+        {
+            reasons.Add("The tray icon is visible.");
+        }
+
+        if (!notListening)
+        {
+            reasons.Add("A web server is already listening.");
+        }
+
+        if (!disabled)
+        {
+            reasons.Add(
+                "The configuration enables the web server, so the production MainForm.OnShown " +
+                "would start a listener as soon as the window is shown.");
+        }
+
+        return new IsolationGateResult(
+            trayHidden,
+            notListening,
+            disabled,
+            null,
+            passed,
+            passed
+                ? "The isolation gates hold: the tray icon is hidden, no web server is listening " +
+                  "and the configuration keeps the production web server disabled."
+                : string.Join(" ", reasons));
+    }
+
+    /// <summary>
+    /// Re-checks the gate **after** the run: the web server must still be down.
+    /// </summary>
+    internal static IsolationGateResult EvaluateAfterRun(IsolationGateResult before, bool webServerRunningAfter)
+    {
+        bool notListeningAfter = !webServerRunningAfter;
+        bool passed = before.Passed && notListeningAfter;
+        return before with
+        {
+            WebServerNotListeningAfter = notListeningAfter,
+            Passed = passed,
+            Reason = passed
+                ? before.Reason
+                : before.Reason + " The web server was still listening after the run."
+        };
+    }
+}
+
+/// <summary>
 /// The real-MainForm arm of the T01 experiment.
 ///
 /// Instantiating the production MainForm has side effects (tray icon,
@@ -16,13 +113,18 @@ namespace GpuHostLifecycleProbe;
 ///
 ///   gate 1 - the tray icon must not be visible;
 ///   gate 2 - the web server must not be listening;
-///   gate 3 - no file may be written outside the probe's own base directory.
+///   gate 3 - the configuration must keep the production web server disabled
+///             (otherwise MainForm.OnShown starts a real listener);
+///   gate 4 - the web server must still be down after the run.
 ///
 /// If a gate fails, the arm stops, records the concrete side effect and the
 /// scenario is reported as NOT_VERIFIED instead of being used as evidence.
 /// </summary>
 internal static class RealMainFormScenario
 {
+    /// <summary>退出码：隔离门失败（拒绝执行这条 arm）。</summary>
+    internal const int IsolationGateExitCode = 4;
+
     private static readonly List<string> _overlayErrors = [];
 
     private static readonly MethodInfo? RecreateHandleMethod = typeof(Form).GetMethod(
@@ -52,6 +154,19 @@ internal static class RealMainFormScenario
             int webServerPort = LiteWebServer.Instance?.CurrentRunningPort ?? -1;
             bool samplingActive = HardwareMonitor.Instance is not null;
 
+            // ★ LM-087：隔离门必须在**服务真正启动之前**求值。
+            //   生产 MainForm.OnShown 会在窗口首次显示时启动网页服务 ⇒ 消息循环一跑
+            //   服务就可能开起来 ⇒ 门必须在此之前判定，并且判定"配置会不会让它开"。
+            bool webServerEnabledInConfig = ReadWebServerEnabled(form);
+            IsolationGateResult gate = IsolationGate.EvaluateBeforeRun(
+                trayVisible,
+                webServerRunning,
+                webServerEnabledInConfig);
+
+            bool gate1 = gate.TrayIconHidden;
+            bool gate2 = gate.WebServerNotListeningBefore;
+            bool gate3 = gate.WebServerDisabledInConfig;
+
             observations.Add(new
             {
                 step = "side-effect-observation",
@@ -60,14 +175,15 @@ internal static class RealMainFormScenario
                 webServerPort,
                 hardwareSamplerCreated = samplingActive,
                 baseDirectory = AppContext.BaseDirectory,
-                foregroundWindow = DesktopObservation.GetForegroundWindow().ToInt64()
+                foregroundWindow = DesktopObservation.GetForegroundWindow().ToInt64(),
+                webServerEnabledInConfig,
+                isolationGate = gate
             });
 
-            bool gate1 = trayVisible == false;
-            bool gate2 = !webServerRunning;
-
-            if (!gate1 || !gate2)
+            if (!gate.Passed)
             {
+                // ★ 拒绝发生在 Application.Run **之前** ⇒ 生产 OnShown 永远不执行
+                //   ⇒ 这条 arm 不会真的开出局域网监听。
                 File.WriteAllText(
                     Path.Combine(output, "mainform-abort.json"),
                     System.Text.Json.JsonSerializer.Serialize(
@@ -77,12 +193,14 @@ internal static class RealMainFormScenario
                             scenario = "mainform",
                             verdict = "NOT_VERIFIED",
                             reason = "The isolation gates failed, so the real MainForm arm was abandoned.",
+                            gateReason = gate.Reason,
                             observations,
                             gate1_trayIconHidden = gate1,
-                            gate2_webServerNotListening = gate2
+                            gate2_webServerNotListening = gate2,
+                            gate3_webServerDisabledInConfig = gate3
                         },
                         new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-                return 4;
+                return IsolationGateExitCode;
             }
 
             GdiRecoveryExperiment experiment = new(
@@ -101,7 +219,13 @@ internal static class RealMainFormScenario
                 hardwareSamplerCreated = samplingActive,
                 baseDirectory = AppContext.BaseDirectory,
                 foregroundWindow = DesktopObservation.GetForegroundWindow().ToInt64(),
-                isolationGates = new { gate1_trayIconHidden = gate1, gate2_webServerNotListening = gate2 }
+                webServerEnabledInConfig,
+                isolationGates = new
+                {
+                    gate1_trayIconHidden = gate1,
+                    gate2_webServerNotListening = gate2,
+                    gate3_webServerDisabledInConfig = gate3
+                }
             });
 
             form.Paint += (sender, e) =>
@@ -131,6 +255,8 @@ internal static class RealMainFormScenario
             int exitCode = 1;
             form.Shown += async (sender, e) =>
             {
+                int code = 1;
+                string? failure = null;
                 try
                 {
                     // The production MainForm fades in from Opacity = 0; the
@@ -138,31 +264,144 @@ internal static class RealMainFormScenario
                     await WaitForFadeAsync(form, TimeSpan.FromSeconds(4)).ConfigureAwait(true);
                     using CancellationTokenSource cancellation = new(timeoutMs);
                     await experiment.RunAsync(cancellation.Token);
-                    exitCode = experiment.WriteEvidence("mainform", 0, null);
+                    code = 0;
                 }
                 catch (OperationCanceledException)
                 {
-                    exitCode = experiment.WriteEvidence("mainform", 3, "The run exceeded its own deadline.");
+                    code = 3;
+                    failure = "The run exceeded its own deadline.";
                 }
                 catch (Exception exception)
                 {
-                    exitCode = experiment.WriteEvidence("mainform", 1, exception.ToString());
+                    code = 1;
+                    failure = exception.ToString();
                     File.WriteAllText(Path.Combine(output, "failure.log"), exception.ToString());
+                }
+
+                // ★ LM-087：最后一次副作用快照必须写进**这一份**证据文件
+                //   （原实现在 WriteEvidence **之后**才追加 ⇒ 主结果里根本没有它）。
+                experiment.ExtraObservations.Add(new
+                {
+                    step = "overlay-errors",
+                    errors = _overlayErrors.ToArray(),
+                    tcpListeners = ActiveTcpListeners()
+                });
+
+                try
+                {
+                    exitCode = experiment.WriteEvidence("mainform", code, failure);
+                }
+                catch (Exception exception)
+                {
+                    exitCode = code == 0 ? 1 : code;
+                    try
+                    {
+                        File.WriteAllText(Path.Combine(output, "failure.log"), exception.ToString());
+                    }
+                    catch (Exception)
+                    {
+                        // 证据文件写不出来时，退出码已经是非零 ⇒ 不会被当成通过。
+                    }
                 }
                 finally
                 {
-                    experiment.ExtraObservations.Add(new
-                    {
-                        step = "overlay-errors",
-                        errors = _overlayErrors.ToArray(),
-                        tcpListeners = ActiveTcpListeners()
-                    });
                     form.Close();
                 }
             };
 
             Application.Run(form);
+
+            // ★ LM-087：隔离承诺必须覆盖**整个运行期** —— 结束后再查一次。
+            //   若生产 OnShown 真的开起了监听，这里必须如实报出来并让退出码非零。
+            bool webServerRunningAfter = LiteWebServer.Instance?.IsRunning ?? false;
+            IsolationGateResult finalGate = IsolationGate.EvaluateAfterRun(gate, webServerRunningAfter);
+            WriteIsolationFinalEvidence(output, finalGate);
+
+            if (!finalGate.Passed)
+            {
+                // 重写主证据，让**文件里的结论**与**进程退出码**保持一致。
+                try
+                {
+                    exitCode = experiment.WriteEvidence(
+                        "mainform",
+                        IsolationGateExitCode,
+                        "The isolation gate failed after the run: " + finalGate.Reason);
+                }
+                catch (Exception)
+                {
+                    exitCode = IsolationGateExitCode;
+                }
+            }
+
             return exitCode;
+        }
+    }
+
+    /// <summary>
+    /// 读取生产配置里"网页服务是否开启"的开关。
+    /// <para>★ 读不到时**按"可能会启动"处理**（保守）：宁可中止这条 arm，
+    /// 也不许真的开一个局域网监听（LM-087）。</para>
+    /// </summary>
+    private static bool ReadWebServerEnabled(MainForm form)
+    {
+        object? settings = null;
+        try
+        {
+            FieldInfo? cfgField = typeof(MainForm).GetField("_cfg", BindingFlags.Instance | BindingFlags.NonPublic);
+            settings = cfgField?.GetValue(form);
+        }
+        catch (Exception)
+        {
+            // 读不到 ⇒ 见 ResolveWebServerEnabled 的保守说明。
+        }
+
+        return ResolveWebServerEnabled(ReadWebServerEnabledFrom(settings));
+    }
+
+    /// <summary>
+    /// 从生产配置对象里读出网页服务开关；读不出来时返回 <c>null</c>（**未知**）。
+    /// </summary>
+    internal static bool? ReadWebServerEnabledFrom(object? settings)
+    {
+        if (settings is Settings typed)
+        {
+            return typed.WebServerEnabled;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 把"读到的开关"变成"是否必须拒绝这条 arm"。
+    /// <para>★ <c>null</c>（读不到）⇒ 按 <c>true</c>（会启动）处理：宁可中止，
+    /// 也不许真的开一个局域网监听（LM-087）。</para>
+    /// </summary>
+    internal static bool ResolveWebServerEnabled(bool? configured) => configured ?? true;
+
+    /// <summary>写出运行结束后的隔离复验结果（独立文件，避免与主证据互相覆盖）。</summary>
+    private static void WriteIsolationFinalEvidence(string output, IsolationGateResult gate)
+    {
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(output, "mainform-isolation-final.json"),
+                System.Text.Json.JsonSerializer.Serialize(
+                    new
+                    {
+                        task = "GPU-T01-recreate-handle",
+                        scenario = "mainform",
+                        step = "isolation-final",
+                        verdict = gate.Passed ? "ISOLATION_HELD" : "NOT_VERIFIED",
+                        reason = gate.Reason,
+                        gate,
+                        tcpListeners = ActiveTcpListeners(),
+                        finishedAt = DateTimeOffset.Now
+                    },
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception)
+        {
+            // 复验记录写不出来不影响退出码判定（退出码由 finalGate.Passed 决定）。
         }
     }
 

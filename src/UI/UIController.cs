@@ -186,13 +186,6 @@ namespace LiteMonitor
             ThemeManager.Load(name);
             var t = ThemeManager.Current;
 
-            // 4. 安全释放旧主题的字体
-            // 此时 Current 已经是新主题了，Paint 事件只会用新字体，所以释放旧的是安全的
-            if (oldTheme != null && oldTheme != t)
-            {
-                oldTheme.DisposeFonts();
-            }
-
             // ... 后续缩放逻辑保持不变 ...
             float dpiScale = GetCurrentDpiScale();   
             float userScale = (float)_cfg.UIScale;    
@@ -252,6 +245,16 @@ namespace LiteMonitor
             // ★【合同 §4.6 / GPU T05】主题被重新加载 ⇒ 派生回退样式必须跟着重算
             //   （否则派生副本会持有旧主题的 Layout / Rendering）。
             RefreshLegacyFallbackTheme(t);
+
+            // 4. 安全释放旧主题的字体
+            //   ★【LM-071 / R07】必须**晚于** RefreshLegacyFallbackTheme(t)：
+            //     派生主题与源主题**共享同一批 Font 实例**（见 LegacyFallbackStyleBridge.BuildDerivedTheme），
+            //     先释放旧主题的字体 ⇒ 派生主题仍引用它们 ⇒ 悬垂引用。
+            //   此时 Current 已经是新主题、派生覆盖也已重算或清空 ⇒ 释放旧的是安全的。
+            if (oldTheme != null && oldTheme != t)
+            {
+                oldTheme.DisposeFonts();
+            }
 
             _form.BackColor = ThemeManager.ParseColor(CurrentRenderTheme.Color.Background);
 
@@ -316,8 +319,20 @@ namespace LiteMonitor
         /// <summary>主题 / DPI 变化（主题代次随外观运行时自增）。</summary>
         public void NotifyLiveGlassAppearanceChanged() => _liveGlass?.OnAppearanceChanged();
 
-        /// <summary>停止实时玻璃（窗口退出 / 句柄销毁时调用）。</summary>
+        /// <summary>
+        /// 停止实时玻璃（**整停**：服务 + 配置态开关）—— 窗口**真退出**时调用。
+        /// <para>★【LM-072 / R08】句柄销毁**不走**这里（那是临时停机，
+        ///   见 <see cref="StopLiveGlassForHandleRecreate"/>）——
+        ///   只有真关闭才允许把配置态开关清成 false。</para>
+        /// </summary>
         public void StopLiveGlass() => _liveGlass?.SetEnabled(false);
+
+        /// <summary>
+        /// 【LM-072 / R08】句柄重建 ⇒ 实时玻璃**临时停机**。
+        /// <para>★ 临时停机 ≠ 用户关闭：只停捕获服务，**保留**配置态的开关
+        ///   （配置仍为"开"，重建完成后按配置恢复，见 <see cref="LiveGlassController.RestoreIfEnabled"/>）。</para>
+        /// </summary>
+        public void StopLiveGlassForHandleRecreate() => _liveGlass?.StopForHandleRecreate();
 
         /// <summary>
         /// 【GPU T03 / 合同 §8.2 / §4 步 5】窗口句柄创建事件。
@@ -487,6 +502,9 @@ namespace LiteMonitor
             host.PresentationFailed += OnGpuPresentationFailed;
             // ★ INV-6 探针：同一代次仍有未完成清理 ⇒ 拒绝叠加新的 affinity 所有者。
             host.CapturePolicyCleanupPendingProbe = _captureCleanup.HasPendingForGeneration;
+            // ★【LM-074】闸门**原因**探针：可区分"还在按合同 §6.4 重试"
+            //   与"已经耗尽但**从未恢复**"（后者会让 HWND 残留 WDA 排除）。
+            host.CapturePolicyCleanupBlockingProbe = _captureCleanup.GetBlockingReasonForGeneration;
             return host;
         }
 
@@ -497,10 +515,17 @@ namespace LiteMonitor
         /// </summary>
         private void OnGpuCapturePolicyCleanupRequired(WindowCapturePolicyCleanup cleanup)
         {
-            _captureCleanup.Add(cleanup);
+            bool registered = _captureCleanup.Add(cleanup);
             _transition.RecordCleanupState(
                 _captureCleanup.State,
                 _captureCleanup.CleanupErrorCode);
+
+            // ★【LM-074】移交被拒（INV-4：同代次已有非终态责任）⇒ **不得静默丢弃**。
+            //   被拒的那条往往正是"误采残留 0x11 为原值"的记录 ⇒ 必须留下可观测诊断。
+            if (!registered)
+            {
+                _transition.RecordCleanupWarning(_captureCleanup.RegistrationRejectedCode);
+            }
         }
 
         // ================================================================
@@ -630,8 +655,11 @@ namespace LiteMonitor
         /// 停止之后 <c>_gpuPresentation</c> **无条件**是 <c>null</c>；未完成的 affinity 恢复责任
         /// 由 ledger 独立持有（合同 §6.2 的所有权形状）。</para>
         /// <para>★ 移交出口已接入：宿主释放会话时会把未完成的清理责任移交给 ledger
-        /// （<c>CapturePolicyCleanupRequired</c> 事件 + <c>LastCapturePolicyCleanup</c> 兜底），
-        /// 双路并存安全 —— <see cref="CapturePolicyCleanupLedger.Add"/> 对同一代次幂等。</para>
+        /// （<c>CapturePolicyCleanupRequired</c> 事件 + <c>LastCapturePolicyCleanup</c> 兜底）。
+        /// ★【LM-093】双路并存**安全**：两条路径登记的是<b>同一实例</b>
+        /// ⇒ <see cref="CapturePolicyCleanupLedger.Add"/> 对<b>同一实例</b>幂等
+        /// （返回"已在册"、不新增条目、<b>不</b>产生"登记被拒"诊断）；
+        /// 只有<b>不同</b>条目撞同代次才被 INV-4 拒绝并留痕。</para>
         /// </summary>
         public void StopGpuPresentation()
         {
@@ -650,7 +678,13 @@ namespace LiteMonitor
                     WindowCapturePolicyCleanup? handedOff = host.LastCapturePolicyCleanup;
                     if (handedOff is not null)
                     {
-                        _captureCleanup.Add(handedOff);
+                        // ★【LM-074】移交被拒（INV-4）⇒ 留痕，不得静默丢弃。
+                        bool registered = _captureCleanup.Add(handedOff);
+                        if (!registered)
+                        {
+                            _transition.RecordCleanupWarning(
+                                _captureCleanup.RegistrationRejectedCode);
+                        }
                     }
                 }
                 finally
@@ -1357,15 +1391,21 @@ namespace LiteMonitor
             bool canReconfigure =
                 _gpuPresentation is not null &&
                 (_gpuPresentation.IsActive || _gpuPresentation.IsSuspended);
-            if (canReconfigure &&
-                _gpuPresentation!.TryReconfigure(
+            bool reconfigured = false;
+            string? reconfigureErrorCode = null;
+            if (canReconfigure)
+            {
+                reconfigured = _gpuPresentation!.TryReconfigure(
                     decision.EffectiveMaterial,
                     decision.CaptureRequested,
                     _cfg.HorizontalMode,
                     theme.Rendering,
                     (float)_cfg.UIScale,
-                    out _,
-                    out _, theme))
+                    out reconfigureErrorCode,
+                    out _, theme);
+            }
+
+            if (reconfigured)
             {
                 _gpuRoute = decision;
                 _gpuFallbackCode =
@@ -1380,6 +1420,21 @@ namespace LiteMonitor
                 _transition.PublishStable(decision.Route);
                 return;
             }
+
+            // ★【LM-074】用户的 live / 主题切换被"**未解决**的清理责任"拒绝
+            //   ⇒ 安排**一次**明确恢复（合同 §6.4 的"用户显式重试"）。
+            //   ★ 主审裁决 ④的约束：只有**真正发起过 TryReconfigure**
+            //     （canReconfigure == true）且拿到 gpu_capture_policy_cleanup_unresolved
+            //     码时才安排恢复；canReconfigure == false 时 reconfigureErrorCode 恒为 null
+            //     ⇒ 本调用**不触发**任何恢复（该场景由下面的 Start 失败分支负责）。
+            //   ★★★ 顺序至关重要（必须排在 StopGpuPresentation() **之前**）：
+            //     先安排明确恢复 ⇒ ledger 里先有一条携带**精确原值**的 Pending 责任；
+            //     随后宿主停止时的移交若因 INV-4（同代次已有非终态责任）被拒，
+            //     被拒的那条往往是"误采残留 0x11 为原值"的记录，
+            //     而**先建**的重建责任携带的是精确原值 ⇒ 最终写回的是正确值。
+            //     若顺序反过来（先停后恢复）⇒ 移交先占坑、恢复被拒 ⇒ 写回误采值
+            //     ⇒ 报告 R10 的危害原样复活。
+            ScheduleExplicitCapturePolicyRecovery(reconfigureErrorCode);
 
             // A suspended host can be reconfigured without replacing its device
             // or swap chain. Any other state, including a failed in-place
@@ -1403,6 +1458,35 @@ namespace LiteMonitor
                     //   §8.4 的启动守卫恒为假 ⇒ Tick 兜底失效）。
                     _transition.PublishStable(decision.Route);
                 }
+                else
+                {
+                    // ★★★【LM-074】这里**必须**安排明确恢复（主审裁决 · 补漏）：
+                    //   这是用户真正会撞上的那个点 ——
+                    //   "GPU live 运行时恢复失败耗尽 ⇒ 用户切到 legacy 主题（宿主释放）
+                    //     ⇒ 用户切回 GPU 主题 ⇒ canReconfigure == false（宿主是 null）
+                    //     ⇒ 走不到 TryReconfigure ⇒ 第一个触发点不触发
+                    //     ⇒ 新建宿主后 Start 被闸门拒绝（unresolved）"。
+                    //   若这里不安排恢复，残留的 0x11 会一直留着
+                    //   ⇒ "明确恢复"这条解除路径在**最常见的用户流程**里几乎不可达。
+                    //
+                    //   ★ 三条"不误触发"的保证（缺一不可）：
+                    //   ① ScheduleExplicitCapturePolicyRecovery 内部**逐字比较**拒绝码，
+                    //      只有 gpu_capture_policy_cleanup_unresolved 才动作；
+                    //      gpu_capture_policy_cleanup_pending（还在正常重试）、
+                    //      gpu_presentation_not_reconfigurable 及其它任何失败码**一律不触发**。
+                    //   ② ledger 的重建入口幂等且拒绝叠加（同代次已有非终态责任 ⇒ 拒绝；
+                    //      无可重建条目 ⇒ 拒绝）⇒ 反复触发不会堆积条目。
+                    //   ③ 恢复本身只做**记账**（新建一条带精确原值的责任），**不触碰 HWND**；
+                    //      真正的写回由 ledger 的退避重试完成（合同 §6.4）。
+                    //
+                    //   ★ 与前一个触发点的关系：上面的 TryReconfigure 分支里，
+                    //   "安排恢复"必须排在 StopGpuPresentation() **之前**
+                    //   （先建的那条责任携带**精确原值**）；
+                    //   本触发点位于宿主停止**之后**，属另一条路径，两者不冲突 ——
+                    //   但若两条路径都命中，ledger 的 INV-4 只会保留**先建**的那条
+                    //   （即携带精确原值的那条）。
+                    ScheduleExplicitCapturePolicyRecovery(_gpuFallbackCode);
+                }
                 // ★★【R02 / 合同 §4.4 / U11】启动失败 ⇒ **不再**在这里"只标记 Stable"：
                 //   失败已经由统一调度入口排进队列，由 UI 安全点执行**完整**的 legacy 转换
                 //   （合同 §4 步 2–9：受控 HWND 重建 + 布局/DPI 恢复 + 窗口状态恢复 + 一次有效重绘）。
@@ -1418,6 +1502,32 @@ namespace LiteMonitor
         }
 
         /// <summary>
+        /// 【LM-074】WDA 取得被"**未解决**的清理责任"拒绝 ⇒ 安排**一次**明确恢复
+        /// （合同 §6.4 的"用户显式重试"）。
+        /// <para>★ 触发路径是**事件驱动**的 WDA 取得尝试（用户切换主题 / 开关 live /
+        /// DPI 变化等 ⇒ <see cref="ApplyGpuRenderingRoute"/>）收到拒绝码
+        /// <c>gpu_capture_policy_cleanup_unresolved</c>；
+        /// <b>严禁</b>在 <c>Tick</c> / ledger 的 <c>Pump</c> 里自动触发
+        /// （合同 §6.4"禁止每帧重试"）。</para>
+        /// <para>★ 只有 <c>gpu_capture_policy_cleanup_unresolved</c> 会动作
+        /// （判据在 <see cref="CapturePolicyCleanupLedger.TryScheduleExplicitRecoveryForRejectedCode"/>）：
+        /// <c>gpu_capture_policy_cleanup_pending</c>（还在正常重试）、
+        /// <c>gpu_presentation_not_reconfigurable</c> 及其它任何失败码**一律不触发**。</para>
+        /// <para>★ 防重复触发：ledger 的重建入口对"同代次已有非终态责任"直接拒绝（INV-4）
+        /// ⇒ 用户反复点击不会无限堆积条目。</para>
+        /// <para>★ 恢复动作本身只做 ledger 记账（不触碰 HWND）⇒ 真正的写回由
+        /// ledger 的退避重试（UI Tick 驱动）完成。</para>
+        /// </summary>
+        private void ScheduleExplicitCapturePolicyRecovery(string? errorCode)
+        {
+            _captureCleanup.TryScheduleExplicitRecoveryForRejectedCode(
+                errorCode,
+                WindowHandleGeneration.Instance.Current,
+                DateTimeOffset.UtcNow,
+                out _);
+        }
+
+        /// <summary>
         /// 【GPU T03 / 合同 §4.6 / GPU T05】legacy 渲染当前应使用的**主题快照**。
         /// <para>★ GPU→legacy 过渡期间是**派生**副本（回退样式已代入）；
         /// 其余时间是 <see cref="ThemeManager.Current"/>（原对象，不做任何修改）。</para>
@@ -1428,9 +1538,21 @@ namespace LiteMonitor
         /// 【GPU T03 / 合同 §4.6 / GPU T05】主题重新加载后重算**派生**回退样式。
         /// <para>★ 未处于 legacy 回退态（<c>_legacyFallbackTheme == null</c>）⇒ **不**引入派生样式，
         /// 保持"只有从 GPU 退出到 legacy 时才用回退样式"的产品语义。</para>
+        /// <para>★【LM-070 / R06】重载进来的主题**本身**不是 GPU 主题（原生 legacy 主题）
+        /// ⇒ **不得**套用任何回退配色 ⇒ **清空**派生覆盖并返回。
+        /// R06 说的"覆盖一直挂到重新进入 GPU 或重启"就修在这里：原实现只要
+        /// <c>_legacyFallbackTheme != null</c> 就会拿新主题重算覆盖，而原生旧主题的
+        /// <c>fallbackStyle</c> 解析结果是**中性默认值** ⇒ 旧主题自身配色被整组盖掉。</para>
         /// </summary>
         private void RefreshLegacyFallbackTheme(Theme theme)
         {
+            // ★【LM-070 / R06】目标主题**本身**不是 GPU 主题 ⇒ 不套回退配色。
+            if (!LegacyFallbackStyleBridge.IsGpuTheme(theme))
+            {
+                _legacyFallbackTheme = null;
+                return;
+            }
+
             if (_legacyFallbackTheme is null) return;
 
             LegacyFallbackStyle style = LegacyFallbackStyleBridge.Resolve(
@@ -1492,6 +1614,11 @@ namespace LiteMonitor
                     // 合同 §4 步 4 失败语义：Phase=Failed + 保留可控重试入口；
                     // **禁止**显示"已成功恢复"（计划 §4.3 :179）。
                     _transition.FailHandleRecreate();
+                    // ★【LM-095】重建失败 ⇒ 状态行里"重建完成后自动恢复"的承诺**永远兑现不了**
+                    //   ⇒ 必须如实收尾（合同 §7「降级不静默」）：
+                    //   · 句柄仍在、且不在关闭流程中 ⇒ 临时停机的语义依然成立 ⇒ 按配置把实时玻璃拉回来；
+                    //   · 否则（句柄已失效 / 正在关闭）⇒ 保持停止，但状态行必须说清楚"重建失败，需手动重开"。
+                    _liveGlass?.HandleRecreateFailed(mainForm.IsHandleCreated && !mainForm.IsClosing);
                     return;
                 }
 
@@ -1529,20 +1656,30 @@ namespace LiteMonitor
                 _layoutDirty = true;
                 _hxLayout = null;
 
-                // ★【合同 §4.6 / GPU T05】legacy 回退外观：解析 resolver 的输出，生成**派生**样式副本，
-                //   驱动 legacy 渲染。★ 绝不改 theme.Color / ThemeManager.Current / 任何写盘路径。
-                LegacyFallbackStyle fallbackStyle = LegacyFallbackStyleBridge.Resolve(
-                    theme.Rendering, out IReadOnlyList<string> fallbackDiagnostics);
-                foreach (string diagnostic in fallbackDiagnostics)
+                // ★【LM-070 / R06】目标主题**本身**不是 GPU 主题（原生 legacy 主题）
+                //   ⇒ **不得**套用任何回退配色 ⇒ 清空派生覆盖，直接用主题自身。
+                if (!LegacyFallbackStyleBridge.IsGpuTheme(theme))
                 {
-                    // 非致命诊断（合同 §5.3 规则 1：不得进 Validate() 错误列表；
-                    // §5.3 规则 2：不得覆盖既有故障根因）。
-                    _transition.RecordNonFatalDiagnostic(diagnostic);
+                    _legacyFallbackTheme = null;
+                    _form.BackColor = ThemeManager.ParseColor(theme.Color.Background);
                 }
+                else
+                {
+                    // ★【合同 §4.6 / GPU T05】legacy 回退外观：解析 resolver 的输出，生成**派生**样式副本，
+                    //   驱动 legacy 渲染。★ 绝不改 theme.Color / ThemeManager.Current / 任何写盘路径。
+                    LegacyFallbackStyle fallbackStyle = LegacyFallbackStyleBridge.Resolve(
+                        theme.Rendering, out IReadOnlyList<string> fallbackDiagnostics);
+                    foreach (string diagnostic in fallbackDiagnostics)
+                    {
+                        // 非致命诊断（合同 §5.3 规则 1：不得进 Validate() 错误列表；
+                        // §5.3 规则 2：不得覆盖既有故障根因）。
+                        _transition.RecordNonFatalDiagnostic(diagnostic);
+                    }
 
-                _legacyFallbackTheme = LegacyFallbackStyleBridge.BuildDerivedTheme(
-                    theme, fallbackStyle);
-                _form.BackColor = ThemeManager.ParseColor(_legacyFallbackTheme.Color.Background);
+                    _legacyFallbackTheme = LegacyFallbackStyleBridge.BuildDerivedTheme(
+                        theme, fallbackStyle);
+                    _form.BackColor = ThemeManager.ParseColor(_legacyFallbackTheme.Color.Background);
+                }
             }
             _transition.RecordLayoutRestore(layoutOk);
             if (!layoutOk)
@@ -1586,6 +1723,16 @@ namespace LiteMonitor
             _gpuRoute = decision;
             if (_gpuPresentation is null) _gpuFallbackCode = decision.FallbackCode;
             _transition.PublishStable(RenderingRoute.Legacy);
+
+            // ───────── 步 6 – 9 收尾：按配置恢复实时玻璃（LM-072 / R08）─────────
+            // ★ 受控重建期间句柄没了 ⇒ 捕获服务被**临时停机**（配置态的开关仍为开）。
+            //   目标 legacy 已就绪 ⇒ 此处按配置把服务拉回来；
+            //   **不得**在句柄重建过程中恢复（那时句柄尚未就绪，捕获请求是不完整的）。
+            // ★ GPU 宿主已在步 3 停止 ⇒ 此刻只有实时玻璃一个捕获所有者（合同 §13.2）。
+            if (_cfg.LiveGlassEnabled)
+            {
+                _liveGlass?.RestoreIfEnabled();
+            }
         }
 
         /// <summary>

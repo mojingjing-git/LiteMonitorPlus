@@ -39,6 +39,13 @@ namespace LiteMonitor
         /// </summary>
         private bool _isClosing;
 
+        /// <summary>
+        /// 【LM-095】关闭流程是否已经开始（<see cref="OnFormClosing"/> 之后为 true）。
+        /// <para>★ 关闭拥有**最高优先级**：关闭过程中不得重建 HWND、也不得把捕获服务拉回来
+        /// （合同 §4 全局约束 / U10）。</para>
+        /// </summary>
+        internal bool IsClosing => _isClosing;
+
         // 防止 Win11 自动隐藏无边框 + 无任务栏窗口
         protected override CreateParams CreateParams
         {
@@ -210,6 +217,12 @@ namespace LiteMonitor
 
             TrafficLogger.Load();
             HardwareHistoryLogger.Load();
+
+            // ★★ LM-083：安装事务恢复必须排在**任何加载 / 调度之前** ——
+            //   上次进程被杀/崩溃可能留下"写了一半"的安装事务；恢复会把磁盘回滚到旧版本。
+            //   若先加载再恢复，磁盘虽然回滚了，内存里跑的却仍是新版本 ⇒ 回滚承诺在进程内不成立。
+            //   （插件管理器内部还有一道结构性兜底，见 PluginManager.LoadPlugins。）
+            src.Plugins.PluginMarket.RecoverInterruptedInstalls();
             src.Plugins.PluginManager.Instance.LoadPlugins(Path.Combine(AppContext.BaseDirectory, "resources", "plugins"));
             src.Plugins.PluginManager.Instance.Start();
 
@@ -502,7 +515,10 @@ namespace LiteMonitor
             _windowAppearance?.OnHandleDestroyed();
             // ★ A16：句柄没了 ⇒ 捕获必须停（否则会对着已失效的句柄抓屏）。
             //   句柄重建后由 HandleCreated 事件重新接上。
-            _ui?.StopLiveGlass();
+            // ★【LM-072 / R08】句柄销毁是**临时停机**，不是用户关闭：
+            //   只停服务、**保留**配置态的开关；重建完成后由 UIController 按配置恢复。
+            //   （真关闭在 OnFormClosed 里整停 —— 那时才允许把开关置 false。）
+            _ui?.StopLiveGlassForHandleRecreate();
             _ui?.StopGpuPresentation();
             base.OnHandleDestroyed(e);
         }

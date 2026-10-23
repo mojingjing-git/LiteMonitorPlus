@@ -1,8 +1,10 @@
 using System;
 using System.Drawing;
+using System.Net;
 using System.Windows.Forms;
 using System.Linq;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.Core.Actions;
 using LiteMonitor.src.UI.Controls;
 using LiteMonitor.src.WebServer;
 using System.Diagnostics;
@@ -456,16 +458,22 @@ namespace LiteMonitor.src.UI.SettingsPage
         /// <summary>
         /// 构造"实际监听地址"的显示文本（契约 W11：必须显示真实监听地址与端口）。
         /// </summary>
-        private string BuildListenAddressText(bool isChinese)
+        /// <remarks>
+        /// ★ 事实来源**只有真实端点一个**：<see cref="LiteWebServer.CurrentListenEndpoint"/>。
+        ///   以前这里读的是**配置草稿** <c>Config.WebServerBindMode</c>，而端口读的是运行态
+        ///   （<c>server.CurrentRunningPort</c>）—— 两端口径不一致：
+        ///   用户在下拉框改了监听范围但还没点"应用设置"时，界面就已经按新草稿显示，
+        ///   于是 LAN → 仅本机 时界面写着 127.0.0.1，而 socket 其实还绑在 0.0.0.0 上
+        ///   ⇒ **对外暴露状态与界面显示相反**。
+        /// ★ 未运行时**没有**真实端点 ⇒ 由 <see cref="AppActions.DescribeListenAddress"/> 显示 "-"，
+        ///   绝不用配置草稿冒充"实际监听地址"。
+        /// </remarks>
+        internal string BuildListenAddressText(bool isChinese)
         {
             var server = LiteWebServer.Instance;
             bool running = server != null && server.IsRunning;
-            int port = running ? server.CurrentRunningPort : Config.WebServerPort;
-            string scope = Config.WebServerBindMode == WebServerBindMode.Lan ? "0.0.0.0" : "127.0.0.1";
-            string state = running
-                ? (isChinese ? "运行中" : "running")
-                : (isChinese ? "未运行" : "not running");
-            return $"{scope}:{port} ({state})";
+            IPEndPoint? endpoint = server != null && server.IsRunning ? server.CurrentListenEndpoint : null;
+            return AppActions.DescribeListenAddress(endpoint, running, Config.WebServerPort, isChinese);
         }
 
         private void ShowFirewallHelp(bool isChinese)

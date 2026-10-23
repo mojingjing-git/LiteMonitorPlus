@@ -214,4 +214,50 @@ public sealed class WindowCapturePolicyCleanup
         WarningCode = "gpu_capture_policy_cleanup_superseded";
         return true;
     }
+
+    /// <summary>
+    /// 【LM-074】本责任是否已被"**明确恢复**"接管。
+    /// <para>★ 语义：该责任的**原策略始终没有被写回**（事实是 <c>Failed</c>），
+    /// 只是"谁负责恢复"换成了新的清理责任 ⇒ <b>本标记不改变记账</b>：
+    /// <see cref="State"/> 仍是 <c>Failed</c>、<see cref="TerminalReason"/> 仍是
+    /// <c>exhausted</c>（如实记录历史），旧条目仍然终态、不再重试、不再触碰 HWND。</para>
+    /// <para>★ 作用：让闸门判据不再把"已被接管"的旧条目算作"该代次仍被占用"
+    /// ⇒ 新责任接管后，同代次的闸门由**新责任**（Pending）继续把关。</para>
+    /// </summary>
+    internal bool ReclaimedByExplicitRecovery { get; private set; }
+
+    /// <summary>
+    /// 【LM-074】明确恢复接管：给已终结的条目打上"已被接管"标记。
+    /// <para>★ <b>不改动</b> <see cref="State"/> 与 <see cref="TerminalReason"/> ——
+    /// "清理成功"与"被接管"是两件事，前者必须是事实。</para>
+    /// </summary>
+    /// <returns><c>true</c> = 本次调用首次打上标记；<c>false</c> = 未终结或已打过标记（幂等）。</returns>
+    internal bool TryMarkReclaimedByExplicitRecovery()
+    {
+        if (!IsTerminal) return false;
+        if (ReclaimedByExplicitRecovery) return false;
+
+        ReclaimedByExplicitRecovery = true;
+        return true;
+    }
+
+    /// <summary>
+    /// 【LM-074】本责任是否由"明确恢复"重建而来。
+    /// <para>重建的责任拥有**自己的**尝试预算（<see cref="Attempts"/> 从 0 开始）⇒
+    /// 合同 §6.4 的"尝试 1、2 属于宿主停止流程"补记**不适用**于它
+    /// —— 那两次尝试已经由旧责任消耗掉了。</para>
+    /// </summary>
+    internal bool RebuiltByExplicitRecovery { get; init; }
+
+    /// <summary>
+    /// 【LM-074】明确恢复：把下一次尝试设为**立即**到期（合同 §6.4 的退避从 0 开始）。
+    /// 已终结时返回 <c>false</c> 且不改动任何状态。
+    /// </summary>
+    internal bool TryScheduleImmediateAttempt(DateTimeOffset now)
+    {
+        if (IsTerminal) return false;
+
+        NextAttemptAt = now;
+        return true;
+    }
 }

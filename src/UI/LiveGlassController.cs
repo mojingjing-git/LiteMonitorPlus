@@ -91,6 +91,15 @@ namespace LiteMonitor
         //   ★ 尺寸代次（_sizeGeneration）与句柄代次**无关**，保持独立（合同 §7.2 末条）。
         private long _sizeGeneration = 1;
         private bool _suspended;
+
+        /// <summary>
+        /// 【LM-072 / R08】当前是否处于"句柄重建的**临时停机**"状态。
+        /// <para>★ 与 <see cref="Enabled"/>（配置态开关）**刻意分开**：
+        ///   临时停机只停捕获服务，配置仍是"开" ⇒ 重建完成后可以按配置恢复；
+        ///   用户显式关闭才允许把 <see cref="Enabled"/> 清成 false。</para>
+        /// </summary>
+        private bool _stoppedForHandleRecreate;
+
         private bool _disposed;
         private string _lastError = string.Empty;
         private string _lastLoggedKey = string.Empty;
@@ -134,9 +143,17 @@ namespace LiteMonitor
                 BackdropCaptureService? svc = _service;
                 if (svc is null)
                 {
-                    return string.IsNullOrEmpty(_lastError)
-                        ? "实时玻璃尚未启动（等待窗口句柄就绪）。"
-                        : _lastError;
+                    if (!string.IsNullOrEmpty(_lastError)) return _lastError;
+
+                    // ★【LM-072 / R08】临时停机 ≠ 用户关闭：配置仍是"开"，
+                    //   但服务确实没在跑 ⇒ 状态行必须说清楚"停了 + 为什么"，
+                    //   不能让复选框（已开启）与状态行自相矛盾。
+                    if (_stoppedForHandleRecreate)
+                    {
+                        return "实时玻璃已暂停（窗口句柄重建中），重建完成后自动恢复。";
+                    }
+
+                    return "实时玻璃尚未启动（等待窗口句柄就绪）。";
                 }
 
                 BackdropCaptureStatus st = svc.Status;
@@ -190,7 +207,24 @@ namespace LiteMonitor
         internal void SetEnabled(bool enabled)
         {
             if (_disposed) return;
-            if (Enabled == enabled) return;
+
+            if (Enabled == enabled)
+            {
+                if (enabled)
+                {
+                    // ★【LM-072 / R08】配置**没变**，但服务已经停了
+                    //   （句柄重建的临时停机 / 上一次启动失败）⇒ 必须按配置把服务拉起来，
+                    //   **不能**早退跳过 —— 否则就是"设置页显示已开启，捕获却只能手动重开"。
+                    if (_service is null) StartService();
+                }
+                else
+                {
+                    // 用户显式关闭（重复调用）⇒ 临时停机标记一并清掉。
+                    _stoppedForHandleRecreate = false;
+                }
+
+                return;
+            }
 
             Enabled = enabled;
             if (enabled)
@@ -200,13 +234,85 @@ namespace LiteMonitor
             }
             else
             {
+                // ★ 用户显式关闭 ⇒ 整停（服务 + 配置态开关 + 临时停机标记）。
+                _stoppedForHandleRecreate = false;
                 StopService();
             }
+        }
+
+        /// <summary>
+        /// 【LM-072 / R08】句柄重建 ⇒ 实时玻璃**临时停机**（只停服务，**保留** <see cref="Enabled"/>）。
+        /// <para>★ 临时停机 ≠ 用户关闭：配置仍为"开"，只是句柄没了不能对着已失效的句柄抓屏。
+        ///   重建完成后由 <see cref="RestoreIfEnabled"/> 按配置把服务拉回来。</para>
+        /// </summary>
+        internal void StopForHandleRecreate()
+        {
+            if (_disposed) return;
+
+            // ★ 临时停机 ≠ 用户关闭：**不动** Enabled（配置仍为"开"），
+            //   只停捕获服务 —— 句柄没了，不能对着已失效的句柄抓屏。
+            //   重建完成后由 RestoreIfEnabled() 按配置把服务拉回来。
+            //   （keepEnabled 只影响"暂停态"是否保留，与 Enabled 无关 —— 见 StopService 的说明。）
+            _stoppedForHandleRecreate = Enabled;
+            StopService(keepEnabled: true);
+        }
+
+        /// <summary>
+        /// 【LM-072 / R08】按配置恢复：配置为开但服务已停（句柄重建的临时停机）⇒ 把服务拉回来。
+        /// <para>★ 只在"目标句柄已就绪"之后调用 —— 句柄尚未就绪时捕获请求是不完整的。</para>
+        /// <para>★ 用户显式关闭过（<see cref="Enabled"/> == false）⇒ **绝不**自动拉起。</para>
+        /// </summary>
+        internal void RestoreIfEnabled()
+        {
+            if (_disposed) return;
+
+            // ★ 用户显式关闭过 ⇒ 绝不自动拉起（配置为关）。
+            if (!Enabled) return;
+
+            // 服务还在跑 ⇒ 无需恢复。
+            if (_service is not null) return;
+
+            StartService();
+        }
+
+        /// <summary>
+        /// 【LM-095】受控重建**失败**时的收尾。
+        /// <para>★ 重建失败 ⇒ 状态行里"重建完成后自动恢复"的承诺**永远兑现不了**
+        ///   ⇒ 不得继续这样承诺（合同 §7「降级不静默」）。</para>
+        /// <para>★ 句柄仍有效（<paramref name="handleAlive"/> == true）⇒ 临时停机的语义
+        ///   （"句柄没了不能抓屏，重建后按配置恢复"）依然成立 —— 句柄没坏 ⇒
+        ///   按配置把服务拉回来是正确的。</para>
+        /// <para>★ 句柄已失效 ⇒ 不得对着无效句柄抓屏 ⇒ 保持停止，并如实说明
+        ///   "重建失败，需手动重开"。</para>
+        /// </summary>
+        internal void HandleRecreateFailed(bool handleAlive)
+        {
+            if (_disposed) return;
+
+            // 重建已经失败了 ⇒ 不再处于"临时停机"（不会再有"重建完成后自动恢复"）。
+            _stoppedForHandleRecreate = false;
+
+            // 用户本就关着 ⇒ 无需任何收尾（状态行会显示"未启用"）。
+            if (!Enabled) return;
+
+            if (handleAlive)
+            {
+                // 句柄还在 ⇒ 按配置把服务拉回来
+                // （RestoreIfEnabled 内部会对"句柄尚未就绪"优雅降级，不会抛异常）。
+                RestoreIfEnabled();
+                return;
+            }
+
+            // 句柄已失效 ⇒ 不能对着无效句柄抓屏 ⇒ 保持停止，如实说明原因。
+            _lastError = "实时玻璃已停止（窗口句柄重建失败），请手动重新开启。";
         }
 
         private void StartService()
         {
             if (_service is not null) return;
+
+            // ★ 恢复动作已发生 ⇒ 不再处于"临时停机"状态（状态行要跟着变）。
+            _stoppedForHandleRecreate = false;
 
             _lastError = string.Empty;
 
@@ -264,6 +370,12 @@ namespace LiteMonitor
             }
         }
 
+        /// <summary>
+        /// 停止后台捕获服务（释放服务、引擎与当前帧租约）。
+        /// <para>★ 历史遗留：参数名 <c>keepEnabled</c> 与 <see cref="Enabled"/> **无关** ——
+        ///   它实际控制的是"是否保留 <c>_suspended</c>（暂停态）"。
+        ///   <see cref="Enabled"/> 只在 <see cref="SetEnabled"/> 里被写。</para>
+        /// </summary>
         private void StopService(bool keepEnabled = false)
         {
             BackdropCaptureService? svc = _service;

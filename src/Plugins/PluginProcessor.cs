@@ -410,6 +410,12 @@ namespace LiteMonitor.src.Plugins
             return hosts;
         }
 
+        /// <summary>
+        /// [LM-080] authority 的**终止符**：路径分隔符、查询串起始、片段起始。
+        /// <para>主机名**不可能**包含 <c>?</c> 或 <c>#</c> ⇒ 它们出现即表示 authority 已经结束。</para>
+        /// </summary>
+        private static readonly char[] AuthorityTerminators = { '/', '?', '#' };
+
         private static void AddDeclaredHost(HashSet<string> hosts, string urlTemplate)
         {
             if (string.IsNullOrWhiteSpace(urlTemplate)) return;
@@ -419,8 +425,18 @@ namespace LiteMonitor.src.Plugins
             if (schemeEnd < 0) return;
 
             string rest = trimmed.Substring(schemeEnd + 3);
-            int slash = rest.IndexOf('/');
-            string authority = slash >= 0 ? rest.Substring(0, slash) : rest;
+
+            // [LM-080] authority 在 '/'、'?'、'#' 三者中**最先出现**的位置结束。
+            // 修复前只按 '/' 截断 ⇒ 无路径 URL（"https://host?x=1" / "https://host#frag"）的
+            // **查询串 / 片段被当成了主机名的一部分** ⇒ 声明集合里出现一枚垃圾串
+            // （该主机的带凭据请求被一律拒绝；危害方向偏严 / fail-closed，不会误放行）。
+            int authorityEnd = rest.Length;
+            foreach (char terminator in AuthorityTerminators)
+            {
+                int idx = rest.IndexOf(terminator);
+                if (idx >= 0 && idx < authorityEnd) authorityEnd = idx;
+            }
+            string authority = rest.Substring(0, authorityEnd);
 
             // 主机来自模板 → 不是插件的显式声明
             if (authority.Contains("{{")) return;
@@ -428,11 +444,44 @@ namespace LiteMonitor.src.Plugins
             int at = authority.LastIndexOf('@');
             if (at >= 0) authority = authority.Substring(at + 1);
 
-            int colon = authority.IndexOf(':');
-            if (colon >= 0) authority = authority.Substring(0, colon);
+            // [LM-094] 端口截断：**IPv6 字面量（带方括号）整体就是主机名** ——
+            // 方括号内的冒号**不是**端口分隔符（与 PluginSandbox 侧 StripPort 的 IPv6 语义一致：
+            // 同一个口径，避免出现第四种不一致实现）。
+            // 修复前按**第一个**冒号截断 ⇒ "[fd00::1]" 被截成 "[fd00"（一枚畸形串）⇒
+            // 该 IPv6 主机永远无法被正确声明（带凭据请求被一律拒绝；偏严 / fail-closed）。
+            authority = StripAuthorityPort(authority);
 
             authority = authority.Trim();
             if (authority.Length > 0) hosts.Add(authority);
+        }
+
+        /// <summary>
+        /// [LM-094] 去掉 authority 里的端口。
+        /// <para><b>IPv6 字面量（带方括号）整体就是主机名</b>："[fd00::1]" / "[fd00::1]:8080"
+        /// 的主机都是 "[fd00::1]" —— <b>方括号内的冒号不是端口分隔符</b>
+        /// （与 <see cref="PluginSandbox"/> 侧 <c>StripPort</c> 的 IPv6 语义一致）。</para>
+        /// <para>非方括号形式：<b>单个</b>冒号是 "host:port"（按冒号截断，既有行为逐字不变）；
+        /// <b>多个</b>冒号是裸 IPv6 字面量，整体就是主机名（不得截出垃圾串）。</para>
+        /// </summary>
+        private static string StripAuthorityPort(string authority)
+        {
+            if (string.IsNullOrEmpty(authority)) return authority;
+
+            // IPv6 字面量（带方括号）：方括号内整体是主机名，只可能整体带端口。
+            if (authority[0] == '[')
+            {
+                int close = authority.IndexOf(']');
+                if (close > 0) return authority.Substring(0, close + 1);
+                return authority;
+            }
+
+            // 非方括号形式：多个冒号 ⇒ 裸 IPv6 字面量，整体就是主机名。
+            int colon = authority.IndexOf(':');
+            if (colon < 0) return authority;
+            if (colon != authority.LastIndexOf(':')) return authority;
+
+            // 单个冒号 ⇒ "host:port"（既有截断行为逐字不变）。
+            return authority.Substring(0, colon);
         }
     }
 
@@ -611,6 +660,9 @@ namespace LiteMonitor.src.Plugins
             _deadlineUtc = DateTime.UtcNow + maxDuration;
             _cts.CancelAfter(maxDuration);
 
+            // [LM-082] 每次执行一个**唯一**的作用域标识（目标级作用域继承它，见下方私有构造）。
+            ScopeId = Guid.NewGuid().ToString("N");
+
             MaxDuration = maxDuration;
             MaxSteps = maxSteps;
             MaxTargets = maxTargets;
@@ -629,6 +681,10 @@ namespace LiteMonitor.src.Plugins
             _cts = owner._cts;            // 共享：同一把取消令牌 ⇒ 总时长仍是"按实例计"
             _ownsCts = false;              // 目标级作用域不拥有 CTS，释放时不连带释放实例级的
             _deadlineUtc = owner._deadlineUtc;
+
+            // [LM-082] 目标级作用域与实例级作用域**共享同一个执行作用域标识**
+            // ⇒ 同一次执行内的各 target 仍然按"执行作用域"归并，不同执行（不同代次）不共享。
+            ScopeId = owner.ScopeId;
 
             MaxDuration = owner.MaxDuration;
             MaxSteps = owner.MaxSteps;
@@ -671,6 +727,14 @@ namespace LiteMonitor.src.Plugins
 
         /// <summary>作用域令牌：与外部取消联动，并在总时长到期时自动取消（网络等待因此可被中止）。</summary>
         public CancellationToken Token => _cts.Token;
+
+        /// <summary>
+        /// [LM-082] 作用域标识：<b>同一次执行</b>内的所有作用域（实例级 + 目标级）共享同一个标识；
+        /// 不同执行（不同代次）各有各的标识。
+        /// <para>用于"按<b>执行作用域</b>归并"（原生在途去重）：不同执行作用域**不共享**在途请求，
+        /// 避免"一个作用域到期"连带打断另一个作用域正在复用的同一请求。</para>
+        /// </summary>
+        public string ScopeId { get; }
 
         /// <summary>总时长到期时刻（UTC）。</summary>
         public DateTime DeadlineUtc => _deadlineUtc;
@@ -1048,10 +1112,34 @@ namespace LiteMonitor.src.Plugins
             return a.Length > 0 && string.Equals(a, h, StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// 去掉主机里的端口。
+        /// <para>[LM-079] **IPv6 字面量（带方括号）整体就是主机名**："[fd00::1]" / "[fd00::2]"
+        /// 只能**整体**带端口（"[fd00::1]:8080"），**不得**按最后一个冒号截断 ——
+        /// 否则两个不同的 IPv6 地址会被截成同一个 "[fd00:" ⇒ **地址碰撞**
+        /// （fail-open：声明了 [fd00::1] 却能把请求/凭据发往 [fd00::2]）。</para>
+        /// <para>非方括号形式：只有**单个**冒号才是 "host:port"；多个冒号是**裸 IPv6 字面量**，
+        /// 整体就是主机名（不得截出垃圾串）。</para>
+        /// </summary>
         private static string StripPort(string value)
         {
-            int colon = value.LastIndexOf(':');
-            if (colon > 0 && colon < value.Length - 1) return value.Substring(0, colon);
+            // 与原实现一致：null 会抛 NullReferenceException（调用方均已先行判空）。
+            if (value.Length == 0) return value;
+
+            // IPv6 字面量（带方括号）：方括号内整体是主机名，只可能整体带端口。
+            if (value[0] == '[')
+            {
+                int close = value.IndexOf(']');
+                if (close > 0) return value.Substring(0, close + 1);
+                return value;
+            }
+
+            // 非方括号形式：单个冒号才是 "host:port"；多个冒号 ⇒ 裸 IPv6 字面量，整体是主机名。
+            int colon = value.IndexOf(':');
+            if (colon > 0 && colon == value.LastIndexOf(':') && colon < value.Length - 1)
+            {
+                return value.Substring(0, colon);
+            }
             return value;
         }
     }

@@ -176,9 +176,26 @@ namespace LiteMonitor
             return s;
         }
 
-        public static void Save(this Settings settings)
+        /// <summary>
+        /// 保存配置，并**如实报告**是否真的写成功。
+        /// </summary>
+        /// <remarks>
+        /// ★ 为什么要**新增**这个入口，而不是把 <see cref="Save"/> 改成返回 bool：
+        ///   <see cref="Save"/> 是**扩展方法**且被**多处**调用（UI / 插件 / 菜单 / 自动保存 …）。
+        ///   改它的返回类型会动到既有 public 成员的签名；把它改成会抛异常的版本，
+        ///   还会把"原来静默失败"的调用点悄悄变成"现在会抛异常"—— 那会造成回归。
+        ///   这里新增一个**能报告结果**的入口，把"写没写成"这条信息交给真正需要它的调用方
+        ///   （如 <c>Settings.EnsureWebPasswordMigrated</c>）；
+        ///   <see cref="Save"/> 保持原有语义（静默失败、不抛异常）**逐位不变**。
+        /// ★ <see cref="GlobalBlockSave"/> 为真（禁止保存）⇒ 返回 **false**（不是 true）。
+        /// ★ 任何 IO / 序列化异常 ⇒ 返回 **false**（不是"吞掉异常后假装成功"）。
+        /// ★ 可见性：**internal**（不是 public）—— 本仓约定"测试接缝收为 internal + InternalsVisibleTo"，
+        ///   不新增对外公开的保存入口；消费方只有同程序集内的
+        ///   <c>Settings.EnsureWebPasswordMigrated</c>。
+        /// </remarks>
+        internal static bool TrySave(this Settings settings)
         {
-            if (GlobalBlockSave) return;
+            if (GlobalBlockSave) return false;
 
             try
             {
@@ -187,11 +204,25 @@ namespace LiteMonitor
                 {
                     AtomicWrite(json);
                 }
+                return true;
             }
             catch
             {
                 CleanupTempFile();
+                return false;
             }
+        }
+
+        /// <summary>
+        /// 保存配置（既有入口）：失败时**静默**，不抛异常。
+        /// </summary>
+        /// <remarks>
+        /// ★ 语义与改造前**逐位一致**：禁止保存 ⇒ 直接返回；IO 失败 ⇒ 清理临时文件后返回。
+        ///   需要知道"写没写成"的调用方请改用 <see cref="TrySave"/>。
+        /// </remarks>
+        public static void Save(this Settings settings)
+        {
+            TrySave(settings);
         }
 
         public static void DeleteStoredSettings()
@@ -325,12 +356,33 @@ namespace LiteMonitor
             //    主文件已损坏还去复制它，会把备份里那份好配置一起毁掉。
             if (File.Exists(FilePath) && TryLoadFile(FilePath, out _) != null)
             {
-                try { File.Copy(FilePath, _backupPath, true); }
+                // ★★ LM-085：备份**不得**是旧主文件的「原样副本」——
+                //   原样复制会把**加密前**的明文凭据（插件凭据 / Web 口令）留在磁盘上的
+                //   第二个文件里，备份的泄露面比主文件还大。
+                //   这里改成：读回旧主文件 → 过一遍脱敏/加密 → 再写进备份，
+                //   于是备份内容与主文件**同级**（凭据一律是 DPAPI 密文、口令一律为空）。
+                //   ★ 脱敏失败 ⇒ **不写备份**（绝不退回「原样复制」）：宁可备份陈旧，
+                //   也不能让明文凭据继续留在磁盘上。
+                try { WriteSanitizedBackup(FilePath, _backupPath); }
                 catch { }
             }
 
             // 4. 最后替换主文件
             File.Move(_tempPath, FilePath, true);
+        }
+
+        /// <summary>
+        /// 写备份（LM-085）：备份内容必须**已经过密 / 脱敏处理**。
+        /// <para>
+        /// ★ 失败时**不退回原样复制** —— 原样复制 = 明文凭据继续留在磁盘上。
+        ///   写不出备份 ⇒ 保持旧备份不动（宁可备份陈旧，也不留明文）。
+        /// </para>
+        /// </summary>
+        private static void WriteSanitizedBackup(string sourcePath, string backupPath)
+        {
+            string raw = File.ReadAllText(sourcePath);
+            string sanitized = Settings.SanitizeSettingsJsonForBackup(raw);
+            File.WriteAllText(backupPath, sanitized);
         }
 
         private static void CleanupTempFile()

@@ -30,7 +30,7 @@ namespace LiteMonitor.src.Plugins.Native
 
         private static readonly object _clientLock = new object();
         private static readonly ConcurrentDictionary<string, QuoteCache> _cache = new(StringComparer.OrdinalIgnoreCase);
-        private static readonly ConcurrentDictionary<string, Lazy<Task<string>>> _inflightRequests = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, InflightRequest> _inflightRequests = new(StringComparer.OrdinalIgnoreCase);
         private static readonly TimeSpan _directCacheTtl = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan _fallbackCacheTtl = TimeSpan.FromMinutes(1);
         private static readonly TimeSpan _staleCacheTtl = TimeSpan.FromMinutes(30);
@@ -105,7 +105,7 @@ namespace LiteMonitor.src.Plugins.Native
         /// <param name="token">作用域令牌（总时长到期即中止请求）。</param>
         /// <param name="maxResponseBytes">响应体字节上限；&lt;= 0 时回落到沙箱硬天花板。</param>
         /// <param name="allowedHosts">允许的目标主机集合；为 null 表示无声明上下文（不做目标校验）。</param>
-        /// <param name="inflightScopeKey">在途去重的作用域键：<b>不同作用域不共享</b>在途请求，
+        /// <param name="inflightScopeKey">在途去重的作用域键（**执行作用域标识**）：<b>不同作用域不共享</b>在途请求，
         /// 避免"一个作用域到期"连带打断另一个作用域正在复用的同一请求。</param>
         public static async Task<string> FetchAsync(string symbol, string fallbackUrl, CancellationToken token,
             int maxResponseBytes, IReadOnlyCollection<string> allowedHosts, string inflightScopeKey)
@@ -125,22 +125,137 @@ namespace LiteMonitor.src.Plugins.Native
                 ? cacheKey
                 : cacheKey + "|" + inflightScopeKey;
 
-            var lazyTask = _inflightRequests.GetOrAdd(
-                inflightKey,
-                _ => new Lazy<Task<string>>(
-                    // [LM-045] allowedHosts 必须**贯穿**到真正发请求的那一层：
-                    // 少了它，逐跳复核就没有"允许集合"可用（这正是缺口本身）。
-                    () => FetchFreshAsync(info, fallbackUrl, cacheKey, token, maxResponseBytes, allowedHosts),
-                    LazyThreadSafetyMode.ExecutionAndPublication));
+            // [LM-082] 在途归并按**执行作用域**（inflightScopeKey）而不是实例 ID：
+            // 同一实例的**不同代次**（不同执行作用域）不共享在途请求。
+            var entry = EnterInflight(inflightKey,
+                // [LM-045] allowedHosts 必须**贯穿**到真正发请求的那一层：
+                // 少了它，逐跳复核就没有"允许集合"可用（这正是缺口本身）。
+                // [LM-082] 共享请求用**自己的**中止令牌（不是任何等待者的令牌）启动。
+                ct => FetchFreshAsync(info, fallbackUrl, cacheKey, ct, maxResponseBytes, allowedHosts));
+
+            Task<string> shared;
             try
             {
-                return await lazyTask.Value;
+                shared = entry.Lazy.Value;
+            }
+            catch
+            {
+                entry.Leave();
+                throw;
+            }
+
+            // 条目随**共享任务**的终结而移除（而不是随某个等待者的放弃而移除）：
+            // 否则"创建者先放弃等待"会把仍在途的请求从表里摘掉 ⇒ 下一个等待者会**再发一条**请求。
+            _ = shared.ContinueWith(t =>
+            {
+                _ = t.Exception;   // 观察异常（避免"未观察到的任务异常"）
+                _inflightRequests.TryRemove(
+                    new KeyValuePair<string, InflightRequest>(inflightKey, entry));
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+            try
+            {
+                // [LM-082] 等待者侧：**用自己**的取消令牌决定"是否继续等"。
+                // 取消只让**本等待者**放弃等待；**不触碰**共享任务（除非本等待者是最后一个 ——
+                // 那时共享任务已经没人等，见 InflightRequest.Leave：释放并发槽位即可）。
+                if (!token.CanBeCanceled)
+                {
+                    return await shared.ConfigureAwait(false);
+                }
+
+                var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (token.Register(() => cancelled.TrySetResult(true)))
+                {
+                    var finished = await Task.WhenAny(shared, cancelled.Task).ConfigureAwait(false);
+                    if (!ReferenceEquals(finished, shared))
+                    {
+                        // 本等待者被取消 ⇒ 放弃等待（共享任务继续跑完，不影响其他等待者）。
+                        token.ThrowIfCancellationRequested();
+                    }
+                }
+                return await shared.ConfigureAwait(false);
             }
             finally
             {
-                // 只移除当前 Lazy，避免误删同 key 下刚创建的新请求。
+                entry.Leave();
+            }
+        }
+
+        /// <summary>
+        /// [LM-082] 加入（或创建）一条在途请求。
+        /// <para>若取到的条目刚刚"无人等待"而被中止 ⇒ 把它摘掉并另起一条
+        /// （绝不与一条已被取消的请求合并）。</para>
+        /// </summary>
+        private static InflightRequest EnterInflight(string inflightKey, Func<CancellationToken, Task<string>> factory)
+        {
+            for (int attempt = 0; attempt < 8; attempt++)
+            {
+                var candidate = _inflightRequests.GetOrAdd(inflightKey, _ => new InflightRequest(factory));
+                if (candidate.TryEnter()) return candidate;
+
+                // 该条目刚被中止（无人等待）⇒ 摘掉它，重来一条。
                 _inflightRequests.TryRemove(
-                    new KeyValuePair<string, Lazy<Task<string>>>(inflightKey, lazyTask));
+                    new KeyValuePair<string, InflightRequest>(inflightKey, candidate));
+            }
+
+            // 兜底（极端并发）：单独发一条（不入表 ⇒ 不与任何人合并）。
+            var solo = new InflightRequest(factory);
+            solo.TryEnter();
+            return solo;
+        }
+
+        /// <summary>
+        /// [LM-082] 原生在途请求条目：共享任务本体 + "无人等待即可中止"的句柄。
+        /// <para>★ 共享任务**不绑定任何等待者的取消令牌**（S1.0 契约 C3.4：取消一个等待者
+        /// 不得取消共享任务；与 HTTP 步骤路径同一口径）—— 它只绑定**自己的**中止令牌
+        /// （<c>_abort</c>）。</para>
+        /// <para>★ 该中止令牌仅在**所有等待者都放弃等待**时取消：原生请求占着
+        /// <see cref="PluginSandbox"/> 的进程级并发槽位，没人等它时还挂着就是白占槽位。</para>
+        /// </summary>
+        private sealed class InflightRequest
+        {
+            private readonly CancellationTokenSource _abort = new();
+            private readonly object _sync = new();
+            private int _waiters;
+
+            public InflightRequest(Func<CancellationToken, Task<string>> factory)
+            {
+                Lazy = new Lazy<Task<string>>(() => factory(_abort.Token),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+            }
+
+            /// <summary>共享任务本体（未求值；求值时用**自己的**中止令牌，不是任何等待者的令牌）。</summary>
+            public Lazy<Task<string>> Lazy { get; }
+
+            /// <summary>
+            /// 登记一个等待者。返回 false ⇒ 这条在途请求刚刚"无人等待"而被中止
+            /// ⇒ 调用方必须另起一条（不得与一条已被取消的请求合并）。
+            /// </summary>
+            public bool TryEnter()
+            {
+                lock (_sync)
+                {
+                    if (_abort.IsCancellationRequested) return false;
+                    _waiters++;
+                    return true;
+                }
+            }
+
+            /// <summary>
+            /// 等待者离开。**最后一个**等待者离开时中止共享任务（释放并发槽位）。
+            /// <para>★ 取消动作在锁内完成 ⇒ 不会与 <see cref="TryEnter"/> 交错出
+            /// "新等待者接手了一条已被取消的请求"。</para>
+            /// </summary>
+            public void Leave()
+            {
+                lock (_sync)
+                {
+                    if (_waiters > 0) _waiters--;
+                    if (_waiters == 0)
+                    {
+                        try { _abort.Cancel(); } catch { /* 取消回调异常不得外溢 */ }
+                    }
+                }
             }
         }
 
@@ -182,10 +297,34 @@ namespace LiteMonitor.src.Plugins.Native
             return false;
         }
 
+        /// <summary>
+        /// 去掉主机里的端口。
+        /// <para>[LM-079] **IPv6 字面量（带方括号）整体就是主机名**："[fd00::1]" / "[fd00::2]"
+        /// 只能**整体**带端口（"[fd00::1]:8080"），**不得**按最后一个冒号截断 ——
+        /// 否则两个不同的 IPv6 地址会被截成同一个 "[fd00:" ⇒ **地址碰撞**
+        /// （fail-open：声明了 [fd00::1] 却能把请求/凭据发往 [fd00::2]）。</para>
+        /// <para>非方括号形式：只有**单个**冒号才是 "host:port"；多个冒号是**裸 IPv6 字面量**，
+        /// 整体就是主机名（不得截出垃圾串）。</para>
+        /// </summary>
         private static string StripPort(string value)
         {
-            int colon = value.LastIndexOf(':');
-            if (colon > 0 && colon < value.Length - 1) return value.Substring(0, colon);
+            // 与原实现一致：null 会抛 NullReferenceException（调用方均已先行判空）。
+            if (value.Length == 0) return value;
+
+            // IPv6 字面量（带方括号）：方括号内整体是主机名，只可能整体带端口。
+            if (value[0] == '[')
+            {
+                int close = value.IndexOf(']');
+                if (close > 0) return value.Substring(0, close + 1);
+                return value;
+            }
+
+            // 非方括号形式：单个冒号才是 "host:port"；多个冒号 ⇒ 裸 IPv6 字面量，整体是主机名。
+            int colon = value.IndexOf(':');
+            if (colon > 0 && colon == value.LastIndexOf(':') && colon < value.Length - 1)
+            {
+                return value.Substring(0, colon);
+            }
             return value;
         }
 

@@ -394,6 +394,21 @@ namespace LiteMonitor
         }
 
         /// <summary>
+        /// 【LM-074】记录清理侧的**告警**（<c>CleanupWarningCode</c>）—— 信息级。
+        /// <para>★ 合同 §5.3 规则 2：写清理诊断**不得**清空呈现根因；
+        /// 本方法只写告警通道，与 <see cref="RecordCleanupState"/> 的错误通道互不覆盖。</para>
+        /// <para>★ 落点：ledger 因 INV-4 拒绝一条清理责任移交时，把诊断码写进这里
+        /// ⇒ "移交被拒"**不静默**。</para>
+        /// </summary>
+        internal void RecordCleanupWarning(string? cleanupWarningCode)
+        {
+            if (!string.IsNullOrEmpty(cleanupWarningCode))
+            {
+                SetCleanupWarning(cleanupWarningCode);
+            }
+        }
+
+        /// <summary>
         /// 【合同 §4 步 4】进入受控重建阶段。
         /// <para>★ 步 4 的禁止动作（计划 §4.3 :169）：不得在 <c>OnPaint</c> /
         /// <c>WndProc</c> 的销毁回调 / GPU 帧绘制栈内递归执行本步。</para>
@@ -798,6 +813,21 @@ namespace LiteMonitor
         }
 
         /// <summary>
+        /// 【LM-070 / R06】目标主题**本身**是不是 GPU 主题（判别式）。
+        /// <para>★ 判据只看主题自身的 <c>rendering.backend</c>：<c>theme.Rendering == null</c>
+        /// （原生 legacy 主题）或 <c>IsGpuRequested == false</c> ⇒ **不是** GPU 主题。</para>
+        /// <para>★ 用它区分两种"回到 legacy"的情形：
+        ///   <list type="bullet">
+        ///   <item>GPU 主题**被迫回退**（safe_mode / gpu_effects_opt_in_required / 运行期 GPU 故障）
+        ///     ⇒ <b>应当</b>套用 <c>rendering.fallbackStyle</c>；</item>
+        ///   <item><b>原生 legacy 主题</b> ⇒ <b>不得</b>套任何回退配色 ⇒ 直接用主题本身。</item>
+        ///   </list></para>
+        /// <para>★ 纯函数（不碰主题、不产生诊断）⇒ 可被确定性单测覆盖。</para>
+        /// </summary>
+        internal static bool IsGpuTheme(Theme? theme) =>
+            theme?.Rendering?.IsGpuRequested == true;
+
+        /// <summary>
         /// 用回退样式生成一份**派生**主题副本（源主题**不被修改**）。
         /// <para>★ 复制策略：逐个 public 可写属性做**浅拷贝**，只把 <c>Color</c> 换成派生副本 ——
         /// 其余子配置按引用共享（与既有运行时副本口径一致：Layout 已经是缩放后的同一份）。</para>
@@ -809,6 +839,13 @@ namespace LiteMonitor
         /// "保留告警语义和进度值"。</para>
         /// <para>★ 也不占用 <c>TextGroup</c>：分组标题色与 <c>MutedText</c> 同源会塌陷层级。
         /// 正文可读性对比度仍由 <c>TextPrimary</c> 承担（合同 §9.5 的对比度口径针对正文与次要文字）。</para>
+        /// <para>★【LM-071 / R07】运行期字体是**字段**（不是属性）⇒ 上面的"逐个 public 属性"浅拷贝
+        /// **拿不到**它们 ⇒ 派生主题的 5 个字体会退回 <c>SystemFonts.CaptionFont</c>
+        /// （字号 / 字体 / 粗体 / 高 DPI 缩放全丢）。这里显式**共享**源主题的同一批 <see cref="System.Drawing.Font"/>
+        /// 实例：<b>不新建</b>、<b>不 BuildFonts()</b>、<b>不 Scale()</b>（后两者会二次缩放，
+        /// 且纯 CLR 的协调器拿不到 dpi×user 系数）。
+        /// <b>释放责任仍在源主题</b>（<c>ThemeManager.Current</c>）—— 派生主题**不得**调用
+        /// <c>DisposeFonts()</c>，否则共享实例会被一起释放（悬垂引用）。</para>
         /// </summary>
         internal static Theme BuildDerivedTheme(Theme source, LegacyFallbackStyle style)
         {
@@ -827,6 +864,14 @@ namespace LiteMonitor
 
             Theme derived = DeriveConfig(source);
             derived.Color = colors;
+
+            // ★【LM-071】共享源主题的 5 个运行期字体字段（同一 Font 实例）。
+            derived.FontTitle = source.FontTitle;
+            derived.FontGroup = source.FontGroup;
+            derived.FontItem = source.FontItem;
+            derived.FontValue = source.FontValue;
+            derived.FontTaskbar = source.FontTaskbar;
+
             return derived;
         }
 
