@@ -45,7 +45,11 @@ namespace LiteMonitor.src.Plugins.Native
                 PooledConnectionLifetime = TimeSpan.FromMinutes(2),
                 MaxConnectionsPerServer = 8,
                 UseProxy = true,
-                Proxy = System.Net.WebRequest.GetSystemWebProxy()
+                Proxy = System.Net.WebRequest.GetSystemWebProxy(),
+                // 【安全】[LM-045] 关闭自动重定向：自动跳转会在**来不及复核目标主机**的情况下
+                // 把请求发到下一跳（未声明主机的响应会直接进入插件流水线）。
+                // 重定向必须由 GetStringAsync 逐跳处理、逐跳复核。
+                AllowAutoRedirect = false
                 // 不设置自定义证书校验回调：TLS 校验按系统信任链进行。
                 // 曾为「解决用户证书报错」整体关闭校验，等于允许中间人替换汇率数据；
                 // 企业 TLS 拦截环境应引导用户导入根证书，而不是关闭校验。
@@ -124,7 +128,9 @@ namespace LiteMonitor.src.Plugins.Native
             var lazyTask = _inflightRequests.GetOrAdd(
                 inflightKey,
                 _ => new Lazy<Task<string>>(
-                    () => FetchFreshAsync(info, fallbackUrl, cacheKey, token, maxResponseBytes),
+                    // [LM-045] allowedHosts 必须**贯穿**到真正发请求的那一层：
+                    // 少了它，逐跳复核就没有"允许集合"可用（这正是缺口本身）。
+                    () => FetchFreshAsync(info, fallbackUrl, cacheKey, token, maxResponseBytes, allowedHosts),
                     LazyThreadSafetyMode.ExecutionAndPublication));
             try
             {
@@ -184,13 +190,15 @@ namespace LiteMonitor.src.Plugins.Native
         }
 
         private static async Task<string> FetchFreshAsync(SymbolInfo info, string fallbackUrl, string cacheKey,
-            CancellationToken token, int maxResponseBytes)
+            CancellationToken token, int maxResponseBytes, IReadOnlyCollection<string> allowedHosts)
         {
             foreach (var source in GetOfficialSources(info))
             {
                 try
                 {
-                    string json = await GetStringAsync(source.url, TimeSpan.FromSeconds(3), token, maxResponseBytes);
+                    // [LM-045] 官方源的允许集合 = 内建官方源主机 ∪ {该次请求的初始主机}。
+                    string json = await GetStringAsync(source.url, TimeSpan.FromSeconds(3), token, maxResponseBytes,
+                        BuildOfficialAllowedHosts(source.url));
                     string normalized = source.parser(json, info);
                     SaveCache(cacheKey, normalized, false);
                     return normalized;
@@ -226,7 +234,9 @@ namespace LiteMonitor.src.Plugins.Native
                 try
                 {
                     string targetUrl = BuildFallbackUrl(fallbackUrl, info.ApiSymbol);
-                    string fallbackJson = await GetStringAsync(targetUrl, TimeSpan.FromSeconds(8), token, maxResponseBytes);
+                    // [LM-045] 回退源的允许集合 = native 允许目标集合 ∪ {回退目标主机}。
+                    string fallbackJson = await GetStringAsync(targetUrl, TimeSpan.FromSeconds(8), token, maxResponseBytes,
+                        BuildFallbackAllowedHosts(targetUrl, allowedHosts));
                     SaveCache(cacheKey, fallbackJson, true);
                     return fallbackJson;
                 }
@@ -315,28 +325,187 @@ namespace LiteMonitor.src.Plugins.Native
         /// <para>与 <c>PluginExecutor.FetchRawAsync</c>（HTTP 步骤路径）**同一套闸门**：
         /// 槽位来自 <see cref="PluginSandbox.AcquireRequestSlotAsync"/>，
         /// 正文读取来自 <see cref="PluginSandbox.ReadResponseBodyAsync"/>（同一原因码）。</para>
+        /// <para>[LM-045] <b>重定向</b>：自动重定向已关闭（见 <see cref="CreateClient"/>），
+        /// 重定向由本方法**逐跳**处理 —— 每一跳都**逐跳复核目标主机**，
+        /// 复核不通过时**该跳请求根本不发出**（未声明主机的响应不会进入插件流水线）。</para>
         /// </summary>
-        private static async Task<string> GetStringAsync(string url, TimeSpan timeout, CancellationToken token, int maxResponseBytes)
+        /// <param name="allowedHosts">该次请求的**允许目标主机集合**（逐跳复核用；null ⇒ 不做复核）。</param>
+        private static async Task<string> GetStringAsync(string url, TimeSpan timeout, CancellationToken token,
+            int maxResponseBytes, IReadOnlyCollection<string> allowedHosts)
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
             cts.CancelAfter(timeout);
 
             // [LM-039] 进程级并发闸门：原生步骤的网络请求与 HTTP 步骤共用同一把闸门（上限 8）。
+            // [LM-045] 槽位覆盖**整条重定向链**（链开始前获取一次、链结束后释放，不逐跳获取/释放）。
             using var slot = await PluginSandbox.AcquireRequestSlotAsync(cts.Token).ConfigureAwait(false);
 
-            // 用 ResponseHeadersRead：正文在读取时按字节上限计数（整体缓冲会先吃满内存）。
-            using var response = await GetClient()
-                .GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token)
-                .ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
+            var client = GetClient();
+
+            // [LM-045] 逐跳跟随重定向（与 HTTP 步骤路径同一口径）。
+            Uri current = null;
+            Uri.TryCreate(url, UriKind.Absolute, out current);
+            string requestTarget = url;
+
+            for (int hop = 0; ; hop++)
             {
-                throw new HttpRequestException($"HTTP {(int)response.StatusCode}", null, response.StatusCode);
+                // [LM-045] 本跳目标复核：不通过 ⇒ 这一跳请求**根本不发出**。
+                if (current != null) EnsureRedirectTargetAllowed(current, allowedHosts);
+
+                // 用 ResponseHeadersRead：正文在读取时按字节上限计数（整体缓冲会先吃满内存）。
+                using var request = new HttpRequestMessage(HttpMethod.Get, requestTarget);
+                using var response = await client
+                    .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token)
+                    .ConfigureAwait(false);
+
+                if (!IsRedirectStatus(response.StatusCode))
+                {
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        throw new HttpRequestException($"HTTP {(int)response.StatusCode}", null, response.StatusCode);
+                    }
+
+                    // [LM-039] 响应体字节上限（≤ 2 MiB）：超出即中止读取并明确失败（不截断）。
+                    using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
+                    byte[] bytes = await PluginSandbox.ReadResponseBodyAsync(stream, maxResponseBytes, cts.Token).ConfigureAwait(false);
+                    return Encoding.UTF8.GetString(bytes);
+                }
+
+                // [LM-045] 重定向：跳数上限 → Location → 目标解析 → scheme/降级复核。
+                if (hop >= MaxRedirectHops)
+                {
+                    throw new PluginSandboxException(
+                        PluginSandboxReasons.RedirectLimit,
+                        $"原生步骤的重定向次数超过上限（{MaxRedirectHops} 次）");
+                }
+
+                var location = response.Headers.Location;
+                if (location == null)
+                {
+                    throw new PluginSandboxException(
+                        PluginSandboxReasons.RedirectTargetNotAllowed,
+                        "原生步骤的重定向响应没有 Location 头，重定向链终止");
+                }
+
+                Uri next;
+                if (location.IsAbsoluteUri) next = location;
+                else if (current != null) next = new Uri(current, location);
+                else
+                {
+                    throw new PluginSandboxException(
+                        PluginSandboxReasons.RedirectTargetNotAllowed,
+                        "原生步骤的相对 Location 缺少基准 URI，重定向链终止");
+                }
+
+                EnsureRedirectSchemeAllowed(current, next);
+
+                current = next;
+                requestTarget = next.AbsoluteUri;
+            }
+        }
+
+        // ==========================================================
+        // [LM-045] 重定向：逐跳复核所需的常量与判定
+        // ==========================================================
+
+        /// <summary>
+        /// [LM-045] 单次请求允许的**最大重定向跳数**
+        /// （与 <c>PluginMarket.MaxDownloadRedirects</c>、HTTP 步骤路径同口径）。
+        /// </summary>
+        private const int MaxRedirectHops = 5;
+
+        /// <summary>
+        /// [LM-045] **内建官方数据源**的主机集合：这些目标是**代码内建**的，插件与用户改不动，
+        /// 因此官方源的重定向允许集合 = 本集合 ∪ {该次请求的初始主机}。
+        /// </summary>
+        private static readonly string[] OfficialSourceHosts =
+        {
+            "api.bybit.com", "api.gateio.ws", "api.binance.com", "www.okx.com"
+        };
+
+        /// <summary>[LM-045] 是否是重定向状态码（301 / 302 / 303 / 307 / 308）。</summary>
+        private static bool IsRedirectStatus(HttpStatusCode status)
+            => status == HttpStatusCode.MovedPermanently
+               || status == HttpStatusCode.Found
+               || status == HttpStatusCode.SeeOther
+               || status == HttpStatusCode.TemporaryRedirect
+               || status == HttpStatusCode.PermanentRedirect;
+
+        /// <summary>
+        /// [LM-045] 官方源的允许目标集合 = 内建官方源主机 ∪ {该次请求的初始主机}。
+        /// <para>★ 初始主机必须在集合内：<see cref="SourceUrlOverrides"/>（测试接缝）会把官方源
+        /// 指向本地回环服务器，不把它放进集合就会把既有回归用例全部误杀。</para>
+        /// </summary>
+        private static IReadOnlyCollection<string> BuildOfficialAllowedHosts(string url)
+        {
+            var hosts = new HashSet<string>(OfficialSourceHosts, StringComparer.OrdinalIgnoreCase);
+            if (Uri.TryCreate((url ?? "").Trim(), UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.Host))
+            {
+                hosts.Add(uri.Host);
+            }
+            return hosts;
+        }
+
+        /// <summary>
+        /// [LM-045] 回退源的允许目标集合 = **native 允许目标集合** ∪ {回退目标主机}。
+        /// </summary>
+        private static IReadOnlyCollection<string> BuildFallbackAllowedHosts(string fallbackUrl,
+            IReadOnlyCollection<string> allowedHosts)
+        {
+            var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (allowedHosts != null)
+            {
+                foreach (var h in allowedHosts)
+                {
+                    if (!string.IsNullOrWhiteSpace(h)) hosts.Add(h.Trim());
+                }
+            }
+            if (Uri.TryCreate((fallbackUrl ?? "").Trim(), UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.Host))
+            {
+                hosts.Add(uri.Host);
+            }
+            return hosts;
+        }
+
+        /// <summary>
+        /// [LM-045] **逐跳**复核重定向目标主机。不通过 ⇒ **该跳请求根本不发出**。
+        /// </summary>
+        private static void EnsureRedirectTargetAllowed(Uri target, IReadOnlyCollection<string> allowedHosts)
+        {
+            if (allowedHosts == null) return;   // 无允许集合 ⇒ 不做复核（与 HTTP 路径同一口径）
+
+            string host = target?.Host;
+            if (string.IsNullOrEmpty(host) || !IsHostAllowed(host, allowedHosts))
+            {
+                throw new PluginSandboxException(
+                    PluginSandboxReasons.RedirectTargetNotAllowed,
+                    $"原生步骤的重定向目标主机 '{host}' 不在允许的目标集合内，该跳请求未发出");
+            }
+        }
+
+        /// <summary>
+        /// [LM-045] 重定向目标的**协议**复核：必须仍是 http/https，且**不允许 https → http 降级**。
+        /// </summary>
+        private static void EnsureRedirectSchemeAllowed(Uri current, Uri next)
+        {
+            string scheme = next?.Scheme ?? "";
+            bool isHttp = string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase);
+            bool isHttps = string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+
+            if (!isHttp && !isHttps)
+            {
+                throw new PluginSandboxException(
+                    PluginSandboxReasons.RedirectTargetNotAllowed,
+                    $"原生步骤的重定向目标协议 '{scheme}' 不是 http/https，重定向链终止");
             }
 
-            // [LM-039] 响应体字节上限（≤ 2 MiB）：超出即中止读取并明确失败（不截断）。
-            using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
-            byte[] bytes = await PluginSandbox.ReadResponseBodyAsync(stream, maxResponseBytes, cts.Token).ConfigureAwait(false);
-            return Encoding.UTF8.GetString(bytes);
+            if (current != null && isHttp &&
+                string.Equals(current.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new PluginSandboxException(
+                    PluginSandboxReasons.RedirectTargetNotAllowed,
+                    "原生步骤的重定向把请求从 https 降级到 http，重定向链终止");
+            }
         }
 
         private static string BuildFallbackUrl(string fallbackUrl, string symbol)

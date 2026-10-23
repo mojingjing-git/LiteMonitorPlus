@@ -104,10 +104,15 @@ internal static class Program
             case "mainform":
                 return RealMainFormScenario.Run(output, timeoutMs, guard);
 
+            case "startup":
+                // ★ R01：只验证"生产 MainForm 能不能构造出来"，刻意不跑消息循环。
+                //   退出码契约：0 = 构造成功；1 = 构造抛异常；2 = 环境不具备条件。
+                return RealMainFormScenario.RunStartupCheck(output);
+
             default:
                 return Fail(
                     output,
-                    $"Unknown scenario '{scenario}'. Known scenarios: lifecycle, s1, s2, mainform.");
+                    $"Unknown scenario '{scenario}'. Known scenarios: lifecycle, s1, s2, mainform, startup.");
         }
     }
 

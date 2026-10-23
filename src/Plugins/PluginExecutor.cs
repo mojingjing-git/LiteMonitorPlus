@@ -75,6 +75,10 @@ namespace LiteMonitor.src.Plugins
                 {
                     // 关键修复：允许 HttpClient 自动识别并解压 GZip 或 Deflate 数据
                     AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                    // 【安全】[LM-045] 关闭自动重定向：自动跳转会在**来不及复核目标主机**的情况下
+                    // 把请求发到下一跳（凭据头、Cookie 会随跳转外泄，未声明主机的响应也会进入流水线）。
+                    // 重定向必须由 FetchRawAsync 逐跳处理、逐跳复核。
+                    AllowAutoRedirect = false,
                     // 【安全】不设置自定义证书校验回调：TLS 校验按系统信任链进行。
                     // 插件内容随取随执行，关闭校验等于允许中间人下发任意插件脚本。
                     // 企业 TLS 拦截/自签代理环境应引导用户导入根证书，而不是关闭校验。
@@ -605,6 +609,9 @@ namespace LiteMonitor.src.Plugins
                 var handler = new SocketsHttpHandler();
                 handler.Proxy = new System.Net.WebProxy(p);
                 handler.UseProxy = true;
+                // 【安全】[LM-045] 代理路径同样**关闭自动重定向**：
+                // 否则经代理的重定向会绕过逐跳目标主机复核（凭据外泄 + 响应注入）。
+                handler.AllowAutoRedirect = false;
                 // 补上这一行，确保代理请求也能解压缩
                 handler.AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate;
                 // 【安全】不设置自定义证书校验回调：TLS 校验按系统信任链进行。
@@ -861,6 +868,9 @@ namespace LiteMonitor.src.Plugins
         /// <item><b>总时长</b>：网络等待受作用域令牌约束（到期可中止 HTTP 等待）。</item>
         /// <item><b>响应体字节上限</b>：见 <see cref="EffectiveMaxResponseBytes"/>。</item>
         /// </list>
+        /// <para>[LM-045] <b>重定向</b>：自动重定向已关闭（见 <see cref="InitializeDefaultClient"/> 与
+        /// <see cref="GetClient"/>），重定向由本方法**逐跳**处理：每一跳都重建请求、**逐跳复核目标主机**。
+        /// 复核不通过时**该跳请求根本不发出**（凭据不外泄，未声明主机的响应也不进入流水线）。</para>
         /// </summary>
         /// <param name="scope">沙箱作用域；为 null 表示不在沙箱内（仅兼容旧的直调路径）。</param>
         /// <param name="allowedHosts">插件显式声明的目标主机集合；为 null 表示无声明上下文（不做凭据校验）。</param>
@@ -874,22 +884,18 @@ namespace LiteMonitor.src.Plugins
             
             // Log($"[Start] {method} {url} Proxy:{proxy ?? "None"}");
 
-            using var request = new HttpRequestMessage(method, url);
-            if (method == HttpMethod.Post && !string.IsNullOrEmpty(body))
-            {
-                request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-            }
-            if (headers != null)
-            {
-                foreach (var h in headers) request.Headers.TryAddWithoutValidation(h.Key, h.Value);
-            }
-
             // [LM-009] 凭据目标校验：**必须在请求发出之前**。
             // 目标主机不在插件显式声明集合内 ⇒ 直接拒绝，请求不会被发出，凭据不会发送。
             if (allowedHosts != null)
             {
                 PluginSandbox.EnsureCredentialTargetAllowed(url, headers, allowedHosts);
             }
+
+            // [LM-045] 逐跳复核所需的两组事实：
+            //   · 是否带凭据（带凭据 ⇒ 每一跳都必须落在**声明主机集合**内，凭据不得随跳转外泄）；
+            //   · 不带凭据时的允许集合 = 声明主机集合 ∪ {原始直连目标主机}。
+            bool hasCredential = PluginSandbox.HasCredentialHeader(headers);
+            HashSet<string> hopAllowedHosts = BuildHopAllowedHosts(allowedHosts, url, hasCredential);
 
             var client = GetClient(proxy);
             int generation = GetClientGeneration();
@@ -899,6 +905,7 @@ namespace LiteMonitor.src.Plugins
                 // 用 ResponseHeadersRead + 自己的期限，使"正文读取"仍在客户端超时预算内
                 // （HttpClient.Timeout 只覆盖到响应头，因此这里用同长的链接令牌补齐总期限，
                 //  用户可见的超时语义不变）。
+                // [LM-045] 该期限覆盖**整条重定向链**（链接令牌在循环外创建）。
                 using var deadline = new CancellationTokenSource(client.Timeout);
 
                 // [LM-009] 作用域令牌：单次执行总时长到期时可中止 HTTP 等待
@@ -908,6 +915,7 @@ namespace LiteMonitor.src.Plugins
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token, scopeToken);
 
                 // [LM-009] 并发槽位：只占**一个**槽位（作用域内的闸门），不在外层重复占用。
+                // [LM-045] 槽位覆盖**整条重定向链**：循环**前**获取一次、链结束后释放（不逐跳获取/释放）。
                 IDisposable slot = null;
                 try
                 {
@@ -917,22 +925,93 @@ namespace LiteMonitor.src.Plugins
                         slot = await PluginSandbox.AcquireRequestSlotAsync(slotToken);
                     }
 
-                    using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linked.Token);
-                    // Log($"[End] {url} Status:{response.StatusCode}");
+                    // [LM-045] 逐跳跟随重定向（镜像 PluginMarket.DownloadBytesAsync 这个仓内同构先例）：
+                    // 自动重定向已关闭 ⇒ 每一跳都由本循环显式发起、显式复核目标主机。
+                    Uri current = null;
+                    Uri.TryCreate(url, UriKind.Absolute, out current);
+                    string requestTarget = url;          // 首跳用原始字符串（与既有行为一致）
+                    HttpMethod currentMethod = method;
+                    string currentBody = body;
 
-                    // [Fix] Enforce success status code to prevent caching error pages (e.g. 404/500 HTML)
-                    response.EnsureSuccessStatusCode();
-                    
-                    // [Optimization] HEAD request optimization
-                    if (method == HttpMethod.Head) return "";
-
-                    byte[] bytes = await ReadBodyWithLimitAsync(response, linked.Token);
-                    
-                    if (encoding?.ToLower() == "gbk")
+                    for (int hop = 0; ; hop++)
                     {
-                        return Encoding.GetEncoding("GBK").GetString(bytes);
+                        // [LM-045] 本跳目标复核：**不通过 ⇒ 这一跳请求根本不发出**。
+                        if (current != null)
+                        {
+                            EnsureHopTargetAllowed(current, allowedHosts, hopAllowedHosts, headers, hasCredential);
+                        }
+
+                        // 每一跳都**重建**请求（StringContent 正文不可复用）。
+                        using var request = new HttpRequestMessage(currentMethod, requestTarget);
+                        if (currentMethod == HttpMethod.Post && !string.IsNullOrEmpty(currentBody))
+                        {
+                            request.Content = new StringContent(currentBody, Encoding.UTF8, "application/json");
+                        }
+                        if (headers != null)
+                        {
+                            foreach (var h in headers) request.Headers.TryAddWithoutValidation(h.Key, h.Value);
+                        }
+
+                        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linked.Token);
+                        // Log($"[End] {url} Status:{response.StatusCode}");
+
+                        if (!IsRedirectStatus(response.StatusCode))
+                        {
+                            // [Fix] Enforce success status code to prevent caching error pages (e.g. 404/500 HTML)
+                            response.EnsureSuccessStatusCode();
+
+                            // [Optimization] HEAD request optimization
+                            if (currentMethod == HttpMethod.Head) return "";
+
+                            byte[] bytes = await ReadBodyWithLimitAsync(response, linked.Token);
+
+                            if (encoding?.ToLower() == "gbk")
+                            {
+                                return Encoding.GetEncoding("GBK").GetString(bytes);
+                            }
+                            return Encoding.UTF8.GetString(bytes);
+                        }
+
+                        // [LM-045] 重定向：跳数上限 → Location → 目标解析 → scheme/降级复核 → 方法语义。
+                        if (hop >= MaxRedirectHops)
+                        {
+                            throw new PluginSandboxException(
+                                PluginSandboxReasons.RedirectLimit,
+                                $"重定向次数超过上限（{MaxRedirectHops} 次）");
+                        }
+
+                        var location = response.Headers.Location;
+                        if (location == null)
+                        {
+                            throw new PluginSandboxException(
+                                PluginSandboxReasons.RedirectTargetNotAllowed,
+                                "重定向响应没有 Location 头，重定向链终止");
+                        }
+
+                        // 相对 Location ⇒ 以当前 URI 解析；绝对 Location 直接采用。
+                        Uri next;
+                        if (location.IsAbsoluteUri) next = location;
+                        else if (current != null) next = new Uri(current, location);
+                        else
+                        {
+                            throw new PluginSandboxException(
+                                PluginSandboxReasons.RedirectTargetNotAllowed,
+                                "相对 Location 缺少基准 URI，重定向链终止");
+                        }
+
+                        EnsureRedirectSchemeAllowed(current, next);
+
+                        // 方法/正文语义（与 .NET 原生重定向一致）：
+                        // 301/302/303 ⇒ 方法变 GET 且丢弃正文；307/308 ⇒ 保留方法与正文。
+                        if (RewritesMethodOnRedirect(response.StatusCode))
+                        {
+                            currentMethod = HttpMethod.Get;
+                            currentBody = null;
+                        }
+
+                        current = next;
+                        requestTarget = next.AbsoluteUri;
                     }
-                    return Encoding.UTF8.GetString(bytes);
                 }
                 finally
                 {
@@ -966,6 +1045,123 @@ namespace LiteMonitor.src.Plugins
                     throw new PluginClientDisposedException(url, ex);
                 }
                 throw;
+            }
+        }
+
+        // ==========================================================
+        // [LM-045] 重定向：逐跳处理所需的常量与判定
+        // ==========================================================
+
+        /// <summary>
+        /// [LM-045] 单次请求允许的**最大重定向跳数**。
+        /// <para>与仓内同构先例 <c>PluginMarket.MaxDownloadRedirects</c>（= 5）对齐。</para>
+        /// </summary>
+        private const int MaxRedirectHops = 5;
+
+        /// <summary>[LM-045] 是否是重定向状态码（301 / 302 / 303 / 307 / 308）。</summary>
+        private static bool IsRedirectStatus(System.Net.HttpStatusCode status)
+            => status == System.Net.HttpStatusCode.MovedPermanently
+               || status == System.Net.HttpStatusCode.Found
+               || status == System.Net.HttpStatusCode.SeeOther
+               || status == System.Net.HttpStatusCode.TemporaryRedirect
+               || status == System.Net.HttpStatusCode.PermanentRedirect;
+
+        /// <summary>
+        /// [LM-045] 该重定向状态码是否**改写方法**（301 / 302 / 303 ⇒ 方法变 GET 且丢弃正文；
+        /// 307 / 308 ⇒ 保留方法与正文）。
+        /// </summary>
+        private static bool RewritesMethodOnRedirect(System.Net.HttpStatusCode status)
+            => status == System.Net.HttpStatusCode.MovedPermanently
+               || status == System.Net.HttpStatusCode.Found
+               || status == System.Net.HttpStatusCode.SeeOther;
+
+        /// <summary>
+        /// [LM-045] 逐跳复核用的**允许主机集合**。
+        /// <para>· <b>带凭据</b>：只保留插件**显式声明**的主机（凭据不得随重定向外泄，
+        /// "原始直连目标主机"这一例外**不适用**）。</para>
+        /// <para>· <b>不带凭据</b>：声明主机集合 ∪ {原始直连目标主机} ——
+        /// 后者让**同主机**重定向（换路径 / 换查询串 / http→https 升级）继续可用。</para>
+        /// </summary>
+        private static HashSet<string> BuildHopAllowedHosts(HashSet<string> declaredHosts, string directUrl, bool hasCredential)
+        {
+            var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (declaredHosts != null)
+            {
+                foreach (var h in declaredHosts)
+                {
+                    if (!string.IsNullOrWhiteSpace(h)) hosts.Add(h.Trim());
+                }
+            }
+
+            if (!hasCredential)
+            {
+                if (Uri.TryCreate((directUrl ?? "").Trim(), UriKind.Absolute, out var direct) && !string.IsNullOrEmpty(direct.Host))
+                {
+                    hosts.Add(direct.Host);
+                }
+            }
+
+            return hosts;
+        }
+
+        /// <summary>
+        /// [LM-045] **逐跳**复核目标主机。不通过 ⇒ **该跳请求根本不发出**。
+        /// <list type="bullet">
+        /// <item><b>带凭据</b>：每一跳都必须在**声明主机集合**内 ⇒ 失败原因为
+        /// <see cref="PluginSandboxReasons.CredentialTargetNotAllowed"/>（凭据未发送）。</item>
+        /// <item><b>不带凭据</b>：每一跳都必须在（声明主机集合 ∪ {原始直连目标主机}）内 ⇒
+        /// 失败原因为 <see cref="PluginSandboxReasons.RedirectTargetNotAllowed"/>。</item>
+        /// </list>
+        /// <para>无声明上下文（<paramref name="declaredHosts"/> 为 null）时不做主机复核
+        /// —— 与既有"无声明上下文即不做凭据校验"的口径保持一致。</para>
+        /// </summary>
+        private static void EnsureHopTargetAllowed(Uri target, HashSet<string> declaredHosts, HashSet<string> hopAllowedHosts,
+            Dictionary<string, string> headers, bool hasCredential)
+        {
+            if (declaredHosts == null || target == null) return;
+
+            string host = target.Host;
+            if (string.IsNullOrEmpty(host)) return;
+
+            if (hasCredential)
+            {
+                // 带凭据：与首跳同一原语、同一口径 —— 每一跳都必须在声明主机集合内。
+                PluginSandbox.EnsureCredentialTargetAllowed(target.AbsoluteUri, headers, declaredHosts);
+                return;
+            }
+
+            if (!HostInAllowedSet(host, hopAllowedHosts))
+            {
+                throw new PluginSandboxException(
+                    PluginSandboxReasons.RedirectTargetNotAllowed,
+                    $"重定向目标主机 '{host}' 不在允许的目标集合内，该跳请求未发出");
+            }
+        }
+
+        /// <summary>
+        /// [LM-045] 重定向目标的**协议**复核：必须仍是 http/https，且**不允许 https → http 降级**。
+        /// <para>降级意味着凭据 / 正文会从加密信道掉到明文信道 ⇒ 直接终止重定向链。</para>
+        /// </summary>
+        private static void EnsureRedirectSchemeAllowed(Uri current, Uri next)
+        {
+            string scheme = next?.Scheme ?? "";
+            bool isHttp = string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase);
+            bool isHttps = string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+
+            if (!isHttp && !isHttps)
+            {
+                throw new PluginSandboxException(
+                    PluginSandboxReasons.RedirectTargetNotAllowed,
+                    $"重定向目标的协议 '{scheme}' 不是 http/https，重定向链终止");
+            }
+
+            if (current != null && isHttp &&
+                string.Equals(current.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new PluginSandboxException(
+                    PluginSandboxReasons.RedirectTargetNotAllowed,
+                    "重定向把请求从 https 降级到 http，重定向链终止");
             }
         }
 

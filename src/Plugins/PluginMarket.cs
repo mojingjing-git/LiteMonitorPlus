@@ -820,6 +820,30 @@ namespace LiteMonitor.src.Plugins
         /// <summary>写前日志文件名（放在 PluginsDir 下，不以 .json 结尾，不会被插件加载器扫到）</summary>
         internal const string TransactionLogFileName = ".market-install-txn.log";
 
+        /// <summary>
+        /// 坏日志隔离文件名（R04）。写前日志被篡改或损坏时，原始内容逐字节留存在这里供事后排查；
+        /// 同样不以 .json 结尾，不会被插件加载器扫到。
+        /// </summary>
+        internal const string QuarantineLogFileName = ".market-install-txn.quarantine.log";
+
+        /// <summary>
+        /// 一笔事务在插件目录下的三个直接子文件（R04）。
+        /// 路径**不是**从日志里读来的，而是按【插件 id + 事务 id】重建并做过目录边界校验的。
+        /// </summary>
+        internal readonly struct TransactionPaths
+        {
+            internal TransactionPaths(string targetPath, string stagePath, string backupPath)
+            {
+                TargetPath = targetPath;
+                StagePath = stagePath;
+                BackupPath = backupPath;
+            }
+
+            internal string TargetPath { get; }
+            internal string StagePath { get; }
+            internal string BackupPath { get; }
+        }
+
         private static readonly object _commitLock = new object();
 
         private static readonly JsonSerializerOptions _jsonOpts = new JsonSerializerOptions
@@ -908,7 +932,7 @@ namespace LiteMonitor.src.Plugins
                 {
                     // ④ 回滚：原文件原样保留、原记录原样保留、暂存文件清理
                     Rollback(
-                        pluginsDir, tx, targetPath, stagePath, backupPath,
+                        pluginsDir, tx,
                         movedToTarget, recordTouched, oldRecord,
                         upsertRecord, removeRecord);
                     throw;
@@ -919,6 +943,11 @@ namespace LiteMonitor.src.Plugins
         /// <summary>
         /// 启动恢复：对账写前日志里的每一笔在途事务。
         /// 返回被处理的条数。
+        ///
+        /// ★ R04（目录边界）：日志里的路径字段**一律不当路径用**。
+        ///   每笔事务先按【插件 id + 事务 id】重建三个直接子文件名，再做边界校验；
+        ///   校验不过（绝对路径 / 含目录分隔符 / 越界 / 重解析点 / 字段与重建值不一致）就整笔拒绝：
+        ///   原文逐字节隔离留证，其中的路径一个都不执行，也不再重试。
         /// </summary>
         internal static int RecoverInterruptedInstalls(
             string pluginsDir,
@@ -927,7 +956,27 @@ namespace LiteMonitor.src.Plugins
             string logPath = LogPath(pluginsDir);
             if (!File.Exists(logPath)) return 0;
 
-            MarketInstallTxnLog log = ReadLog(pluginsDir);
+            string rawText;
+            try
+            {
+                rawText = File.ReadAllText(logPath);
+            }
+            catch
+            {
+                // 读不到（被占用等）：按原行为当作没有在途事务
+                SafeDelete(logPath);
+                return 0;
+            }
+
+            if (!TryParseLogText(rawText, out MarketInstallTxnLog log))
+            {
+                // 坏日志：原文留证，一个字节都不执行
+                QuarantineRejectedLog(pluginsDir, ReadLogBytes(logPath),
+                    new[] { "写前日志无法解析成合法的日志结构" });
+                SafeDelete(logPath);
+                return 0;
+            }
+
             if (log.Pending.Count == 0)
             {
                 SafeDelete(logPath);
@@ -936,11 +985,21 @@ namespace LiteMonitor.src.Plugins
 
             int handled = 0;
             var remaining = new List<MarketInstallTransaction>();
-            foreach (var tx in log.Pending)
+            var rejected = new List<string>();
+            for (int i = 0; i < log.Pending.Count; i++)
             {
+                MarketInstallTransaction tx = log.Pending[i];
+
+                // ★ R04：先重建 + 先校验，不通过就整笔拒绝，绝不拿日志里的字符串去碰磁盘
+                if (!TryResolveTransactionPaths(pluginsDir, tx, out TransactionPaths paths, out string reason))
+                {
+                    rejected.Add($"第 {i + 1} 条被拒绝：{reason}；原始条目 = {SerializeTransaction(tx)}");
+                    continue;
+                }
+
                 try
                 {
-                    Reconcile(pluginsDir, tx, findRecord);
+                    Reconcile(paths, tx, findRecord);
                     handled++;
                 }
                 catch
@@ -950,21 +1009,24 @@ namespace LiteMonitor.src.Plugins
                 }
             }
 
+            if (rejected.Count > 0)
+                QuarantineRejectedLog(pluginsDir, ReadLogBytes(logPath), rejected);
+
             if (remaining.Count == 0) SafeDelete(logPath);
             else WriteLog(pluginsDir, new MarketInstallTxnLog { Pending = remaining });
 
             return handled;
         }
 
-        /// <summary>单笔事务对账。</summary>
+        /// <summary>单笔事务对账。paths 已通过目录边界校验（R04），里面的路径都在插件目录之下。</summary>
         private static void Reconcile(
-            string pluginsDir,
+            TransactionPaths paths,
             MarketInstallTransaction tx,
             Func<string, MarketPluginRecord?> findRecord)
         {
-            string targetPath = Path.Combine(pluginsDir, tx.Target);
-            string stagePath = Path.Combine(pluginsDir, tx.Stage);
-            string backupPath = Path.Combine(pluginsDir, tx.Backup);
+            string targetPath = paths.TargetPath;
+            string stagePath = paths.StagePath;
+            string backupPath = paths.BackupPath;
 
             bool stageExists = File.Exists(stagePath);
             bool targetHasNewContent = File.Exists(targetPath)
@@ -1002,13 +1064,16 @@ namespace LiteMonitor.src.Plugins
             }
         }
 
-        /// <summary>回滚：恢复原文件与原记录，清理暂存文件。</summary>
+        /// <summary>
+        /// 回滚：恢复原文件与原记录，清理暂存文件。
+        ///
+        /// ★ R04：作用路径同样按【插件 id + 事务 id】重建并做目录边界校验，
+        ///   校验不过就一个字节都不动。正常路径下 tx 由本类自己构造（插件 id 合法、事务 id 自产），
+        ///   重建值与实际路径必然一致 ⇒ 回滚行为不变。
+        /// </summary>
         private static void Rollback(
             string pluginsDir,
             MarketInstallTransaction tx,
-            string targetPath,
-            string stagePath,
-            string backupPath,
             bool movedToTarget,
             bool recordTouched,
             MarketPluginRecord? oldRecord,
@@ -1017,6 +1082,13 @@ namespace LiteMonitor.src.Plugins
         {
             try
             {
+                if (!TryBuildTransactionPaths(pluginsDir, tx, out TransactionPaths paths, out _))
+                    return;   // 路径不可信 ⇒ 不执行任何文件操作
+
+                string targetPath = paths.TargetPath;
+                string stagePath = paths.StagePath;
+                string backupPath = paths.BackupPath;
+
                 if (movedToTarget)
                 {
                     if (File.Exists(backupPath))
@@ -1048,6 +1120,267 @@ namespace LiteMonitor.src.Plugins
             }
         }
 
+        // ==========================================================
+        // R04：目录边界 —— 事务日志里的路径字段一律不直接使用
+        // ==========================================================
+
+        /// <summary>
+        /// 解析一笔事务，得到它在插件目录下的三个直接子文件路径（R04）。
+        ///
+        /// ★ 三层校验，任何一层不过都整笔拒绝：
+        ///   ① 形状：日志字段不得含目录分隔符、不得是绝对路径、不得是 "." / ".."；
+        ///   ② 一致性：Target / Stage / Backup 必须分别等于按【插件 id + 事务 id】重建出来的文件名；
+        ///   ③ 边界：重建出来的名字必须落在插件目录之下，且目标不是重解析点。
+        /// </summary>
+        internal static bool TryResolveTransactionPaths(
+            string pluginsDir,
+            MarketInstallTransaction? tx,
+            out TransactionPaths paths,
+            out string reason)
+        {
+            paths = default;
+
+            if (!TryBuildTransactionPaths(pluginsDir, tx, out paths, out reason)) return false;
+            if (tx == null) return false;   // TryBuildTransactionPaths 已经拦住了空条目
+
+            // ① 形状：日志里的"路径"字段只能是叶子文件名
+            if (LooksLikePathEscape(tx.Target) || LooksLikePathEscape(tx.Stage) || LooksLikePathEscape(tx.Backup))
+            {
+                reason = "日志里的路径字段含目录分隔符 / 绝对路径 / 相对目录标记";
+                return false;
+            }
+
+            // ② 一致性：字段必须与按 id 重建出来的文件名逐字节相同
+            string targetName = PluginMarket.GetInstallFileName(tx.PluginId);
+            if (!string.Equals(tx.Target, targetName, StringComparison.Ordinal) ||
+                !string.Equals(tx.Stage, targetName + "." + tx.TxId + ".stage", StringComparison.Ordinal) ||
+                !string.Equals(tx.Backup, targetName + "." + tx.TxId + ".bak", StringComparison.Ordinal))
+            {
+                reason = "日志里的路径字段与按插件 id / 事务 id 重建的文件名不一致";
+                return false;
+            }
+
+            // ③ 摘要必须可用：摘要被改掉时，日志就没有可信的"新内容"判据
+            if (!PluginMarket.IsUsableSha256(tx.Sha256))
+            {
+                reason = "事务摘要缺失或格式非法";
+                return false;
+            }
+
+            reason = "";
+            return true;
+        }
+
+        /// <summary>
+        /// 按【插件 id + 事务 id】重建三个直接子文件名，并解析成插件目录下的路径（R04）。
+        /// 只做"路径安全"校验（重建 + 目录边界），不涉及日志字段的一致性判断。
+        /// </summary>
+        internal static bool TryBuildTransactionPaths(
+            string pluginsDir,
+            MarketInstallTransaction? tx,
+            out TransactionPaths paths,
+            out string reason)
+        {
+            paths = default;
+
+            if (tx == null) { reason = "事务条目为空"; return false; }
+
+            if (!PluginMarket.TryValidatePluginId(tx.PluginId, out string idReason))
+            {
+                reason = "插件 id 非法（" + idReason + "）";
+                return false;
+            }
+
+            if (!IsValidTransactionId(tx.TxId))
+            {
+                reason = "事务 id 非法（必须是 32 位十六进制）";
+                return false;
+            }
+
+            string targetName = PluginMarket.GetInstallFileName(tx.PluginId);
+            if (!TryResolveDirectChildPath(pluginsDir, targetName, out string targetPath, out reason) ||
+                !TryResolveDirectChildPath(pluginsDir, targetName + "." + tx.TxId + ".stage", out string stagePath, out reason) ||
+                !TryResolveDirectChildPath(pluginsDir, targetName + "." + tx.TxId + ".bak", out string backupPath, out reason))
+            {
+                return false;
+            }
+
+            paths = new TransactionPaths(targetPath, stagePath, backupPath);
+            reason = "";
+            return true;
+        }
+
+        /// <summary>
+        /// 把一个【叶子文件名】解析成 pluginsDir 下的直接子文件路径，并做目录边界校验（R04）。
+        ///
+        /// 拒绝：绝对路径、含目录分隔符的路径、"." / ".."、解析后越出 pluginsDir 的路径，
+        ///       以及目标是重解析点（符号链接 / 联接）的情况。
+        /// </summary>
+        internal static bool TryResolveDirectChildPath(
+            string pluginsDir,
+            string? fileName,
+            out string path,
+            out string reason)
+        {
+            path = "";
+
+            if (string.IsNullOrWhiteSpace(pluginsDir)) { reason = "插件目录为空"; return false; }
+            if (string.IsNullOrEmpty(fileName)) { reason = "文件名为空"; return false; }
+
+            // ★ 叶子名判定：只要带路径成分（分隔符 / 根 / 相对目录标记）就不是合法文件名
+            if (fileName == "." || fileName == "..") { reason = "文件名是相对目录标记"; return false; }
+            if (fileName.IndexOf(Path.DirectorySeparatorChar) >= 0 ||
+                fileName.IndexOf(Path.AltDirectorySeparatorChar) >= 0 ||
+                fileName.IndexOf('/') >= 0 || fileName.IndexOf('\\') >= 0 ||
+                Path.IsPathRooted(fileName))
+            {
+                reason = "文件名含目录分隔符或绝对路径";
+                return false;
+            }
+
+            try
+            {
+                string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(pluginsDir));
+                string candidate = Path.GetFullPath(Path.Combine(root, fileName));
+
+                string? candidateDir = Path.GetDirectoryName(candidate);
+                if (!string.Equals(
+                        Path.TrimEndingDirectorySeparator(candidateDir ?? ""),
+                        root,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    reason = "路径越出插件目录";
+                    return false;
+                }
+
+                if (IsUntrustedReparsePoint(candidate))
+                {
+                    reason = "目标是重解析点（符号链接 / 联接），不可信";
+                    return false;
+                }
+
+                path = candidate;
+                reason = "";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                reason = "路径解析失败：" + ex.Message;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 目标是否是【不受信任的重解析点】（符号链接 / 联接等）。
+        /// 读不到属性时按"不可信"处理（fail-closed）。
+        /// </summary>
+        private static bool IsUntrustedReparsePoint(string path)
+        {
+            try
+            {
+                FileAttributes attrs = File.GetAttributes(path);
+                return (attrs & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint;
+            }
+            catch (FileNotFoundException) { return false; }   // 不存在 ⇒ 不是重解析点
+            catch (DirectoryNotFoundException) { return false; }
+            catch { return true; }                              // 读不到属性 ⇒ 不可信
+        }
+
+        /// <summary>事务 id 必须是 32 位十六进制（Guid.NewGuid().ToString("N") 的形状）</summary>
+        private static bool IsValidTransactionId(string? txId)
+        {
+            if (string.IsNullOrEmpty(txId) || txId.Length != 32) return false;
+            foreach (char c in txId)
+            {
+                bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+                if (!hex) return false;
+            }
+            return true;
+        }
+
+        /// <summary>日志字段长得像"路径"（而不是叶子文件名）时返回 true。</summary>
+        private static bool LooksLikePathEscape(string? value)
+        {
+            if (string.IsNullOrEmpty(value)) return true;
+            if (value == "." || value == "..") return true;
+            if (value.IndexOf('/') >= 0 || value.IndexOf('\\') >= 0) return true;
+            if (Path.IsPathRooted(value)) return true;
+            return false;
+        }
+
+        /// <summary>解析写前日志原文。返回 false = 坏日志（无法解析或结构不对）。</summary>
+        private static bool TryParseLogText(string? rawText, out MarketInstallTxnLog log)
+        {
+            log = new MarketInstallTxnLog();
+            if (rawText == null) return false;
+            if (string.IsNullOrWhiteSpace(rawText)) return true;   // 空日志 = 没有在途事务
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<MarketInstallTxnLog>(rawText, _jsonOpts);
+                if (parsed?.Pending == null) return false;
+                log = parsed;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>读日志的原始字节（隔离留证时逐字节保留）。</summary>
+        private static byte[]? ReadLogBytes(string logPath)
+        {
+            try { return File.ReadAllBytes(logPath); }
+            catch { return null; }
+        }
+
+        /// <summary>把一条事务条目序列化回 JSON（隔离留证时用）。</summary>
+        private static string SerializeTransaction(MarketInstallTransaction tx)
+        {
+            try { return JsonSerializer.Serialize(tx, _jsonOpts); }
+            catch { return "(序列化失败)"; }
+        }
+
+        /// <summary>
+        /// 坏日志隔离留证（R04）：原始日志内容【逐字节】追加到隔离文件，并记录拒绝原因。
+        /// 隔离文件与写前日志同目录，不以 .json 结尾，不会被插件加载器扫到。
+        /// 隔离失败不得阻断启动恢复。
+        /// </summary>
+        private static void QuarantineRejectedLog(
+            string pluginsDir,
+            byte[]? rawLogBytes,
+            IReadOnlyList<string> reasons)
+        {
+            try
+            {
+                Directory.CreateDirectory(pluginsDir);
+                string path = Path.Combine(pluginsDir, QuarantineLogFileName);
+
+                var header = new StringBuilder();
+                header.Append("===== LiteMonitor 插件市场事务日志隔离（R04 目录边界校验） =====\r\n");
+                header.Append("隔离时间(UTC): ")
+                      .Append(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))
+                      .Append("\r\n");
+                header.Append("拒绝原因:\r\n");
+                foreach (string reason in reasons) header.Append("  - ").Append(reason).Append("\r\n");
+                header.Append("----- 原始日志全文（逐字节保留）开始 -----\r\n");
+
+                var encoding = new UTF8Encoding(false);
+                byte[] headerBytes = encoding.GetBytes(header.ToString());
+                byte[] footerBytes = encoding.GetBytes("\r\n----- 原始日志全文 结束 -----\r\n");
+
+                using var fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read);
+                fs.Write(headerBytes, 0, headerBytes.Length);
+                if (rawLogBytes != null && rawLogBytes.Length > 0)
+                    fs.Write(rawLogBytes, 0, rawLogBytes.Length);
+                fs.Write(footerBytes, 0, footerBytes.Length);
+            }
+            catch
+            {
+                // 隔离失败也不能阻断启动恢复
+            }
+        }
+
         private static string LogPath(string pluginsDir)
             => Path.Combine(pluginsDir, TransactionLogFileName);
 
@@ -1058,9 +1391,9 @@ namespace LiteMonitor.src.Plugins
 
             try
             {
-                var log = JsonSerializer.Deserialize<MarketInstallTxnLog>(File.ReadAllText(path), _jsonOpts);
-                if (log?.Pending == null) return new MarketInstallTxnLog();
-                return log;
+                return TryParseLogText(File.ReadAllText(path), out MarketInstallTxnLog log)
+                    ? log
+                    : new MarketInstallTxnLog();
             }
             catch
             {

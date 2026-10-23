@@ -22,7 +22,26 @@ namespace LiteMonitor.src.WebServer
         // 只由 Interlocked 读写：ListenLoop 与各连接自己的收尾路径分别在不同线程上跑。
         private int _activeConnections = 0;
 
+        /// <summary>
+        /// 启动那一刻的**明文**口令（迁移后的生产形态下通常是空串）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 只保留作状态快照，**不再**拿它判断"口令是否变了"（R03）：
+        ///   迁移后的明文恒为空串，拿它比较永远发现不了凭据变更。
+        ///   判定用 <see cref="CurrentCredentialFingerprint"/>。
+        /// </remarks>
         public string CurrentPassword { get;set; }
+
+        /// <summary>
+        /// 当前运行的**有效凭据指纹**（启动那一刻算出来的）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 用指纹而不是明文（R03）：迁移后的生产形态里明文恒为空串，
+        ///   拿明文比较**永远发现不了**"哈希被清掉 / 哈希被换掉"这类变更。
+        /// ★ 指纹来自 <see cref="Settings.GetWebPasswordFingerprint"/>：口令一变它就变；
+        ///   没有配置任何口令时是空串（= 无凭据）。
+        /// </remarks>
+        public string CurrentCredentialFingerprint { get; private set; } = "";
 
         private readonly Settings _cfg;
         
@@ -78,6 +97,25 @@ namespace LiteMonitor.src.WebServer
         ///   配置说"仅本机"不等于真的只监听环回 —— 端点才是事实。
         /// </remarks>
         internal IPEndPoint? CurrentListenEndpoint { get; private set; }
+
+        /// <summary>
+        /// 当前是否**对局域网暴露**（实际监听在非回环地址上）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 判定的是**真实监听端点**（<see cref="CurrentListenEndpoint"/>）而不是配置：
+        ///   配置写着「仅本机」但服务还没重绑、仍然绑在 0.0.0.0 上时，端点才是事实。
+        /// ★ 未运行 ⇒ false（没有监听 ⇒ 没有暴露）。
+        /// </remarks>
+        internal bool IsLanExposed
+        {
+            get
+            {
+                if (!_isRunning) return false;
+                IPEndPoint? ep = CurrentListenEndpoint;
+                if (ep == null) return false;
+                return !IPAddress.IsLoopback(ep.Address);
+            }
+        }
 
         /// <summary>当前是否存在合法的 Web 数据需求（已鉴权连接或未过期的 HTTP 快照租期）。</summary>
         public bool HasWebDataDemand => _sessionManager.HasWebDataDemand;
@@ -190,8 +228,10 @@ namespace LiteMonitor.src.WebServer
                 //   · Lan 模式**必须**配置非空口令 —— 空口令直接拒绝启动并给出明确错误，
                 //     绝不能"先跑起来再说"（那等于把监控数据敞开给整个局域网）。
                 //   · 其余（仅本机）只监听 127.0.0.1。
+                //   ★ 判定走 WebServerAccessPolicy：与"运行中变更"共用同一条规则（R03），
+                //     运行中的变更绕不过冷启动这条约束。
                 bool lanMode = _cfg.WebServerBindMode == WebServerBindMode.Lan;
-                if (lanMode && !_cfg.HasWebPasswordConfigured())
+                if (WebServerAccessPolicy.IsLanAccessForbidden(_cfg, IsLanExposed))
                 {
                     errorMsg = "局域网模式必须先设置访问口令：已拒绝启动。" +
                                "请在【设置 → 网页服务】里填写口令，或把监听范围改为「仅本机」。";
@@ -234,6 +274,9 @@ namespace LiteMonitor.src.WebServer
                 _isRunning = true;
                 _currentRunningPort = port;
                 CurrentPassword = _cfg.WebServerPassword;
+
+                // ★ 记录**有效凭据指纹**（不是明文）：运行中判断"凭据是否变了"靠它（R03）
+                CurrentCredentialFingerprint = _cfg.GetWebPasswordFingerprint();
 
                 // ★ 记录真实监听端点（供"监听范围"断言核对事实而不是配置）
                 CurrentListenEndpoint = listener.LocalEndpoint as IPEndPoint;

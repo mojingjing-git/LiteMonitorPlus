@@ -1,3 +1,4 @@
+using LiteMonitor.Rendering.Configuration;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices;
 using LiteMonitor.src.UI;
@@ -30,6 +31,13 @@ namespace LiteMonitor
 
         private Point _dragOffset;
         private bool _uiDragging = false;
+
+        /// <summary>
+        /// 【GPU T03 / 合同 §4 全局约束 / U10】窗体是否已进入关闭过程。
+        /// <para>关闭拥有**最高优先级**：关闭过程中不得重建 HWND、不得恢复 affinity、
+        /// 不得重新创建宿主。</para>
+        /// </summary>
+        private bool _isClosing;
 
         // 防止 Win11 自动隐藏无边框 + 无任务栏窗口
         protected override CreateParams CreateParams
@@ -69,6 +77,58 @@ namespace LiteMonitor
         public void EnsureVisibleAndSavePos() => _bizHelper.SavePos();
         public void ApplyRoundedCorners() => _winHelper.ApplyRoundedCorners();
         public void RefreshTopMost(bool forceReinsert = false) => _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert);
+
+        // ================================================================
+        // 【GPU T03 / 合同 §4 步 7、§8、§10 GPU-003】窗口切换相关入口
+        // ================================================================
+
+        /// <summary>
+        /// 【GPU T03 / 合同 §10 GPU-003 / 裁决 D4】当前窗口是否处于分层窗口（<c>WS_EX_LAYERED</c>）。
+        /// <para>只读；用于把真实值喂给 <c>RenderingRouteRequest.WindowIsLayered</c>。</para>
+        /// </summary>
+        public bool IsWindowLayered() => _winHelper.IsWindowLayered();
+
+        /// <summary>
+        /// 【GPU T03 / 合同 §4 步 4 / §8】MainForm 内部的**受控 HWND 重建薄入口**。
+        /// <para>★ <c>MainForm</c> 是**非 partial** 的单文件类（全仓唯一声明在
+        /// <c>src/UI/MainForm_Transparent.cs:14</c>）⇒ 本入口只能加在本文件内，
+        /// 切换协调器另立独立类（计划 §4.3 :170-171）。</para>
+        /// <para>★ <c>RecreateHandle()</c> 是 <see cref="Control.RecreateHandle"/>（<c>protected</c>）：
+        /// 这里**直接调用**（本类成员），**绝不**用反射（合同 §4 步 4 的禁止动作 / T01 §7 约束 2）。</para>
+        /// <para>★ 判别位：调用 <c>RecreateHandle()</c> **之前**先
+        /// <see cref="UIController.RequestControlledRecreate"/> 置位；
+        /// 抛异常 ⇒ 立即 <see cref="UIController.CancelControlledRecreate"/> 归零（合同 §8.1 规则 ②）。</para>
+        /// <para>★ 关闭优先（合同 §4 全局约束）：关闭过程中**不得**重建 HWND。</para>
+        /// </summary>
+        /// <param name="reason">重建原因（诊断用）。</param>
+        /// <returns><c>true</c> = 重建已发起。</returns>
+        internal bool TryRecreateHandleForTransition(string reason)
+        {
+            if (_isClosing)
+            {
+                // 关闭拥有最高优先级：关闭过程中不得重建 HWND（合同 §4 全局约束 / U10）。
+                return false;
+            }
+
+            long requestId = _ui?.RequestControlledRecreate(reason) ?? 0;
+            if (requestId == 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                // ★ 直接调用 protected 成员 —— 不用反射（合同 §4 步 4）。
+                RecreateHandle();
+                return true;
+            }
+            catch
+            {
+                // 规则 ②：RecreateHandle() 抛异常 ⇒ 立即取消判别位并归零。
+                _ui?.CancelControlledRecreate(requestId);
+                return false;
+            }
+        }
         
         // 供外部调用
         public void OpenTaskManager() => _bizHelper.OpenTaskManager();
@@ -157,14 +217,23 @@ namespace LiteMonitor
             // 结果由插件市场页展示，提示用户删除
             src.Plugins.PluginSelfCheck.RunOnce();
 
+            // ★★★ 初始化顺序约束（R01，启动阻断）★★★
+            //   `_winHelper` 必须在 `new UIController(...)` **之前**赋值。
+            //   UIController 构造函数会走 ApplyTheme → ApplyGpuRenderingRoute →
+            //   MainForm.IsWindowLayered()，而 IsWindowLayered() 直接解引用 `_winHelper`
+            //   （`MainForm_Transparent.cs` 的转发方法）⇒ 晚一步赋值就是**启动即崩**的空引用，
+            //   且与主题、GPU 开关、安全模式**全部无关**（该调用无条件求值）。
+            //   实测复现：`.artifacts/r01-repro/mainform-construction-error.log`
+            //   （NullReferenceException @ MainForm.IsWindowLayered）。
+            //   安全性：MainFormWinHelper 的构造函数只保存窗体引用（不触碰 HWND、不依赖 _ui），
+            //   提前赋值无任何副作用；`IsWindowLayered()` 本身在句柄未创建时安全返回 false。
+            _winHelper = new MainFormWinHelper(this);
+
             _ui = new UIController(_cfg, this);
             new src.WebServer.LiteWebServer(_cfg);
 
             // 5. 设置背景色 (这是关键！解耦时漏掉了这行，导致背景是系统默认色而非透明或皮肤色)
             BackColor = ThemeManager.ParseColor(ThemeManager.Current.Color.Background);
-
-            // 2. 初始化双助手
-            _winHelper = new MainFormWinHelper(this);
 
             // ★ A13：窗口轮廓交给 A09 的控制器统一负责（DWM 角偏好 + Region）。
             //   必须在 UI 线程构造（控制器记录构造线程 ID，并拒绝跨线程调用）。
@@ -265,12 +334,26 @@ namespace LiteMonitor
             };
             this.HandleCreated += (_, __) =>
             {
+                // ★★【GPU T03 / 合同 §7.2 / 裁决 D1】句柄代次推进 = **第一行** ★★
+                //   唯一递增点 = WindowHandleGeneration.Advance()；唯一驱动者 = 协调器（owner B）。
+                //   必须**先于** NotifyLiveGlassHandleChanged()（下方）与 NotifyGpuHandleChanged()
+                //   ⇒ live 捕获链与 GPU 清理链读到**同一个**新代次（合同 §7.2"递增顺序"）。
+                long handleGeneration = WindowHandleGeneration.Instance.Advance();
+
+                // ★【GPU T03 / 合同 §8.2】判别位：区分"受控重建后创建"与"构造期首次创建"。
+                //   controlled == false ⇒ 构造期首次创建 / 非受控创建
+                //   ⇒ **禁止**拉起 GPU（计划 §4.2 :147，既有设计必须保持）；
+                //   但 RefreshTopMost / OnHandleCreated / NotifyLiveGlassHandleChanged
+                //   仍必须**照旧**执行（合同 §8.2 规则 3）。
+                bool controlled = _ui?.TryConsumeControlledRecreate(out long recreateRequestId) == true;
+
                 _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert: true);
                 // 句柄重建后旧窗口的 Region 已随旧窗口销毁，必须重新应用一次轮廓
                 _windowAppearance?.OnHandleCreated();
                 // ★ A16：句柄代次 +1（句柄变了，旧请求里的句柄已失效，必须换新的）。
+                //   代次已在上方推进 ⇒ 这里消费的是**新**代次。
                 _ui?.NotifyLiveGlassHandleChanged();
-                _ui?.NotifyGpuHandleChanged();
+                _ui?.NotifyGpuHandleChanged(controlled, handleGeneration);
             };
 
             // 换肤 / DPI 变化 → 重新应用窗口轮廓（外框样式可能在切角与圆角之间切换）
@@ -288,8 +371,13 @@ namespace LiteMonitor
         /// 已按布局缩放换算成物理像素），否则窗口轮廓与画出来的边框会错位
         /// （v4 §3.4「切角使用与画框相同几何」）。
         /// </para>
+        /// <para>
+        /// ★【GPU T03 / 合同 §4 步 8】过渡完成后需要**显式**重放一次窗口轮廓
+        ///   （"所有状态稳定后发出一次有效重绘并应用窗口轮廓"，计划 §4.3 :176）
+        ///   ⇒ 可见性由 private 放宽为 internal。
+        /// </para>
         /// </summary>
-        private void ApplyWindowAppearance()
+        internal void ApplyWindowAppearance()
         {
             WindowAppearanceSnapshot? snapshot = CurrentAppearanceSnapshot();
             if (!snapshot.HasValue) return;
@@ -492,10 +580,22 @@ namespace LiteMonitor
             }
         }
 
+        /// <summary>
+        /// 【GPU T03 / 合同 §4 全局约束 / U10】关闭**最高优先级**的入口。
+        /// <para>关闭过程中：不得重建 HWND、不得恢复 affinity、不得重新创建宿主
+        /// （计划 §4.2 :162 / §4.3 :179"若当前窗体已进入关闭过程，直接执行清理而不恢复"）。</para>
+        /// </summary>
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            _isClosing = true;
+            _ui?.NotifyFormClosing();
+            base.OnFormClosing(e);
+        }
+
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
-            _cfg.Save(); 
-            TrafficLogger.Save(); 
+            _cfg.Save();
+            TrafficLogger.Save();
             HardwareHistoryLogger.Save();
             src.WebServer.LiteWebServer.Instance?.Stop();
             

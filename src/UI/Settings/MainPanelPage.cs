@@ -406,8 +406,8 @@ namespace LiteMonitor.src.UI.SettingsPage
                 100, HorizontalAlignment.Center);
 
             group.AddHint(isChinese
-                ? "口令只以 PBKDF2 哈希 + 盐保存（不再回显明文，也不会写进 settings.json）；留空表示不修改。局域网模式必须设置口令，否则服务拒绝启动。"
-                : "The password is stored as a PBKDF2 hash + salt (never in clear text, never in settings.json); leave it empty to keep it unchanged. LAN mode requires a password, otherwise the service refuses to start.");
+                ? "口令只以 PBKDF2 哈希 + 盐保存（不再回显明文，也不会写进 settings.json）；留空表示不修改。局域网模式必须设置口令：没有口令时服务拒绝启动，运行中清除口令也会停止网页服务。"
+                : "The password is stored as a PBKDF2 hash + salt (never in clear text, never in settings.json); leave it empty to keep it unchanged. LAN mode requires a password: the service refuses to start without one, and clearing the password while running stops the web service.");
 
             // ★ 清除口令：哈希与盐要一起清掉（只清明文字段是不够的）
             group.AddButton(
@@ -418,6 +418,19 @@ namespace LiteMonitor.src.UI.SettingsPage
                     Config.WebServerPassword = "";
                     Config.WebServerPasswordHash = "";
                     Config.WebServerPasswordSalt = "";
+
+                    // ★ 局域网模式必须设置口令（R03）：清除并保存后网页服务会被**停止**，
+                    //   绝不能变成"局域网里无凭据可访问"。这里先把后果讲清楚。
+                    if (Config.WebServerBindMode == WebServerBindMode.Lan)
+                    {
+                        MessageBox.Show(
+                            isChinese
+                                ? "已清除访问口令。\n\n当前监听范围是「局域网」：局域网模式必须设置访问口令。\n保存设置后网页服务会被停止（不会以无口令的方式继续对局域网开放）。\n\n如需继续在局域网访问，请重新填写口令。"
+                                : "The access password has been cleared.\n\nThe bind scope is LAN, which requires an access password.\nSaving stops the web service (it will not stay open on the LAN without a password).\n\nEnter a password again if you still need LAN access.",
+                            isChinese ? "清除访问口令" : "Clear access password",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+
                     OnShow();   // 立即刷新界面（口令框回到空）
                 });
 

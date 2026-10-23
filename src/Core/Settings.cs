@@ -186,9 +186,12 @@ namespace LiteMonitor
         /// ★ 这个字段**只用于读取旧配置**与"当前会话内的编辑"，**永不落盘**：
         ///   写盘时由 <see cref="WebPasswordJsonConverter"/> 强制写成空串，
         ///   真正用来校验的是 <see cref="WebServerPasswordHash"/> + <see cref="WebServerPasswordSalt"/>。
-        /// ★ 之所以保留明文字段：设置界面要显示/编辑它，
-        ///   并且 <c>AppActions.ApplyWebServer</c> 用它与
-        ///   <c>LiteWebServer.CurrentPassword</c> 比较来判断"口令是否变了"（变了要重启服务）。
+        /// ★ 之所以保留明文字段：设置界面要显示/编辑它。
+        ///   ★ 但"口令是否变了"**不再**拿明文比（R03）：迁移后的生产形态里明文恒为空串，
+        ///   拿明文比较永远发现不了"哈希被清掉 / 被换掉"。
+        ///   现在比的是**有效凭据指纹**：<c>AppActions.ApplyWebServer</c> 用
+        ///   <see cref="GetWebPasswordFingerprint"/> 与
+        ///   <c>LiteWebServer.CurrentCredentialFingerprint</c> 比较。
         /// </remarks>
         [JsonConverter(typeof(WebPasswordJsonConverter))]
         public string WebServerPassword { get; set; } = ""; // 访问密码（内存态）

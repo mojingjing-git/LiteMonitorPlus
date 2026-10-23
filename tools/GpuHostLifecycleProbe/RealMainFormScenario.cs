@@ -166,6 +166,77 @@ internal static class RealMainFormScenario
         }
     }
 
+    /// <summary>
+    /// 生产 MainForm 的**启动检查**（R01 专用）。
+    /// <para>只做一件事：真的把生产 <see cref="MainForm"/> 构造出来，看它会不会在构造期抛异常。
+    /// 刻意**不跑消息循环**（不触发 <c>OnShown</c>）⇒ 网页服务不会开始监听，
+    /// 托盘图标构造后立即隐藏 ⇒ 隔离门只作为<strong>观测项</strong>记录，不作为失败条件
+    /// （托盘图标在构造期出现是生产既有行为，见 <see cref="Run"/> 的 gate1）。
+    /// 这正是 R01 的暴露面：<c>MainForm..ctor → UIController..ctor → ApplyTheme →
+    /// ApplyGpuRenderingRoute → MainForm.IsWindowLayered()</c> 这条链在构造期就会读
+    /// <c>_winHelper</c>。</para>
+    /// <para><b>退出码契约：</b>0 = 构造成功；1 = 构造抛异常（真实缺陷）；2 = 环境不具备
+    /// 创建窗口的条件（NOT_VERIFIED_ENV，**不得**当成通过）。</para>
+    /// </summary>
+    public static int RunStartupCheck(string output)
+    {
+        MainForm form;
+        try
+        {
+            form = new MainForm();
+        }
+        catch (Exception exception)
+        {
+            File.WriteAllText(Path.Combine(output, "startup-error.log"), exception.ToString());
+            return 1;
+        }
+
+        using (form)
+        {
+            bool? trayVisible = ObserveTrayIcon(form);
+            bool webServerRunning = LiteWebServer.Instance?.IsRunning ?? false;
+
+            try
+            {
+                HideTrayIcon(form);
+            }
+            catch (Exception)
+            {
+                // 隐藏托盘只是收尾动作，失败不影响"构造成功"这个结论。
+            }
+
+            File.WriteAllText(
+                Path.Combine(output, "startup-ok.json"),
+                System.Text.Json.JsonSerializer.Serialize(
+                    new
+                    {
+                        task = "mainform-startup-check",
+                        scenario = "startup",
+                        verdict = "PASS",
+                        note = "The production MainForm was constructed without throwing.",
+                        trayIconVisibleAtConstruction = trayVisible,
+                        webServerRunning,
+                        webServerPort = LiteWebServer.Instance?.CurrentRunningPort ?? -1,
+                        hardwareSamplerCreated = HardwareMonitor.Instance is not null,
+                        baseDirectory = AppContext.BaseDirectory,
+                        finishedAt = DateTimeOffset.Now
+                    },
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            return 0;
+        }
+    }
+
+    private static void HideTrayIcon(MainForm form)
+    {
+        FieldInfo? helperField = typeof(MainForm).GetField("_bizHelper", BindingFlags.Instance | BindingFlags.NonPublic);
+        object? helper = helperField?.GetValue(form);
+        FieldInfo? trayField = helper?.GetType().GetField("_tray", BindingFlags.Instance | BindingFlags.NonPublic);
+        if (trayField?.GetValue(helper) is NotifyIcon tray)
+        {
+            tray.Visible = false;
+        }
+    }
+
     private static void RecreateViaReflection(Form target)
     {
         if (RecreateHandleMethod is null)

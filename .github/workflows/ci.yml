@@ -51,12 +51,21 @@ jobs:
       # ★★ 用例发现数下限（防假绿的核心阈值）★★
       #    改动这个值必须是**有意**的（例如新增测试工程后调高），
       #    绝不允许为了"让流水线变绿"而调低。
-      #    当前基线：1281（1204 + 58 + 19），阈值 1281（**等于**当前实测总数——
+      #    当前基线：1487（1395 + 73 + 19），阈值 1487（**等于**当前实测总数——
       #    门禁只收紧不放宽：任何用例被删或被跳过都会让本行变红）。
       #    历史：1185（1153+13+19）/阈值 1150 → 1270（1193+58+19）/阈值 1150
       #    → 1280（1203+58+19）/阈值 1280（S3.5 + S3.6 + 主审集成落地）
-      #    → 1281（1204+58+19）/阈值 1281（LM-047 原语层夹取 + 1 条护栏用例）。
-      MIN_TEST_TOTAL: 1281
+      #    → 1281（1204+58+19）/阈值 1281（LM-047 原语层夹取 + 1 条护栏用例）
+      #    → 1316（1239+58+19）/阈值 1316（LM-045 两侧逐跳复核 22 条 + owner A 物化 14 条）
+      #    → 1349（1272+58+19）/阈值 1349（GPU T04 清理责任转交 14 条 + GPU T05 回退样式 13 条
+      #      + owner A 接线 5 条 + 裁决 D-H 1 条）
+      #    → 1394（1317+58+19）/阈值 1394（GPU T03 切换协调器 44 条 + 裁决 D-H 钉住用例 1 条）
+      #    → 1396（1319+58+19）/阈值 1396（LM-061/LM-063 护栏盲区修复新增 2 条钉住用例）
+      #    → 1487（1395+73+19）/阈值 1487（审查批 R01~R05 全部修复并集成后：
+      #      主工程 +76（R01 4 + R03 6 + R05 11 + R04 25 + R02 30）、更新器 +15（R05））。
+      #    ★ release.yml 的同名阈值必须与本行**逐字一致**（2026-10-23 主审更正 LM-056：
+      #      原先 release.yml 写着 1000 ⇒ 删掉 281 条用例时 CI 会红、**发布流水线却会绿**）。
+      MIN_TEST_TOTAL: 1487
 
       # ★ 必须出现的测试程序集。少任何一个都会让断言失败
       #   （防止某个测试工程悄悄没被测到）。
@@ -102,6 +111,46 @@ jobs:
 
       - name: 构建（Debug）
         run: dotnet build LiteMonitor.sln -c Debug --nologo
+
+      # ★ 生产主窗体启动检查（R01 引入）★
+      #   纯单测**证明不了**主程序能不能启动。R01 就是一条"主窗体构造即抛
+      #   NullReferenceException"的**启动阻断**缺陷：它一路穿过了全部单测与
+      #   连续 8 次绿色 CI，因为没有任何用例真的构造过生产 MainForm。
+      #   ⇒ 这里真的把生产 MainForm 构造出来（探针场景 `startup`）。
+      #   退出码契约（tools/GpuHostLifecycleProbe）：
+      #     0 = 构造成功；1 = 构造抛异常（**真实缺陷 ⇒ 本步骤红**）。
+      #   该场景刻意**不跑消息循环**（不触发 OnShown）⇒ 网页服务不会开始监听。
+      - name: 生产主窗体启动检查（R01：真实构造 MainForm）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet build tools/GpuHostLifecycleProbe/GpuHostLifecycleProbe.csproj -c Debug --nologo -v quiet
+          if ($LASTEXITCODE -ne 0) { throw "探针构建失败（退出码 $LASTEXITCODE）" }
+          $out = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\startup-check'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $probe = 'tools\GpuHostLifecycleProbe\bin\Debug\net8.0-windows\GpuHostLifecycleProbe.exe'
+          # ★★ 探针是 WinExe（GUI 子系统）★★：PowerShell 的 `&` 对 GUI 程序
+          #   **不等待**、**不更新** $LASTEXITCODE；而上一步 `dotnet build` 恰好把
+          #   $LASTEXITCODE 置为 0 ⇒ `&` 之后读到的永远是 0 ⇒ 门禁**恒绿**。
+          #   实测（LM-090）：把 R01 的启动空引用放回去，这条门禁照样判 PASS，
+          #   而探针真实退出码是 1（探针根本没跑完就被判定了）。
+          #   ⇒ 必须用 Start-Process -PassThru + WaitForExit 取**真实**退出码。
+          # ★ 路径含空格时必须**手工加引号**（LM-092）：Start-Process 的 -ArgumentList
+          #   **不给**含空格的元素加引号 ⇒ 路径会被拆成多个 argv ⇒ 探针报
+          #   "Unknown argument"（退出码 64）⇒ 门禁误报红。GitHub 托管 runner 的
+          #   GITHUB_WORKSPACE 无空格，但自托管 runner / 本地含空格路径会命中。
+          $proc = Start-Process -FilePath $probe -ArgumentList @('--scenario=startup', ('"{0}"' -f $out)) -PassThru -WindowStyle Hidden
+          if (-not $proc.WaitForExit(180000)) {
+            try { $proc.Kill() } catch { }
+            throw '生产主窗体启动检查超时（180 s）'
+          }
+          $code = $proc.ExitCode
+          Write-Host "生产主窗体启动检查退出码: $code"
+          if ($code -ne 0) {
+            $err = Join-Path $out 'startup-error.log'
+            if (Test-Path -LiteralPath $err) { Write-Host '--- startup-error.log ---'; Get-Content -LiteralPath $err }
+            throw "生产主窗体启动检查失败（退出码 $code）—— 退出码契约：0=构造成功 / 1=MainForm 构造期抛异常 / 2=环境不具备 / 64=参数错误"
+          }
 
       # ★ 第三方组件声明与实际依赖一致（LM-024 护栏，S5.3/S5.3b 引入）★
       #   脚本以**实际解析**的依赖为真值（还原图 + 目标框架冲突消解），
@@ -199,6 +248,7 @@ jobs:
           path: |
             tests/**/TestResults/*.trx
             ci-artifacts/test-console.log
+            ci-artifacts/startup-check/**
           if-no-files-found: error
           retention-days: 14
 

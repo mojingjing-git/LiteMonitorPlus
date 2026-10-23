@@ -248,7 +248,13 @@ namespace LiteMonitor.ThemeEditor
 
             if (snapshot.Rendering == null) target.Rendering = null;
             else if (target.Rendering == null) target.Rendering = CloneRendering(snapshot.Rendering);
-            else CopyInto(target.Rendering, snapshot.Rendering);
+            else
+            {
+                CopyInto(target.Rendering, snapshot.Rendering);
+                // 【GPU T05】显式回填 rendering.fallbackStyle 兄弟块：
+                // 反射拷贝只保证"值在"，这里保证块不丢、且块内未知键已脱离源对象。
+                target.Rendering.FallbackStyle = CloneFallbackStyle(snapshot.Rendering.FallbackStyle);
+            }
 
             target.ExtensionData = CloneDictionary(snapshot.ExtensionData);
         }
@@ -256,7 +262,45 @@ namespace LiteMonitor.ThemeEditor
         public static ThemeRenderingConfig CloneRendering(ThemeRenderingConfig source)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
-            return (ThemeRenderingConfig)CloneObject(source);
+            ThemeRenderingConfig clone = (ThemeRenderingConfig)CloneObject(source);
+
+            // 【GPU T05】rendering.fallbackStyle 的字段保留路径（显式，不依赖反射的"碰巧拷到"）：
+            //   - 块本身必须保留（否则预览 / 快照 / 取消往返后回退样式消失）；
+            //   - 块内未知键做脱离克隆（JsonElement.Clone），不与源主题共享 JsonElement。
+            clone.FallbackStyle = CloneFallbackStyle(source.FallbackStyle);
+
+            return clone;
+        }
+
+        /// <summary>
+        /// 【GPU T05】深拷贝 legacy 回退样式块。
+        /// 6 个业务字段是纯 CLR 字符串（按值复制），块内未知键做脱离克隆。
+        /// </summary>
+        private static ThemeFallbackStyle? CloneFallbackStyle(ThemeFallbackStyle? source)
+        {
+            if (source == null) return null;
+
+            var clone = new ThemeFallbackStyle
+            {
+                Background = source.Background,
+                PanelBackground = source.PanelBackground,
+                Border = source.Border,
+                Text = source.Text,
+                MutedText = source.MutedText,
+                Accent = source.Accent
+            };
+
+            if (source.InvalidFields != null)
+            {
+                clone.InvalidFields = new List<string>(source.InvalidFields);
+            }
+
+            foreach (KeyValuePair<string, JsonElement> pair in source.ExtensionData)
+            {
+                clone.ExtensionData[pair.Key] = pair.Value.Clone();
+            }
+
+            return clone;
         }
 
         /// <summary>深拷贝颜色配置。</summary>
