@@ -1501,6 +1501,12 @@ else if (methodStr?.ToUpper() == "HEAD") method = HttpMethod.Head;
   ★ 附带一次**真实假失败**：自证脚本首版把 YAML 的单引号当**字面量**传参 ⇒ 门禁以
   「缺少测试程序集 ''LiteMonitor.Tests'」判红 ⇒ 反证该门禁对参数**敏感**（假绿禁令确实有效），
   修正解析语义后转绿 —— **非门禁缺陷**，如实记录。
+- ★ **同一 run 上的探针运行时证据**：探针工程因批次 E 的 `ProjectReference` 被
+  `dotnet build LiteMonitor.sln` **间接构建**（日志中 3 次出现 `GpuHostLifecycleProbe -> …dll`，
+  分别来自 restore、`sln` 构建与启动检查步骤的单独构建）；
+  「生产主窗体启动检查（R01）」在真实 runner 上**退出码 0** ⇒ 生产 `MainForm` 在 runner 上**构造成功**。
+  ★ 这同时给 §4.13.7 第 10 条提供**正面证据**：只要那条 `ProjectReference` 还在，探针就随 `sln` 构建
+  ⇒ 该结构风险当前**未实际发生**（引用一旦移除风险即回来，故仍登记为已知结构风险）。
 
 #### 4.13.7 残留与未验证项（**不计入通过**）
 
