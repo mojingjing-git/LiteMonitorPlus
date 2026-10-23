@@ -45,6 +45,18 @@ public sealed class GpuPresentationHostController : IDisposable
     private string? _lastErrorMessage;
     private string? _capturePolicyFallbackCode;
     private string? _cleanupHandoffError;
+
+    /// <summary>
+    /// 【R02】呈现失败的**根因码**（第一次失败时写入，之后**永不**被清理诊断顶替）。
+    /// <para>★ 合同 §5.3 规则 2 / U11：故障回退必须**保留失败原因**，
+    /// 不得把它退化成"普通 fallback code"。</para>
+    /// </summary>
+    private string? _failureReasonCode;
+    private string? _failureReasonMessage;
+
+    /// <summary>【R02】故障通知订阅者抛出的异常消息（不影响宿主释放）。</summary>
+    private string? _failureNotificationError;
+
     private PresentationBindingState _bindingState = PresentationBindingState.Unbound;
     private FirstFrameOutcome _firstFrameOutcome = FirstFrameOutcome.NotAttempted;
     private GpuStartupAttempt? _startupAttempt;
@@ -175,6 +187,38 @@ public sealed class GpuPresentationHostController : IDisposable
     public string? LastErrorCode => _lastErrorCode;
 
     public string? LastErrorMessage => _lastErrorMessage;
+
+    /// <summary>
+    /// 【R02】呈现失败的**根因码**（第一次失败时写入；之后的清理诊断**不得**顶替它）。
+    /// <para>★ 合同 §5.3 规则 2 / U11：故障回退必须**保留失败原因**，
+    /// 不得把它退化成"普通 fallback code"。</para>
+    /// </summary>
+    public string? FailureReasonCode => _failureReasonCode;
+
+    /// <summary>【R02】呈现失败的根因消息。</summary>
+    public string? FailureReasonMessage => _failureReasonMessage;
+
+    /// <summary>【R02】故障通知订阅者抛出的异常消息（不影响宿主释放）。</summary>
+    public string? FailureNotificationError => _failureNotificationError;
+
+    /// <summary>
+    /// 【R02 / 合同 §4.4 / U11】故障通知出口：宿主把故障报告交给 UI 生命周期所有者。
+    /// <para><b>集成者须知（owner B）</b>：订阅者**只允许**记录 / 入队 ——
+    /// 本事件可能在 <b>GPU 帧绘制栈内</b>触发（计划 §4.3 :169 禁止在那里递归执行 legacy 转换）
+    /// ⇒ 真正的转换必须由订阅者安排到 UI 安全点再执行。</para>
+    /// </summary>
+    public event Action<GpuFailureReport>? PresentationFailed;
+
+    /// <summary>
+    /// 【R02】构造一次故障报告快照（纯数据；呈现历史与首帧结果取自**本代次**）。
+    /// </summary>
+    public GpuFailureReport DescribeFailure(GpuFailureStage stage) =>
+        new(
+            stage,
+            _failureReasonCode ?? _lastErrorCode ?? "gpu_presentation_failed",
+            _failureReasonMessage ?? _lastErrorMessage,
+            _bindingState,
+            _firstFrameOutcome);
 
     public GpuResourceSnapshot ResourceSnapshot => _ledger.Snapshot();
 
@@ -630,6 +674,11 @@ public sealed class GpuPresentationHostController : IDisposable
                 "gpu_presentation_resize_failed",
                 exception.Message);
             StopCore();
+
+            // ★【R02】运行故障同样要上报。
+            //   ★ 阶段 = Runtime ⇒ 宿主**仍保留**既有的一次自动恢复
+            //   （计划 §4.4 :186 "最终失败才进入完整 legacy 切换"）。
+            RaisePresentationFailed(DescribeFailure(GpuFailureStage.Runtime));
         }
     }
 
@@ -680,6 +729,41 @@ public sealed class GpuPresentationHostController : IDisposable
             exception.Message);
         _recoveryPending = true;
         StopCore();
+
+        // ★【R02】把故障报告交给 UI 生命周期所有者。
+        //   ★ 订阅者**只允许**记录 / 入队 —— 本方法可能在 GPU 帧绘制栈内被调用
+        //   （计划 §4.3 :169 禁止在那里递归执行 legacy 转换），
+        //   真正的转换必须由订阅者安排到 UI 安全点（UI Tick）再执行。
+        //   ★ 阶段判定：首帧从未成功 ⇒ FirstFrame（计划 §4.1 :124 保守重建的依据）；
+        //   已经呈现过 ⇒ Runtime（先走既有的一次自动恢复，最终失败才回退 legacy）。
+        RaisePresentationFailed(DescribeFailure(
+            _firstFrameOutcome == FirstFrameOutcome.Succeeded
+                ? GpuFailureStage.Runtime
+                : GpuFailureStage.FirstFrame));
+    }
+
+    /// <summary>
+    /// 【R02】通知订阅者（订阅者抛出的异常**不得**阻断宿主的资源释放）。
+    /// </summary>
+    private void RaisePresentationFailed(GpuFailureReport report)
+    {
+        Action<GpuFailureReport>? handlers = PresentationFailed;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Delegate handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                ((Action<GpuFailureReport>)handler)(report);
+            }
+            catch (Exception exception)
+            {
+                _failureNotificationError = exception.Message;
+            }
+        }
     }
 
     private void SetToolbarFixedBackground()
@@ -792,6 +876,16 @@ public sealed class GpuPresentationHostController : IDisposable
     {
         _lastErrorCode = errorCode;
         _lastErrorMessage = errorMessage;
+
+        // ★【R02】首次失败原因**只写一次** —— 之后的清理诊断（affinity 恢复失败等）
+        //   不得顶替它（合同 §5.3 规则 2 / U11：有效后端状态与清理告警同时可见，
+        //   不覆盖故障根因）。
+        if (string.IsNullOrEmpty(_failureReasonCode) && !string.IsNullOrEmpty(errorCode))
+        {
+            _failureReasonCode = errorCode;
+            _failureReasonMessage = errorMessage;
+        }
+
         if (_lifecycle.State is RenderLifecycleState.Probing or
             RenderLifecycleState.Initializing or
             RenderLifecycleState.Running)

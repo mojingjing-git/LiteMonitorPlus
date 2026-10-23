@@ -538,6 +538,26 @@ namespace LiteMonitor
             _state = _state with { BindingState = bindingState };
         }
 
+        /// <summary>
+        /// 【合同 §4 步 4 / 计划 §4.1 :123-126】受控 HWND 重建的触发依据。
+        /// <para>★ **不得**用 <c>newHwnd != oldHwnd</c> 作为唯一重建断言（计划 §4.1 :129）——
+        /// 这里依据的是**本代次的呈现历史**（单调推进的绑定状态）。</para>
+        /// <para>★ "用户手动关闭 GPU"与"GPU 故障回退"两条路径<b>共用</b>本判据
+        /// ⇒ 两条路径的重建决策天然对称（计划 §4.4 :185"按 HWND 历史决定是否重建"）。</para>
+        /// </summary>
+        internal bool RequiresControlledRecreate() =>
+            _state.BindingState switch
+            {
+                // 该代次成功完成过 flip 呈现 ⇒ 退出到 legacy **必须**重建。
+                PresentationBindingState.Presented => true,
+                // 首次呈现调用期间发生异常、是否已改变 HWND 状态无法确定 ⇒ 保守重建。
+                PresentationBindingState.PresentAttempted => true,
+                // 已绑定（交换链已创建）⇒ 保守重建。
+                PresentationBindingState.Bound => true,
+                // 未创建交换链、未尝试呈现 ⇒ 证据支持时可省略重建。
+                _ => false,
+            };
+
         /// <summary>记录宿主会话代次（每次新建宿主递增；合同 §2 维度 5）。</summary>
         internal long NextHostGeneration()
         {
@@ -582,6 +602,56 @@ namespace LiteMonitor
         internal IReadOnlyList<string> NonFatalDiagnostics => _nonFatalDiagnostics;
 
         /// <summary>
+        /// 【R02 / 合同 §4.4 / U11 / U01】故障回退的"步 1"：进入一次 GPU → legacy 切换。
+        /// <para>★ 与"用户手动关闭 GPU"路径<b>共用</b>同一套后续步骤（步 2–9），
+        /// 区别只在于本方法<b>不</b>调用 <see cref="RenderingRoutePolicy.Decide"/>：
+        /// 故障回退**不得**把用户的 GPU 选择悄悄改写（合同 U11"不把用户选择悄悄写回为关闭"）
+        /// ⇒ <see cref="RenderingTransitionState.ExpectedRoute"/> 保持不变，
+        /// 有效路由在步 9 落到 <c>Legacy</c>。</para>
+        /// <para>★ <b>保留失败原因</b>：呈现根因写入 <see cref="RenderingTransitionState.FailureCode"/>，
+        /// 不会被"普通 fallback code"顶替（合同 §5.3 规则 2）。</para>
+        /// </summary>
+        /// <returns><c>true</c> = 已进入一次新的切换（<c>Phase = Stopping</c>）。</returns>
+        internal bool TryBeginFailureFallback(
+            string? failureCode,
+            RenderingTransitionTrigger trigger)
+        {
+            if (_closing)
+            {
+                // 关闭优先：关闭过程中不得再启动一次切换（合同 §4 全局约束 / U10）。
+                return false;
+            }
+
+            _transitionId++;
+            _lastAppliedRequestVersion++;
+            _state = _state with
+            {
+                TransitionId = _transitionId,
+                LastAppliedRequestVersion = _lastAppliedRequestVersion,
+                Phase = RenderingTransitionPhase.Stopping,
+                Trigger = trigger,
+                // ★ 保留失败原因（合同 U11 / §5.3 规则 2）。
+                FailureCode = string.IsNullOrEmpty(failureCode)
+                    ? _state.FailureCode
+                    : failureCode,
+            };
+
+            return true;
+        }
+
+        /// <summary>
+        /// 【R02 / 合同 §5.3 规则 2 / U11】记录呈现根因。
+        /// <para>★ <b>不覆盖</b>已记录的根因（先到先得 ⇒ 最早的根因不被后来的诊断顶替）；
+        /// <b>不改变</b>切换阶段（故障上报本身不是一次切换失败）。</para>
+        /// </summary>
+        internal void RecordPresentationRootCause(string? code)
+        {
+            if (string.IsNullOrEmpty(code)) return;
+            if (_state.FailureCode is not null) return;
+            _state = _state with { FailureCode = code };
+        }
+
+        /// <summary>
         /// 【合同 §4.4 / §8.4 条件 3 / U11】GPU 恢复预算已耗尽
         /// （<c>gpu_presentation_recovery_exhausted</c>）⇒ 普通 Tick 不得再自动拉起 GPU，
         /// 只能由用户显式重试。
@@ -589,9 +659,19 @@ namespace LiteMonitor
         internal void MarkGpuRecoveryExhausted()
         {
             _gpuRecoveryExhausted = true;
-            // ★ 只写根因码，**不**改切换阶段：阶段由窗口切换流程推进，
-            //   GPU 启动失败不等于一次窗口切换失败（否则会把协调器永久卡在 Failed）。
-            _state = _state with { FailureCode = RecoveryExhaustedCode };
+            // ★【R02 / 合同 §5.3 规则 2 / U11】恢复预算耗尽**不得**顶替已记录的呈现根因 ——
+            //   根因（例如 <c>gpu_presentation_render_failed</c>）与"预算已耗尽"是**两件事**，
+            //   两者必须同时可见。
+            if (_state.FailureCode is null)
+            {
+                _state = _state with { FailureCode = RecoveryExhaustedCode };
+            }
+
+            // ★ 预算耗尽本身也留痕（诊断通道），便于同时显示"为什么失败"与"为什么不再自动重试"。
+            if (!_nonFatalDiagnostics.Contains(RecoveryExhaustedCode))
+            {
+                _nonFatalDiagnostics.Add(RecoveryExhaustedCode);
+            }
         }
 
         /// <summary>清除"恢复预算耗尽"标记（用户显式重试时；合同 §6.4"用户显式重试"）。</summary>

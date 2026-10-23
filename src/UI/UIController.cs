@@ -74,6 +74,12 @@ namespace LiteMonitor
         //   过渡过程中（步 6 需要重放 ApplyTheme）用它切断递归。
         private bool _inGpuTransition;
 
+        // ★★【R02 / 合同 §4.4 / U11】GPU 故障 → legacy 转换的**统一调度器**。
+        //   三条故障路径（启动失败 / 首帧失败 / 运行故障恢复耗尽）全部经由它入队，
+        //   再由 UI 安全点（UI Tick）统一执行 —— 与"用户手动关闭 GPU"路径共用
+        //   同一个 legacy 转换入口（RunGpuToLegacyTransition）。
+        private readonly GpuFailureFallbackScheduler _gpuFailureFallback = new();
+
         // ================================================================
         // 【GPU T03 / 合同 §4.6 / GPU T05】legacy 回退样式的**派生**覆盖值
         // ================================================================
@@ -476,6 +482,9 @@ namespace LiteMonitor
 
             // ★ 清理责任移交出口（合同 §6.2）—— 订阅早于任何 Dispose。
             host.CapturePolicyCleanupRequired += OnGpuCapturePolicyCleanupRequired;
+            // ★★【R02】故障通知出口 —— 订阅早于任何 Dispose。
+            //   ★ 回调**只允许**记录 / 入队：它可能在 GPU 帧绘制栈内触发。
+            host.PresentationFailed += OnGpuPresentationFailed;
             // ★ INV-6 探针：同一代次仍有未完成清理 ⇒ 拒绝叠加新的 affinity 所有者。
             host.CapturePolicyCleanupPendingProbe = _captureCleanup.HasPendingForGeneration;
             return host;
@@ -492,6 +501,127 @@ namespace LiteMonitor
             _transition.RecordCleanupState(
                 _captureCleanup.State,
                 _captureCleanup.CleanupErrorCode);
+        }
+
+        // ================================================================
+        // 【R02 / 合同 §4.4 / U11】GPU 故障 → legacy 转换的统一调度
+        // ================================================================
+
+        /// <summary>
+        /// 【R02】宿主的故障通知回调。
+        /// <para>★ <b>本方法不做任何窗口操作</b> —— 它可能在 <b>GPU 帧绘制栈内</b>被调用
+        /// （计划 §4.3 :169 禁止在那里递归执行 legacy 转换）
+        /// ⇒ 这里只把故障交给统一调度入口入队，真正的转换由 UI 安全点执行。</para>
+        /// </summary>
+        private void OnGpuPresentationFailed(GpuFailureReport report)
+        {
+            ScheduleGpuFailureFallback(report);
+        }
+
+        /// <summary>
+        /// 【R02 / 合同 §4.4 / U11】GPU 故障 → legacy 转换的<b>统一调度入口</b>。
+        /// <para>★ "启动失败""首帧失败""运行故障恢复耗尽"三条路径全部经由本方法入队，
+        /// 再由 <see cref="PumpGpuFailureFallback"/>（UI 安全点）执行 ——
+        /// 与"用户手动关闭 GPU"路径<b>共用</b>同一个 legacy 转换入口
+        /// （<see cref="RunGpuToLegacyTransition"/>）。</para>
+        /// <para>★ <b>保留失败原因</b>：呈现根因写入协调器的 <c>FailureCode</c>，
+        /// 不得退化成"普通 fallback code"（合同 §5.3 规则 2 / U11）。</para>
+        /// <para>★ <b>本方法不做任何窗口操作</b>（只记录 + 入队）。</para>
+        /// </summary>
+        internal void ScheduleGpuFailureFallback(GpuFailureReport report)
+        {
+            if (report is null) return;
+
+            // 关闭拥有最高优先级（合同 §4 全局约束 / U10）：关闭过程中不得再启动一次切换。
+            if (_disposed || _form.IsDisposed) return;
+            if (_transition.IsClosing) return;
+
+            // ★ 保留失败原因（先到先得 ⇒ 最早的根因不被后来的诊断顶替）。
+            _transition.RecordPresentationRootCause(report.FailureCode);
+            if (!string.IsNullOrEmpty(report.FailureCode))
+            {
+                _gpuFallbackCode = report.FailureCode;
+            }
+
+            // ★【合同 §4 步 4 / 计划 §4.1 :123-126】把**本代次**的 HWND 呈现历史写进协调器 ——
+            //   "是否需要受控重建 HWND"的唯一依据（与手动关闭路径共用同一判据）。
+            _transition.RecordBindingState(report.BindingState);
+
+            // ★ 运行故障**不**立刻回退：宿主仍保留既有的一次自动恢复
+            //   （计划 §4.4 :186 "最终失败才进入完整 legacy 切换"）。
+            //   只有"恢复也失败"（恢复预算耗尽）才落到 legacy 转换。
+            if (report.Stage == GpuFailureStage.Runtime) return;
+
+            _gpuFailureFallback.Request(report);
+        }
+
+        /// <summary>
+        /// 【R02 / 合同 §4 全局约束】UI 安全点：执行排队的 legacy 转换。
+        /// <para>★ <b>只有 UI Tick 会调用本方法</b> ⇒ 转换一定发生在
+        /// <c>OnPaint</c> / <c>WndProc</c> 销毁回调 / GPU 帧绘制栈<b>之外</b>
+        /// （计划 §4.3 :169）。</para>
+        /// <para>★ 返回 <c>true</c> = 本次执行了一次转换。</para>
+        /// </summary>
+        private bool PumpGpuFailureFallback()
+        {
+            if (!_gpuFailureFallback.HasPending) return false;
+
+            // 关闭优先：关闭过程中不得重建 HWND、不得恢复 affinity（合同 §4 全局约束 / U10）。
+            if (_disposed || _form.IsDisposed || _transition.IsClosing)
+            {
+                _gpuFailureFallback.Clear();
+                return false;
+            }
+
+            // 已有一次转换在跑 ⇒ 留给下一次 Tick（重入保护）。
+            if (_inGpuTransition) return false;
+
+            // 禁止上下文（OnPaint / 销毁回调 / GPU 帧栈）与重入保护。
+            if (!_gpuFailureFallback.IsExecutionAllowed) return false;
+
+            if (!_gpuFailureFallback.TryDequeue(out GpuFailureReport report)) return false;
+
+            _gpuFailureFallback.BeginExecution();
+            try
+            {
+                RunGpuFailureFallbackTransition(report);
+            }
+            finally
+            {
+                _gpuFailureFallback.EndExecution();
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 【R02】执行一次"GPU 故障 → legacy"转换。
+        /// <para>★ 与"用户手动关闭 GPU"路径<b>共用</b> <see cref="RunGpuToLegacyTransition"/>
+        /// （合同 §4 步 2–9：受控 HWND 重建 + 布局/DPI 恢复 + 窗口状态恢复 + 一次有效重绘 + 发布稳定）。</para>
+        /// <para>★ 是否需要受控重建 HWND，由**本代次的呈现历史**决定
+        /// （计划 §4.1 :123-126，见 <see cref="RequiresControlledRecreate"/>）。</para>
+        /// </summary>
+        private void RunGpuFailureFallbackTransition(GpuFailureReport report)
+        {
+            // ★ 合同 §4 步 1（故障版本）：进入保护 + 推进切换号 + **保留失败原因**。
+            if (!_transition.TryBeginFailureFallback(
+                    report.FailureCode,
+                    RenderingTransitionTrigger.RuntimeFailure))
+            {
+                return;
+            }
+
+            // ★ 故障回退的路由判定：**期望路由不变**（用户的 GPU 选择不被悄悄改写，合同 U11），
+            //   有效路由在步 9 落到 legacy；FallbackCode 承载**失败原因**本身。
+            RenderingRouteDecision decision = new(
+                RenderingRoute.Legacy,
+                RenderBackendKind.LegacyGdiPlus,
+                MaterialKind.Legacy,
+                CaptureRequested: false,
+                FallbackCode: report.FailureCode,
+                Errors: []);
+
+            RunGpuToLegacyTransition(decision, ThemeManager.Current);
         }
 
         /// <summary>
@@ -847,6 +977,13 @@ namespace LiteMonitor
                         _captureCleanup.State,
                         _captureCleanup.CleanupErrorCode);
                 }
+
+                // ★★【R02 / 合同 §4.4 / U11】UI 安全点：执行排队的"GPU 故障 → legacy"转换。
+                //   ★ 必须排在下面的 GPU 重启兜底**之前** —— 否则一次启动失败刚被排进队列，
+                //   同一个 Tick 里的重启兜底就会先把 GPU 再拉起来，回退永远轮不到。
+                //   ★ 本处是 UI 消息循环（Timer 回调）⇒ 不在 OnPaint / WndProc 销毁回调 /
+                //     GPU 帧绘制栈内（计划 §4.3 :169）。
+                PumpGpuFailureFallback();
 
                 // ★★【GPU T03 / 合同 §8.4 / §4.4 / U11】Tick 兜底的**启动守卫** ★★
                 //   既有口径是 `_gpuRoute?.IsGpu == true`（只看期望路由）⇒ 普通 Tick 会把 GPU
@@ -1266,11 +1403,11 @@ namespace LiteMonitor
                     //   §8.4 的启动守卫恒为假 ⇒ Tick 兜底失效）。
                     _transition.PublishStable(decision.Route);
                 }
-                else
-                {
-                    // 启动失败 ⇒ 有效路由落到 legacy，**期望路由保留用户选择**（合同 U11）。
-                    _transition.PublishLegacyFallback();
-                }
+                // ★★【R02 / 合同 §4.4 / U11】启动失败 ⇒ **不再**在这里"只标记 Stable"：
+                //   失败已经由统一调度入口排进队列，由 UI 安全点执行**完整**的 legacy 转换
+                //   （合同 §4 步 2–9：受控 HWND 重建 + 布局/DPI 恢复 + 窗口状态恢复 + 一次有效重绘）。
+                //   ★ 在那之前阶段停在 Stopping ⇒ §8.4 的启动守卫恒为假
+                //   ⇒ 普通 Tick 不会把 GPU 再拉起来（合同 §4.4 :188）。
             }
             else
             {
@@ -1455,19 +1592,11 @@ namespace LiteMonitor
         /// 【合同 §4 步 4 / 计划 §4.1 :123-126】受控 HWND 重建的触发依据。
         /// <para>★ **不得**用 <c>newHwnd != oldHwnd</c> 作为唯一重建断言（计划 §4.1 :129）——
         /// 这里依据的是**呈现历史**（单调推进的绑定状态）。</para>
+        /// <para>★【R02】判据本身放在协调器里 ⇒ "用户手动关闭 GPU"与"GPU 故障回退"
+        /// 两条路径<b>共用同一个</b>判据 ⇒ 两条路径的重建决策天然对称。</para>
         /// </summary>
         private bool RequiresControlledRecreate() =>
-            _transition.BindingState switch
-            {
-                // 该代次成功完成过 flip 呈现 ⇒ 退出到 legacy **必须**重建。
-                PresentationBindingState.Presented => true,
-                // 首次呈现调用期间发生异常、是否已改变 HWND 状态无法确定 ⇒ 保守重建。
-                PresentationBindingState.PresentAttempted => true,
-                // 已绑定（交换链已创建）⇒ 保守重建。
-                PresentationBindingState.Bound => true,
-                // 未创建交换链、未尝试呈现 ⇒ 证据支持时可省略重建。
-                _ => false,
-            };
+            _transition.RequiresControlledRecreate();
 
         /// <summary>【合同 §4 步 2】快照当前窗口状态。</summary>
         private RenderingWindowSnapshot? CaptureWindowState(MainForm form)
@@ -1561,19 +1690,54 @@ namespace LiteMonitor
                 return true;
             }
 
-            _gpuFallbackCode = errorCode;
+            // ══════════════【R02 / 合同 §4.4 / U11】启动失败 → 统一调度到 legacy 转换 ══════════════
+            // ★ 旧实现在这里只做 `StopGpuPresentation(); _form.Invalidate();` ——
+            //   那**不**走完整的 legacy 转换流程，也不按呈现历史决定是否受控重建 HWND
+            //   ⇒ 与"用户手动关闭 GPU"路径不对称（GPU 已经呈现过 flip model 时画面会冻结）。
+            // ★ 现在：记录失败原因 + 本代次呈现历史 → 交给统一调度入口入队，
+            //   由 UI 安全点执行与手动关闭路径**同一个** legacy 转换入口。
+
+            GpuPresentationHostController host = _gpuPresentation;
+            string? failureReason = host.FailureReasonCode ?? errorCode;
+            string? failureMessage = host.FailureReasonMessage ?? errorMessage;
+            PresentationBindingState bindingState = host.BindingState;
+            FirstFrameOutcome firstFrameOutcome = host.FirstFrameOutcome;
+
+            // ★【合同 §4 步 4 / 计划 §4.1 :123-126】本代次的 HWND 呈现历史 ——
+            //   "是否需要受控重建 HWND"的**唯一**依据。
+            _transition.RecordBindingState(bindingState);
+
+            bool recoveryExhausted = string.Equals(
+                errorCode,
+                RenderingTransitionCoordinator.RecoveryExhaustedCode,
+                StringComparison.Ordinal);
+
+            // ★ 阶段判定：宿主已经消耗过那一次自动恢复（<c>RecoveryAttempted</c>）
+            //   ⇒ 这次启动失败就是"运行故障恢复耗尽"（计划 §4.4 :186）；
+            //   否则是"启动失败"。两条都会走同一条 legacy 转换入口。
+            GpuFailureStage stage =
+                recoveryExhausted || host.RecoveryAttempted
+                    ? GpuFailureStage.RecoveryExhausted
+                    : GpuFailureStage.Startup;
+
+            // ★ 统一调度入口（只记录 + 入队；真正的转换在 UI 安全点执行）。
+            ScheduleGpuFailureFallback(new GpuFailureReport(
+                stage,
+                failureReason ?? errorCode ?? "gpu_presentation_start_failed",
+                failureMessage,
+                bindingState,
+                firstFrameOutcome));
+
+            // ★ 保留失败原因：不得退化成"普通 fallback code"（合同 §5.3 规则 2 / U11）。
+            _gpuFallbackCode = failureReason ?? errorCode;
 
             // ★【合同 §4.4 / §8.4 条件 3 / U11】恢复预算耗尽 ⇒ 普通 Tick 不得再自动拉起 GPU。
-            if (string.Equals(
-                    errorCode,
-                    RenderingTransitionCoordinator.RecoveryExhaustedCode,
-                    StringComparison.Ordinal))
+            if (recoveryExhausted)
             {
                 _transition.MarkGpuRecoveryExhausted();
             }
 
             StopGpuPresentation();
-            _form.Invalidate();
             return false;
         }
 
@@ -1861,6 +2025,11 @@ namespace LiteMonitor
 
             _gpuPresentation?.Dispose();
             _gpuPresentation = null;
+
+            // ★★【R02】丢弃排队的故障回退请求 ——
+            //   关闭拥有最高优先级（合同 §4 全局约束 / U10）：关闭过程中不得重建 HWND、
+            //   不得恢复 affinity、不得重新创建宿主。
+            _gpuFailureFallback.Clear();
 
             // ★【GPU T03 / 合同 §6.4 / INV-5】清理责任在窗体关闭时**终结**（幂等）。
             //   ★ 关闭拥有最高优先级（合同 §4 全局约束）：关闭过程中不得恢复 affinity
