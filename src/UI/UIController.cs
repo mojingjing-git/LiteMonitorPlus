@@ -502,6 +502,9 @@ namespace LiteMonitor
             host.PresentationFailed += OnGpuPresentationFailed;
             // ★ INV-6 探针：同一代次仍有未完成清理 ⇒ 拒绝叠加新的 affinity 所有者。
             host.CapturePolicyCleanupPendingProbe = _captureCleanup.HasPendingForGeneration;
+            // ★【LM-074】闸门**原因**探针：可区分"还在按合同 §6.4 重试"
+            //   与"已经耗尽但**从未恢复**"（后者会让 HWND 残留 WDA 排除）。
+            host.CapturePolicyCleanupBlockingProbe = _captureCleanup.GetBlockingReasonForGeneration;
             return host;
         }
 
@@ -1372,15 +1375,21 @@ namespace LiteMonitor
             bool canReconfigure =
                 _gpuPresentation is not null &&
                 (_gpuPresentation.IsActive || _gpuPresentation.IsSuspended);
-            if (canReconfigure &&
-                _gpuPresentation!.TryReconfigure(
+            bool reconfigured = false;
+            string? reconfigureErrorCode = null;
+            if (canReconfigure)
+            {
+                reconfigured = _gpuPresentation!.TryReconfigure(
                     decision.EffectiveMaterial,
                     decision.CaptureRequested,
                     _cfg.HorizontalMode,
                     theme.Rendering,
                     (float)_cfg.UIScale,
-                    out _,
-                    out _, theme))
+                    out reconfigureErrorCode,
+                    out _, theme);
+            }
+
+            if (reconfigured)
             {
                 _gpuRoute = decision;
                 _gpuFallbackCode =
@@ -1395,6 +1404,10 @@ namespace LiteMonitor
                 _transition.PublishStable(decision.Route);
                 return;
             }
+
+            // ★【LM-074】用户的 live / 主题切换被"**未解决**的清理责任"拒绝
+            //   ⇒ 安排**一次**明确恢复（合同 §6.4 的"用户显式重试"）。
+            ScheduleExplicitCapturePolicyRecovery(reconfigureErrorCode);
 
             // A suspended host can be reconfigured without replacing its device
             // or swap chain. Any other state, including a failed in-place
@@ -1418,6 +1431,12 @@ namespace LiteMonitor
                     //   §8.4 的启动守卫恒为假 ⇒ Tick 兜底失效）。
                     _transition.PublishStable(decision.Route);
                 }
+                else
+                {
+                    // ★【LM-074】启动同样被闸门拒绝 ⇒ 安排**一次**明确恢复。
+                    //   （拒绝码已由 StartGpuPresentation 记进 _gpuFallbackCode。）
+                    ScheduleExplicitCapturePolicyRecovery(_gpuFallbackCode);
+                }
                 // ★★【R02 / 合同 §4.4 / U11】启动失败 ⇒ **不再**在这里"只标记 Stable"：
                 //   失败已经由统一调度入口排进队列，由 UI 安全点执行**完整**的 legacy 转换
                 //   （合同 §4 步 2–9：受控 HWND 重建 + 布局/DPI 恢复 + 窗口状态恢复 + 一次有效重绘）。
@@ -1430,6 +1449,35 @@ namespace LiteMonitor
                 //   但期望路由已经是 GPU ⇒ 阶段必须回到 Stable，否则守卫恒为假。
                 _transition.PublishStable(decision.Route);
             }
+        }
+
+        /// <summary>
+        /// 【LM-074】用户显式发起的 WDA 取得被"**未解决**的清理责任"拒绝 ⇒
+        /// 安排**一次**明确恢复（合同 §6.4 的"用户显式重试"）。
+        /// <para>★ 触发路径是**用户的显式动作**（切换主题 / 开关 live ⇒
+        /// <see cref="ApplyGpuRenderingRoute"/>）收到拒绝码
+        /// <c>gpu_capture_policy_cleanup_unresolved</c>；
+        /// <b>严禁</b>在 <c>Tick</c> / ledger 的 <c>Pump</c> 里自动触发
+        /// （合同 §6.4"禁止每帧重试"）。</para>
+        /// <para>★ 防重复触发：ledger 的重建入口对"同代次已有非终态责任"直接拒绝（INV-4）
+        /// ⇒ 用户反复点击不会无限堆积条目。</para>
+        /// <para>★ 恢复动作本身只做 ledger 记账（不触碰 HWND）⇒ 真正的写回由
+        /// ledger 的退避重试（UI Tick 驱动）完成。</para>
+        /// </summary>
+        private void ScheduleExplicitCapturePolicyRecovery(string? errorCode)
+        {
+            if (!string.Equals(
+                    errorCode,
+                    CapturePolicyCleanupLedger.UnresolvedBlockingErrorCode,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _captureCleanup.TryRearmForExplicitRecovery(
+                WindowHandleGeneration.Instance.Current,
+                DateTimeOffset.UtcNow,
+                out _);
         }
 
         /// <summary>

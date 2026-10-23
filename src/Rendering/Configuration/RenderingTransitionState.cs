@@ -214,4 +214,45 @@ public sealed class WindowCapturePolicyCleanup
         WarningCode = "gpu_capture_policy_cleanup_superseded";
         return true;
     }
+
+    /// <summary>【LM-074】"已被明确恢复接管"的终结原因。</summary>
+    internal const string RearmedTerminalReason = "rearmed_by_explicit_recovery";
+
+    /// <summary>
+    /// 【LM-074】本责任是否由"明确恢复"重建而来。
+    /// <para>重建的责任拥有**自己的**尝试预算（<see cref="Attempts"/> 从 0 开始）⇒
+    /// 合同 §6.4 的"尝试 1、2 属于宿主停止流程"补记**不适用**于它
+    /// —— 那两次尝试已经由旧责任消耗掉了。</para>
+    /// </summary>
+    internal bool RebuiltByExplicitRecovery { get; init; }
+
+    /// <summary>
+    /// 【LM-074】明确恢复：把下一次尝试设为**立即**到期（合同 §6.4 的退避从 0 开始）。
+    /// 已终结时返回 <c>false</c> 且不改动任何状态。
+    /// </summary>
+    internal bool TryScheduleImmediateAttempt(DateTimeOffset now)
+    {
+        if (IsTerminal) return false;
+
+        NextAttemptAt = now;
+        return true;
+    }
+
+    /// <summary>
+    /// 【LM-074】明确恢复接管：把**已终结**的条目重新终结为
+    /// <c>Completed</c> + <c>rearmed_by_explicit_recovery</c>。
+    /// <para>★ 合同 §6.3"终态不可回退"的**实质**是"不再重试、不再触碰 HWND"：
+    /// 本方法**不复活**该条目 —— 它仍然是终态、ledger 不会再重试它、
+    /// 也不会再对它做任何 Win32 调用；只是把终结原因改写为"已由明确恢复接管"，
+    /// 让它不再占用该代次的 WDA 闸门。</para>
+    /// </summary>
+    internal bool TryMarkRearmedByExplicitRecovery()
+    {
+        if (!IsTerminal) return false;
+        if (TerminalReason == RearmedTerminalReason) return false;
+
+        State = CapturePolicyCleanupState.Completed;
+        TerminalReason = RearmedTerminalReason;
+        return true;
+    }
 }

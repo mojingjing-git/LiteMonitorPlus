@@ -151,6 +151,17 @@ public sealed class GpuPresentationHostController : IDisposable
     public Func<long, bool>? CapturePolicyCleanupPendingProbe { get; set; }
 
     /// <summary>
+    /// 【LM-074】同一代次是否仍被"**未完成的 affinity 清理**"占用的闸门查询。
+    /// <para>★ 与 <see cref="CapturePolicyCleanupPendingProbe"/> <b>并列</b>：后者只能表达 bool
+    /// （"还有没有未完成的责任"），本探针返回**阻断原因码**，二者必须**可区分** ——
+    /// "还在按合同 §6.4 重试"与"已经耗尽但**从未恢复**"是两种不同的故障
+    /// （后者会让 HWND 上残留 <c>WDA_EXCLUDEFROMCAPTURE</c>）。</para>
+    /// <para>由 owner B 的 ledger 持有者注入；未注入时退回到
+    /// <see cref="CapturePolicyCleanupPendingProbe"/>（保持既有行为）。</para>
+    /// </summary>
+    public Func<long, string?>? CapturePolicyCleanupBlockingProbe { get; set; }
+
+    /// <summary>
     /// 【T02 合同 §6.2】清理责任移交出口：宿主恢复失败时把清理记录交给订阅者。
     /// <para><b>集成者须知（owner B）</b>：在创建宿主时订阅本事件，把记录加入 ledger；
     /// ledger 负责退避重试（§6.4）与终结迁移（§6.3）。</para>
@@ -919,8 +930,9 @@ public sealed class GpuPresentationHostController : IDisposable
     /// <summary>
     /// 【LM-073 / 合同 §6.2 INV-6 / §4.5 :202】同一代次的 <b>WDA 取得闸门</b>。
     /// <para>★ 唯一判据来源 = owner B 注入的 ledger 查询
-    /// （<see cref="CapturePolicyCleanupPendingProbe"/>）：同一 HWND（同一代次）仍有未完成的
-    /// affinity 清理 ⇒ <b>拒绝</b>叠加新的 affinity 所有者。</para>
+    /// （<see cref="CapturePolicyCleanupBlockingProbe"/> 优先，
+    /// <see cref="CapturePolicyCleanupPendingProbe"/> 兜底）：
+    /// 同一 HWND（同一代次）仍有未完成的 affinity 清理 ⇒ <b>拒绝</b>叠加新的 affinity 所有者。</para>
     /// <para>★ 四个"要施加 <c>WDA_EXCLUDEFROMCAPTURE</c>"的入口
     /// （<c>Start</c> / <c>TryReconfigure</c> 的 live 分支 / <c>Resume</c> /
     /// <c>NotifyOutputChanged</c>）<b>共用</b>本方法 ⇒ 不得各自另立判据。</para>
@@ -936,12 +948,28 @@ public sealed class GpuPresentationHostController : IDisposable
         errorCode = null;
         errorMessage = null;
 
+        // ★【LM-074】原因探针优先：它能区分"还在重试"与"已耗尽且从未恢复"。
+        string? blocking = CapturePolicyCleanupBlockingProbe?.Invoke(generation);
+        if (!string.IsNullOrEmpty(blocking))
+        {
+            errorCode = blocking;
+            errorMessage = string.Equals(
+                blocking,
+                CapturePolicyCleanupLedger.UnresolvedBlockingErrorCode,
+                StringComparison.Ordinal)
+                    ? "The capture policy cleanup of this handle generation exhausted its " +
+                      "retry budget without restoring the original policy."
+                    : "The capture policy cleanup of this handle generation is still pending.";
+            return true;
+        }
+
+        // ★ 既有探针（只能表达 bool）—— 未注入原因探针时保持既有行为。
         if (CapturePolicyCleanupPendingProbe?.Invoke(generation) != true)
         {
             return false;
         }
 
-        errorCode = "gpu_capture_policy_cleanup_pending";
+        errorCode = CapturePolicyCleanupLedger.PendingBlockingErrorCode;
         errorMessage =
             "The capture policy cleanup of this handle generation is still pending.";
         return true;

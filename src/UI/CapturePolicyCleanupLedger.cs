@@ -50,6 +50,29 @@ namespace LiteMonitor
         /// <summary>【合同 §5.1】恢复失败的清理错误码。</summary>
         internal const string RestoreFailedErrorCode = "presentation_capture_policy_restore_failed";
 
+        /// <summary>
+        /// 【LM-074】闸门阻断原因码：同一代次仍有**未完成**的清理责任（还在正常重试）。
+        /// </summary>
+        internal const string PendingBlockingErrorCode = "gpu_capture_policy_cleanup_pending";
+
+        /// <summary>
+        /// 【LM-074】闸门阻断原因码：同一代次的清理责任已**耗尽**，且**原策略从未恢复**
+        /// （本程序改过 affinity 却没能写回）⇒ HWND 上可能仍残留 <c>WDA_EXCLUDEFROMCAPTURE</c>。
+        /// </summary>
+        internal const string UnresolvedBlockingErrorCode = "gpu_capture_policy_cleanup_unresolved";
+
+        /// <summary>【LM-074】明确恢复失败：该代次没有可重建的未解决条目。</summary>
+        internal const string NoUnresolvedEntryErrorCode =
+            "gpu_capture_policy_cleanup_no_unresolved_entry";
+
+        /// <summary>【LM-074】明确恢复失败：该代次已有非终态责任（INV-4，不得叠加第二条）。</summary>
+        internal const string AlreadyPendingErrorCode =
+            "gpu_capture_policy_cleanup_already_pending";
+
+        /// <summary>【LM-074】明确恢复失败：无法登记新的清理责任。</summary>
+        internal const string RearmFailedErrorCode =
+            "gpu_capture_policy_cleanup_rearm_failed";
+
         private readonly List<WindowCapturePolicyCleanup> _entries = new();
         private readonly Func<long> _currentGeneration;
         private readonly Func<IntPtr, bool> _isWindowAlive;
@@ -136,6 +159,134 @@ namespace LiteMonitor
         }
 
         /// <summary>
+        /// 【LM-074】同一代次是否仍被"**未完成的 affinity 清理**"占用，以及占用原因。
+        /// <para>★ 判据（与 <see cref="HasPendingForGeneration"/> **并列**，不是替代 ——
+        /// 后者的既有语义不得改写）：同一代次存在 <c>Pending</c> 条目 ⇒ 占用，原因 = pending；
+        /// 或存在 <c>Failed</c> 且 <see cref="WindowCapturePolicyCleanup.AffinityChangedBySession"/>
+        /// 为 <c>true</c> 的条目 ⇒ 占用，原因 = unresolved。</para>
+        /// <para>★ 语义分离（报告 R10 的根因修复）：重试预算耗尽只意味着"**停止重试**"，
+        /// **不等于**"**安全恢复**"。原策略没被写回 ⇒ HWND 上仍可能残留
+        /// <c>WDA_EXCLUDEFROMCAPTURE</c> ⇒ 同代次**不得**叠加新的 affinity 所有者
+        /// （合同 §6.2 INV-6 / §4.5 :202 的支配条款）。</para>
+        /// <para>★ <c>Failed</c> 且本程序**没改过** affinity ⇒ 没有残留 ⇒ **不占用**。</para>
+        /// </summary>
+        /// <returns>阻断原因码；<c>null</c> = 该代次未被占用。</returns>
+        internal string? GetBlockingReasonForGeneration(long generation)
+        {
+            bool unresolved = false;
+
+            foreach (WindowCapturePolicyCleanup entry in _entries)
+            {
+                if (entry.Generation != generation)
+                {
+                    continue;
+                }
+
+                if (!entry.IsTerminal)
+                {
+                    // Pending 优先：它代表"还在按合同 §6.4 正常重试"。
+                    return PendingBlockingErrorCode;
+                }
+
+                if (entry.State == CapturePolicyCleanupState.Failed &&
+                    entry.AffinityChangedBySession)
+                {
+                    unresolved = true;
+                }
+            }
+
+            return unresolved ? UnresolvedBlockingErrorCode : null;
+        }
+
+        /// <summary>
+        /// 【LM-074】同一代次是否仍被"**未完成的 affinity 清理**"占用（布尔版）。
+        /// <para>★ <see cref="HasPendingForGeneration"/> 的既有语义（只认非终态条目）**不变**；
+        /// 本方法是**新增的并列判据**，覆盖"已耗尽但从未恢复"这一档。</para>
+        /// </summary>
+        internal bool HasUnresolvedForGeneration(long generation) =>
+            GetBlockingReasonForGeneration(generation) is not null;
+
+        /// <summary>
+        /// 【LM-074】**明确恢复**：对同代次"已 <c>Failed</c> 且由本程序改过 affinity"的条目
+        /// **重建一条新的清理责任**。
+        /// <para>★ 新责任沿用该条目的**精确原值** <see cref="WindowCapturePolicyCleanup.OriginalAffinity"/>、
+        /// 同一 <see cref="WindowCapturePolicyCleanup.WindowHandle"/>、同一
+        /// <see cref="WindowCapturePolicyCleanup.Generation"/>；<c>Attempts</c> 归零；
+        /// <c>NextAttemptAt</c> = 立即。</para>
+        /// <para>★ 旧条目**不再重试、也不再触碰 HWND**（终结为
+        /// <c>Completed("rearmed_by_explicit_recovery")</c>）⇒ **不违反**合同 §6.3
+        /// "终态不可回退"。</para>
+        /// <para>★ 同代次已有非终态条目时**必须拒绝**（否则会叠加第二条 Pending，违反 INV-4），
+        /// ⇒ 用户反复点击不会无限堆积条目。</para>
+        /// </summary>
+        /// <returns><c>true</c> = 已重建一条新的清理责任。</returns>
+        internal bool TryRearmForExplicitRecovery(
+            long generation,
+            DateTimeOffset now,
+            out string? errorCode)
+        {
+            errorCode = null;
+
+            WindowCapturePolicyCleanup? failed = null;
+            bool hasNonTerminal = false;
+
+            foreach (WindowCapturePolicyCleanup entry in _entries)
+            {
+                if (entry.Generation != generation)
+                {
+                    continue;
+                }
+
+                if (!entry.IsTerminal)
+                {
+                    hasNonTerminal = true;
+                    continue;
+                }
+
+                if (failed is null &&
+                    entry.State == CapturePolicyCleanupState.Failed &&
+                    entry.AffinityChangedBySession)
+                {
+                    failed = entry;
+                }
+            }
+
+            if (failed is null)
+            {
+                errorCode = NoUnresolvedEntryErrorCode;
+                return false;
+            }
+
+            if (hasNonTerminal)
+            {
+                // INV-4：同一代次至多一条非终态条目 ⇒ 不得再叠加第二条。
+                errorCode = AlreadyPendingErrorCode;
+                return false;
+            }
+
+            WindowCapturePolicyCleanup rearmed = new()
+            {
+                WindowHandle = failed.WindowHandle,
+                Generation = failed.Generation,
+                OriginalAffinity = failed.OriginalAffinity,
+                AffinityChangedBySession = failed.AffinityChangedBySession,
+                RebuiltByExplicitRecovery = true,
+            };
+            rearmed.TryScheduleImmediateAttempt(now);
+
+            // ★ 先登记新责任（失败则旧责任原样保留）⇒ 不会出现"无人负责恢复"的空窗。
+            if (!Add(rearmed))
+            {
+                errorCode = RearmFailedErrorCode;
+                return false;
+            }
+
+            // 旧责任终结为"已由明确恢复接管"（仍然不再重试、不再触碰 HWND）。
+            failed.TryMarkRearmedByExplicitRecovery();
+            return true;
+        }
+
+        /// <summary>
         /// 【合同 §6.4】驱动一次退避重试（由 UI Tick 调用；<b>仅当</b> <c>Now &gt;= NextAttemptAt</c> 才尝试）。
         /// <para>★ 判定顺序不可交换（合同 §7.4）：先比代次，**只有同代次**才允许调用 <c>IsWindow</c>。</para>
         /// <para>★ 禁止每帧重试：退避未到 ⇒ 直接返回。</para>
@@ -203,12 +354,17 @@ namespace LiteMonitor
                 //   尝试 **3–6** 才是 ledger 的退避重试（间隔 250 / 500 / 1000 / 2000 ms）。
                 //   宿主移交过来的记录若还没记满这两次（移交时未登记），这里补记 ——
                 //   否则退避表与"总上限 6 次"的口径会漂。
-                while (cleanup.Attempts < 2)
+                //   ★【LM-074】由"明确恢复"重建的责任拥有**自己的**预算（Attempts 从 0 开始），
+                //   那两次宿主停止尝试已经由旧责任消耗掉 ⇒ 这里**不再补记**。
+                if (!cleanup.RebuiltByExplicitRecovery)
                 {
-                    cleanup.TryRecordFailedAttempt(
-                        RestoreFailedErrorCode,
-                        cleanup.LastErrorMessage,
-                        now);
+                    while (cleanup.Attempts < 2)
+                    {
+                        cleanup.TryRecordFailedAttempt(
+                            RestoreFailedErrorCode,
+                            cleanup.LastErrorMessage,
+                            now);
+                    }
                 }
 
                 attempts++;
