@@ -109,7 +109,11 @@ jobs:
           #   实测（LM-090）：把 R01 的启动空引用放回去，这条门禁照样判 PASS，
           #   而探针真实退出码是 1（探针根本没跑完就被判定了）。
           #   ⇒ 必须用 Start-Process -PassThru + WaitForExit 取**真实**退出码。
-          $proc = Start-Process -FilePath $probe -ArgumentList @('--scenario=startup', $out) -PassThru -WindowStyle Hidden
+          # ★ 路径含空格时必须**手工加引号**（LM-092）：Start-Process 的 -ArgumentList
+          #   **不给**含空格的元素加引号 ⇒ 路径会被拆成多个 argv ⇒ 探针报
+          #   "Unknown argument"（退出码 64）⇒ 门禁误报红。GitHub 托管 runner 的
+          #   GITHUB_WORKSPACE 无空格，但自托管 runner / 本地含空格路径会命中。
+          $proc = Start-Process -FilePath $probe -ArgumentList @('--scenario=startup', ('"{0}"' -f $out)) -PassThru -WindowStyle Hidden
           if (-not $proc.WaitForExit(180000)) {
             try { $proc.Kill() } catch { }
             throw '生产主窗体启动检查超时（180 s）'
@@ -119,7 +123,7 @@ jobs:
           if ($code -ne 0) {
             $err = Join-Path $out 'startup-error.log'
             if (Test-Path -LiteralPath $err) { Write-Host '--- startup-error.log ---'; Get-Content -LiteralPath $err }
-            throw "生产主窗体启动检查失败（退出码 $code）—— MainForm 构造期抛异常"
+            throw "生产主窗体启动检查失败（退出码 $code）—— 退出码契约：0=构造成功 / 1=MainForm 构造期抛异常 / 2=环境不具备 / 64=参数错误"
           }
 
       - name: 清理历史测试结果
