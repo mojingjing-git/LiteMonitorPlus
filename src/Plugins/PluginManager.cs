@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.IO;
@@ -72,725 +72,501 @@ namespace LiteMonitor.src.Plugins
         private static PluginManager _instance;
         public static PluginManager Instance => _instance ??= new PluginManager();
 
-        private readonly List<PluginTemplate> _templates = new();
+        private List<PluginTemplate> _templates = new();
         private readonly Dictionary<string, IPluginTimer> _timers = new();
-        private readonly Dictionary<string, System.Threading.CancellationTokenSource> _cts = new();
-        private readonly ConcurrentDictionary<string, int> _consecutiveFailures = new();
+        private readonly Dictionary<string, Runtime> _runtimes = new();
         private readonly Dictionary<string, string> _configSnapshots = new();
+        private readonly Dictionary<string, HashSet<string>> _ownedDataKeys = new();
+        private readonly ConcurrentDictionary<string, int> _consecutiveFailures = new();
         private readonly PluginExecutor _executor;
 
-        /// <summary>
-        /// 调度代次（LM-001）。每个实例一个单调递增的代号：
-        /// <c>StopInstance()</c> / <c>Stop()</c> / 重新 <c>StartInstance()</c> 时递增。
-        /// <para>
-        /// 异步回调在继续之前必须核对"自己仍属于当前代次"，否则：
-        /// 不得重新启动计时器、不得写回执行结果、不得访问已释放的计时器或 CTS。
-        /// </para>
-        /// <para>
-        /// ★ 代次只用于"结果写回裁决"，<b>不</b>参与在途请求键的构成（契约 C6）。
-        /// </para>
-        /// </summary>
-        private readonly ConcurrentDictionary<string, long> _generations = new();
-
-        /// <summary>
-        /// 保护 <see cref="_timers"/> / <see cref="_cts"/> 的锁。
-        /// 计时器回调运行在线程池线程上，与 UI 线程的启停会并发访问这两个字典。
-        /// </summary>
+        // Lock order: lifecycle -> publication (_scheduleLock) -> executor HTTP/cache,
+        // InfoService and MonitorItems. Ticks take only the publication gate. No path
+        // takes lifecycle from a tick/commit. Cancel, Dispose, timer factories, settings
+        // saves and external observers run after BOTH manager locks have been released.
+        private readonly object _lifecycleLock = new();
         private readonly object _scheduleLock = new();
+        private bool _running;
+
+        private sealed class Runtime
+        {
+            internal PluginInstanceConfig Source;
+            internal PluginInstanceConfig Instance;
+            internal PluginTemplate Template;
+            internal PluginPublicationLease Lease;
+            internal System.Threading.CancellationTokenSource Cancellation;
+            internal System.Threading.CancellationToken Token;
+            internal IPluginTimer Timer;
+            internal int IntervalSeconds;
+            internal HashSet<string> DataKeys;
+        }
 
         public event Action OnPluginSchemaChanged;
-
-        /// <summary>
-        /// 首次心跳延迟（毫秒）：调度启动后尽快触发一次，
-        /// 这样第一次执行的结果也能被捕获，从而触发失败重试逻辑。
-        /// </summary>
         internal const int InitialTickDelayMs = 50;
-
-        /// <summary>
-        /// 插件不可见时的复查间隔（毫秒）：可见性是"按需刷新"的开关，
-        /// 不可见时仍必须按此间隔**显式**重新武装计时器（LM-001）。
-        /// <para>
-        /// ★ 根因更正（2026-10-22 复核）：基线的不可见分支在 <c>try</c> 之前 <c>return</c>，
-        /// 从未显式重新武装，它靠的是 <see cref="System.Timers.Timer"/> "在处理器内赋值
-        /// <c>Interval</c> 即重新武装"这一**未文档化副作用**才得以继续轮询 ——
-        /// 因此基线**并非永久停摆**。修复的定位是"消除对该副作用的依赖"，不是"恢复停摆"。
-        /// </para>
-        /// <para>internal 可变：测试可压到毫秒级以在生产计时器上验证"仍在轮询"，不改变生产取值。</para>
-        /// </summary>
         internal int InvisibleRetryIntervalMs { get; set; } = 2000;
+        internal Func<string, bool> VisibilityProbe { get; set; }
+        internal Func<PluginInstanceConfig, PluginTemplate, System.Threading.CancellationToken, Task<bool>> ExecutionProbe { get; set; }
+        internal Func<double, Func<IPluginTimer, Task>, IPluginTimer> TimerFactory { get; set; }
+        internal Action<string> NetworkResetObserver { get; set; }
+        internal Func<string, Task> BeforeScheduleCommitAsync { get; set; }
 
-        /// <summary>
-        /// 构造插件管理器。
-        /// <para>
-        /// internal 而非 private：测试需要构造与单例隔离的实例，
-        /// 以便注入可见性 / 执行 / 计时器接缝而不触碰真实设置与真实网络。
-        /// </para>
-        /// </summary>
         internal PluginManager(PluginExecutor executor = null)
         {
             _executor = executor ?? new PluginExecutor();
+            // No new schema notification source is introduced by reconciliation.
             _executor.OnSchemaChanged += () => OnPluginSchemaChanged?.Invoke();
         }
 
-        // ==========================================================
-        // 测试接缝（internal；生产路径保持 null，走默认实现）
-        // ==========================================================
-
-        /// <summary>可见性探针：null 时使用 <see cref="IsPluginVisible"/>。</summary>
-        internal Func<string, bool> VisibilityProbe { get; set; }
-
-        /// <summary>执行探针：null 时使用 <see cref="PluginExecutor.ExecuteInstanceAsync"/>。</summary>
-        internal Func<PluginInstanceConfig, PluginTemplate, System.Threading.CancellationToken, Task<bool>> ExecutionProbe { get; set; }
-
-        /// <summary>计时器工厂：null 时使用生产计时器（System.Timers.Timer）。</summary>
-        internal Func<double, Func<IPluginTimer, Task>, IPluginTimer> TimerFactory { get; set; }
-
-        /// <summary>连续失败触发"重置网络客户端 + 清缓存"时的观察点（仅供测试断言）。</summary>
-        internal Action<string> NetworkResetObserver { get; set; }
-
-        /// <summary>测试/诊断用：读取某实例当前的连续失败计数。</summary>
         internal int GetConsecutiveFailures(string instanceId)
-            => _consecutiveFailures.TryGetValue(instanceId, out var v) ? v : 0;
-
-        /// <summary>测试/诊断用：内部执行器实例（便于测试释放其持有的 HttpClient）。</summary>
+            => _consecutiveFailures.TryGetValue(instanceId, out var count) ? count : 0;
         internal PluginExecutor ExecutorInternal => _executor;
-
-        /// <summary>测试/诊断用：当前登记在册的调度循环总数。</summary>
-        internal int RegisteredScheduleCount
-        {
-            get { lock (_scheduleLock) { return _timers.Count; } }
-        }
-
-        /// <summary>测试/诊断用：某实例当前登记在册的调度循环数量（正常恒为 0 或 1）。</summary>
+        internal int RegisteredScheduleCount { get { lock (_scheduleLock) return _timers.Count; } }
         internal int GetRegisteredScheduleCount(string instanceId)
         {
-            lock (_scheduleLock) { return _timers.ContainsKey(instanceId) ? 1 : 0; }
+            lock (_scheduleLock) return _timers.ContainsKey(instanceId) ? 1 : 0;
         }
 
-        /// <summary>
-        /// 启动恢复（LM-083）：把上次没干完的**插件安装事务**对账掉。
-        /// <para>
-        /// ★ 必须在任何**加载 / 调度之前**完成：恢复会把磁盘回滚到旧版本；
-        ///   如果先加载再恢复，磁盘回滚了而内存里仍跑新版本 ⇒ 回滚承诺在进程内**不成立**。
-        /// </para>
-        /// <para>
-        /// ★ 恢复失败**不阻断**加载：恢复本身是对账，失败时保持现状继续启动，
-        ///   但绝不能因此跳过恢复（跳过 ⇒ 又变成"恢复晚于加载"）。
-        /// </para>
-        /// </summary>
         public void RecoverMarketTransactions(string pluginsDir)
         {
             try { PluginMarket.RecoverInterruptedInstallsIn(pluginsDir); }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    "[PluginManager] 对账未完成的插件安装事务失败：" + ex.Message);
+                System.Diagnostics.Debug.WriteLine("[PluginManager] Market recovery failed: " + ex.Message);
             }
         }
 
         public void LoadPlugins(string directoryPath)
         {
-            // ★★ LM-083：恢复必须排在**任何加载 / 调度之前** ——
-            //   先把上次没干完的安装事务对账掉（磁盘回滚到旧版本），
-            //   否则就会出现"磁盘已回滚、内存仍跑新版本"。
-            //   这是**结构性兜底**：任何调用方（启动、市场页安装/卸载）都绕不过它。
             RecoverMarketTransactions(directoryPath);
-
+            var loaded = new List<PluginTemplate>();
             if (!Directory.Exists(directoryPath))
             {
                 try { Directory.CreateDirectory(directoryPath); } catch { }
-                return;
             }
-
-            // 1. 加载模版
-            _templates.Clear();
-
-            // ★ 排序后再遍历，保证去重的 tie-break 是确定性的
-            //   （否则留下的那个取决于 Directory.GetFiles 的枚举顺序 —— 正是我们要消除的不确定性）
-            var files = Directory.GetFiles(directoryPath, PluginConstants.CONFIG_EXT)
-                                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
-                                .ToList();
-
-            foreach (var file in files)
+            if (Directory.Exists(directoryPath))
             {
-                try
+                foreach (string file in Directory.GetFiles(directoryPath, PluginConstants.CONFIG_EXT)
+                    .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
                 {
-                    var json = File.ReadAllText(file);
-                    var tmpl = JsonSerializer.Deserialize<PluginTemplate>(json);
-                    if (tmpl != null && !string.IsNullOrEmpty(tmpl.Id))
+                    try
                     {
-                        // ★ 同 id 的模板只留第一个：
-                        //   内置插件改 id 时旧文件不会被 CopyToOutputDirectory 删除，
-                        //   新旧两个模板并存会让 FirstOrDefault 取到哪个不确定。
-                        if (_templates.Any(t => t.Id == tmpl.Id))
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[PluginManager] 跳过重复 id 的插件: {tmpl.Id} ({file})");
-                            continue;
-                        }
-                        _templates.Add(tmpl);
+                        var template = JsonSerializer.Deserialize<PluginTemplate>(File.ReadAllText(file));
+                        if (template == null || string.IsNullOrEmpty(template.Id) ||
+                            loaded.Any(t => t.Id == template.Id)) continue;
+                        loaded.Add(template);
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Failed to load plugin {file}: {ex.Message}");
                     }
                 }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Failed to load plugin {file}: {ex.Message}");
-                }
             }
 
-            // 2. 自动同步逻辑 (确保新插件出现在配置中，且已删除的插件被清理)
+            var retired = new List<Runtime>();
+            var added = new List<Runtime>();
             var settings = Settings.Load();
             bool changed = false;
-
-            // [新增] 清理失效的插件实例 (Template 不存在的)
-            var instancesToRemove = new List<PluginInstanceConfig>();
-            foreach (var inst in settings.PluginInstances)
+            lock (_lifecycleLock)
             {
-                if (!_templates.Any(t => t.Id == inst.TemplateId))
+                // Publish the complete template set, never a partially loaded collection.
+                lock (_scheduleLock) _templates = loaded;
+                foreach (var instance in settings.PluginInstances.ToList())
                 {
-                    instancesToRemove.Add(inst);
-                }
-            }
-
-            foreach (var inst in instancesToRemove)
-            {
-                settings.PluginInstances.Remove(inst);
-                // 同时清理关联的 MonitorItems
-                PluginMonitorSyncService.Instance.RemoveMonitorItems(inst.Id, saveIfChanged: false);
-                changed = true;
-            }
-
-            // [原有] 添加新插件实例
-            foreach (var tmpl in _templates)
-            {
-                if (!settings.PluginInstances.Any(x => x.TemplateId == tmpl.Id))
-                {
-                    string newId = tmpl.Id;
-                    if (settings.PluginInstances.Any(x => x.Id == newId))
+                    if (loaded.Any(t => t.Id == instance.TemplateId)) continue;
+                    lock (_scheduleLock)
                     {
-                         newId = Guid.NewGuid().ToString("N").Substring(0, 8);
+                        RetireLocked(instance.Id, retired, cleanup: true);
+                        instance.KeyCache.Clear();
+                        PluginMonitorSyncService.Instance.RemoveMonitorItems(instance.Id, saveIfChanged: false);
                     }
-
-                    var newInst = new PluginInstanceConfig
-                    {
-                        Id = newId,
-                        TemplateId = tmpl.Id,
-                        Enabled = false
-                    };
-                    
-                    if (tmpl.Inputs != null)
-                    {
-                        foreach(var input in tmpl.Inputs)
-                        {
-                            newInst.InputValues[input.Key] = input.DefaultValue;
-                        }
-                    }
-                    
-                    settings.PluginInstances.Add(newInst);
+                    settings.PluginInstances.Remove(instance);
                     changed = true;
                 }
+                foreach (var template in loaded)
+                {
+                    if (settings.PluginInstances.Any(i => i.TemplateId == template.Id)) continue;
+                    string id = template.Id;
+                    if (settings.PluginInstances.Any(i => i.Id == id)) id = Guid.NewGuid().ToString("N").Substring(0, 8);
+                    var instance = new PluginInstanceConfig { Id = id, TemplateId = template.Id, Enabled = false };
+                    foreach (var input in template.Inputs ?? new List<PluginInput>())
+                        instance.InputValues[input.Key] = input.DefaultValue;
+                    settings.PluginInstances.Add(instance);
+                    changed = true;
+                }
+                changed |= ReconcileLocked(settings, retired, added);
             }
+            FinishChanges(retired, added);
             if (changed) settings.Save();
         }
 
         public List<PluginTemplate> GetAllTemplates()
         {
-            return _templates;
+            lock (_scheduleLock) return _templates.ToList();
         }
 
+        // Call only with the publication gate held. Dotted instance ids cannot be
+        // separated by a prefix; remove only the complete keys this instance owned.
         private void CleanupPluginData(string instanceId)
         {
             if (string.IsNullOrEmpty(instanceId)) return;
-            
-            // 1. Remove raw values injected by plugin (Key starts with instanceId)
-            InfoService.Instance.RemoveDataByPrefix(instanceId);
-            
-            // 2. Remove dynamic properties (Label, ShortLabel, etc.)
-            // Keys are like PROP.Label.DASH.{instanceId}.{OutputKey}
-            InfoService.Instance.RemoveDataByPrefix("PROP.Label.DASH." + instanceId);
-            InfoService.Instance.RemoveDataByPrefix("PROP.ShortLabel.DASH." + instanceId);
-            InfoService.Instance.RemoveDataByPrefix("PROP.Unit.DASH." + instanceId); // If we add Unit support later
+            if (_ownedDataKeys.Remove(instanceId, out var keys)) InfoService.Instance.RemoveDataByKeys(keys);
         }
 
         public void Reload(Settings cfg)
         {
-            // 1. Identify active instances
-            List<string> currentIds;
-            lock (_scheduleLock) { currentIds = _timers.Keys.ToList(); }
-            var newInstances = cfg.PluginInstances.Where(x => x.Enabled).ToDictionary(x => x.Id);
-
-            // 2. Process Removals
-            foreach (var id in currentIds)
-            {
-                if (!newInstances.ContainsKey(id))
-                {
-                    StopInstance(id);
-                    _configSnapshots.Remove(id);
-                    CleanupPluginData(id);
-                }
-            }
-
-            // 3. Process Additions & Updates
-            foreach (var kv in newInstances)
-            {
-                var inst = kv.Value;
-                string newHash = GetConfigHash(inst);
-                bool needsRestart = false;
-
-                // ★ 读 _timers 必须在 _scheduleLock 内：计时器回调在线程池读写同一个字典，
-                //   锁外 ContainsKey 与锁内 Remove 交错会让 Dictionary 的内部状态撕裂。
-                bool exists;
-                lock (_scheduleLock)
-                {
-                    exists = _timers.ContainsKey(inst.Id);
-                }
-
-                if (exists)
-                {
-                    // Exists. Check if changed.
-                    if (_configSnapshots.TryGetValue(inst.Id, out var oldHash) && oldHash == newHash)
-                    {
-                        continue; // Stable, skip
-                    }
-                    needsRestart = true;
-                    StopInstance(inst.Id);
-                }
-                else
-                {
-                    needsRestart = true;
-                }
-
-                if (needsRestart)
-                {
-                    var tmpl = _templates.FirstOrDefault(x => x.Id == inst.TemplateId);
-                    if (tmpl != null)
-                    {
-                        
-                        PluginMonitorSyncService.Instance.SyncMonitorItem(inst, tmpl, saveIfChanged: false);
-                        StartInstance(inst, tmpl);
-                        _configSnapshots[inst.Id] = newHash;
-                    }
-                }
-            }
-            
-            // Force save once if needed, or rely on caller? 
-            // Caller (SettingsForm) already saves. But SyncMonitorItem might have added new items to Settings.
-            // Let's save just in case structure changed.
+            var retired = new List<Runtime>();
+            var added = new List<Runtime>();
+            lock (_lifecycleLock) ReconcileLocked(cfg, retired, added);
+            FinishChanges(retired, added);
             Settings.Load().Save();
         }
-        
-        private string GetConfigHash(PluginInstanceConfig inst)
+
+        // Lifecycle lock held, payload snapshots/fingerprints prepared outside the
+        // publication gate. New runtimes are reserved before timer creation begins.
+        private bool ReconcileLocked(Settings cfg, List<Runtime> retired, List<Runtime> added)
         {
-            try { return JsonSerializer.Serialize(inst); } catch { return ""; }
-        }
-
-        /// <summary>
-        /// 停止某个插件实例的调度循环。
-        /// 返回后，该实例的旧计时器不得再自行启动（LM-001）。
-        /// </summary>
-        internal void StopInstance(string instanceId)
-        {
-            StopSchedule(instanceId);
-
-            // Reset failure count
-            _consecutiveFailures.TryRemove(instanceId, out _);
-        }
-
-        /// <summary>
-        /// 停止某个实例的调度循环：停表 + 释放计时器 + 取消 CTS + <b>递增代次</b>。
-        /// <para>
-        /// ★ 代次递增是"停止后不复活"的裁决依据：所有仍在运行的旧回调在下一次同步点
-        /// 都会发现代次不匹配，从而放弃重新调度、放弃写回结果。
-        /// </para>
-        /// <para>
-        /// ★ <c>Stop()</c> + <c>Dispose()</c> 会让 <see cref="System.Timers.Timer"/>
-        /// 内部计时器被释放，此后即便旧回调再给 <c>Interval</c> 赋值也不会重新武装
-        /// （赋值副作用依赖内部计时器仍然存在）—— 所以停止路径不会留下"僵尸计时器"。
-        /// </para>
-        /// <para>
-        /// ★ 取消/释放在锁外执行：<c>CancellationTokenSource.Cancel()</c> 会同步触发
-        /// 已注册的回调，回调不应该被同一把锁挡住。
-        /// </para>
-        /// </summary>
-        private void StopSchedule(string instanceId)
-        {
-            if (string.IsNullOrEmpty(instanceId)) return;
-
-            IPluginTimer timer = null;
-            System.Threading.CancellationTokenSource cts = null;
-
+            bool changed = false;
+            var enabled = cfg.PluginInstances.Where(i => i.Enabled)
+                .Where(i => _templates.Any(t => t.Id == i.TemplateId)).ToDictionary(i => i.Id);
             lock (_scheduleLock)
             {
-                // ★ 代次递增：旧回调在继续之前都会核对代次
-                _generations.AddOrUpdate(instanceId, 1, (k, v) => v + 1);
-
-                if (_timers.TryGetValue(instanceId, out timer)) _timers.Remove(instanceId);
-                if (_cts.TryGetValue(instanceId, out cts)) _cts.Remove(instanceId);
+                foreach (var id in _runtimes.Keys.ToList())
+                    if (!_running || !enabled.ContainsKey(id)) RetireLocked(id, retired, cleanup: true);
             }
+            if (!_running) return changed;
 
-            try { timer?.Stop(); } catch { }
-            try { timer?.Dispose(); } catch { }
-            try { cts?.Cancel(); } catch { }
-            try { cts?.Dispose(); } catch { }
+            foreach (var source in enabled.Values)
+            {
+                var template = _templates.First(t => t.Id == source.TemplateId);
+                string fingerprint = PluginRuntimeSnapshot.Fingerprint(source, template);
+                lock (_scheduleLock)
+                {
+                    if (_runtimes.ContainsKey(source.Id) &&
+                        _configSnapshots.TryGetValue(source.Id, out var previous) && previous == fingerprint)
+                        continue;
+                }
+                var runtime = PrepareRuntime(source, template);
+                lock (_scheduleLock)
+                {
+                    RetireLocked(source.Id, retired, cleanup: true);
+                    changed |= PluginMonitorSyncService.Instance.SyncMonitorItem(source, template, saveIfChanged: false);
+                    ReserveLocked(runtime, fingerprint);
+                }
+                added.Add(runtime);
+            }
+            return changed;
+        }
+
+        private Runtime PrepareRuntime(PluginInstanceConfig source, PluginTemplate template)
+        {
+            var instanceSnapshot = PluginRuntimeSnapshot.Copy(source);
+            var templateSnapshot = PluginRuntimeSnapshot.Copy(template);
+            var cancellation = new System.Threading.CancellationTokenSource();
+            return new Runtime
+            {
+                Source = source,
+                Instance = instanceSnapshot,
+                Template = templateSnapshot,
+                Cancellation = cancellation,
+                Token = cancellation.Token,
+                Lease = new PluginPublicationLease(_scheduleLock, cancellation.Token),
+                IntervalSeconds = GetEffectiveInterval(instanceSnapshot, templateSnapshot),
+                DataKeys = PluginKeyOwnership.PublicDataKeys(instanceSnapshot, templateSnapshot)
+            };
+        }
+
+        private void ReserveLocked(Runtime runtime, string fingerprint)
+        {
+            _runtimes[runtime.Instance.Id] = runtime;
+            _configSnapshots[runtime.Instance.Id] = fingerprint;
+            if (!_ownedDataKeys.TryGetValue(runtime.Instance.Id, out var keys))
+                _ownedDataKeys[runtime.Instance.Id] = keys = new HashSet<string>(StringComparer.Ordinal);
+            keys.UnionWith(runtime.DataKeys);
+        }
+
+        private void RetireLocked(string instanceId, List<Runtime> retired, bool cleanup)
+        {
+            if (_runtimes.Remove(instanceId, out var runtime))
+            {
+                runtime.Lease.Retire();
+                runtime.Instance.KeyCache.Clear();
+                runtime.Source.KeyCache.Clear();
+                retired.Add(runtime);
+            }
+            _timers.Remove(instanceId);
+            _configSnapshots.Remove(instanceId);
+            _consecutiveFailures.TryRemove(instanceId, out _);
+            _executor.ClearCache(instanceId);
+            if (cleanup) CleanupPluginData(instanceId);
+        }
+
+        private void FinishChanges(List<Runtime> retired, List<Runtime> added)
+        {
+            // Cancellation can synchronously call arbitrary user code. It is never
+            // under lifecycle/publication locks and only touches detached resources.
+            foreach (var runtime in retired) ReleaseRuntime(runtime);
+            foreach (var runtime in added) ArmRuntime(runtime);
+        }
+
+        private static void ReleaseRuntime(Runtime runtime)
+        {
+            try { runtime.Timer?.Stop(); } catch { }
+            try { runtime.Timer?.Dispose(); } catch { }
+            try { runtime.Cancellation.Cancel(); } catch { }
+            try { runtime.Cancellation.Dispose(); } catch { }
+        }
+
+        private void ArmRuntime(Runtime runtime)
+        {
+            IPluginTimer timer = null;
+            bool installed = false;
+            try
+            {
+                timer = CreateTimer(InitialTickDelayMs, t => RunScheduleTickAsync(runtime, t));
+                installed = runtime.Lease.TryCommit(() =>
+                {
+                    runtime.Timer = timer;
+                    _timers[runtime.Instance.Id] = timer;
+                    InitDefaultValues(runtime.Instance, runtime.Template);
+                    timer.Start();
+                });
+            }
+            catch
+            {
+                var retired = new List<Runtime>();
+                lock (_scheduleLock)
+                {
+                    if (_runtimes.TryGetValue(runtime.Instance.Id, out var current) && ReferenceEquals(current, runtime))
+                        RetireLocked(runtime.Instance.Id, retired, cleanup: false);
+                }
+                FinishChanges(retired, new List<Runtime>());
+                throw;
+            }
+            finally
+            {
+                if (!installed)
+                {
+                    try { timer?.Stop(); } catch { }
+                    try { timer?.Dispose(); } catch { }
+                }
+            }
+        }
+
+        internal void StopInstance(string instanceId)
+        {
+            var retired = new List<Runtime>();
+            lock (_lifecycleLock)
+            {
+                lock (_scheduleLock) RetireLocked(instanceId, retired, cleanup: false);
+            }
+            FinishChanges(retired, new List<Runtime>());
         }
 
         public void Start()
         {
-            Stop(); 
-            _configSnapshots.Clear();
-
+            var retired = new List<Runtime>();
+            var added = new List<Runtime>();
             var settings = Settings.Load();
-            bool anyChange = false;
-            
-            foreach (var inst in settings.PluginInstances)
+            bool changed;
+            lock (_lifecycleLock)
             {
-                if (!inst.Enabled) continue;
-
-                var tmpl = _templates.FirstOrDefault(x => x.Id == inst.TemplateId);
-                if (tmpl == null) continue;
-
-                bool changed = PluginMonitorSyncService.Instance.SyncMonitorItem(inst, tmpl, saveIfChanged: false);
-                if (changed) anyChange = true;
-                
-                StartInstance(inst, tmpl);
-                _configSnapshots[inst.Id] = GetConfigHash(inst);
+                lock (_scheduleLock)
+                {
+                    foreach (var id in _runtimes.Keys.ToList()) RetireLocked(id, retired, cleanup: false);
+                    _running = true;
+                }
+                changed = ReconcileLocked(settings, retired, added);
             }
-            
-            if (anyChange) settings.Save();
+            FinishChanges(retired, added);
+            if (changed) settings.Save();
         }
-        
+
         public void RestartInstance(string instanceId, PluginInstanceConfig configOverride = null)
         {
-            StopInstance(instanceId);
-            
-            PluginInstanceConfig inst;
-            if (configOverride != null)
+            var retired = new List<Runtime>();
+            var added = new List<Runtime>();
+            lock (_lifecycleLock)
             {
-                inst = configOverride;
+                lock (_scheduleLock) RetireLocked(instanceId, retired, cleanup: true);
+                var instance = configOverride ?? Settings.Load().PluginInstances.FirstOrDefault(i => i.Id == instanceId);
+                var template = _templates.FirstOrDefault(t => t.Id == instance?.TemplateId);
+                if (instance == null || !instance.Enabled || template == null)
+                {
+                    lock (_scheduleLock)
+                        PluginMonitorSyncService.Instance.RemoveMonitorItems(instanceId, saveIfChanged: false);
+                }
+                else if (_running)
+                {
+                    var runtime = PrepareRuntime(instance, template);
+                    string fingerprint = PluginRuntimeSnapshot.Fingerprint(instance, template);
+                    lock (_scheduleLock)
+                    {
+                        PluginMonitorSyncService.Instance.SyncMonitorItem(instance, template, saveIfChanged: false);
+                        ReserveLocked(runtime, fingerprint);
+                    }
+                    added.Add(runtime);
+                }
             }
-            else
-            {
-                var settings = Settings.Load();
-                inst = settings.PluginInstances.FirstOrDefault(x => x.Id == instanceId);
-            }
-            
-            if (inst == null || !inst.Enabled)
-            {
-                // Clean up items if disabled
-                PluginMonitorSyncService.Instance.RemoveMonitorItems(instanceId, saveIfChanged: true);
-                return;
-            }
-            
-            var tmpl = _templates.FirstOrDefault(x => x.Id == inst.TemplateId);
-            if (tmpl == null) return;
-            
-            PluginMonitorSyncService.Instance.SyncMonitorItem(inst, tmpl, saveIfChanged: true);
-            StartInstance(inst, tmpl);
-            _configSnapshots[inst.Id] = GetConfigHash(inst);
+            FinishChanges(retired, added);
+            Settings.Load().Save();
         }
 
         public void RemoveInstance(string instanceId)
         {
-            StopInstance(instanceId);
-            _configSnapshots.Remove(instanceId);
-            CleanupPluginData(instanceId);
-
-            PluginMonitorSyncService.Instance.RemoveMonitorItems(instanceId, saveIfChanged: true);
+            var retired = new List<Runtime>();
+            lock (_lifecycleLock)
+            {
+                lock (_scheduleLock)
+                {
+                    RetireLocked(instanceId, retired, cleanup: true);
+                    PluginMonitorSyncService.Instance.RemoveMonitorItems(instanceId, saveIfChanged: false);
+                }
+            }
+            FinishChanges(retired, new List<Runtime>());
+            Settings.Load().Save();
         }
 
         public void Stop()
         {
-            List<string> ids;
-            lock (_scheduleLock)
+            var retired = new List<Runtime>();
+            lock (_lifecycleLock)
             {
-                ids = _timers.Keys.Concat(_cts.Keys).Distinct().ToList();
+                lock (_scheduleLock)
+                {
+                    _running = false;
+                    foreach (var id in _runtimes.Keys.ToList()) RetireLocked(id, retired, cleanup: false);
+                }
             }
+            FinishChanges(retired, new List<Runtime>());
+        }
 
-            // ★ 逐实例走 StopSchedule：每个实例的代次都会递增，
-            //   返回后旧计时器不得再自行启动（LM-001）。
-            foreach (var id in ids) StopSchedule(id);
+        internal void StartInstance(PluginInstanceConfig instance, PluginTemplate template)
+        {
+            if (instance == null || template == null) return;
+            var retired = new List<Runtime>();
+            Runtime runtime;
+            lock (_lifecycleLock)
+            {
+                runtime = PrepareRuntime(instance, template);
+                string fingerprint = PluginRuntimeSnapshot.Fingerprint(instance, template);
+                lock (_scheduleLock)
+                {
+                    RetireLocked(instance.Id, retired, cleanup: false);
+                    ReserveLocked(runtime, fingerprint);
+                }
+            }
+            FinishChanges(retired, new List<Runtime> { runtime });
         }
 
         private bool IsPluginVisible(string instanceId)
         {
             var settings = Settings.Load();
             if (settings?.MonitorItems == null) return false;
-
-            // 1. Web Server Check
             if (LiteWebServer.Instance != null && LiteWebServer.Instance.IsRunning) return true;
-
-            // 2. Monitor Items Visibility Check
-            string prefix = PluginConstants.DASH_PREFIX + instanceId + ".";
             lock (settings.MonitorItems)
             {
-                foreach (var item in settings.MonitorItems)
-                {
-                    if (item.Key.StartsWith(prefix))
-                    {
-                        if (item.VisibleInPanel || item.VisibleInTaskbar) return true;
-                    }
-                }
+                var keys = PluginKeyOwnership.MonitorKeys(settings, instanceId);
+                return settings.MonitorItems.Any(item => keys.Contains(item.Key) &&
+                    (item.VisibleInPanel || item.VisibleInTaskbar));
             }
-            return false;
         }
 
-        public static int GetMinimumInterval(PluginTemplate tmpl)
+        public static int GetMinimumInterval(PluginTemplate template)
+            => Math.Max(PluginConstants.DEFAULT_INTERVAL, template?.Execution?.MinInterval ?? 0);
+
+        public static int GetEffectiveInterval(PluginInstanceConfig instance, PluginTemplate template)
+            => Math.Max(instance.CustomInterval > 0 ? instance.CustomInterval : template.Execution.Interval,
+                GetMinimumInterval(template));
+
+        private async Task RunScheduleTickAsync(Runtime runtime, IPluginTimer timer)
         {
-            return Math.Max(PluginConstants.DEFAULT_INTERVAL, tmpl?.Execution?.MinInterval ?? 0);
-        }
-
-        public static int GetEffectiveInterval(PluginInstanceConfig inst, PluginTemplate tmpl)
-        {
-            int interval = inst.CustomInterval > 0 ? inst.CustomInterval : tmpl.Execution.Interval;
-            return Math.Max(interval, GetMinimumInterval(tmpl));
-        }
-
-        /// <summary>
-        /// 启动某个插件实例的调度循环。
-        /// <para>
-        /// ★ 先无条件停掉同一实例可能残留的旧循环，保证"同一实例最多一个有效调度循环"（LM-001）。
-        /// </para>
-        /// </summary>
-        internal void StartInstance(PluginInstanceConfig inst, PluginTemplate tmpl)
-        {
-            if (inst == null || tmpl == null) return;
-
-            // ★ 同实例重复启动（快速 stop/start/restart）时，先彻底停掉旧循环：
-            //   旧计时器被释放、旧代次作废，剩下唯一一条新循环。
-            StopSchedule(inst.Id);
-
-            var cts = new System.Threading.CancellationTokenSource();
-            // ★ 提前取出 token：CTS 被释放后再访问 .Token 会抛 ObjectDisposedException
-            var token = cts.Token;
-
-            // ★ 代次：本次启动的代号。Stop/StopInstance/再次 StartInstance 都会让它递增。
-            long generation = _generations.AddOrUpdate(inst.Id, 1, (k, v) => v + 1);
-
-            lock (_scheduleLock)
-            {
-                _cts[inst.Id] = cts;
-            }
-
-            // 设定间隔 (单位：秒)
-            int interval = GetEffectiveInterval(inst, tmpl);
-
-            // 使用 Timer 统一调度：初始间隔设为极短(例如 50ms)以触发立即执行
-            // 这样第一次执行的结果也能被捕获，从而触发失败重试逻辑
-            IPluginTimer newTimer = CreateTimer(InitialTickDelayMs,
-                timer => RunScheduleTickAsync(inst, tmpl, generation, interval, timer, token));
-
-            lock (_scheduleLock)
-            {
-                _timers[inst.Id] = newTimer;
-            }
-
-            newTimer.Start();
-
-            // ★★★ Inject Initial Loading State ★★★
-            InitDefaultValues(inst, tmpl);
-        }
-
-        /// <summary>
-        /// 调度心跳：执行插件，并根据结果调整下一次心跳的间隔。
-        /// <para>
-        /// ★ 不可见分支必须留在 <c>try</c> 内部 —— 这样它才会经过 <c>finally</c> 的统一收尾，
-        /// 由 <c>RearmSchedule</c> **显式**重新武装计时器（LM-001 修复要求 1）。
-        /// <para>
-        /// ★ 根因更正（2026-10-22 复核）：基线的不可见分支在 <c>try</c> 之前直接 <c>return</c>，
-        /// 从未显式重新武装；基线之所以还能继续轮询，靠的是
-        /// <see cref="System.Timers.Timer"/> "在处理器内赋值 <c>Interval</c> 即重新武装"这一
-        /// **未文档化副作用**（赋值发生在提前 <c>return</c> 之前）——
-        /// <b>并非"调度永久停摆"</b>。修复的定位因此是
-        /// "消除对未文档化副作用的依赖"，而非"恢复停摆的轮询"。
-        /// </para>
-        /// <para>
-        /// ★ 所有退出路径（可见 / 不可见 / 失败 / 取消 / 停止）统一由 <c>finally</c> 收尾。
-        /// </para>
-        /// </summary>
-        private async Task RunScheduleTickAsync(PluginInstanceConfig inst, PluginTemplate tmpl, long generation, int intervalSeconds, IPluginTimer timer, System.Threading.CancellationToken token)
-        {
+            bool resetCommitted = false;
             try
             {
-                // ★ 代次校验：Stop/Restart 之后，旧回调必须自我否决
-                if (!IsCurrentGeneration(inst.Id, generation)) return;
-                if (token.IsCancellationRequested) return;
-
-                // [Optimization] On-Demand Update: Skip if not visible
-                if (!ProbeVisible(inst.Id))
+                if (!runtime.Lease.IsCurrent || !runtime.Source.Enabled) return;
+                if (!(VisibilityProbe?.Invoke(runtime.Instance.Id) ?? IsPluginVisible(runtime.Instance.Id)))
                 {
-                    timer.Interval = InvisibleRetryIntervalMs; // Check again in 2s
-                    return; // ★ 走 finally → 统一收尾 → **显式**重新武装（不依赖赋值 Interval 的副作用）
+                    runtime.Lease.TryCommit(() => timer.Interval = InvisibleRetryIntervalMs);
+                    return;
                 }
-
-                // Execute and get success status
-                bool success = await ProbeExecute(inst, tmpl, token);
-
-                // ★ 再次校验代次：旧代次的执行结果不得写回（契约 C6）
-                if (!IsCurrentGeneration(inst.Id, generation)) return;
-
-                // 动态调整间隔：如果失败，使用快速重试间隔 (5s)；如果成功，恢复正常间隔
-                if (!success)
+                if (!runtime.Lease.IsCurrent) return;
+                var probe = ExecutionProbe;
+                bool success = probe != null
+                    ? await probe(runtime.Instance, runtime.Template, runtime.Token).ConfigureAwait(false)
+                    : await _executor.ExecuteLeasedAsync(runtime.Instance, runtime.Template, runtime.Token, runtime.Lease).ConfigureAwait(false);
+                var barrier = BeforeScheduleCommitAsync;
+                if (barrier != null) await barrier(runtime.Instance.Id).ConfigureAwait(false);
+                runtime.Lease.TryCommit(() =>
                 {
-                    // 失败逻辑：线性退避 (5s, 10s, 15s... max 60s)
-                    int fails = _consecutiveFailures.AddOrUpdate(inst.Id, 1, (k, v) => v + 1);
-                    int backoff = Math.Min(fails * PluginConstants.RETRY_INTERVAL_MS, 60000);
-
-                    // [Fix] 连续失败达到一定次数时，尝试重置网络客户端，以应对网络环境切换(如VPN/代理)导致的连接僵死
-                    // [Optimization] Reduced threshold from 5 to 3 to recover faster from network changes
-                    if (fails >= 3 && fails % 3 == 0)
+                    if (success)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Plugin {inst.Id} failed {fails} times. Resetting network clients and clearing cache.");
-                        _executor.ResetNetworkClients();
-                        _executor.ClearCache(inst.Id);
-                        NetworkResetObserver?.Invoke(inst.Id);
+                        _consecutiveFailures.TryRemove(runtime.Instance.Id, out _);
+                        timer.Interval = runtime.IntervalSeconds * 1000;
                     }
-
-                    timer.Interval = backoff;
-                    System.Diagnostics.Debug.WriteLine($"Plugin {inst.Id} failed ({fails} times). Retry in {backoff}ms.");
-                }
-                else
-                {
-                    // 成功：重置失败计数
-                    if (_consecutiveFailures.ContainsKey(inst.Id)) _consecutiveFailures.TryRemove(inst.Id, out _);
-                    timer.Interval = intervalSeconds * 1000;
-                }
+                    else
+                    {
+                        int failures = _consecutiveFailures.AddOrUpdate(runtime.Instance.Id, 1, (_, n) => n + 1);
+                        timer.Interval = Math.Min(failures * PluginConstants.RETRY_INTERVAL_MS, 60000);
+                        if (failures >= 3 && failures % 3 == 0)
+                        {
+                            // Controlled client reference swaps, not network I/O. Delayed
+                            // disposal owns only the detached old clients. No observer here.
+                            _executor.ResetNetworkClients();
+                            _executor.ClearCache(runtime.Instance.Id);
+                            resetCommitted = true;
+                        }
+                    }
+                });
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Timer execution failed: {ex.Message}");
-
-                // ★ 代次校验：旧代次的异常不得写回失败计数（契约 C6）
-                if (!IsCurrentGeneration(inst.Id, generation)) return;
-                // ★ 取消不是失败：不应计入连续失败
-                if (token.IsCancellationRequested) return;
-
-                // 异常逻辑：同样应用退避
-                int fails = _consecutiveFailures.AddOrUpdate(inst.Id, 1, (k, v) => v + 1);
-                int backoff = Math.Min(fails * PluginConstants.RETRY_INTERVAL_MS, 60000);// 最大 60s
-                timer.Interval = backoff;
+                System.Diagnostics.Debug.WriteLine("Plugin timer execution failed: " + ex.Message);
+                runtime.Lease.TryCommit(() =>
+                {
+                    int failures = _consecutiveFailures.AddOrUpdate(runtime.Instance.Id, 1, (_, n) => n + 1);
+                    timer.Interval = Math.Min(failures * PluginConstants.RETRY_INTERVAL_MS, 60000);
+                });
             }
             finally
             {
-                // ★★ 统一收尾（LM-001 修复要求 1）：所有退出路径都经过这里，
-                //    由这里统一裁决是否重新武装计时器。
-                RearmSchedule(inst, timer, generation, token);
-            }
-        }
-
-        /// <summary>
-        /// 统一收尾：决定是否重新武装计时器。
-        /// <para>
-        /// ★ 以下任一条件成立时都<b>不得</b>重新武装：
-        /// 代次已变（实例被停止/重启）、令牌已取消（实例被停止）、
-        /// 实例已被禁用、计时器已不是该实例当前的计时器（被更替）。
-        /// </para>
-        /// <para>
-        /// ★ 这里的 <c>Start()</c> 是<b>显式</b>重新武装：调度存活**不依赖</b>
-        /// <see cref="System.Timers.Timer"/> "在处理器内赋值 <c>Interval</c> 即重新武装"
-        /// 这一未文档化副作用（LM-001 修复要求 1）。
-        /// </para>
-        /// </summary>
-        private void RearmSchedule(PluginInstanceConfig inst, IPluginTimer timer, long generation, System.Threading.CancellationToken token)
-        {
-            try
-            {
-                // ★ 代次不匹配 → 旧调度不得复活
-                if (!IsCurrentGeneration(inst.Id, generation)) return;
-                if (token.IsCancellationRequested) return;
-                if (!inst.Enabled) return;
-
-                // ★ 计时器必须仍是该实例当前的计时器
-                lock (_scheduleLock)
+                runtime.Lease.TryCommit(() =>
                 {
-                    if (!_timers.TryGetValue(inst.Id, out var current) || !ReferenceEquals(current, timer)) return;
-                }
-
-                timer.Start();
+                    if (runtime.Source.Enabled && _timers.TryGetValue(runtime.Instance.Id, out var current) &&
+                        ReferenceEquals(current, timer)) timer.Start();
+                });
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[PluginManager] Failed to re-arm timer for {inst?.Id}: {ex.Message}");
-            }
+            // Audit of a reset already committed before any subsequent retirement.
+            if (resetCommitted) NetworkResetObserver?.Invoke(runtime.Instance.Id);
         }
 
-        /// <summary>某实例的当前代次是否仍等于回调自称的代次。</summary>
-        private bool IsCurrentGeneration(string instanceId, long generation)
-        {
-            return _generations.TryGetValue(instanceId, out var current) && current == generation;
-        }
-
-        /// <summary>可见性探针：注入时走注入实现，否则走真实实现。</summary>
-        private bool ProbeVisible(string instanceId)
-        {
-            var probe = VisibilityProbe;
-            return probe != null ? probe(instanceId) : IsPluginVisible(instanceId);
-        }
-
-        /// <summary>执行探针：注入时走注入实现，否则走真实执行器。</summary>
-        private Task<bool> ProbeExecute(PluginInstanceConfig inst, PluginTemplate tmpl, System.Threading.CancellationToken token)
-        {
-            var probe = ExecutionProbe;
-            return probe != null ? probe(inst, tmpl, token) : _executor.ExecuteInstanceAsync(inst, tmpl, token);
-        }
-
-        /// <summary>创建调度计时器：注入工厂时走注入实现，否则走生产计时器。</summary>
         private IPluginTimer CreateTimer(double intervalMs, Func<IPluginTimer, Task> onTick)
-        {
-            var factory = TimerFactory;
-            return factory != null ? factory(intervalMs, onTick) : CreateProductionTimer(intervalMs, onTick);
-        }
+            => TimerFactory?.Invoke(intervalMs, onTick) ?? CreateProductionTimer(intervalMs, onTick);
 
-        /// <summary>
-        /// 生产计时器：<see cref="System.Timers.Timer"/> 的 AutoReset=false（Stop-Wait）包装。
-        /// <para>
-        /// ★ <c>Elapsed</c> 是 <c>async void</c> 事件处理器：其中抛出的异常会逃逸到线程池，
-        /// 在 .NET Core 上会直接终止进程。这里显式吞掉异常，保证调度异常不会变成未观察异常（T7）。
-        /// </para>
-        /// </summary>
         internal static IPluginTimer CreateProductionTimer(double intervalMs, Func<IPluginTimer, Task> onTick)
         {
             var wrapper = new SystemPluginTimer(intervalMs);
-            wrapper.Inner.Elapsed += async (s, e) =>
+            wrapper.Inner.Elapsed += async (_, _) =>
             {
-                try
-                {
-                    await onTick(wrapper).ConfigureAwait(false);
-                }
+                try { await onTick(wrapper).ConfigureAwait(false); }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[PluginManager] Timer tick failed: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine("[PluginManager] Timer tick failed: " + ex.Message);
                 }
             };
             return wrapper;
         }
 
-        private void InitDefaultValues(PluginInstanceConfig inst, PluginTemplate tmpl)
+        private void InitDefaultValues(PluginInstanceConfig instance, PluginTemplate template)
         {
-            if (tmpl.Outputs == null) return;
-            
-            // Logic must match PluginExecutor to generate correct keys
-            int targetCount = (inst.Targets != null && inst.Targets.Count > 0) ? inst.Targets.Count : 1;
-            bool hasTargets = (inst.Targets != null && inst.Targets.Count > 0);
-
-            for (int i = 0; i < targetCount; i++)
+            foreach (var binding in PluginKeyOwnership.Outputs(instance, template))
             {
-                string keySuffix = hasTargets ? $".{i}" : "";
-                
-                foreach (var output in tmpl.Outputs)
-                {
-                    string injectKey = inst.Id + keySuffix + "." + output.Key;
-                    
-                    // Only inject if currently empty to avoid flashing "..." on reload if data exists
-                    if (string.IsNullOrEmpty(InfoService.Instance.GetValue(injectKey)))
-                    {
-                        InfoService.Instance.InjectValue(injectKey, PluginConstants.STATUS_LOADING);
-                    }
-                }
+                string key = binding.RawKey;
+                if (string.IsNullOrEmpty(InfoService.Instance.GetValue(key)))
+                    InfoService.Instance.InjectValue(key, PluginConstants.STATUS_LOADING);
             }
         }
 
-        // 委托给 Service 的 UI 辅助方法
         public string TryGetSmartLabel(string itemKey, string targetField = "label")
-        {
-            return PluginMonitorSyncService.Instance.TryGetSmartLabel(itemKey, _templates, targetField);
-        }
+            => PluginMonitorSyncService.Instance.TryGetSmartLabel(itemKey, GetAllTemplates(), targetField);
     }
 }

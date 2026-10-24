@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
@@ -109,6 +109,11 @@ namespace LiteMonitor.src.Plugins.Native
         /// 避免"一个作用域到期"连带打断另一个作用域正在复用的同一请求。</param>
         public static async Task<string> FetchAsync(string symbol, string fallbackUrl, CancellationToken token,
             int maxResponseBytes, IReadOnlyCollection<string> allowedHosts, string inflightScopeKey)
+            => await FetchLeasedAsync(symbol, fallbackUrl, token, maxResponseBytes, allowedHosts,
+                inflightScopeKey, null).ConfigureAwait(false);
+
+        internal static async Task<string> FetchLeasedAsync(string symbol, string fallbackUrl, CancellationToken token,
+            int maxResponseBytes, IReadOnlyCollection<string> allowedHosts, string inflightScopeKey, PluginPublicationLease publication)
         {
             // [LM-039] 回退目标校验：必须在任何请求发出之前（否则用户填的任意 URL 会被取回）。
             EnsureFallbackTargetAllowed(fallbackUrl, allowedHosts);
@@ -131,7 +136,7 @@ namespace LiteMonitor.src.Plugins.Native
                 // [LM-045] allowedHosts 必须**贯穿**到真正发请求的那一层：
                 // 少了它，逐跳复核就没有"允许集合"可用（这正是缺口本身）。
                 // [LM-082] 共享请求用**自己的**中止令牌（不是任何等待者的令牌）启动。
-                ct => FetchFreshAsync(info, fallbackUrl, cacheKey, ct, maxResponseBytes, allowedHosts));
+                ct => FetchFreshAsync(info, fallbackUrl, cacheKey, ct, maxResponseBytes, allowedHosts, publication));
 
             Task<string> shared;
             try
@@ -265,6 +270,7 @@ namespace LiteMonitor.src.Plugins.Native
         private static void EnsureFallbackTargetAllowed(string fallbackUrl, IReadOnlyCollection<string> allowedHosts)
         {
             if (string.IsNullOrWhiteSpace(fallbackUrl)) return;
+            PluginHostPolicy.RequireHttpHost(fallbackUrl);
             if (allowedHosts == null) return;   // 无声明上下文 ⇒ 不做目标校验（与 HTTP 路径同一口径）
 
             if (!Uri.TryCreate(fallbackUrl.Trim(), UriKind.Absolute, out var uri) ||
@@ -275,7 +281,7 @@ namespace LiteMonitor.src.Plugins.Native
                     "原生步骤的回退地址非法，请求未发出");
             }
 
-            string host = uri.Host;
+            string host = PluginHostPolicy.RequireHttpHost(fallbackUrl);
             if (string.IsNullOrEmpty(host) || !IsHostAllowed(host, allowedHosts))
             {
                 throw new PluginSandboxException(
@@ -286,50 +292,10 @@ namespace LiteMonitor.src.Plugins.Native
 
         /// <summary>主机是否在允许集合内（忽略端口、大小写不敏感）。</summary>
         private static bool IsHostAllowed(string host, IEnumerable<string> allowedHosts)
-        {
-            if (allowedHosts == null) return false;
-            string h = StripPort(host);
-            foreach (var allowed in allowedHosts)
-            {
-                if (string.IsNullOrWhiteSpace(allowed)) continue;
-                if (string.Equals(StripPort(allowed.Trim()), h, StringComparison.OrdinalIgnoreCase)) return true;
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// 去掉主机里的端口。
-        /// <para>[LM-079] **IPv6 字面量（带方括号）整体就是主机名**："[fd00::1]" / "[fd00::2]"
-        /// 只能**整体**带端口（"[fd00::1]:8080"），**不得**按最后一个冒号截断 ——
-        /// 否则两个不同的 IPv6 地址会被截成同一个 "[fd00:" ⇒ **地址碰撞**
-        /// （fail-open：声明了 [fd00::1] 却能把请求/凭据发往 [fd00::2]）。</para>
-        /// <para>非方括号形式：只有**单个**冒号才是 "host:port"；多个冒号是**裸 IPv6 字面量**，
-        /// 整体就是主机名（不得截出垃圾串）。</para>
-        /// </summary>
-        private static string StripPort(string value)
-        {
-            // 与原实现一致：null 会抛 NullReferenceException（调用方均已先行判空）。
-            if (value.Length == 0) return value;
-
-            // IPv6 字面量（带方括号）：方括号内整体是主机名，只可能整体带端口。
-            if (value[0] == '[')
-            {
-                int close = value.IndexOf(']');
-                if (close > 0) return value.Substring(0, close + 1);
-                return value;
-            }
-
-            // 非方括号形式：单个冒号才是 "host:port"；多个冒号 ⇒ 裸 IPv6 字面量，整体是主机名。
-            int colon = value.IndexOf(':');
-            if (colon > 0 && colon == value.LastIndexOf(':') && colon < value.Length - 1)
-            {
-                return value.Substring(0, colon);
-            }
-            return value;
-        }
+            => PluginHostPolicy.HostInSet(host, allowedHosts);
 
         private static async Task<string> FetchFreshAsync(SymbolInfo info, string fallbackUrl, string cacheKey,
-            CancellationToken token, int maxResponseBytes, IReadOnlyCollection<string> allowedHosts)
+            CancellationToken token, int maxResponseBytes, IReadOnlyCollection<string> allowedHosts, PluginPublicationLease publication)
         {
             foreach (var source in GetOfficialSources(info))
             {
@@ -339,7 +305,7 @@ namespace LiteMonitor.src.Plugins.Native
                     string json = await GetStringAsync(source.url, TimeSpan.FromSeconds(3), token, maxResponseBytes,
                         BuildOfficialAllowedHosts(source.url));
                     string normalized = source.parser(json, info);
-                    SaveCache(cacheKey, normalized, false);
+                    CommitNative(publication, () => SaveCache(cacheKey, normalized, false));
                     return normalized;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -376,7 +342,7 @@ namespace LiteMonitor.src.Plugins.Native
                     // [LM-045] 回退源的允许集合 = native 允许目标集合 ∪ {回退目标主机}。
                     string fallbackJson = await GetStringAsync(targetUrl, TimeSpan.FromSeconds(8), token, maxResponseBytes,
                         BuildFallbackAllowedHosts(targetUrl, allowedHosts));
-                    SaveCache(cacheKey, fallbackJson, true);
+                    CommitNative(publication, () => SaveCache(cacheKey, fallbackJson, true));
                     return fallbackJson;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -390,7 +356,7 @@ namespace LiteMonitor.src.Plugins.Native
                 }
                 catch (Exception ex)
                 {
-                    BlockFallback(ex);
+                    CommitNative(publication, () => BlockFallback(ex));
                     if (TryGetStaleCache(cacheKey, out var stale))
                         return stale;
 
@@ -472,6 +438,7 @@ namespace LiteMonitor.src.Plugins.Native
         private static async Task<string> GetStringAsync(string url, TimeSpan timeout, CancellationToken token,
             int maxResponseBytes, IReadOnlyCollection<string> allowedHosts)
         {
+            PluginHostPolicy.RequireHttpHost(url);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
             cts.CancelAfter(timeout);
 
@@ -526,6 +493,7 @@ namespace LiteMonitor.src.Plugins.Native
                         "原生步骤的重定向响应没有 Location 头，重定向链终止");
                 }
 
+                PluginHostPolicy.ValidateRedirectLocation(location, current);
                 Uri next;
                 if (location.IsAbsoluteUri) next = location;
                 else if (current != null) next = new Uri(current, location);
@@ -580,7 +548,7 @@ namespace LiteMonitor.src.Plugins.Native
             var hosts = new HashSet<string>(OfficialSourceHosts, StringComparer.OrdinalIgnoreCase);
             if (Uri.TryCreate((url ?? "").Trim(), UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.Host))
             {
-                hosts.Add(uri.Host);
+                hosts.Add(PluginHostPolicy.RequireHttpHost(url));
             }
             return hosts;
         }
@@ -601,7 +569,7 @@ namespace LiteMonitor.src.Plugins.Native
             }
             if (Uri.TryCreate((fallbackUrl ?? "").Trim(), UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.Host))
             {
-                hosts.Add(uri.Host);
+                hosts.Add(PluginHostPolicy.RequireHttpHost(fallbackUrl));
             }
             return hosts;
         }
@@ -611,9 +579,9 @@ namespace LiteMonitor.src.Plugins.Native
         /// </summary>
         private static void EnsureRedirectTargetAllowed(Uri target, IReadOnlyCollection<string> allowedHosts)
         {
+            string host = PluginHostPolicy.RequireHttpHost(target?.OriginalString, PluginSandboxReasons.RedirectTargetNotAllowed);
             if (allowedHosts == null) return;   // 无允许集合 ⇒ 不做复核（与 HTTP 路径同一口径）
 
-            string host = target?.Host;
             if (string.IsNullOrEmpty(host) || !IsHostAllowed(host, allowedHosts))
             {
                 throw new PluginSandboxException(
@@ -678,6 +646,12 @@ namespace LiteMonitor.src.Plugins.Native
 
             json = entry.Json;
             return true;
+        }
+
+        private static void CommitNative(PluginPublicationLease publication, Action commit)
+        {
+            if (publication != null) publication.TryCommit(commit);
+            else commit();
         }
 
         private static void SaveCache(string key, string json, bool isFallback)

@@ -317,11 +317,16 @@ if ($mustExecClasses.Count -gt 0) {
 }
 
 if ($duplicated) {
+    # 【C-1 / 评审阻断 1】同一程序集多份 TRX 一律 **FAIL**（原为"取最后一次+警告"）：
+    #   多份 TRX 意味着测试输出目录没清干净或重复执行 —— 计数被重复累加/新旧混杂时，
+    #   任何"总数达标"都不可信。让这类状态现形，而不是挑一份好看的。
     Write-Host ''
-    Write-Host '[警告] 发现同一程序集的多个 TRX，已采用最后一次运行的结果：' -ForegroundColor Yellow
-    foreach ($r in $selected) {
-        Write-Host ("    {0} -> {1} ({2})" -f $r.Assembly, $r.Path, $r.LastWrite.ToString('s')) -ForegroundColor Yellow
+    Write-Host '=== 测试发现数校验：失败 ===' -ForegroundColor Red
+    Write-Host '[原因] 同一程序集存在多份 TRX（计数不可信，绝不取"最后一次"糊弄）：' -ForegroundColor Red
+    foreach ($r in $reports | Sort-Object -Property Assembly, LastWrite) {
+        Write-Host ("    {0} -> {1} ({2})" -f $r.Assembly, $r.Path, $r.LastWrite.ToString('s')) -ForegroundColor Red
     }
+    exit 4
 }
 
 # 被跳过的用例：必须逐条可见
@@ -395,6 +400,19 @@ if ($sumTotal -lt $MinTotal) {
 # ★ 跳过总数上限（收紧项）。跳过数只允许减少，不允许增加。
 if ($sumSkipped -gt $MaxSkipped) {
     $problems.Add("被跳过的用例共 $sumSkipped 条，超过上限 $MaxSkipped —— 允许跳过的只有联网 E2E（MarketE2ETests）；契约用例被跳过属于门禁失效。")
+}
+
+# 数量上限不能证明跳过的是被授权的用例：精确核对程序集及用例身份。
+$allowedSkippedTest = 'LiteMonitor.Tests.MarketE2ETests.端到端_拉索引_安装_校验_卸载'
+foreach ($r in $selected) {
+    if ($r.Skipped -ne $r.SkippedTests.Count) {
+        $problems.Add("程序集 '$($r.Assembly)' 的跳过计数与明细不符，无法验证允许跳过的用例身份。")
+    }
+    foreach ($t in $r.SkippedTests) {
+        if ($r.Assembly -ine 'LiteMonitor.Tests' -or $t.Name -cne $allowedSkippedTest) {
+            $problems.Add("未获允许的跳过用例：[$($r.Assembly)] $($t.Name) —— 仅指定联网 E2E 可以跳过。")
+        }
+    }
 }
 
 # ★ "必须真正执行"的测试类（收紧项）。门控失效时必须让流水线红，而不是静默跳过。

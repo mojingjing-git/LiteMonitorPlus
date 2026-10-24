@@ -346,7 +346,11 @@ namespace LiteMonitor
         public void NotifyGpuHandleChanged(bool controlled, long handleGeneration)
         {
             // 步 5：原生生命周期 + 代次推进（状态侧）。
-            _transition.OnHandleCreated(controlled, handleGeneration);
+            if (_disposed || !_transition.OnHandleCreated(controlled, handleGeneration))
+            {
+                // 重复或过期通知不得在稳定阶段重新创建宿主；关闭优先由协调器统一把关。
+                return;
+            }
 
             if (!controlled)
             {
@@ -1823,9 +1827,8 @@ namespace LiteMonitor
                     out string? errorCode,
                     out string? errorMessage))
             {
-                // ★【合同 §2 维度 6 / §4 步 4】HWND 呈现历史：直接取宿主的精确值
-                //   （Presented / PresentAttempted / Bound / Unbound）——
-                //   重建触发依据（计划 §4.1 :123-126）据此决定是否必须受控重建 HWND。
+                // 宿主保留精确即时状态，协调器在同一 HWND 代次内单调累积呈现历史，
+                //   据此决定是否必须受控重建 HWND（合同 §2 维度 6 / §4 步 4）。
                 _transition.RecordBindingState(_gpuPresentation.BindingState);
                 _gpuFallbackCode = _gpuPresentation.RequestsLiveBackground &&
                     !_gpuPresentation.IsLiveCaptureStarted

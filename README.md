@@ -83,6 +83,16 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 
 部分主题在 JSON 中声明 `rendering.backend = "gpu"`，用 DirectX 11 (DXGI / D3D11) 直接渲染面板材质，而不是传统 GDI+ 绘制。**主题声明与用户开关两者都满足**才会进入 GPU 路线，缺一都保持原来的 GDI+ 外观。
 
+### 三条渲染路线
+
+| 路线 | 前置条件 | 表现 |
+|---|---|---|
+| **GDI+ 旧路线**（自动兜底） | 主题未声明 `rendering.backend = "gpu"`、显卡不支持 DirectX 11、或 `--safe` 启动 | 传统 GDI+ 绘制，任何环境可用 |
+| **GPU 固定背景** | GPU 主题 + 「GPU 材质渲染」开 | 真实玻璃材质（折射/厚度/高光），背景为程序化材质 |
+| **GPU 实时桌面背景** | 上一条全部满足 + 「实时桌面背景」开 + WDA 政策已接受 | 玻璃后面是**实时模糊桌面**；透明度 <100%（分层窗口）实测同样可用 |
+
+设置面板 → **「渲染路线」页**：查看当前主题声明路线与实际生效路线（含真实原因码，如 `safe_mode` / `gpu_effects_opt_in_required`），GPU 路线开关也在这里。主题下拉与托盘菜单的主题项都会标注 `(GPU 材质)` / `(GDI+)`。旧版「实时玻璃」开关已移除，由 GPU 路线的「实时桌面背景」替代（旧配置值会在加载时自动迁移为关闭）。
+
 ### 支持矩阵
 
 | 项目 | 要求 | 不满足时 |
@@ -91,7 +101,7 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 | 运行时 | .NET 8 桌面运行时（发布包为框架依赖） | 无法启动 |
 | 显卡 | 提供 DXGI 适配器且支持 DirectX 11 | 自动回退 GDI+，面板正常显示 |
 | 主题 | 主题 JSON 中 `rendering.backend = "gpu"` | 该主题保持原 GDI+ 外观 |
-| 用户开关 | 设置 → 主面板 → 外观 →「GPU 材质渲染」 | 不开启则不进入 GPU 路线 |
+| 用户开关 | 设置 → 渲染路线 →「GPU 材质渲染」 | 不开启则不进入 GPU 路线 |
 | 多屏 / 混合 DPI | 支持，可拖到副屏（含负坐标原点） | — |
 | 实时桌面背景 | 需 DXGI Desktop Duplication 与 WDA 支持 | 捕获失败时保留可读的固定材质 |
 

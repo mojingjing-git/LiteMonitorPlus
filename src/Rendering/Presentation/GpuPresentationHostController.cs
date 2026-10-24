@@ -274,19 +274,13 @@ public sealed class GpuPresentationHostController : IDisposable
             return false;
         }
 
-        // 【合同 §10 GPU-003 / 裁决 D4】宿主侧二次校验：
-        // WS_EX_LAYERED 与 WDA_EXCLUDEFROMCAPTURE 互斥 ⇒ 分层窗口上不得申请 WDA 排除，
-        // 有效路由降为 GpuFixedInput（期望路由不变），原因码与 owner A 的路由分支保持一致。
+        // 【步0 实验 2026-10-24 / R3 §3.2】宿主侧分层二次校验**同步放开**（与 owner A 的
+        // RenderingRoutePolicy 步0 实验注释同因：分层与 WDA 互斥的前提已被 legacy 路线
+        // 在同一分层窗口上实测证伪，R3 §1.4）。分层事实不再把 WDA 排除降级为 None；
+        // 实测结论决定本改动去留（R3 §3.4 三分支）。
         WindowCapturePolicy effectiveCapturePolicy = capturePolicy;
         bool liveBackgroundAllowed = _liveBackgroundRequested;
         _capturePolicyFallbackCode = null;
-        if (capturePolicy == WindowCapturePolicy.WdaExcludeFromCapture &&
-            WindowExtendedStyle.IsLayered(_form.Handle))
-        {
-            effectiveCapturePolicy = WindowCapturePolicy.None;
-            liveBackgroundAllowed = false;
-            _capturePolicyFallbackCode = "wda_capture_policy_unsupported_on_layered_window";
-        }
 
         // 【合同 §6.2 INV-6 / LM-073】同一代次仍有未完成的清理 ⇒ 拒绝叠加新的 affinity 所有者。
         if (effectiveCapturePolicy == WindowCapturePolicy.WdaExcludeFromCapture &&

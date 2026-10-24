@@ -47,8 +47,12 @@ public sealed class RenderingTransitionStateTests
     }
 
     [Fact]
-    public void LayeredWindowNeverRequestsWdaExclusion()
+    public void LayeredWindowStillRequestsLiveBackgroundWithDiagnostic()
     {
+        // 【步0 实验 2026-10-24 → 方案 A】原守卫"分层 ⇒ GpuFixedInput"的前提
+        // （WS_EX_LAYERED 与 WDA 互斥）被 legacy 路线在同一分层窗口上实测证伪，
+        // 且 GPU 实时背景在分层窗口上六项判据全过（R3 §3.3 / 证据 gpu-live-2026-10-24）。
+        // 分层事实降级为**诊断条目**（Errors），不再阻断路由。
         RenderingRouteDecision decision = RenderingRoutePolicy.Decide(new(
             CreateGpuConfiguration(ThemeRenderingConfig.LiquidGlassMaterial, liveBackground: true),
             GpuEffectsEnabled: true,
@@ -57,10 +61,26 @@ public sealed class RenderingTransitionStateTests
             SafeMode: false,
             WindowIsLayered: true));
 
-        Assert.Equal(RenderingRoute.GpuFixedInput, decision.Route);
+        Assert.Equal(RenderingRoute.GpuLiveBackground, decision.Route);
         Assert.Equal(RenderBackendKind.Gpu, decision.EffectiveBackend);
-        Assert.False(decision.CaptureRequested);
-        Assert.Equal("wda_capture_policy_unsupported_on_layered_window", decision.FallbackCode);
+        Assert.True(decision.CaptureRequested);
+        Assert.Null(decision.FallbackCode);
+        Assert.Contains("diagnostic_window_is_layered", decision.Errors);
+    }
+
+    [Fact]
+    public void NonLayeredWindowDoesNotCarryLayeredDiagnostic()
+    {
+        RenderingRouteDecision decision = RenderingRoutePolicy.Decide(new(
+            CreateGpuConfiguration(ThemeRenderingConfig.LiquidGlassMaterial, liveBackground: true),
+            GpuEffectsEnabled: true,
+            LiveBackgroundEnabled: true,
+            WdaCapturePolicyAccepted: true,
+            SafeMode: false,
+            WindowIsLayered: false));
+
+        Assert.Equal(RenderingRoute.GpuLiveBackground, decision.Route);
+        Assert.DoesNotContain("diagnostic_window_is_layered", decision.Errors);
     }
 
     [Theory]

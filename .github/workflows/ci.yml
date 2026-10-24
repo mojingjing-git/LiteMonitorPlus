@@ -51,7 +51,7 @@ jobs:
       # ★★ 用例发现数下限（防假绿的核心阈值）★★
       #    改动这个值必须是**有意**的（例如新增测试工程后调高），
       #    绝不允许为了"让流水线变绿"而调低。
-      #    当前基线：1526（1433 + 73 + 19），阈值 1526（**等于**当前实测总数——
+      #    当前基线：1831（1739 + 73 + 19），阈值 1831（**等于**当前实测总数——
       #    门禁只收紧不放宽：任何用例被删或被跳过都会让本行变红）。
       #    历史：1185（1153+13+19）/阈值 1150 → 1270（1193+58+19）/阈值 1150
       #    → 1280（1203+58+19）/阈值 1280（S3.5 + S3.6 + 主审集成落地）
@@ -75,7 +75,15 @@ jobs:
       #    #    → 1632（1540+73+19）/阈值 1632（P2 批次 C/D/E 全部修复并集成后：主工程 **+85**
       #    #      （LM-080 6 + LM-094 6 + LM-081 42 + LM-082 4 + LM-083 5 + LM-084 3 + LM-085 4
       #    #        + LM-086 4 + LM-087 5 + LM-088 3 + LM-089 3；LM-089 只改 release.yml 不加用例数））。
-      MIN_TEST_TOTAL: 1632
+      #    → 1831（1739+73+19）/阈值 1831（2026-10-24 独立复审修复：主工程 +199
+      #      = GPU 35 + 市场 33 + 指标 56 + 主机 36 + 热加载 15 + IL 13 + 门禁 11；
+      #      Debug / Release 各实测 1830 通过、0 失败、1 指定 E2E 跳过，原 1632 身份保留）。
+      #    → 1862（1770+73+19）/阈值 1862（R3 渲染路线批次：主工程 +31
+      #      = StatusBuilder 10 + 原因码 8 + 主题路线 helper 9 + LiveGlass 迁移 3；
+      #      另有方案 A 改写 1 条守卫（LayeredWindowNeverRequestsWdaExclusion →
+      #      LayeredWindowStillRequestsLiveBackgroundWithDiagnostic + NonLayered 新增 1 条），
+      #      Debug 实测 1769 通过、0 失败、1 指定 E2E 跳过，原 1831 身份保留）。
+      MIN_TEST_TOTAL: 1862
 
       # ★ 必须出现的测试程序集。少任何一个都会让断言失败
       #   （防止某个测试工程悄悄没被测到）。
@@ -91,7 +99,10 @@ jobs:
       #    插件市场的 6 条契约用例由 LITEMONITOR_PLUGIN_REPO 门控：
       #    夹具路径一旦失效，它们会被 xunit 记为 Skipped 而不是失败 ——
       #    这里把它们钉成硬门禁："必须被发现、必须不少于 6 条、必须一条都没被跳过"。
-      MUST_EXECUTE_TEST_CLASS: 'MarketIndexContractTests'
+      # ★ 必须真正执行的测试类（C-1 / 评审阻断 1）：
+      #   ReviewMarketPersistenceRegressionTests 是持久化事务护栏，其历史间歇失败
+      #   曾被误归因为"环境抖动"——钉进来后任何静默跳过/漏跑都会让门禁直接红。
+      MUST_EXECUTE_TEST_CLASS: 'MarketIndexContractTests, ReviewMarketPersistenceRegressionTests'
       MUST_EXECUTE_TEST_CLASS_MIN_COUNT: 6
 
       # ★ 插件市场契约夹具路径（S4.1 引入，仓库内固定路径）。
@@ -181,24 +192,25 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # 清掉上一次运行遗留的 TRX，保证下面"每个程序集一份结果"是干净的
-          Get-ChildItem -Path 'tests' -Filter 'TestResults' -Directory -Recurse -ErrorAction SilentlyContinue |
-            Remove-Item -Recurse -Force
+          $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          $results = [IO.Path]::GetFullPath((Join-Path $workspace 'ci-artifacts/test-results'))
+          if (-not $results.StartsWith($workspace.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw '测试结果目录越界' }
+          if (Test-Path -LiteralPath $results) { Remove-Item -LiteralPath $results -Recurse -Force }
           New-Item -ItemType Directory -Force -Path 'ci-artifacts' | Out-Null
-          Write-Host '已清理历史 TestResults 目录'
+          Write-Host '已清理双配置测试结果目录'
 
       - name: 运行单元测试
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          $log = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\test-console.log'
-          # TRX 落在每个测试工程自己的 TestResults 目录，文件名固定为 results.trx，
-          # 三个工程各写各的目录，不会互相覆盖。
-          dotnet test LiteMonitor.sln -c Debug --nologo --logger "trx;LogFileName=results.trx" |
-            Tee-Object -FilePath $log
-          $code = $LASTEXITCODE
-          Write-Host "dotnet test 退出码: $code"
-          if ($code -ne 0) { throw "dotnet test 失败（退出码 $code）" }
+          $log = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\test-Debug.log'
+          foreach ($assembly in @('LiteMonitor.Tests', 'LiteMonitor.Updater.Tests', 'LiteMonitor.GpuNonperformance.Tests')) {
+            $results = Join-Path $env:GITHUB_WORKSPACE "ci-artifacts/test-results/Debug/$assembly"
+            dotnet test "tests/$assembly/$assembly.csproj" -c Debug --nologo --results-directory $results --logger "trx;LogFileName=results.trx" |
+              Tee-Object -FilePath $log -Append
+            $code = $LASTEXITCODE
+            if ($code -ne 0) { throw "Debug $assembly 测试失败（退出码 $code）" }
+          }
 
       - name: 强制校验测试发现数（防假绿）
         shell: pwsh
@@ -207,7 +219,7 @@ jobs:
           $assertArgs = @(
             '-NoProfile',
             '-File', '.github/workflows/assert-test-counts.ps1',
-            '-TrxRoot', 'tests',
+            '-TrxRoot', 'ci-artifacts/test-results/Debug',
             '-MinTotal', $env:MIN_TEST_TOTAL,
             '-ExpectedAssembly', $env:EXPECTED_TEST_ASSEMBLIES,
             '-MaxSkipped', $env:MAX_SKIPPED_TESTS,
@@ -220,6 +232,36 @@ jobs:
 
       - name: 构建（Release）
         run: dotnet build LiteMonitor.sln -c Release --nologo
+
+      - name: 运行单元测试（Release）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $log = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\test-Release.log'
+          foreach ($assembly in @('LiteMonitor.Tests', 'LiteMonitor.Updater.Tests', 'LiteMonitor.GpuNonperformance.Tests')) {
+            $results = Join-Path $env:GITHUB_WORKSPACE "ci-artifacts/test-results/Release/$assembly"
+            dotnet test "tests/$assembly/$assembly.csproj" -c Release --nologo --results-directory $results --logger "trx;LogFileName=results.trx" |
+              Tee-Object -FilePath $log -Append
+            $code = $LASTEXITCODE
+            if ($code -ne 0) { throw "Release $assembly 测试失败（退出码 $code）" }
+          }
+
+      - name: 强制校验测试发现数（Release）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assertArgs = @(
+            '-NoProfile',
+            '-File', '.github/workflows/assert-test-counts.ps1',
+            '-TrxRoot', 'ci-artifacts/test-results/Release',
+            '-MinTotal', $env:MIN_TEST_TOTAL,
+            '-ExpectedAssembly', $env:EXPECTED_TEST_ASSEMBLIES,
+            '-MaxSkipped', $env:MAX_SKIPPED_TESTS,
+            '-MustExecuteTestClass', $env:MUST_EXECUTE_TEST_CLASS,
+            '-MustExecuteTestClassMinCount', $env:MUST_EXECUTE_TEST_CLASS_MIN_COUNT
+          )
+          & pwsh @assertArgs
+          if ($LASTEXITCODE -ne 0) { throw "Release 测试发现数断言失败（退出码 $LASTEXITCODE）" }
 
       - name: 读取版本号
         id: version
@@ -256,8 +298,8 @@ jobs:
         with:
           name: test-results
           path: |
-            tests/**/TestResults/*.trx
-            ci-artifacts/test-console.log
+            ci-artifacts/test-results/**/*.trx
+            ci-artifacts/test-*.log
             ci-artifacts/startup-check/**
           if-no-files-found: error
           retention-days: 14

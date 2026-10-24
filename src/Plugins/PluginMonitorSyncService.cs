@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -34,11 +34,13 @@ namespace LiteMonitor.src.Plugins
             bool changed = false;
 
             var targets = inst.Targets != null && inst.Targets.Count > 0 ? inst.Targets : new List<Dictionary<string, string>> { new Dictionary<string, string>() };
-            var validKeys = new HashSet<string>();
+            var validKeys = PluginKeyOwnership.Outputs(inst, tmpl)
+                .Select(binding => PluginConstants.DASH_PREFIX + binding.RawKey).ToHashSet(StringComparer.Ordinal);
 
             // 优化 2: 高风险并发崩溃修复 - 加锁
             lock (settings.MonitorItems)
             {
+                var ownedKeys = PluginKeyOwnership.MonitorKeys(settings, inst.Id);
                 for (int i = 0; i < targets.Count; i++)
                 {
                     // ... (保持原有循环逻辑，但被锁保护)
@@ -91,22 +93,10 @@ namespace LiteMonitor.src.Plugins
                                 string safeLabel = !string.IsNullOrEmpty(finalName) ? finalName : (PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key);
                                 string safeShort = !string.IsNullOrEmpty(finalShort) ? finalShort : output.Key;
 
-                                // [Optimization] Smart Insert: Follow last sibling based on SortIndex
-                                string prefix = PluginConstants.DASH_PREFIX + inst.Id + ".";
-                                var siblings = settings.MonitorItems.Where(x => x.Key.StartsWith(prefix)).ToList();
-                                
-                                var lastSortPeer = siblings.OrderByDescending(x => x.SortIndex).FirstOrDefault();
-                                var lastTbSortPeer = siblings.OrderByDescending(x => x.TaskbarSortIndex).FirstOrDefault();
-                                
-                                int nextSort = (lastSortPeer?.SortIndex ?? (settings.MonitorItems.Any() ? settings.MonitorItems.Max(x => x.SortIndex) : 0)) + 1;
-                                int nextTbSort = (lastTbSortPeer?.TaskbarSortIndex ?? (settings.MonitorItems.Any() ? settings.MonitorItems.Max(x => x.TaskbarSortIndex) : 0)) + 1;
-
-                                // Shift others to make room
-                                foreach (var m in settings.MonitorItems)
-                                {
-                                    if (m.SortIndex >= nextSort) m.SortIndex++;
-                                    if (m.TaskbarSortIndex >= nextTbSort) m.TaskbarSortIndex++;
-                                }
+                                // New output keys append without renumbering another
+                                // instance's existing monitor items during hot reload.
+                                int nextSort = (settings.MonitorItems.Any() ? settings.MonitorItems.Max(x => x.SortIndex) : 0) + 1;
+                                int nextTbSort = (settings.MonitorItems.Any() ? settings.MonitorItems.Max(x => x.TaskbarSortIndex) : 0) + 1;
 
                                 item = new MonitorItemConfig
                                 {
@@ -142,7 +132,7 @@ namespace LiteMonitor.src.Plugins
 
                 // Cleanup Orphaned Items for this Instance
                 var toRemove = settings.MonitorItems
-                    .Where(x => x.Key.StartsWith(PluginConstants.DASH_PREFIX + inst.Id + ".") && !validKeys.Contains(x.Key))
+                    .Where(x => ownedKeys.Contains(x.Key) && !validKeys.Contains(x.Key))
                     .ToList();
 
                 foreach (var item in toRemove)
@@ -150,6 +140,7 @@ namespace LiteMonitor.src.Plugins
                     settings.MonitorItems.Remove(item);
                     changed = true;
                 }
+                PluginKeyOwnership.RememberMonitorKeys(settings, inst.Id, validKeys);
             } // End Lock
 
             if (changed && saveIfChanged) settings.Save();
@@ -162,17 +153,16 @@ namespace LiteMonitor.src.Plugins
         public void RemoveMonitorItems(string instanceId, bool saveIfChanged = true)
         {
             var settings = Settings.Load();
-            string mainKey = PluginConstants.DASH_PREFIX + instanceId;
-            var itemsToRemove = settings.MonitorItems.Where(x => x.Key == mainKey || x.Key.StartsWith(mainKey + ".")).ToList();
-
-            if (itemsToRemove.Count > 0)
+            bool changed;
+            lock (settings.MonitorItems)
             {
-                foreach (var item in itemsToRemove)
-                {
-                    settings.MonitorItems.Remove(item);
-                }
-                if (saveIfChanged) settings.Save();
+                var keys = PluginKeyOwnership.MonitorKeys(settings, instanceId);
+                var itemsToRemove = settings.MonitorItems.Where(item => keys.Contains(item.Key)).ToList();
+                foreach (var item in itemsToRemove) settings.MonitorItems.Remove(item);
+                PluginKeyOwnership.RememberMonitorKeys(settings, instanceId, new HashSet<string>(StringComparer.Ordinal));
+                changed = itemsToRemove.Count > 0;
             }
+            if (changed && saveIfChanged) settings.Save();
         }
 
         /// <summary>
@@ -182,57 +172,35 @@ namespace LiteMonitor.src.Plugins
         {
             try
             {
-                if (string.IsNullOrEmpty(itemKey) || !itemKey.StartsWith(PluginConstants.DASH_PREFIX)) return "";
-
+                if (string.IsNullOrEmpty(itemKey)) return "";
                 var settings = Settings.Load();
+                string owner;
+                lock (settings.MonitorItems) owner = PluginKeyOwnership.MonitorOwner(settings, itemKey);
+                var instance = settings.PluginInstances.FirstOrDefault(i => i.Id == owner);
+                var template = templates.FirstOrDefault(t => t.Id == instance?.TemplateId);
+                if (instance == null || template == null) return "";
 
-                foreach (var inst in settings.PluginInstances)
+                foreach (var binding in PluginKeyOwnership.Outputs(instance, template))
                 {
-                    string prefix = PluginConstants.DASH_PREFIX + inst.Id + ".";
-                    if (itemKey.StartsWith(prefix) || itemKey == PluginConstants.DASH_PREFIX + inst.Id)
-                    {
-                        var tmpl = templates.FirstOrDefault(t => t.Id == inst.TemplateId);
-                        if (tmpl == null) continue;
+                    if (PluginConstants.DASH_PREFIX + binding.RawKey != itemKey) continue;
+                    var inputs = new Dictionary<string, string>(instance.InputValues);
+                    if (binding.TargetIndex >= 0)
+                        foreach (var pair in instance.Targets[binding.TargetIndex]) inputs[pair.Key] = pair.Value;
+                    foreach (var input in template.Inputs ?? new List<PluginInput>())
+                        if (!inputs.ContainsKey(input.Key)) inputs[input.Key] = input.DefaultValue;
 
-                        string suffix = itemKey.Substring(prefix.Length);
-                        
-                        if (tmpl.Outputs != null)
-                        {
-                            foreach (var output in tmpl.Outputs)
-                            {
-                                if (suffix == output.Key || suffix.EndsWith("." + output.Key))
-                                {
-                                    var mergedInputs = new Dictionary<string, string>(inst.InputValues);
-                                    if (tmpl.Inputs != null)
-                                    {
-                                        foreach (var input in tmpl.Inputs)
-                                            if (!mergedInputs.ContainsKey(input.Key))
-                                                mergedInputs[input.Key] = input.DefaultValue;
-                                    }
-
-                                    string labelPattern;
-                                    if (targetField == "short_label")
-                                        labelPattern = PluginI18n.Pick(output.ShortLabel, output.ShortLabelEn);
-                                    else
-                                        labelPattern = PluginI18n.Pick(output.Label, output.LabelEn);
-
-                                    if (string.IsNullOrEmpty(labelPattern)) labelPattern = PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn);
-
-                                    string resolved = PluginProcessor.ResolveTemplate(labelPattern, mergedInputs);
-
-                                    if (string.IsNullOrEmpty(resolved) || resolved.Contains("{{"))
-                                        return PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key;
-
-                                    return resolved;
-                                }
-                            }
-                        }
-                        return PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn);
-                    }
+                    var output = binding.Output;
+                    string pattern = targetField == "short_label"
+                        ? PluginI18n.Pick(output.ShortLabel, output.ShortLabelEn)
+                        : PluginI18n.Pick(output.Label, output.LabelEn);
+                    if (string.IsNullOrEmpty(pattern)) pattern = PluginI18n.Pick(template.Meta.Name, template.Meta.NameEn);
+                    string resolved = PluginProcessor.ResolveTemplate(pattern, inputs);
+                    return string.IsNullOrEmpty(resolved) || resolved.Contains("{{")
+                        ? PluginI18n.Pick(template.Meta.Name, template.Meta.NameEn) + " " + output.Key : resolved;
                 }
+                return PluginI18n.Pick(template.Meta.Name, template.Meta.NameEn);
             }
-            catch { }
-            return "";
+            catch { return ""; }
         }
 
         private static readonly Regex _varsRegex = new Regex(@"\{\{(.+?)\}\}", RegexOptions.Compiled);

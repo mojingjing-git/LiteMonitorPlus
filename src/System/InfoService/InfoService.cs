@@ -179,6 +179,15 @@ namespace LiteMonitor.src.SystemServices.InfoService
             _currentInterval = INTERVAL_SLOW;
         }
 
+        internal void RemoveDataByKeys(IReadOnlyCollection<string> keys)
+        {
+            if (keys == null || keys.Count == 0) return;
+            lock (_lock)
+            {
+                foreach (string key in keys) _data.Remove(key);
+            }
+        }
+
         public void RemoveDataByPrefix(string prefix)
         {
             if (string.IsNullOrEmpty(prefix)) return;

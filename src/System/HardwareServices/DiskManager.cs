@@ -216,6 +216,35 @@ namespace LiteMonitor.src.SystemServices
         // ===========================================================
         public float? GetBestValue(string key, Computer computer, Settings cfg, Dictionary<string, float> lastValidMap, object syncLock)
         {
+            // 逻辑盘使用率独立于物理盘传感器，不能被物理盘的新鲜缓存提前返回。
+            // 只有完整的 DISK.<盘符>.Used 才访问 DriveInfo。
+            var parts = key.Split('.');
+            if (parts.Length == 3 && parts[0] == "DISK" && parts[2] == "Used" &&
+                parts[1].Length == 1 && char.IsAsciiLetter(parts[1][0]))
+            {
+                string driveLetter = parts[1]; // "C"
+                string root = driveLetter + ":\\";
+
+                DriveInfo di;
+                // ★★★ 优先查缓存 ★★★
+                if (!_driveInfoCache.TryGetValue(root, out di))
+                {
+                    try 
+                    { 
+                        di = new DriveInfo(root); 
+                        _driveInfoCache[root] = di; // 存入缓存
+                    } 
+                    catch { return null; }
+                }
+
+                try
+                {
+                    // IsReady 不会产生 Volume 字符串垃圾
+                    if (di.IsReady) return (100f - (float)((double)di.TotalFreeSpace / di.TotalSize * 100.0));
+                }
+                catch { return 0f; }
+            }
+
             // 1. 运行时缓存 (针对自动选择模式)
             if (_cachedDiskHw != null)
             {
@@ -231,37 +260,6 @@ namespace LiteMonitor.src.SystemServices
                     // ★★★ [新增] 温度支持 ★★★
                     if ((cachedVal.HasValue && cachedVal.Value > 0.1f) || key.Contains("Temp") || IsDiskScanFresh())
                         return cachedVal;
-                }
-            }
-            // === [核心修复] 逻辑分区处理：使用缓存的 DriveInfo ===
-            // key 格式如: DISK.C.Used
-            var parts = key.Split('.');
-            if (parts.Length >= 3 && parts[1].Length == 1 && char.IsLetter(parts[1][0]))
-            {
-                string driveLetter = parts[1]; // "C"
-                string type = parts[2];        // "Used"
-                string root = driveLetter + ":\\";
-
-                DriveInfo di;
-                // ★★★ 优先查缓存 ★★★
-                if (!_driveInfoCache.TryGetValue(root, out di))
-                {
-                    try 
-                    { 
-                        di = new DriveInfo(root); 
-                        _driveInfoCache[root] = di; // 存入缓存
-                    } 
-                    catch { return null; }
-                }
-
-                if (type == "Used") 
-                {
-                    try 
-                    { 
-                        // IsReady 不会产生 Volume 字符串垃圾
-                        if (di.IsReady) return (100f - (float)((double)di.TotalFreeSpace / di.TotalSize * 100.0));
-                    } 
-                    catch { return 0f; }
                 }
             }
             // ★★★ [新增] B. 尝试启动时缓存 (Settings 记忆) ★★★

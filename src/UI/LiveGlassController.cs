@@ -463,7 +463,21 @@ namespace LiteMonitor
         private void RefreshRequest()
         {
             BackdropCaptureService? svc = _service;
-            if (svc is null) return;
+            if (svc is null)
+            {
+                // ★【缺陷修复】服务已经被**整停**时（句柄重建 ⇒ MainForm_Transparent.OnHandleDestroyed
+                //   ⇒ StopForHandleRecreate ⇒ StopService ⇒ _service = null），这里**不能**直接返回。
+                //   ★ 旧行为的后果（真液态玻璃在真实程序里 100% 失效，且全程零报错）：
+                //     · 服务永远不被拉回来；
+                //     · BeginPaint() 每次都在第一行 `if (svc is null) return;` 退出
+                //       ⇒ 从不取帧、从不写"生效模式=Glass"状态行；
+                //     · 背景永远拿不到实时帧 ⇒ BackdropModeResolver 走"降级 1：glass → gradient"
+                //       ⇒ 用户看到的就是渐变假玻璃。
+                //   ★ 上面那段 A16 复核注释修的是"服务**存在**但没启动"；这里补的是"服务**已经不在**"。
+                //   ⇒ 按配置把服务拉回来（用户显式关过时 RestoreIfEnabled 不会拉起）。
+                RestoreIfEnabled();
+                return;
+            }
 
             BackdropServiceRequest? request = BuildRequest();
             if (request is null) return;

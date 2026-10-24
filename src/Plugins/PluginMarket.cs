@@ -812,12 +812,14 @@ namespace LiteMonitor.src.Plugins
         {
             lock (_recoveryLock)
             {
-                if (!force && _recoveredDirs.Contains(pluginsDir)) return;
+                if (!force && _recoveredDirs.Contains(pluginsDir) &&
+                    !File.Exists(Path.Combine(pluginsDir, PluginMarketInstallCore.TransactionLogFileName))) return;
 
                 try
                 {
-                    PluginMarketInstallCore.RecoverInterruptedInstalls(pluginsDir, PluginMarketState.Find);
-                    _recoveredDirs.Add(pluginsDir);
+                    PluginMarketInstallCore.RecoverInterruptedInstalls(pluginsDir, PluginMarketState.FindPersistedForRecovery);
+                    if (!File.Exists(Path.Combine(pluginsDir, PluginMarketInstallCore.TransactionLogFileName)))
+                        _recoveredDirs.Add(pluginsDir);
                 }
                 catch
                 {
@@ -855,6 +857,12 @@ namespace LiteMonitor.src.Plugins
         public string Stage { get; set; } = "";
         public string Backup { get; set; } = "";
         public string Sha256 { get; set; } = "";
+        // Version 0 is the legacy journal. Version 1 records enough pre-state to
+        // confirm rollback after record compensation succeeds but file Move fails.
+        public int RecoveryVersion { get; set; }
+        public bool HadTarget { get; set; }
+        public string PreviousFileSha256 { get; set; } = "";
+        public string? PreviousRecordSha256 { get; set; }
     }
 
     /// <summary>写前日志文件的内容</summary>
@@ -915,6 +923,8 @@ namespace LiteMonitor.src.Plugins
         }
 
         private static readonly object _commitLock = new object();
+        internal static object TransactionGate => _commitLock;
+        internal static Action? BeforeRecoveryGateForTests { get; set; }
 
         private static readonly JsonSerializerOptions _jsonOpts = new JsonSerializerOptions
         {
@@ -955,10 +965,27 @@ namespace LiteMonitor.src.Plugins
             // ★ 并发安装同一插件时必须串行：暂存/替换/写记录必须是一个整体
             lock (_commitLock)
             {
-                MarketPluginRecord? oldRecord = findRecord(pluginId);
+                MarketPluginRecord? foundRecord = findRecord(pluginId);
+                MarketPluginRecord? oldRecord = foundRecord == null ? null : new MarketPluginRecord
+                {
+                    Id = foundRecord.Id, File = foundRecord.File, Version = foundRecord.Version,
+                    Sha256 = foundRecord.Sha256, InstalledAt = foundRecord.InstalledAt
+                };
                 bool hadOldFile = File.Exists(targetPath);
                 bool movedToTarget = false;
-                bool recordTouched = false;
+                bool recordAttempted = false;
+                bool recordPersisted = false;
+
+                tx.RecoveryVersion = 1;
+                tx.HadTarget = hadOldFile;
+                tx.PreviousFileSha256 = hadOldFile ? ComputeFileSha(targetPath) : "";
+                tx.PreviousRecordSha256 = oldRecord?.Sha256;
+                if (!TryResolveTransactionPaths(pluginsDir, tx, out _, out string pathReason))
+                    throw new IOException("Unsafe market transaction: " + pathReason);
+
+                // An unresolved transaction owns its payload and backup until
+                // recovery has confirmed a consistent state.
+                EnsureNoPendingInstall(pluginsDir, pluginId);
 
                 Directory.CreateDirectory(pluginsDir);
                 AppendPending(pluginsDir, tx);
@@ -977,6 +1004,7 @@ namespace LiteMonitor.src.Plugins
                     faultInjector?.Invoke("afterMove");
 
                     // ② 落盘成功之后才更新安装记录
+                    recordAttempted = true;
                     upsertRecord(new MarketPluginRecord
                     {
                         Id = pluginId,
@@ -985,25 +1013,35 @@ namespace LiteMonitor.src.Plugins
                         Sha256 = sha256,
                         InstalledAt = oldRecord?.InstalledAt ?? DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
                     });
-                    recordTouched = true;
+                    recordPersisted = true;
 
                     faultInjector?.Invoke("afterRecord");
 
                     // ③ 提交：清理备份与日志条目
-                    SafeDelete(backupPath);
-                    RemovePending(pluginsDir, tx.TxId);
+                    try
+                    {
+                        DeleteFile(backupPath);
+                        RemovePending(pluginsDir, tx.TxId);
+                    }
+                    catch
+                    {
+                        // Both commits succeeded. Cleanup failure is recoverable
+                        // garbage, not a reason to undo the durable record.
+                    }
                 }
                 catch (MarketInstallCrashException)
                 {
                     // 模拟进程被杀：不做回滚，保留写前日志，交给启动恢复
                     throw;
                 }
-                catch
+                catch (Exception ex)
                 {
                     // ④ 回滚：原文件原样保留、原记录原样保留、暂存文件清理
                     Rollback(
                         pluginsDir, tx,
-                        movedToTarget, recordTouched, oldRecord,
+                        movedToTarget,
+                        recordAttempted && (recordPersisted || ex is not MarketRecordPersistenceException),
+                        oldRecord,
                         upsertRecord, removeRecord);
                     throw;
                 }
@@ -1023,6 +1061,16 @@ namespace LiteMonitor.src.Plugins
             string pluginsDir,
             Func<string, MarketPluginRecord?> findRecord)
         {
+            BeforeRecoveryGateForTests?.Invoke();
+            // Lock order: this transaction gate, then SettingsHelper's save gate.
+            lock (_commitLock)
+                return RecoverInterruptedInstallsLocked(pluginsDir, findRecord);
+        }
+
+        private static int RecoverInterruptedInstallsLocked(
+            string pluginsDir,
+            Func<string, MarketPluginRecord?> findRecord)
+        {
             string logPath = LogPath(pluginsDir);
             if (!File.Exists(logPath)) return 0;
 
@@ -1033,8 +1081,7 @@ namespace LiteMonitor.src.Plugins
             }
             catch
             {
-                // 读不到（被占用等）：按原行为当作没有在途事务
-                SafeDelete(logPath);
+                // Keep an unreadable journal pending; a sharing failure proves no commit state.
                 return 0;
             }
 
@@ -1094,99 +1141,139 @@ namespace LiteMonitor.src.Plugins
             MarketInstallTransaction tx,
             Func<string, MarketPluginRecord?> findRecord)
         {
-            string targetPath = paths.TargetPath;
-            string stagePath = paths.StagePath;
-            string backupPath = paths.BackupPath;
-
-            bool stageExists = File.Exists(stagePath);
-            bool targetHasNewContent = File.Exists(targetPath)
-                                       && ShaEquals(FileSha(targetPath), tx.Sha256);
-
-            if (stageExists || !targetHasNewContent)
-            {
-                // 暂存文件还在 ⇒ 原子替换从未发生（File.Move 会消费掉暂存文件）；
-                // 目标文件也不是新内容 ⇒ 同样是"没替换成功"。
-                // 两种情况下目标文件都是旧内容（完好），只需清理暂存/备份。
-                SafeDelete(stagePath);
-                SafeDelete(backupPath);
-                return;
-            }
-
-            // 目标已经是新内容：替换成功过。这时要看记录有没有跟上。
+            // Read authority first, even with stage present or a non-new target.
+            // The production reader never substitutes the live Settings singleton.
             MarketPluginRecord? record = findRecord(tx.PluginId);
-            bool recordUpdated = record != null && ShaEquals(record.Sha256, tx.Sha256);
+            if (record != null &&
+                (!string.Equals(record.Id, tx.PluginId, StringComparison.OrdinalIgnoreCase) ||
+                 !PluginMarket.IsUsableSha256(record.Sha256)))
+                throw new IOException("The persisted market record is invalid.");
 
-            if (recordUpdated)
+            if (record != null && ShaEquals(record.Sha256, tx.Sha256))
             {
-                // 记录也已更新 ⇒ 这次安装实际是成功的，只剩清理
-                SafeDelete(backupPath);
-                return;
+                RequireContent(paths.TargetPath, tx.Sha256);
             }
-
-            // 记录没跟上 ⇒ 回滚：恢复旧内容；首次安装则删掉这次落下的文件
-            if (File.Exists(backupPath))
+            else if (tx.RecoveryVersion == 1)
             {
-                File.Move(backupPath, targetPath, overwrite: true);
+                bool previousRecordConfirmed = tx.PreviousRecordSha256 == null
+                    ? record == null
+                    : record != null && ShaEquals(record.Sha256, tx.PreviousRecordSha256);
+                if (!previousRecordConfirmed)
+                    throw new IOException("The persisted record matches neither transaction state.");
+                RestorePreviousFiles(paths, tx);
             }
             else
             {
-                SafeDelete(targetPath);
+                ReconcileLegacyFiles(paths, tx, record);
+            }
+
+            // Garbage is removable only after payload and authority agree.
+            DeleteFile(paths.StagePath);
+            DeleteFile(paths.BackupPath);
+        }
+
+        private static void RestorePreviousFiles(TransactionPaths paths, MarketInstallTransaction tx)
+        {
+            if (tx.HadTarget)
+            {
+                if (!HasContent(paths.TargetPath, tx.PreviousFileSha256))
+                {
+                    RequireContent(paths.BackupPath, tx.PreviousFileSha256);
+                    File.Move(paths.BackupPath, paths.TargetPath, overwrite: true);
+                }
+                RequireContent(paths.TargetPath, tx.PreviousFileSha256);
+            }
+            else
+            {
+                if (File.Exists(paths.TargetPath))
+                {
+                    RequireContent(paths.TargetPath, tx.Sha256);
+                    DeleteFile(paths.TargetPath);
+                }
+                if (File.Exists(paths.TargetPath) || Directory.Exists(paths.TargetPath))
+                    throw new IOException("The new plugin payload was not removed.");
             }
         }
 
-        /// <summary>
-        /// 回滚：恢复原文件与原记录，清理暂存文件。
-        ///
-        /// ★ R04：作用路径同样按【插件 id + 事务 id】重建并做目录边界校验，
-        ///   校验不过就一个字节都不动。正常路径下 tx 由本类自己构造（插件 id 合法、事务 id 自产），
-        ///   重建值与实际路径必然一致 ⇒ 回滚行为不变。
-        /// </summary>
+        private static void ReconcileLegacyFiles(
+            TransactionPaths paths, MarketInstallTransaction tx, MarketPluginRecord? record)
+        {
+            if (record != null)
+            {
+                if (!HasContent(paths.TargetPath, record.Sha256))
+                {
+                    RequireContent(paths.BackupPath, record.Sha256);
+                    File.Move(paths.BackupPath, paths.TargetPath, overwrite: true);
+                }
+                RequireContent(paths.TargetPath, record.Sha256);
+            }
+            else if (File.Exists(paths.StagePath))
+            {
+                // A legacy stage still exists: the target was never replaced.
+                // Preserve an unmanaged old target, even if its hash happens to
+                // equal the proposed payload's hash.
+                return;
+            }
+            else if (File.Exists(paths.BackupPath))
+            {
+                // Legacy journals have no old hash. Only their reconstructed,
+                // validated backup path can supply the previous payload.
+                File.Move(paths.BackupPath, paths.TargetPath, overwrite: true);
+            }
+            else if (HasContent(paths.TargetPath, tx.Sha256))
+            {
+                DeleteFile(paths.TargetPath);
+            }
+            else if (File.Exists(paths.TargetPath) && !File.Exists(paths.StagePath))
+            {
+                throw new IOException("A legacy transaction cannot confirm the previous payload.");
+            }
+        }
+
+        private static bool HasContent(string path, string sha256)
+            => File.Exists(path) && ShaEquals(ComputeFileSha(path), sha256);
+
+        private static void RequireContent(string path, string sha256)
+        {
+            if (!HasContent(path, sha256))
+                throw new IOException("The plugin payload does not match the required transaction state.");
+        }
+
         private static void Rollback(
             string pluginsDir,
             MarketInstallTransaction tx,
             bool movedToTarget,
-            bool recordTouched,
+            bool compensateRecord,
             MarketPluginRecord? oldRecord,
             Action<MarketPluginRecord> upsertRecord,
             Action<string> removeRecord)
         {
             try
             {
-                if (!TryBuildTransactionPaths(pluginsDir, tx, out TransactionPaths paths, out _))
-                    return;   // 路径不可信 ⇒ 不执行任何文件操作
+                if (!TryResolveTransactionPaths(pluginsDir, tx, out TransactionPaths paths, out _))
+                    return;
 
-                string targetPath = paths.TargetPath;
-                string stagePath = paths.StagePath;
-                string backupPath = paths.BackupPath;
-
-                if (movedToTarget)
-                {
-                    if (File.Exists(backupPath))
-                    {
-                        // 原子恢复旧内容
-                        File.Move(backupPath, targetPath, overwrite: true);
-                    }
-                    else
-                    {
-                        // 首次安装：把刚写进去的文件撤掉
-                        SafeDelete(targetPath);
-                    }
-                }
-
-                SafeDelete(stagePath);
-                SafeDelete(backupPath);
-
-                if (recordTouched)
+                // Strict initial-write failure already restored memory. Every other
+                // attempted callback, including mutate-then-throw, needs compensation
+                // BEFORE a backup is consumed or a newly installed file is deleted.
+                if (compensateRecord)
                 {
                     if (oldRecord != null) upsertRecord(oldRecord);
                     else removeRecord(tx.PluginId);
                 }
 
+                if (movedToTarget) RestorePreviousFiles(paths, tx);
+                else if (tx.HadTarget) RequireContent(paths.TargetPath, tx.PreviousFileSha256);
+
+                DeleteFile(paths.StagePath);
+                DeleteFile(paths.BackupPath);
                 RemovePending(pluginsDir, tx.TxId);
             }
             catch
             {
-                // 回滚本身失败不能掩盖原始异常；写前日志仍在，下次启动会再对账
+                // Keep new payload, journal and backup if record compensation failed;
+                // keep remaining materials if file restoration failed. Disk authority
+                // and the validated hashes determine the next recovery direction.
             }
         }
 
@@ -1234,6 +1321,21 @@ namespace LiteMonitor.src.Plugins
             if (!PluginMarket.IsUsableSha256(tx.Sha256))
             {
                 reason = "事务摘要缺失或格式非法";
+                return false;
+            }
+
+            // Extended journal data is untrusted, including unknown versions,
+            // null hashes, and contradictory previous-file metadata.
+            if (tx.RecoveryVersion is not (0 or 1) ||
+                (tx.RecoveryVersion == 0 && (tx.HadTarget ||
+                    tx.PreviousFileSha256 != "" || tx.PreviousRecordSha256 != null)) ||
+                (tx.RecoveryVersion == 1 &&
+                    ((tx.HadTarget ? !PluginMarket.IsUsableSha256(tx.PreviousFileSha256)
+                                   : tx.PreviousFileSha256 != "") ||
+                     (tx.PreviousRecordSha256 != null &&
+                      !PluginMarket.IsUsableSha256(tx.PreviousRecordSha256)))))
+            {
+                reason = "Invalid recovery version or previous-state hashes";
                 return false;
             }
 
@@ -1387,7 +1489,7 @@ namespace LiteMonitor.src.Plugins
             try
             {
                 var parsed = JsonSerializer.Deserialize<MarketInstallTxnLog>(rawText, _jsonOpts);
-                if (parsed?.Pending == null) return false;
+                if (parsed?.Pending == null || parsed.Version != 1) return false;
                 log = parsed;
                 return true;
             }
@@ -1454,22 +1556,29 @@ namespace LiteMonitor.src.Plugins
         private static string LogPath(string pluginsDir)
             => Path.Combine(pluginsDir, TransactionLogFileName);
 
+        // Both installation and uninstallation must respect a pending transaction's
+        // ownership. A failed read is not evidence that no transaction exists.
+        internal static void EnsureNoPendingInstall(string pluginsDir, string pluginId)
+        {
+            lock (_commitLock)
+            {
+                if (ReadLog(pluginsDir).Pending.Any(pending => pending == null ||
+                    !PluginMarket.TryValidatePluginId(pending.PluginId, out _) ||
+                    string.Equals(pending.PluginId, pluginId, StringComparison.OrdinalIgnoreCase)))
+                    throw new IOException("An earlier installation of this plugin still requires recovery.");
+            }
+        }
+
         private static MarketInstallTxnLog ReadLog(string pluginsDir)
         {
             string path = LogPath(pluginsDir);
-            if (!File.Exists(path)) return new MarketInstallTxnLog();
-
-            try
-            {
-                return TryParseLogText(File.ReadAllText(path), out MarketInstallTxnLog log)
-                    ? log
-                    : new MarketInstallTxnLog();
-            }
-            catch
-            {
-                // 日志损坏：当作没有在途事务，但保留文件让人工排查
-                return new MarketInstallTxnLog();
-            }
+            string raw;
+            try { raw = File.ReadAllText(path); }
+            catch (FileNotFoundException) { return new MarketInstallTxnLog(); }
+            catch (DirectoryNotFoundException) { return new MarketInstallTxnLog(); }
+            if (!TryParseLogText(raw, out MarketInstallTxnLog log))
+                throw new IOException("The pending market journal cannot be read safely.");
+            return log;
         }
 
         private static void WriteLog(string pluginsDir, MarketInstallTxnLog log)
@@ -1497,15 +1606,9 @@ namespace LiteMonitor.src.Plugins
             log.Pending.RemoveAll(t => string.Equals(t.TxId, txId, StringComparison.OrdinalIgnoreCase));
 
             // 没有在途事务了 ⇒ 日志文件直接删掉，不留空壳
-            if (log.Pending.Count == 0) { SafeDelete(LogPath(pluginsDir)); return; }
+            if (log.Pending.Count == 0) { DeleteFile(LogPath(pluginsDir)); return; }
 
             WriteLog(pluginsDir, log);
-        }
-
-        private static string FileSha(string path)
-        {
-            try { return ComputeFileSha(path); }
-            catch { return ""; }
         }
 
         private static string ComputeFileSha(string path)
@@ -1521,6 +1624,13 @@ namespace LiteMonitor.src.Plugins
         {
             try { if (File.Exists(path)) File.Delete(path); }
             catch { }
+        }
+
+        private static void DeleteFile(string path)
+        {
+            // File.Delete accepts absence but reports sharing/access failures.
+            // Never acknowledge required payload deletion through SafeDelete.
+            File.Delete(path);
         }
     }
 }

@@ -34,3 +34,16 @@
 程序运行需要对应的 .NET Desktop Runtime，启动时可能请求管理员权限。
 
 启动脚本不执行 DPI 验收。需要实机验收时，使用现有的 `scripts/run-livecheck.ps1`。
+
+## 启动当前源码（绕开被占用的 bin\Release）
+
+`bin\Release` 被正在运行的旧实例锁定、或想确保跑的是**当前源码**时，用：
+
+```powershell
+pwsh -File scripts/start-current.ps1                # 构建当前源码 → bin\run\Release 并启动
+pwsh -File scripts/start-current.ps1 -ImportSettings # 首次可把 bin\Release 的旧配置带过来
+pwsh -File scripts/start-current.ps1 -Restart        # 结束同目录旧实例后再启动
+pwsh -File scripts/start-current.ps1 -NoBuild        # 直接启动已有构建
+```
+
+构建输出重定向到 `bin\run\{配置}\`，与被锁的 `bin\Release` 互不影响；settings.json 按运行目录隔离（首次为全新默认配置）。不同目录的实例可以并存；同目录重复启动会立刻退出（用 `-Restart`）。提权中的旧实例从普通 shell 停不掉，请从托盘退出。

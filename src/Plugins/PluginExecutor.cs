@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -46,6 +46,36 @@ namespace LiteMonitor.src.Plugins
         }
 
         private readonly ConcurrentDictionary<string, CacheItem> _stepCache = new();
+        private readonly AsyncLocal<PluginPublicationLease> _publication = new();
+        private readonly object _standalonePublicationGate = new();
+
+        // Test barriers run before the gate. Identity validation and writes stay together.
+        internal Func<string, string, Task> BeforePublicationAsync { get; set; }
+
+        private Task PreparePublicationAsync(string instanceId, string kind)
+            => BeforePublicationAsync?.Invoke(instanceId, kind) ?? Task.CompletedTask;
+
+        private bool CommitPublication(Action commit)
+        {
+            var lease = _publication.Value;
+            if (lease != null) return lease.TryCommit(commit);
+            lock (_standalonePublicationGate) { commit(); return true; }
+        }
+
+
+        private IDisposable EnterStandalonePublication(CancellationToken token)
+        {
+            if (_publication.Value != null) return null;
+            _publication.Value = new PluginPublicationLease(_standalonePublicationGate, token);
+            return new PublicationContext(_publication);
+        }
+
+        private sealed class PublicationContext : IDisposable
+        {
+            private readonly AsyncLocal<PluginPublicationLease> _context;
+            internal PublicationContext(AsyncLocal<PluginPublicationLease> context) => _context = context;
+            public void Dispose() => _context.Value = null;
+        }
 
         public event Action OnSchemaChanged;
 
@@ -202,8 +232,18 @@ namespace LiteMonitor.src.Plugins
         /// <see cref="PluginSandboxScope.BeginTarget"/>）。</para>
         /// </summary>
         public async Task<bool> ExecuteInstanceAsync(PluginInstanceConfig inst, PluginTemplate tmpl, System.Threading.CancellationToken token = default)
+            => await ExecuteLeasedAsync(inst, tmpl, token,
+                new PluginPublicationLease(_standalonePublicationGate, token)).ConfigureAwait(false);
+
+        internal async Task<bool> ExecuteLeasedAsync(PluginInstanceConfig inst, PluginTemplate tmpl,
+            CancellationToken token, PluginPublicationLease lease)
         {
             if (inst == null || tmpl == null) return false;
+            var previous = _publication.Value;
+            _publication.Value = lease;
+            try
+            {
+            if (!lease.IsCurrent) return false;
 
             // [LM-009] 实例级沙箱作用域：步骤数 / 目标展开数 / 单次执行总时长 / 并发槽位都收在这里。
             // [LM-044] 经 CreateScope 创建 ⇒ 生产入口实际使用的上限可被回归测试直接观测。
@@ -213,6 +253,8 @@ namespace LiteMonitor.src.Plugins
             var declaredHosts = PluginProcessor.GetDeclaredHosts(tmpl);
 
             return await ExecuteInstanceWithScopeAsync(inst, tmpl, token, scope, declaredHosts).ConfigureAwait(false);
+            }
+            finally { _publication.Value = previous; }
         }
 
         /// <summary>
@@ -221,6 +263,7 @@ namespace LiteMonitor.src.Plugins
         /// </summary>
         private async Task<bool> ExecuteInstanceWithScopeAsync(PluginInstanceConfig inst, PluginTemplate tmpl, System.Threading.CancellationToken token, PluginSandboxScope scope, HashSet<string> declaredHosts)
         {
+            using var publication = EnterStandalonePublication(token);
             var targets = inst.Targets != null && inst.Targets.Count > 0 ? inst.Targets : new List<Dictionary<string, string>> { new Dictionary<string, string>() };
 
             // [LM-009] 目标展开数上限：在发起任何请求之前判定，超限即明确失败（原因码 LM009_TARGET_LIMIT）。
@@ -342,14 +385,17 @@ namespace LiteMonitor.src.Plugins
                     
                     if (tmpl.Outputs != null)
                     {
-                        ProcessOutputs(inst, tmpl, inputs, keySuffix);
+                        Action publish = PrepareOutputs(inst, tmpl, inputs, keySuffix);
+                        await PreparePublicationAsync(inst.Id, "outputs").ConfigureAwait(false);
+                        CommitPublication(publish);
                     }
                 }
                 else
                 {
                      // api_text
                      string injectKey = inst.Id + keySuffix;
-                     InfoService.Instance.InjectValue(injectKey, resultRaw);
+                     await PreparePublicationAsync(inst.Id, "api_text").ConfigureAwait(false);
+                     CommitPublication(() => InfoService.Instance.InjectValue(injectKey, resultRaw));
                 }
                 return true;
             }
@@ -358,12 +404,12 @@ namespace LiteMonitor.src.Plugins
                 if (token.IsCancellationRequested) return false;
                 
                 // If token is NOT cancelled, it's a timeout. Treat as error to trigger reset logic.
-                HandleExecutionError(inst, tmpl, inputs, keySuffix, opEx);
+                await PublishExecutionErrorAsync(inst, tmpl, inputs, keySuffix, opEx).ConfigureAwait(false);
                 return false;
             }
             catch (Exception ex)
             {
-                 HandleExecutionError(inst, tmpl, inputs, keySuffix, ex);
+                 await PublishExecutionErrorAsync(inst, tmpl, inputs, keySuffix, ex).ConfigureAwait(false);
 
                  // [LM-009] 沙箱失败必须**可判定地传播**：原因码不得被宽泛 catch 吞掉后
                  // 变成"看不出原因的普通失败"。失败语义不变（仍是失败，界面照旧显示错误状态），
@@ -404,6 +450,7 @@ namespace LiteMonitor.src.Plugins
         /// </summary>
         private async Task ExecuteStepWithScopeAsync(PluginInstanceConfig inst, PluginExecutionStep step, Dictionary<string, string> context, string keySuffix, System.Threading.CancellationToken token, PluginSandboxScope scope, HashSet<string> declaredHosts)
         {
+            using var publication = EnterStandalonePublication(token);
             try {
                 // 0. Check Skip Condition
                 if (!string.IsNullOrEmpty(step.SkipIfSet))
@@ -439,6 +486,17 @@ namespace LiteMonitor.src.Plugins
                 // 1. 先解析 Header 中的占位符 (例如 Authorization: Bearer {{token}})
                 var resolvedHeaders = ResolveHeaders(step.Headers, context);
 
+                // Validate this caller's raw targets before cache lookup or in-flight reuse.
+                PluginHostPolicy.ValidateRequestUrl(url);
+                if (url.StartsWith("native://", StringComparison.OrdinalIgnoreCase))
+                {
+                    var nativeAllowed = GetNativeAllowedHosts(step.Url, declaredHosts);
+                    foreach (var target in ParseNativeArgs(new Uri(url)).Values)
+                        if (IsAbsoluteHttpUrl(target)) EnsureNativeTargetAllowed(target, resolvedHeaders, nativeAllowed, declaredHosts);
+                }
+                else if (declaredHosts != null)
+                    PluginSandbox.EnsureCredentialTargetAllowed(url, resolvedHeaders, declaredHosts);
+
                 // [C1] 请求身份：实例ID / 目标索引 / 步骤ID 沿用现行键里的三个维度，
                 // 摘要则覆盖**全部影响响应**的字段（方法 / 规范化URL / 请求体 /
                 // 全部步骤级Header / 代理 / 响应编码）。
@@ -455,18 +513,19 @@ namespace LiteMonitor.src.Plugins
 
                 if (step.CacheMinutes > 0)
                 {
-                    if (_stepCache.TryGetValue(cacheKey, out var cached))
+                    await PreparePublicationAsync(inst.Id, "cache-read").ConfigureAwait(false);
+                    if (!CommitPublication(() =>
                     {
-                        if (DateTime.Now - cached.Timestamp < TimeSpan.FromMinutes(step.CacheMinutes))
+                        if (_stepCache.TryGetValue(cacheKey, out var cached))
                         {
-                            resultRaw = cached.RawResponse;
-                            hit = true;
+                            if (DateTime.Now - cached.Timestamp < TimeSpan.FromMinutes(step.CacheMinutes))
+                            {
+                                resultRaw = cached.RawResponse;
+                                hit = true;
+                            }
+                            else _stepCache.TryRemove(cacheKey, out _);
                         }
-                        else
-                        {
-                            _stepCache.TryRemove(cacheKey, out _); 
-                        }
-                    }
+                    })) return;
                 }
 
                 if (!hit)
@@ -508,6 +567,8 @@ namespace LiteMonitor.src.Plugins
 
                         var task = GetOrStartInflight(inflightKey, () =>
                             FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, System.Threading.CancellationToken.None, proxy, scope, declaredHosts, scopeCancelsRequest: false));
+
+                        await PreparePublicationAsync(inst.Id, "inflight-wait").ConfigureAwait(false);
 
                         // 等待者取消只释放自己：不触碰在途条目、不取消共享任务。
                         // 条目的移除由共享任务终结时的延续驱动（见 ReleaseInflight），
@@ -563,34 +624,19 @@ namespace LiteMonitor.src.Plugins
 
                 // [Fix] Update Cache AFTER successful parsing and processing
                 // This ensures we don't cache invalid data (e.g. HTML error pages that passed HTTP check but failed JSON parse)
-                if (!hit && step.CacheMinutes != 0)
+                if (!hit && step.CacheMinutes != 0 && (resultRaw == null || resultRaw.Length <= 500 * 1024))
                 {
-                    // [Optimization] Prevent large blobs from polluting cache (limit 500KB)
-                    if (resultRaw != null && resultRaw.Length > 500 * 1024)
+                    var candidate = new CacheItem { RawResponse = resultRaw, Timestamp = DateTime.Now };
+                    await PreparePublicationAsync(inst.Id, "cache-write").ConfigureAwait(false);
+                    CommitPublication(() =>
                     {
-                        System.Diagnostics.Debug.WriteLine($"Plugin response too large to cache ({resultRaw.Length} bytes). Key: {cacheKey}");
-                    }
-                    else
-                    {
-                        // [Optimization] Prevent unbounded growth with timestamp-based eviction
                         if (_stepCache.Count > 100)
                         {
-                            // Evict oldest items first
-                            var keysToRemove = _stepCache
-                                .OrderBy(kv => kv.Value.Timestamp)
-                                .Take(20)
-                                .Select(kv => kv.Key)
-                                .ToList();
-                                
-                            foreach(var k in keysToRemove) _stepCache.TryRemove(k, out _);
+                            foreach (var key in _stepCache.OrderBy(kv => kv.Value.Timestamp).Take(20).Select(kv => kv.Key).ToList())
+                                _stepCache.TryRemove(key, out _);
                         }
-
-                        _stepCache[cacheKey] = new CacheItem
-                        {
-                            RawResponse = resultRaw,
-                            Timestamp = DateTime.Now
-                        };
-                    }
+                        _stepCache[cacheKey] = candidate;
+                    });
                 }
             }
             catch (OperationCanceledException) when (scope != null && scope.Token.IsCancellationRequested && !token.IsCancellationRequested)
@@ -700,7 +746,8 @@ namespace LiteMonitor.src.Plugins
             {
                 string s = args.TryGetValue("symbol", out var sv) ? sv : "BTC";
                 string fb = args.TryGetValue("fallback", out var fv) ? fv : "";
-                return await CryptoNative.FetchAsync(s, fb, nativeToken, maxResponseBytes, allowedHosts, inflightScopeKey).ConfigureAwait(false);
+                return await CryptoNative.FetchLeasedAsync(s, fb, nativeToken, maxResponseBytes, allowedHosts,
+                    inflightScopeKey, _publication.Value).ConfigureAwait(false);
             }
 
             throw new Exception($"Unknown native host: {uri.Host}");
@@ -766,60 +813,11 @@ namespace LiteMonitor.src.Plugins
 
         /// <summary>[LM-039] 取出模板里内嵌的绝对 URL（<c>http://</c> / <c>https://</c> 开头）。</summary>
         private static IEnumerable<string> ExtractEmbeddedUrls(string urlTemplate)
-        {
-            if (string.IsNullOrWhiteSpace(urlTemplate)) yield break;
+            => PluginHostPolicy.EmbeddedHttpUrls(urlTemplate);
 
-            string s = urlTemplate;
-            int index = 0;
-            while (index < s.Length)
-            {
-                int pos = s.IndexOf("http://", index, StringComparison.OrdinalIgnoreCase);
-                int pos2 = s.IndexOf("https://", index, StringComparison.OrdinalIgnoreCase);
-                if (pos < 0) pos = pos2;
-                else if (pos2 >= 0 && pos2 < pos) pos = pos2;
-                if (pos < 0) yield break;
-
-                int end = s.IndexOfAny(new[] { ' ', '\t', '\r', '\n', '"', '\'', '<', '>' }, pos);
-                if (end < 0) end = s.Length;
-                yield return s.Substring(pos, end - pos);
-                index = pos + 1;
-            }
-        }
-
-        /// <summary>
-        /// [LM-039] 取 URL 的**字面量**主机（口径同 <c>PluginProcessor.AddDeclaredHost</c>）：
-        /// 主机来自模板变量（<c>{{...}}</c>）时<b>不</b>构成声明。
-        /// </summary>
         private static bool TryExtractLiteralHost(string url, out string host)
-        {
-            host = "";
-            if (string.IsNullOrWhiteSpace(url)) return false;
+            => PluginHostPolicy.TryGetDeclaredHost(url, out host);
 
-            string trimmed = url.Trim();
-            int schemeEnd = trimmed.IndexOf("://", StringComparison.Ordinal);
-            if (schemeEnd < 0) return false;
-
-            string rest = trimmed.Substring(schemeEnd + 3);
-            int cut = rest.IndexOfAny(new[] { '/', '?', '#', '&' });
-            string authority = cut >= 0 ? rest.Substring(0, cut) : rest;
-
-            // 主机来自模板 → 不是插件的显式声明
-            if (authority.Contains("{{")) return false;
-
-            int at = authority.LastIndexOf('@');
-            if (at >= 0) authority = authority.Substring(at + 1);
-
-            int colon = authority.IndexOf(':');
-            if (colon >= 0) authority = authority.Substring(0, colon);
-
-            authority = authority.Trim();
-            if (authority.Length == 0) return false;
-
-            host = authority;
-            return true;
-        }
-
-        /// <summary>[LM-039] 判断字符串是否是绝对 http(s) 地址（native 的用户可控目标）。</summary>
         private static bool IsAbsoluteHttpUrl(string value)
         {
             if (string.IsNullOrWhiteSpace(value)) return false;
@@ -835,15 +833,7 @@ namespace LiteMonitor.src.Plugins
         private static void EnsureNativeTargetAllowed(string targetUrl, Dictionary<string, string> headers,
             HashSet<string> allowedHosts, HashSet<string> declaredHosts)
         {
-            if (!Uri.TryCreate((targetUrl ?? "").Trim(), UriKind.Absolute, out var uri) ||
-                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-            {
-                throw new PluginSandboxException(
-                    PluginSandboxReasons.CredentialTargetNotAllowed,
-                    "原生步骤的目标地址非法，请求未发出");
-            }
-
-            string host = uri.Host;
+            string host = PluginHostPolicy.RequireHttpHost(targetUrl);
             if (string.IsNullOrEmpty(host) || !HostInAllowedSet(host, allowedHosts))
             {
                 throw new PluginSandboxException(
@@ -860,50 +850,8 @@ namespace LiteMonitor.src.Plugins
 
         /// <summary>主机是否在允许集合内（忽略端口、大小写不敏感）。</summary>
         private static bool HostInAllowedSet(string host, IEnumerable<string> allowedHosts)
-        {
-            if (allowedHosts == null) return false;
+            => PluginHostPolicy.HostInSet(host, allowedHosts);
 
-            string h = StripPort(host ?? "");
-            foreach (var allowed in allowedHosts)
-            {
-                if (string.IsNullOrWhiteSpace(allowed)) continue;
-                if (string.Equals(StripPort(allowed.Trim()), h, StringComparison.OrdinalIgnoreCase)) return true;
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// 去掉主机里的端口。
-        /// <para>[LM-079] **IPv6 字面量（带方括号）整体就是主机名**："[fd00::1]" / "[fd00::2]"
-        /// 只能**整体**带端口（"[fd00::1]:8080"），**不得**按最后一个冒号截断 ——
-        /// 否则两个不同的 IPv6 地址会被截成同一个 "[fd00:" ⇒ **地址碰撞**
-        /// （fail-open：声明了 [fd00::1] 却能把请求/凭据发往 [fd00::2]）。</para>
-        /// <para>非方括号形式：只有**单个**冒号才是 "host:port"；多个冒号是**裸 IPv6 字面量**，
-        /// 整体就是主机名（不得截出垃圾串）。</para>
-        /// </summary>
-        private static string StripPort(string value)
-        {
-            // 与原实现一致：null 会抛 NullReferenceException（调用方均已先行判空）。
-            if (value.Length == 0) return value;
-
-            // IPv6 字面量（带方括号）：方括号内整体是主机名，只可能整体带端口。
-            if (value[0] == '[')
-            {
-                int close = value.IndexOf(']');
-                if (close > 0) return value.Substring(0, close + 1);
-                return value;
-            }
-
-            // 非方括号形式：单个冒号才是 "host:port"；多个冒号 ⇒ 裸 IPv6 字面量，整体是主机名。
-            int colon = value.IndexOf(':');
-            if (colon > 0 && colon == value.LastIndexOf(':') && colon < value.Length - 1)
-            {
-                return value.Substring(0, colon);
-            }
-            return value;
-        }
-
-        /// <summary>响应体读取上限（字节）默认值。超出即明确失败，防止异常插件把内存打爆。</summary>
         private const int DefaultMaxResponseBytes = 8 * 1024 * 1024;
 
         /// <summary>
@@ -932,6 +880,7 @@ namespace LiteMonitor.src.Plugins
         /// 共享在途请求必须传 false（C1 契约：取消一个等待者不得取消共享任务）。</param>
         private async Task<string> FetchRawAsync(string methodStr, string url, string body, Dictionary<string, string> headers, string encoding, System.Threading.CancellationToken token, string proxy = null, PluginSandboxScope scope = null, HashSet<string> allowedHosts = null, bool scopeCancelsRequest = true)
         {
+            PluginHostPolicy.RequireHttpHost(url);
             // 方法解析：**只支持 GET / POST / HEAD**，其余一律回落 GET（既有行为，逐字不变）。
             // ★ LM-081 的判据对齐**不**扩大插件可发的方法面：第三方插件仍只能发
             //   GET / POST / HEAD（插件市场里的插件是第三方代码，扩大方法面属于需要
@@ -1047,6 +996,7 @@ namespace LiteMonitor.src.Plugins
                         }
 
                         // 相对 Location ⇒ 以当前 URI 解析；绝对 Location 直接采用。
+                        PluginHostPolicy.ValidateRedirectLocation(location, current);
                         Uri next;
                         if (location.IsAbsoluteUri) next = location;
                         else if (current != null) next = new Uri(current, location);
@@ -1188,7 +1138,7 @@ namespace LiteMonitor.src.Plugins
             {
                 if (Uri.TryCreate((directUrl ?? "").Trim(), UriKind.Absolute, out var direct) && !string.IsNullOrEmpty(direct.Host))
                 {
-                    hosts.Add(direct.Host);
+                    hosts.Add(PluginHostPolicy.RequireHttpHost(directUrl));
                 }
             }
 
@@ -1209,15 +1159,15 @@ namespace LiteMonitor.src.Plugins
         private static void EnsureHopTargetAllowed(Uri target, HashSet<string> declaredHosts, HashSet<string> hopAllowedHosts,
             Dictionary<string, string> headers, bool hasCredential)
         {
-            if (declaredHosts == null || target == null) return;
-
-            string host = target.Host;
+            if (target == null) return;
+            string host = PluginHostPolicy.RequireHttpHost(target.OriginalString, PluginSandboxReasons.RedirectTargetNotAllowed);
+            if (declaredHosts == null) return;
             if (string.IsNullOrEmpty(host)) return;
 
             if (hasCredential)
             {
                 // 带凭据：与首跳同一原语、同一口径 —— 每一跳都必须在声明主机集合内。
-                PluginSandbox.EnsureCredentialTargetAllowed(target.AbsoluteUri, headers, declaredHosts);
+                PluginSandbox.EnsureCredentialTargetAllowed(target.OriginalString, headers, declaredHosts);
                 return;
             }
 
@@ -1351,176 +1301,78 @@ namespace LiteMonitor.src.Plugins
             }
         }
 
-        private void ProcessOutputs(PluginInstanceConfig inst, PluginTemplate tmpl, Dictionary<string, string> inputs, string keySuffix)
+        private Action PrepareOutputs(PluginInstanceConfig inst, PluginTemplate tmpl,
+            Dictionary<string, string> inputs, string keySuffix)
         {
-            // [Optimization] Use Unified KeyCache from PluginInstanceConfig
-            // Cache Key format: "{keySuffix}.{outputKey}" (e.g. ".0.main" or ".main")
-            
+            var values = new List<KeyValuePair<string, string>>();
+            var keys = new List<KeyValuePair<string, PluginOutputKeys>>();
             foreach (var output in tmpl.Outputs)
             {
-                string cacheKey = keySuffix + "." + output.Key;
-                
-                var keys = inst.KeyCache.GetOrAdd(cacheKey, _ => 
+                string raw = inst.Id + keySuffix + "." + output.Key;
+                string item = PluginConstants.DASH_PREFIX + raw;
+                var prepared = new PluginOutputKeys
                 {
-                    var k = new PluginOutputKeys();
-                    
-                    // 1. InjectKey: "Id.0.Key"
-                    string rawInjectKey = inst.Id + keySuffix + "." + output.Key;
-                    k.InjectKey = UIUtils.Intern(rawInjectKey);
-
-                    // 2. Attribute Keys
-                    k.InjectColorKey = UIUtils.Intern(rawInjectKey + ".Color");
-                    k.InjectUnitKey = UIUtils.Intern(rawInjectKey + ".Unit");
-
-                    // 3. Prop Keys (DASH prefix)
-                    string itemKey = PluginConstants.DASH_PREFIX + rawInjectKey;
-                    k.PropLabelKey = UIUtils.Intern("PROP.Label." + itemKey);
-                    k.PropShortKey = UIUtils.Intern("PROP.ShortLabel." + itemKey);
-                    
-                    return k;
-                });
-
-                // 1. Value Injection
-                string val = PluginProcessor.ResolveTemplate(output.Format, inputs);
-                if (string.IsNullOrEmpty(val)) val = PluginConstants.STATUS_EMPTY;
-                
-                // [Optimization] Check existing value to avoid string churn
-                string currentVal = InfoService.Instance.GetValue(keys.InjectKey);
-                if (val != currentVal)
-                {
-                    InfoService.Instance.InjectValue(keys.InjectKey, val);
-                }
-
-                // 2. Color Injection
+                    InjectKey = raw, InjectColorKey = raw + ".Color", InjectUnitKey = raw + ".Unit",
+                    PropLabelKey = "PROP.Label." + item, PropShortKey = "PROP.ShortLabel." + item
+                };
+                keys.Add(new KeyValuePair<string, PluginOutputKeys>(keySuffix + "." + output.Key, prepared));
+                string value = PluginProcessor.ResolveTemplate(output.Format, inputs);
+                values.Add(new(prepared.InjectKey, string.IsNullOrEmpty(value) ? PluginConstants.STATUS_EMPTY : value));
                 if (!string.IsNullOrEmpty(output.Color))
-                {
-                    string colorState = PluginProcessor.ResolveTemplate(output.Color, inputs);
-                    string currentColor = InfoService.Instance.GetValue(keys.InjectColorKey);
-                    
-                    if (colorState != currentColor)
-                    {
-                        InfoService.Instance.InjectValue(keys.InjectColorKey, colorState);
-                    }
-                }
-
-                // 3. Unit Injection
+                    values.Add(new(prepared.InjectColorKey, PluginProcessor.ResolveTemplate(output.Color, inputs)));
                 if (!string.IsNullOrEmpty(output.Unit))
-                {
-                    string resolvedUnit = PluginProcessor.ResolveTemplate(output.Unit, inputs);
-                    string currentUnit = InfoService.Instance.GetValue(keys.InjectUnitKey);
-
-                    if (resolvedUnit != currentUnit)
-                    {
-                        InfoService.Instance.InjectValue(keys.InjectUnitKey, resolvedUnit);
-                    }
-                }
-
-                // 4. Dynamic Label Logic
-                string labelPattern = !string.IsNullOrEmpty(output.Label) ? PluginI18n.Pick(output.Label, output.LabelEn) : (PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key);
-                
-                string newName = PluginProcessor.ResolveTemplate(labelPattern, inputs);
-                string newShort = PluginProcessor.ResolveTemplate(PluginI18n.Pick(output.ShortLabel ?? "", output.ShortLabelEn ?? ""), inputs);
-                
-                // Apply default values for missing inputs in labels
-                if (tmpl.Inputs != null)
-                {
-                    foreach (var input in tmpl.Inputs)
-                    {
-                        if (!inputs.ContainsKey(input.Key))
-                        {
-                            newName = newName.Replace("{{" + input.Key + "}}", input.DefaultValue);
-                            newShort = newShort.Replace("{{" + input.Key + "}}", input.DefaultValue);
-                        }
-                    }
-                }
-
-                // [Optimization] Use cached Prop keys
-                if (InfoService.Instance.GetValue(keys.PropLabelKey) != newName)
-                {
-                    InfoService.Instance.InjectValue(keys.PropLabelKey, newName);
-                }
-
-                if (InfoService.Instance.GetValue(keys.PropShortKey) != newShort)
-                {
-                    InfoService.Instance.InjectValue(keys.PropShortKey, newShort);
-                }
+                    values.Add(new(prepared.InjectUnitKey, PluginProcessor.ResolveTemplate(output.Unit, inputs)));
+                PrepareLabels(tmpl, output, inputs, item, values);
             }
+            return () =>
+            {
+                foreach (var key in keys) inst.KeyCache.TryAdd(key.Key, key.Value);
+                foreach (var value in values)
+                    if (InfoService.Instance.GetValue(value.Key) != value.Value)
+                        InfoService.Instance.InjectValue(value.Key, value.Value);
+            };
         }
 
-        private void HandleExecutionError(PluginInstanceConfig inst, PluginTemplate tmpl, Dictionary<string, string> inputs, string keySuffix, Exception ex)
+        private static void PrepareLabels(PluginTemplate tmpl, PluginOutput output,
+            Dictionary<string, string> inputs, string itemKey, List<KeyValuePair<string, string>> values)
         {
-            // [Fix] Removed aggressive ResetNetworkClients() on single error.
-            // Let PluginManager handle network resets based on consecutive failures to avoid client storm.
-
-            // [Improvement] Even on error, try to resolve labels if possible (so user knows which item failed)
-            if (tmpl.Outputs != null)
+            string pattern = !string.IsNullOrEmpty(output.Label) ? PluginI18n.Pick(output.Label, output.LabelEn)
+                : PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key;
+            string name = PluginProcessor.ResolveTemplate(pattern, inputs);
+            string shortName = PluginProcessor.ResolveTemplate(PluginI18n.Pick(output.ShortLabel ?? "", output.ShortLabelEn ?? ""), inputs);
+            foreach (var input in tmpl.Inputs ?? new List<PluginInput>())
             {
-                foreach(var output in tmpl.Outputs) 
+                if (inputs.ContainsKey(input.Key)) continue;
+                name = name.Replace("{{" + input.Key + "}}", input.DefaultValue);
+                shortName = shortName.Replace("{{" + input.Key + "}}", input.DefaultValue);
+            }
+            values.Add(new("PROP.Label." + itemKey, name));
+            values.Add(new("PROP.ShortLabel." + itemKey, shortName));
+        }
+
+        private async Task PublishExecutionErrorAsync(PluginInstanceConfig inst, PluginTemplate tmpl,
+            Dictionary<string, string> inputs, string keySuffix, Exception error)
+        {
+            var values = new List<KeyValuePair<string, string>>();
+            foreach (var output in tmpl.Outputs ?? new List<PluginOutput>())
+            {
+                string raw = inst.Id + keySuffix + "." + output.Key;
+                values.Add(new(raw, PluginConstants.STATUS_ERROR));
+                try { PrepareLabels(tmpl, output, inputs, PluginConstants.DASH_PREFIX + raw, values); }
+                catch
                 {
-                    string injectKey = inst.Id + keySuffix + "." + output.Key;
-                    
-                    // Inject Error Status
-                    InfoService.Instance.InjectValue(injectKey, PluginConstants.STATUS_ERROR);
-
-                    // Try resolve label (ignore errors in template resolution)
-                    try 
-                    {
-                        string itemKey = PluginConstants.DASH_PREFIX + injectKey;
-                        string labelPattern = !string.IsNullOrEmpty(output.Label) ? PluginI18n.Pick(output.Label, output.LabelEn) : (PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key);
-                        
-                        string newName = PluginProcessor.ResolveTemplate(labelPattern, inputs);
-                        string newShort = PluginProcessor.ResolveTemplate(PluginI18n.Pick(output.ShortLabel ?? "", output.ShortLabelEn ?? ""), inputs);
-
-                        // Apply default values for missing inputs in labels
-                        if (tmpl.Inputs != null)
-                        {
-                            foreach (var input in tmpl.Inputs)
-                            {
-                                if (!inputs.ContainsKey(input.Key))
-                                {
-                                    newName = newName.Replace("{{" + input.Key + "}}", input.DefaultValue);
-                                    newShort = newShort.Replace("{{" + input.Key + "}}", input.DefaultValue);
-                                }
-                            }
-                        }
-
-                        string propLabelKey = "PROP.Label." + itemKey;
-                        string propShortKey = "PROP.ShortLabel." + itemKey;
-
-                        if (InfoService.Instance.GetValue(propLabelKey) != newName)
-                            InfoService.Instance.InjectValue(propLabelKey, newName);
-
-                        if (InfoService.Instance.GetValue(propShortKey) != newShort)
-                            InfoService.Instance.InjectValue(propShortKey, newShort);
-                    }
-                    catch (Exception lblEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Label resolution failed during error handling: {lblEx.Message}");
-                        // [Fix] Fallback to raw pattern if template resolution fails, to avoid showing raw keys like DASH.GitHub.0.stats
-                        try 
-                        {
-                            string itemKey = PluginConstants.DASH_PREFIX + injectKey;
-                            string fallback = !string.IsNullOrEmpty(output.Label) ? PluginI18n.Pick(output.Label, output.LabelEn) : (PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key);
-                            
-                            // Remove template markers to make it look cleaner if possible
-                            if (fallback.Contains("{{")) 
-                            {
-                                // Simple cleanup: remove {{...}} parts or keep them, keeping them is better than nothing
-                            }
-
-                            InfoService.Instance.InjectValue(UIUtils.Intern("PROP.Label." + itemKey), fallback);
-                        }
-                        catch {}
-                    }
+                    string label = !string.IsNullOrEmpty(output.Label)
+                        ? PluginI18n.Pick(output.Label, output.LabelEn)
+                        : PluginI18n.Pick(tmpl.Meta.Name, tmpl.Meta.NameEn) + " " + output.Key;
+                    values.Add(new("PROP.Label." + PluginConstants.DASH_PREFIX + raw, label));
                 }
             }
-            // [LM-009] 沙箱失败的原因码必须**可观测**：错误记录里带上原因码，
-            // 调用方才能区分"触达沙箱上限"与"普通网络故障"。
-            // 原因码是常量字符串，异常消息里也只有主机名/上限数值 —— **绝不包含凭据值**。
-            string reason = ex is PluginSandboxException sandboxEx ? sandboxEx.Reason : "";
-            System.Diagnostics.Debug.WriteLine(reason.Length > 0
-                ? $"Plugin exec error ({inst.Id}) [{reason}]: {ex.Message}"
-                : $"Plugin exec error ({inst.Id}): {ex.Message}");
+            await PreparePublicationAsync(inst.Id, "error").ConfigureAwait(false);
+            CommitPublication(() =>
+            {
+                foreach (var value in values) InfoService.Instance.InjectValue(value.Key, value.Value);
+            });
+            System.Diagnostics.Debug.WriteLine($"Plugin exec error ({inst.Id}): {error.Message}");
         }
 
         private Dictionary<string, string> ResolveHeaders(Dictionary<string, string> headers, Dictionary<string, string> context)
@@ -1593,6 +1445,7 @@ namespace LiteMonitor.src.Plugins
         private static string CanonicalizeUrl(string url)
         {
             if (string.IsNullOrEmpty(url)) return "";
+            PluginHostPolicy.ValidateRequestUrl(url);
             if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return url;
 
             var sb = new StringBuilder(url.Length + 8);

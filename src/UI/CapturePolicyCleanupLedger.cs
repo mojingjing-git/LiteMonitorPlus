@@ -121,6 +121,9 @@ namespace LiteMonitor
         /// <summary>清理告警（<c>CleanupWarningCode</c>）—— 信息级。</summary>
         internal string? CleanupWarningCode { get; private set; }
 
+        /// <summary>实例级登记边界接缝：在生产 Add 前注入确定性登记冲突，不绕过 Add 的不变量。</summary>
+        internal Action<WindowCapturePolicyCleanup>? BeforeExplicitRecoveryRegistration { get; set; }
+
         /// <summary>
         /// 【合同 §6.2 INV-4 / §6.3 / LM-093】登记一条清理责任。
         /// <para><b>返回值语义</b>（LM-093 修正）：<c>true</c> = "这条责任<b>已在册</b>"
@@ -254,7 +257,7 @@ namespace LiteMonitor
             GetBlockingReasonForGeneration(generation) is not null;
 
         /// <summary>
-        /// 【LM-074】**明确恢复**：对同代次"已 <c>Failed</c> 且由本程序改过 affinity"的条目
+        /// 【LM-074】**明确恢复**：对同代次"已 <c>Failed</c>、由本程序改过 affinity 且尚未被接管"的条目
         /// **重建一条新的清理责任**。
         /// <para>★ 新责任沿用该条目的**精确原值** <see cref="WindowCapturePolicyCleanup.OriginalAffinity"/>、
         /// 同一 <see cref="WindowCapturePolicyCleanup.WindowHandle"/>、同一
@@ -296,22 +299,23 @@ namespace LiteMonitor
 
                 if (failed is null &&
                     entry.State == CapturePolicyCleanupState.Failed &&
-                    entry.AffinityChangedBySession)
+                    entry.AffinityChangedBySession &&
+                    !entry.ReclaimedByExplicitRecovery)
                 {
                     failed = entry;
                 }
-            }
-
-            if (failed is null)
-            {
-                errorCode = NoUnresolvedEntryErrorCode;
-                return false;
             }
 
             if (hasNonTerminal)
             {
                 // INV-4：同一代次至多一条非终态条目 ⇒ 不得再叠加第二条。
                 errorCode = AlreadyPendingErrorCode;
+                return false;
+            }
+
+            if (failed is null)
+            {
+                errorCode = NoUnresolvedEntryErrorCode;
                 return false;
             }
 
@@ -326,6 +330,7 @@ namespace LiteMonitor
             rearmed.TryScheduleImmediateAttempt(now);
 
             // ★ 先登记新责任（失败则旧责任原样保留）⇒ 不会出现"无人负责恢复"的空窗。
+            BeforeExplicitRecoveryRegistration?.Invoke(rearmed);
             if (!Add(rearmed))
             {
                 errorCode = RearmFailedErrorCode;

@@ -5,17 +5,31 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.Plugins;
 
 namespace LiteMonitor
 {
     public static class SettingsHelper
     {
         // Cache path
-        private static readonly string _cachedPath = Path.Combine(AppContext.BaseDirectory, "settings.json");
-        private static readonly string _backupPath = Path.Combine(AppContext.BaseDirectory, "settings.json.bak");
-        private static readonly string _tempPath = Path.Combine(AppContext.BaseDirectory, "settings.json.tmp");
+        // 【C-1 / 候选树评审阻断 1】三件套路径（主/备/tmp）支持**整体重定向**（测试接缝）：
+        // PathOverride 非 null ⇒ 全部落进该沙箱目录；null ⇒ 生产路径（AppContext.BaseDirectory）。
+        // 之前三件套是全程序集唯一一份真实文件 + Settings._instance 活单例——任何不在
+        // cfgfile 集合里的用例（如 env 激活的 MarketIndexContractTests）都可能与之串台，
+        // 造成"单跑全绿、全量间歇挂"的非确定性（评审已在同机三复现三条不同用例）。
+        internal static string? PathOverride { get; set; }
+
+        private static string ResolveRoot => PathOverride ?? AppContext.BaseDirectory;
+        private static string CachedPath => Path.Combine(ResolveRoot, "settings.json");
+        private static string BackupPath => Path.Combine(ResolveRoot, "settings.json.bak");
+
+        // ★ tmp 带**进程号**：固定的 settings.json.tmp 是所有测试与所有进程的公共踩踏点
+        //   （写一半的 tmp 会被下一个写者原样接管）。每进程唯一 + Load 时清扫崩溃残留。
+        private static string TempPath => Path.Combine(
+            ResolveRoot, $"settings.json.{Environment.ProcessId}.tmp");
+
         private static readonly object _ioLock = new object();
-        public static string FilePath => _cachedPath;
+        public static string FilePath => CachedPath;
 
         // Global block save lock
         private static bool _globalBlockSave;
@@ -45,28 +59,37 @@ namespace LiteMonitor
 
         public static bool GlobalBlockSave
         {
-            get => _globalBlockSave;
+            get { lock (_ioLock) return _globalBlockSave; }
             set
             {
-                _globalBlockSave = value;
-                // 外部赋值一律记为 External：本类自己置真走 BlockSaveForIoFailure()。
-                _saveBlockOwner = value ? SaveBlockOwner.External : SaveBlockOwner.None;
+                lock (_ioLock)
+                {
+                    _globalBlockSave = value;
+                    // 外部赋值一律记为 External：本类自己置真走 BlockSaveForIoFailure()。
+                    _saveBlockOwner = value ? SaveBlockOwner.External : SaveBlockOwner.None;
+                }
             }
         }
 
         private static void BlockSaveForIoFailure()
         {
-            _globalBlockSave = true;
-            _saveBlockOwner = SaveBlockOwner.IoFailure;
+            lock (_ioLock)
+            {
+                _globalBlockSave = true;
+                _saveBlockOwner = SaveBlockOwner.IoFailure;
+            }
         }
 
         private static void ReleaseSaveBlockFromIoFailure()
         {
-            // 只解除「本类因 IO 故障置上的」禁写。外部（「重置配置」）置上的强制禁写不在解除范围内。
-            if (_saveBlockOwner != SaveBlockOwner.IoFailure) return;
+            lock (_ioLock)
+            {
+                // 只解除「本类因 IO 故障置上的」禁写。外部（「重置配置」）置上的强制禁写不在解除范围内。
+                if (_saveBlockOwner != SaveBlockOwner.IoFailure) return;
 
-            _globalBlockSave = false;
-            _saveBlockOwner = SaveBlockOwner.None;
+                _globalBlockSave = false;
+                _saveBlockOwner = SaveBlockOwner.None;
+            }
         }
 
         public static Settings Load(bool forceReload = false)
@@ -78,6 +101,19 @@ namespace LiteMonitor
             LoadFailure primaryFailure;
             lock (_ioLock)
             {
+                // 【C-1】tmp 带进程号后的配套清扫：上一次崩溃残留的他进程 tmp 在这里清掉。
+                // 只删"settings.json.*.tmp"且非本进程的；删不动（被占用）就留给下次，绝不阻塞加载。
+                try
+                {
+                    string stalePattern = "settings.json.*.tmp";
+                    foreach (string stale in Directory.EnumerateFiles(ResolveRoot, stalePattern))
+                    {
+                        if (string.Equals(stale, TempPath, StringComparison.OrdinalIgnoreCase)) continue;
+                        try { File.Delete(stale); } catch { }
+                    }
+                }
+                catch { /* 枚举失败不阻塞加载 */ }
+
                 s = TryLoadFile(FilePath, out primaryFailure);
 
                 // 主文件内容损坏：立刻改名留证。
@@ -94,11 +130,11 @@ namespace LiteMonitor
                 if (s == null && primaryFailure != LoadFailure.IoFailure)
                 {
                     LoadFailure backupFailure;
-                    s = TryLoadFile(_backupPath, out backupFailure);
+                    s = TryLoadFile(BackupPath, out backupFailure);
 
                     if (backupFailure == LoadFailure.Corrupt)
                     {
-                        QuarantineCorruptFile(_backupPath);
+                        QuarantineCorruptFile(BackupPath);
                     }
                     else if (backupFailure == LoadFailure.IoFailure)
                     {
@@ -155,12 +191,23 @@ namespace LiteMonitor
             // Caller (AppActions.ApplyAllSettings) is responsible for syncing language state.
             // s.SyncToLanguage();
             
-            // [Migration] 兼容老用户：如果未设置 PresetStyle (-1)，根据旧的 FontSize 推断  
+            // [Migration] 兼容老用户：如果未设置 PresetStyle (-1)，根据旧的 FontSize 推断
             // 未来1.2.9几个版本后，将TaskbarPresetStyle 默认配置改成1即可
             if (s.TaskbarPresetStyle == -1)
             {
                 // 9.0pt => 小字模式(0), 其他 => 大字模式(1)
                 s.TaskbarPresetStyle = (Math.Abs(s.TaskbarFontSize - Settings.DEFAULT_TB_SIZE_REGULAR) < 0.1f) ? 0 : 1;
+            }
+
+            // 【R3 §4.3-3.1/3.2】旧「实时玻璃」开关废弃迁移 —— **每次加载都执行**。
+            // ★ 不能放进 RebuildAndMigrateSettings：那只对 isLegacyConfig（TaskbarSortIndex 全零的
+            //   遗留配置）生效；放那里 ⇒ 普通用户永远不会被迁移——UI 开关已删、配置里仍是 true、
+            //   实时玻璃继续运行且**无任何入口可关闭**。
+            // ★ 字段保留（schema 兼容，不丢用户文件里的键）；UI 入口已随 R3 改动三移除，
+            //   GPU 路线的「实时桌面背景」是替代功能（2026-10-24 步 0 实测其在默认配置下可达）。
+            if (s.LiveGlassEnabled)
+            {
+                s.LiveGlassEnabled = false;
             }
 
             s.InternAllStrings();
@@ -195,16 +242,47 @@ namespace LiteMonitor
         /// </remarks>
         internal static bool TrySave(this Settings settings)
         {
-            if (GlobalBlockSave) return false;
+            try
+            {
+                BeforeSaveGateForTests?.Invoke();
+                lock (_ioLock) return TrySaveLocked(settings);
+            }
+            catch { return false; }
+        }
+
+        // These seams only observe the production critical sections in regression tests.
+        internal static Action? BeforeSaveGateForTests { get; set; }
+        internal static Action? BeforeSettingsSerializeForTests { get; set; }
+        internal static Action<string>? MarketRecordMutationForTests { get; set; }
+
+        private static bool TrySaveLocked(Settings settings)
+        {
+            if (_globalBlockSave) return false;
 
             try
             {
+                BeforeSettingsSerializeForTests?.Invoke();
                 var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
-                lock (_ioLock)
+
+                // 【C-1】瞬时外部锁（杀软/索引器对刚落盘文件的短时持有）会让
+                // AtomicWrite 里的 WriteAllText/Move 偶发 IOException/UnauthorizedAccessException
+                // ——这是"单跑全绿、全量间歇挂"的另一半根因（严格记录写入器会把它如实放大成
+                // MarketRecordPersistenceException）。AtomicWrite 整体幂等（重新序列化、重写 tmp、
+                // 重刷备份、重移动），对这两类**可重试**异常做小步重试；
+                // 非瞬时异常（如回读校验失败的 InvalidOperationException）照旧立即失败。
+                for (int attempt = 0; ; attempt++)
                 {
-                    AtomicWrite(json);
+                    try
+                    {
+                        AtomicWrite(json);
+                        return true;
+                    }
+                    catch (Exception ex) when (attempt < 2 &&
+                        ex is IOException or UnauthorizedAccessException)
+                    {
+                        Thread.Sleep(25 * (attempt + 1));
+                    }
                 }
-                return true;
             }
             catch
             {
@@ -212,6 +290,113 @@ namespace LiteMonitor
                 return false;
             }
         }
+
+        // Lock order: market transaction gate -> _ioLock. No installer, scheduler,
+        // or UI callback may run here; only the affected record is restored on failure.
+        internal static bool TryChangeMarketRecord(string id, MarketPluginRecord? replacement)
+        {
+            lock (_ioLock)
+            {
+                Settings settings = Settings.Load();
+                var originalList = settings.MarketPlugins;
+                var list = originalList ?? new List<MarketPluginRecord>();
+                var previous = list.Select((record, index) => (record, index))
+                    .Where(pair => SameMarketId(pair.record, id)).ToList();
+
+                try
+                {
+                    settings.MarketPlugins = list;
+                    if (replacement == null)
+                        list.RemoveAll(record => SameMarketId(record, id));
+                    else if (previous.Count > 0)
+                        list[previous[0].index] = CopyMarketRecord(replacement);
+                    else
+                        list.Add(CopyMarketRecord(replacement));
+
+                    MarketRecordMutationForTests?.Invoke(id);
+                    if (TrySaveLocked(settings)) return true;
+                }
+                catch
+                {
+                    // Also restore if preparation/serialization throws before writing.
+                }
+
+                list.RemoveAll(record => SameMarketId(record, id));
+                foreach (var pair in previous)
+                    list.Insert(Math.Min(pair.index, list.Count), pair.record);
+                if (originalList == null && list.Count == 0) settings.MarketPlugins = null!;
+                return false;
+            }
+        }
+
+        internal static MarketPluginRecord? FindMarketRecord(string id)
+        {
+            lock (_ioLock)
+            {
+                MarketPluginRecord? record = Settings.Load().MarketPlugins?
+                    .FirstOrDefault(record => SameMarketId(record, id));
+                return record == null ? null : CopyMarketRecord(record);
+            }
+        }
+
+        // Recovery must read the primary independently: Load() can return a live
+        // singleton or a default/backup after a read failure, neither proves commit.
+        internal static bool TryReadPersistedMarketRecord(
+            string id, out MarketPluginRecord? record, bool synchronizeMemory = false)
+        {
+            lock (_ioLock)
+            {
+                record = null;
+                try
+                {
+                    string json;
+                    try { json = File.ReadAllText(FilePath); }
+                    catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+                    {
+                        // Confirmed absence of BOTH files is an empty installation,
+                        // not a default fabricated after a locked/corrupt primary.
+                        try { File.GetAttributes(BackupPath); }
+                        catch (Exception absent) when (absent is FileNotFoundException or DirectoryNotFoundException)
+                        {
+                            if (synchronizeMemory) SynchronizeMarketRecord(id, null);
+                            return true;
+                        }
+                        return false;
+                    }
+
+                    var persisted = JsonSerializer.Deserialize<Settings>(json,
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (persisted == null) return false;
+                    record = persisted.MarketPlugins?.FirstOrDefault(item => SameMarketId(item, id));
+                    if (record != null) record = CopyMarketRecord(record);
+                    if (synchronizeMemory) SynchronizeMarketRecord(id, record);
+                    return true;
+                }
+                catch { return false; }
+            }
+        }
+
+        private static bool SameMarketId(MarketPluginRecord? record, string id)
+            => record != null && string.Equals(record.Id, id, StringComparison.OrdinalIgnoreCase);
+
+        private static void SynchronizeMarketRecord(string id, MarketPluginRecord? record)
+        {
+            // Called only under _ioLock, after a successful independent read.
+            // Reconcile just this record without saving or replacing Settings.
+            Settings settings = Settings.Load();
+            var list = settings.MarketPlugins ??= new List<MarketPluginRecord>();
+            int position = list.FindIndex(item => SameMarketId(item, id));
+            list.RemoveAll(item => SameMarketId(item, id));
+            if (record != null)
+                list.Insert(position < 0 ? list.Count : Math.Min(position, list.Count), CopyMarketRecord(record));
+        }
+
+        private static MarketPluginRecord CopyMarketRecord(MarketPluginRecord record)
+            => new MarketPluginRecord
+            {
+                Id = record.Id, File = record.File, Version = record.Version,
+                Sha256 = record.Sha256, InstalledAt = record.InstalledAt
+            };
 
         /// <summary>
         /// 保存配置（既有入口）：失败时**静默**，不抛异常。
@@ -230,8 +415,8 @@ namespace LiteMonitor
             lock (_ioLock)
             {
                 DeleteFileIfExists(FilePath);
-                DeleteFileIfExists(_backupPath);
-                DeleteFileIfExists(_tempPath);
+                DeleteFileIfExists(BackupPath);
+                DeleteFileIfExists(TempPath);
             }
         }
 
@@ -337,11 +522,11 @@ namespace LiteMonitor
                 Directory.CreateDirectory(dir);
 
             // 1. 先写临时文件
-            File.WriteAllText(_tempPath, json);
+            File.WriteAllText(TempPath, json);
 
             // 2. 回读校验：落盘内容必须还能解析回配置对象。
             //    校验放在「刷新备份」之前，这样半截内容既不会顶替主文件，也不会污染备份。
-            string verifyJson = File.ReadAllText(_tempPath);
+            string verifyJson = File.ReadAllText(TempPath);
             if (JsonSerializer.Deserialize<Settings>(verifyJson, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true
@@ -363,12 +548,12 @@ namespace LiteMonitor
                 //   于是备份内容与主文件**同级**（凭据一律是 DPAPI 密文、口令一律为空）。
                 //   ★ 脱敏失败 ⇒ **不写备份**（绝不退回「原样复制」）：宁可备份陈旧，
                 //   也不能让明文凭据继续留在磁盘上。
-                try { WriteSanitizedBackup(FilePath, _backupPath); }
+                try { WriteSanitizedBackup(FilePath, BackupPath); }
                 catch { }
             }
 
             // 4. 最后替换主文件
-            File.Move(_tempPath, FilePath, true);
+            File.Move(TempPath, FilePath, true);
         }
 
         /// <summary>
@@ -389,7 +574,7 @@ namespace LiteMonitor
         {
             try
             {
-                if (File.Exists(_tempPath)) File.Delete(_tempPath);
+                if (File.Exists(TempPath)) File.Delete(TempPath);
             }
             catch { }
         }

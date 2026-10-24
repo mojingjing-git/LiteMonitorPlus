@@ -63,13 +63,18 @@ namespace LiteMonitor.Tests
             /// <summary>字符串字面量（<c>ldstr</c>）；非字符串指令为 <c>null</c>。</summary>
             public string StringOperand { get; }
 
-            public IlInstruction(int offset, OpCode opCode, MethodBase target, FieldInfo field, string stringOperand)
+            /// <summary>局部变量指令所指的槽位与类型；不把参数槽误作局部变量。</summary>
+            public LocalVariableInfo Local { get; }
+
+            public IlInstruction(int offset, OpCode opCode, MethodBase target, FieldInfo field, string stringOperand,
+                LocalVariableInfo local = null)
             {
                 Offset = offset;
                 OpCode = opCode;
                 Target = target;
                 Field = field;
                 StringOperand = stringOperand;
+                Local = local;
             }
         }
 
@@ -161,6 +166,7 @@ namespace LiteMonitor.Tests
                 MethodBase target = null;
                 FieldInfo field = null;
                 string text = null;
+                int variableIndex = -1;
 
                 switch (op.OperandType)
                 {
@@ -204,10 +210,14 @@ namespace LiteMonitor.Tests
                         break;
                     case OperandType.ShortInlineI:
                     case OperandType.ShortInlineBrTarget:
+                        i += 1;
+                        break;
                     case OperandType.ShortInlineVar:
+                        variableIndex = il[i];
                         i += 1;
                         break;
                     case OperandType.InlineVar:
+                        variableIndex = BitConverter.ToUInt16(il, i);
                         i += 2;
                         break;
                     case OperandType.InlineSwitch:
@@ -220,7 +230,19 @@ namespace LiteMonitor.Tests
                         break;   // InlineNone / InlinePhi（已废弃）
                 }
 
-                result.Instructions.Add(new IlInstruction(offset, op, target, field, text));
+                LocalVariableInfo local = null;
+                if (op == OpCodes.Ldloc_0) variableIndex = 0;
+                else if (op == OpCodes.Ldloc_1) variableIndex = 1;
+                else if (op == OpCodes.Ldloc_2) variableIndex = 2;
+                else if (op == OpCodes.Ldloc_3) variableIndex = 3;
+                bool loadsLocal = op == OpCodes.Ldloc_0 || op == OpCodes.Ldloc_1 ||
+                    op == OpCodes.Ldloc_2 || op == OpCodes.Ldloc_3 ||
+                    op == OpCodes.Ldloc || op == OpCodes.Ldloc_S ||
+                    op == OpCodes.Ldloca || op == OpCodes.Ldloca_S;
+                if (loadsLocal && variableIndex >= 0 && variableIndex < body.LocalVariables.Count)
+                    local = body.LocalVariables[variableIndex];
+
+                result.Instructions.Add(new IlInstruction(offset, op, target, field, text, local));
             }
 
             return result;
