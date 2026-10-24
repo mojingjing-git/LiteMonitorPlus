@@ -81,6 +81,18 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "RenderingRoute": "Маршрут рендеринга",
+    "RouteSuffixGpu": " (GPU-материал)",
+    "RouteSuffixGdi": " (GDI+)",
+    "RouteStatus": {
+      "LegacyTheme": "Эта тема рендерится через унаследованный маршрут GDI+ (GPU-материал не объявлен).",
+      "GpuRunning": "GPU-материал работает.",
+      "LiveBackgroundOn": "Живой фон рабочего стола активен; поддерживаемые скриншоты/записи исключают всё окно.",
+      "LiveBackgroundOff": "GPU работает с фиксированным фоном (живой фон выключен).",
+      "LiveBackgroundUnavailable": "Живой фон включён, но сейчас недоступен",
+      "NotStarted": "GPU-рендеринг не запущен",
+      "LayeredNote": "Окно многослойное (непрозрачность<100%); проверено 24.10.2026 — живому фону не мешает."
+    },
     "IpTrafficExclusion": "Исключение трафика по IP",
     "IpTrafficExclusionEnabled": "Включить исключение трафика по IP",
     "ExcludedTrafficIps": "Удалённые IP для исключения (по одному в строке, только точные IPv4/IPv6)",

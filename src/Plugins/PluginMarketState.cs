@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.IO;
 
 namespace LiteMonitor.src.Plugins
 {
@@ -34,17 +34,21 @@ namespace LiteMonitor.src.Plugins
         public static MarketPluginRecord? Find(string id)
         {
             if (string.IsNullOrEmpty(id)) return null;
+            return SettingsHelper.FindMarketRecord(id);
+        }
 
-            var settings = Settings.Load();
-            var list = settings.MarketPlugins;
-            if (list == null) return null;
+        internal static MarketPluginRecord? FindPersisted(string id)
+        {
+            if (!SettingsHelper.TryReadPersistedMarketRecord(id, out var record))
+                throw new IOException("The persisted market record is unavailable; recovery remains pending.");
+            return record;
+        }
 
-            foreach (var r in list)
-            {
-                if (r != null && string.Equals(r.Id, id, StringComparison.OrdinalIgnoreCase))
-                    return r;
-            }
-            return null;
+        internal static MarketPluginRecord? FindPersistedForRecovery(string id)
+        {
+            if (!SettingsHelper.TryReadPersistedMarketRecord(id, out var record, synchronizeMemory: true))
+                throw new IOException("The persisted market record is unavailable; recovery remains pending.");
+            return record;
         }
 
         /// <summary>写入或更新一条安装记录</summary>
@@ -52,17 +56,8 @@ namespace LiteMonitor.src.Plugins
         {
             if (record == null || string.IsNullOrEmpty(record.Id)) return;
 
-            var settings = Settings.Load();
-            if (settings.MarketPlugins == null)
-                settings.MarketPlugins = new List<MarketPluginRecord>();
-
-            int idx = settings.MarketPlugins.FindIndex(
-                r => r != null && string.Equals(r.Id, record.Id, StringComparison.OrdinalIgnoreCase));
-
-            if (idx >= 0) settings.MarketPlugins[idx] = record;
-            else settings.MarketPlugins.Add(record);
-
-            settings.Save();
+            if (!SettingsHelper.TryChangeMarketRecord(record.Id, record))
+                throw new MarketRecordPersistenceException();
         }
 
         /// <summary>移除一条安装记录</summary>
@@ -70,13 +65,16 @@ namespace LiteMonitor.src.Plugins
         {
             if (string.IsNullOrEmpty(id)) return;
 
-            var settings = Settings.Load();
-            if (settings.MarketPlugins == null) return;
-
-            int removed = settings.MarketPlugins.RemoveAll(
-                r => r != null && string.Equals(r.Id, id, StringComparison.OrdinalIgnoreCase));
-
-            if (removed > 0) settings.Save();
+            if (!SettingsHelper.TryChangeMarketRecord(id, null))
+                throw new MarketRecordPersistenceException();
         }
+    }
+
+    // Only the strict record writer creates this failure, after restoring memory
+    // inside the shared save gate. The installer need not attempt another save.
+    internal sealed class MarketRecordPersistenceException : IOException
+    {
+        internal MarketRecordPersistenceException()
+            : base("The market record was not saved; its in-memory change was restored.") { }
     }
 }

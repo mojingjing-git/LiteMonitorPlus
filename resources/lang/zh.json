@@ -81,6 +81,18 @@
     "BAT.Current": "电流"
   },
   "Menu": {
+    "RenderingRoute": "渲染路线",
+    "RouteSuffixGpu": "（GPU 材质）",
+    "RouteSuffixGdi": "（GDI+）",
+    "RouteStatus": {
+      "LegacyTheme": "当前主题走 GDI+ 旧路线（未声明 GPU 材质）。",
+      "GpuRunning": "GPU 材质运行中。",
+      "LiveBackgroundOn": "实时桌面背景运行中（系统截图/录屏会排除整个窗口）。",
+      "LiveBackgroundOff": "GPU 运行中，使用固定背景（实时背景未开启）。",
+      "LiveBackgroundUnavailable": "实时背景已开启但暂不可用",
+      "NotStarted": "GPU 呈现未运行",
+      "LayeredNote": "当前窗口为分层窗口（透明度<100%）；2026-10-24 实测不影响实时背景。"
+    },
     "IpTrafficExclusion": "按 IP 排除实时网速",
     "IpTrafficExclusionEnabled": "启用按 IP 排除流量",
     "ExcludedTrafficIps": "要排除的远端 IP（每行一个，仅支持精确 IPv4/IPv6）",

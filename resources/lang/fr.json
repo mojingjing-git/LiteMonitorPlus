@@ -82,6 +82,18 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "RenderingRoute": "Route de rendu",
+    "RouteSuffixGpu": " (matériau GPU)",
+    "RouteSuffixGdi": " (GDI+)",
+    "RouteStatus": {
+      "LegacyTheme": "Ce thème effectue le rendu via la route GDI+ héritée (aucun matériau GPU déclaré).",
+      "GpuRunning": "Matériau GPU en cours d'exécution.",
+      "LiveBackgroundOn": "Arrière-plan de bureau en direct actif ; les captures/enregistrements pris en charge excluent toute la fenêtre.",
+      "LiveBackgroundOff": "GPU en cours avec arrière-plan fixe (arrière-plan en direct désactivé).",
+      "LiveBackgroundUnavailable": "Arrière-plan en direct activé mais actuellement indisponible",
+      "NotStarted": "Le rendu GPU n'est pas en cours",
+      "LayeredNote": "La fenêtre est superposée (opacité<100 %) ; vérifié le 24-10-2026 : ne bloque pas l'arrière-plan en direct."
+    },
     "IpTrafficExclusion": "Exclure le trafic par IP",
     "IpTrafficExclusionEnabled": "Activer l’exclusion du trafic par IP",
     "ExcludedTrafficIps": "IP distantes à exclure (une par ligne, IPv4/IPv6 exactes uniquement)",

@@ -81,6 +81,18 @@
     "BAT.Current": "BCUR"
   },
   "Menu": {
+    "RenderingRoute": "Rendering route",
+    "RouteSuffixGpu": " (GPU material)",
+    "RouteSuffixGdi": " (GDI+)",
+    "RouteStatus": {
+      "LegacyTheme": "This theme renders via the GDI+ legacy route (no GPU material declared).",
+      "GpuRunning": "GPU material is running.",
+      "LiveBackgroundOn": "Live desktop background is active; supported screenshots/recordings exclude the whole window.",
+      "LiveBackgroundOff": "GPU is running with a fixed background (live background is off).",
+      "LiveBackgroundUnavailable": "Live background is on but currently unavailable",
+      "NotStarted": "GPU presentation is not running",
+      "LayeredNote": "Window is layered (opacity<100%); verified 2026-10-24 that this does not block the live background."
+    },
     "IpTrafficExclusion": "Exclude traffic by IP",
     "IpTrafficExclusionEnabled": "Enable IP-based traffic exclusion",
     "ExcludedTrafficIps": "Remote IPs to exclude (one per line, exact IPv4/IPv6 only)",

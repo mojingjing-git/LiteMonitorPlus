@@ -82,6 +82,18 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "RenderingRoute": "描画ルート",
+    "RouteSuffixGpu": "（GPUマテリアル）",
+    "RouteSuffixGdi": "（GDI+）",
+    "RouteStatus": {
+      "LegacyTheme": "このテーマは GDI+ 旧ルートで描画されます（GPU マテリアル未宣言）。",
+      "GpuRunning": "GPU マテリアル実行中。",
+      "LiveBackgroundOn": "ライブデスクトップ背景が実行中（対応するスクリーンショット/録画からはウィンドウ全体が除外されます）。",
+      "LiveBackgroundOff": "GPU 実行中、固定背景を使用中（ライブ背景はオフ）。",
+      "LiveBackgroundUnavailable": "ライブ背景はオンですが現在利用できません",
+      "NotStarted": "GPU 描画が実行されていません",
+      "LayeredNote": "ウィンドウはレイヤード表示（不透明度<100%）です。2026-10-24 の実測ではライブ背景に影響しません。"
+    },
     "IpTrafficExclusion": "IP 単位でリアルタイム通信速度から除外",
     "IpTrafficExclusionEnabled": "IP ベースの通信除外を有効化",
     "ExcludedTrafficIps": "除外する宛先 IP（1 行に 1 つ、IPv4/IPv6 の完全一致のみ）",

@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -436,28 +437,14 @@ namespace LiteMonitor.Tests
         /// 判断方法体里是否**对指定类型的对象**调用了 Dispose。
         /// </summary>
         /// <remarks>
-        /// ★ 编译器把 <c>using</c> 变量的释放统一编译成对 <see cref="IDisposable"/> 的调用，
-        ///   光看调用目标分不出释放的是哪一个对象。
-        ///   但 <c>using</c> 变量会被提升成状态机的字段，释放前必然先 <c>ldfld</c> 那个字段 ——
-        ///   所以"Dispose 调用前面那条 ldfld 的字段类型"就是被释放对象的真实类型。
+        /// using 可以保存为状态机字段，也可以保留在局部槽（Release 的 JsonDocument 即如此）。
+        /// 只识别紧接实例 Dispose 的实际接收者加载，不能向前搜索无关字段或局部变量。
         /// </remarks>
         private static bool DisposesType(IlInspector.Disassembly dis, Type owner)
         {
             for (int i = 0; i < dis.Instructions.Count; i++)
             {
-                MethodBase? target = dis.Instructions[i].Target;
-                if (target == null || target.Name != "Dispose") continue;
-
-                // 往前找最近的一条字段读取：那就是被释放对象所在的字段
-                for (int k = i - 1; k >= 0 && k >= i - 4; k--)
-                {
-                    FieldInfo? field = dis.Instructions[k].Field;
-                    if (field == null) continue;
-
-                    // 这一处 Dispose 释放的就是该字段的对象
-                    if (field.FieldType == owner) return true;
-                    break;      // 释放的是别的对象，继续看下一处 Dispose
-                }
+                if (DisposeReceiverType(dis, i) == owner) return true;
             }
             return false;
         }
@@ -468,20 +455,124 @@ namespace LiteMonitor.Tests
             var types = new System.Collections.Generic.List<string>();
             for (int i = 0; i < dis.Instructions.Count; i++)
             {
-                MethodBase? target = dis.Instructions[i].Target;
-                if (target == null || target.Name != "Dispose") continue;
-
-                for (int k = i - 1; k >= 0 && k >= i - 4; k--)
-                {
-                    FieldInfo? field = dis.Instructions[k].Field;
-                    if (field != null)
-                    {
-                        types.Add($"{field.FieldType.Name}({field.Name})");
-                        break;
-                    }
-                }
+                Type? type = DisposeReceiverType(dis, i);
+                if (type != null) types.Add(type.Name);
             }
             return "已释放的对象：" + string.Join(", ", types);
+        }
+
+        private static Type? DisposeReceiverType(IlInspector.Disassembly dis, int callIndex)
+        {
+            var call = dis.Instructions[callIndex];
+            if ((call.OpCode != OpCodes.Call && call.OpCode != OpCodes.Callvirt) ||
+                call.Target is not MethodInfo target || target.IsStatic ||
+                target.Name != nameof(IDisposable.Dispose) || target.ReturnType != typeof(void) ||
+                target.GetParameters().Length != 0) return null;
+
+            int receiverIndex = callIndex - 1;
+            while (receiverIndex >= 0 && (dis.Instructions[receiverIndex].OpCode == OpCodes.Nop ||
+                   dis.Instructions[receiverIndex].OpCode == OpCodes.Constrained)) receiverIndex--;
+            if (receiverIndex < 0) return null;
+            var receiver = dis.Instructions[receiverIndex];
+            if (receiver.OpCode == OpCodes.Ldfld || receiver.OpCode == OpCodes.Ldflda ||
+                receiver.OpCode == OpCodes.Ldsfld || receiver.OpCode == OpCodes.Ldsflda)
+                return receiver.Field?.FieldType;
+            return receiver.Local?.LocalType;
+        }
+
+        [Theory]
+        [InlineData(nameof(DisposeIlFixtures.Field), true)]
+        [InlineData(nameof(DisposeIlFixtures.Local), true)]
+        [InlineData(nameof(DisposeIlFixtures.UnreleasedLocal), false)]
+        [InlineData(nameof(DisposeIlFixtures.OnlyOtherLocal), false)]
+        [InlineData(nameof(DisposeIlFixtures.MixedFieldAndLocal), false)]
+        [InlineData(nameof(DisposeIlFixtures.StaticNamesake), false)]
+        public void 释放识别器必须关联实际字段或局部接收者(string method, bool expected)
+        {
+            var fixture = typeof(DisposeIlFixtures).GetMethod(method);
+            Assert.NotNull(fixture);
+            var dis = IlInspector.Disassemble(fixture);
+            Assert.Equal(0, dis.UnresolvedCalls);
+            Assert.Equal(expected, DisposesType(dis, typeof(JsonDocument)));
+        }
+
+        [Fact]
+        public void 释放识别器支持值类型局部地址()
+        {
+            var fixture = typeof(DisposeIlFixtures).GetMethod(nameof(DisposeIlFixtures.ValueLocal));
+            Assert.True(DisposesType(IlInspector.Disassemble(fixture), typeof(ValueDisposable)));
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(3)]
+        [InlineData(4)]
+        [InlineData(256)]
+        public void 释放识别器解码短长及隐式局部槽号(int slot)
+        {
+            var assembly = AssemblyBuilder.DefineDynamicAssembly(
+                new AssemblyName("DisposeReceiver" + Guid.NewGuid().ToString("N")), AssemblyBuilderAccess.RunAndCollect);
+            var type = assembly.DefineDynamicModule("Fixtures").DefineType("LocalFixture", TypeAttributes.Public);
+            var method = type.DefineMethod("Release", MethodAttributes.Public | MethodAttributes.Static,
+                typeof(void), Type.EmptyTypes);
+            var il = method.GetILGenerator();
+            for (int i = 0; i <= slot; i++) il.DeclareLocal(i == slot ? typeof(JsonDocument) : typeof(int));
+            if (slot <= 3) il.Emit(new[] { OpCodes.Ldloc_0, OpCodes.Ldloc_1, OpCodes.Ldloc_2, OpCodes.Ldloc_3 }[slot]);
+            else if (slot <= byte.MaxValue) il.Emit(OpCodes.Ldloc_S, (byte)slot);
+            else il.Emit(OpCodes.Ldloc, (short)slot);
+            il.Emit(OpCodes.Callvirt, typeof(JsonDocument).GetMethod(nameof(IDisposable.Dispose))!);
+            il.Emit(OpCodes.Ret);
+            var compiled = type.CreateType()!.GetMethod("Release");
+            Assert.True(DisposesType(IlInspector.Disassemble(compiled), typeof(JsonDocument)));
+        }
+
+        // 只反汇编，不执行这些故意缺少释放的反例；KeepAlive 保留 Release 的真实局部使用。
+        private sealed class DisposeIlFixtures
+        {
+            private JsonDocument _document;
+            public void Field() => _document.Dispose();
+            public void Local()
+            {
+                using var document = JsonDocument.Parse("{}");
+                GC.KeepAlive(document);
+            }
+            public void UnreleasedLocal()
+            {
+                var document = JsonDocument.Parse("{}");
+                GC.KeepAlive(document);
+            }
+            public void OnlyOtherLocal()
+            {
+                var document = JsonDocument.Parse("{}");
+                using var stream = new MemoryStream();
+                GC.KeepAlive(document);
+            }
+            public void MixedFieldAndLocal()
+            {
+                GC.KeepAlive(_document);
+                using var stream = new MemoryStream();
+                GC.KeepAlive(stream);
+            }
+            public void StaticNamesake()
+            {
+                var document = JsonDocument.Parse("{}");
+                DisposeNamesake.Dispose(document);
+            }
+            public void ValueLocal()
+            {
+                using var value = new ValueDisposable();
+                GC.KeepAlive(value);
+            }
+        }
+        private static class DisposeNamesake
+        {
+            public static void Dispose(JsonDocument document) => GC.KeepAlive(document);
+        }
+        private struct ValueDisposable : IDisposable
+        {
+            public void Dispose() { }
         }
 
         /// <summary>
@@ -494,7 +585,7 @@ namespace LiteMonitor.Tests
         /// </remarks>
         private sealed class LoopbackHttpServer : IDisposable
         {
-            private readonly HttpListener _listener = new();
+            private HttpListener _listener = new();
             private readonly CancellationTokenSource _cts = new();
             private readonly Task _pump;
             private int _requests;
@@ -502,9 +593,24 @@ namespace LiteMonitor.Tests
 
             private LoopbackHttpServer(Func<HttpListenerContext, CancellationToken, Task> handler)
             {
-                Port = GetFreeLoopbackPort();
-                _listener.Prefixes.Add($"http://127.0.0.1:{Port}/");
-                _listener.Start();
+                // 【C-1】GetFreeLoopbackPort（TcpListener 探测）与 HttpListener.Start 之间存在
+                // TOCTOU：探到的端口可能恰好被系统排除/其他进程抢占 ⇒ AddPrefixCore 抛
+                // HttpListenerException(5, 拒绝访问)，整条用例翻车。换端口重试若干次。
+                for (int attempt = 0; ; attempt++)
+                {
+                    Port = GetFreeLoopbackPort();
+                    _listener.Prefixes.Add($"http://127.0.0.1:{Port}/");
+                    try
+                    {
+                        _listener.Start();
+                        break;
+                    }
+                    catch (HttpListenerException ex) when (attempt < 4)
+                    {
+                        _listener.Close();
+                        _listener = new HttpListener();
+                    }
+                }
                 _pump = Task.Run(() => PumpAsync(handler));
             }
 

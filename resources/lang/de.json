@@ -81,6 +81,18 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "RenderingRoute": "Render-Route",
+    "RouteSuffixGpu": " (GPU-Material)",
+    "RouteSuffixGdi": " (GDI+)",
+    "RouteStatus": {
+      "LegacyTheme": "Dieses Theme rendert über die GDI+-Legacy-Route (kein GPU-Material deklariert).",
+      "GpuRunning": "GPU-Material läuft.",
+      "LiveBackgroundOn": "Live-Desktop-Hintergrund aktiv; unterstützte Screenshots/Aufnahmen schließen das ganze Fenster aus.",
+      "LiveBackgroundOff": "GPU läuft mit festem Hintergrund (Live-Hintergrund aus).",
+      "LiveBackgroundUnavailable": "Live-Hintergrund ist eingeschaltet, aber derzeit nicht verfügbar",
+      "NotStarted": "GPU-Darstellung läuft nicht",
+      "LayeredNote": "Fenster ist geschichtet (Deckkraft<100%); am 24.10.2026 verifiziert: blockiert den Live-Hintergrund nicht."
+    },
     "IpTrafficExclusion": "Datenverkehr nach IP ausschließen",
     "IpTrafficExclusionEnabled": "IP-basierten Verkehrsausschluss aktivieren",
     "ExcludedTrafficIps": "Auszuschließende entfernte IPs (eine pro Zeile, nur exakte IPv4/IPv6)",

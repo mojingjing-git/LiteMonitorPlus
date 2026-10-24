@@ -817,7 +817,7 @@ internal static class Program
             HorizontalMode = horizontal,
             PanelWidth = horizontal ? 760 : 300,
             UIScale = 1.0,
-            Opacity = 0.96,
+            Opacity = 0.85, // 【步0 实验 2026-10-24】按生产默认值实测（R3 §3.2 步 3）；原为 0.96
             GpuThemeEffectsEnabled = true,
             GpuLiveBackgroundEnabled = live,
             GpuWdaCapturePolicyAccepted = live,

@@ -81,6 +81,18 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "RenderingRoute": "렌더링 경로",
+    "RouteSuffixGpu": " (GPU 재질)",
+    "RouteSuffixGdi": " (GDI+)",
+    "RouteStatus": {
+      "LegacyTheme": "이 테마는 GDI+ 레거시 경로로 렌더링됩니다(GPU 재질 미선언).",
+      "GpuRunning": "GPU 재질 실행 중.",
+      "LiveBackgroundOn": "실시간 데스크톱 배경 실행 중(지원되는 스크린샷/녹화에서 창 전체가 제외됨).",
+      "LiveBackgroundOff": "GPU 실행 중, 고정 배경 사용(실시간 배경 꺼짐).",
+      "LiveBackgroundUnavailable": "실시간 배경이 켜져 있지만 현재 사용 불가",
+      "NotStarted": "GPU 프레젠테이션이 실행되지 않음",
+      "LayeredNote": "창이 계층화되어 있습니다(불투명도<100%). 2026-10-24 실측에서 실시간 배경에 영향 없음 확인."
+    },
     "IpTrafficExclusion": "IP로 실시간 네트워크 속도 제외",
     "IpTrafficExclusionEnabled": "IP 기반 트래픽 제외 사용",
     "ExcludedTrafficIps": "제외할 원격 IP (한 줄에 하나, 정확한 IPv4/IPv6만)",

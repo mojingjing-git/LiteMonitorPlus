@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -414,75 +414,11 @@ namespace LiteMonitor.src.Plugins
         /// [LM-080] authority 的**终止符**：路径分隔符、查询串起始、片段起始。
         /// <para>主机名**不可能**包含 <c>?</c> 或 <c>#</c> ⇒ 它们出现即表示 authority 已经结束。</para>
         /// </summary>
-        private static readonly char[] AuthorityTerminators = { '/', '?', '#' };
-
         private static void AddDeclaredHost(HashSet<string> hosts, string urlTemplate)
         {
-            if (string.IsNullOrWhiteSpace(urlTemplate)) return;
-
-            string trimmed = urlTemplate.Trim();
-            int schemeEnd = trimmed.IndexOf("://", StringComparison.Ordinal);
-            if (schemeEnd < 0) return;
-
-            string rest = trimmed.Substring(schemeEnd + 3);
-
-            // [LM-080] authority 在 '/'、'?'、'#' 三者中**最先出现**的位置结束。
-            // 修复前只按 '/' 截断 ⇒ 无路径 URL（"https://host?x=1" / "https://host#frag"）的
-            // **查询串 / 片段被当成了主机名的一部分** ⇒ 声明集合里出现一枚垃圾串
-            // （该主机的带凭据请求被一律拒绝；危害方向偏严 / fail-closed，不会误放行）。
-            int authorityEnd = rest.Length;
-            foreach (char terminator in AuthorityTerminators)
-            {
-                int idx = rest.IndexOf(terminator);
-                if (idx >= 0 && idx < authorityEnd) authorityEnd = idx;
-            }
-            string authority = rest.Substring(0, authorityEnd);
-
-            // 主机来自模板 → 不是插件的显式声明
-            if (authority.Contains("{{")) return;
-
-            int at = authority.LastIndexOf('@');
-            if (at >= 0) authority = authority.Substring(at + 1);
-
-            // [LM-094] 端口截断：**IPv6 字面量（带方括号）整体就是主机名** ——
-            // 方括号内的冒号**不是**端口分隔符（与 PluginSandbox 侧 StripPort 的 IPv6 语义一致：
-            // 同一个口径，避免出现第四种不一致实现）。
-            // 修复前按**第一个**冒号截断 ⇒ "[fd00::1]" 被截成 "[fd00"（一枚畸形串）⇒
-            // 该 IPv6 主机永远无法被正确声明（带凭据请求被一律拒绝；偏严 / fail-closed）。
-            authority = StripAuthorityPort(authority);
-
-            authority = authority.Trim();
-            if (authority.Length > 0) hosts.Add(authority);
+            if (PluginHostPolicy.TryGetDeclaredHost(urlTemplate, out var host)) hosts.Add(host);
         }
 
-        /// <summary>
-        /// [LM-094] 去掉 authority 里的端口。
-        /// <para><b>IPv6 字面量（带方括号）整体就是主机名</b>："[fd00::1]" / "[fd00::1]:8080"
-        /// 的主机都是 "[fd00::1]" —— <b>方括号内的冒号不是端口分隔符</b>
-        /// （与 <see cref="PluginSandbox"/> 侧 <c>StripPort</c> 的 IPv6 语义一致）。</para>
-        /// <para>非方括号形式：<b>单个</b>冒号是 "host:port"（按冒号截断，既有行为逐字不变）；
-        /// <b>多个</b>冒号是裸 IPv6 字面量，整体就是主机名（不得截出垃圾串）。</para>
-        /// </summary>
-        private static string StripAuthorityPort(string authority)
-        {
-            if (string.IsNullOrEmpty(authority)) return authority;
-
-            // IPv6 字面量（带方括号）：方括号内整体是主机名，只可能整体带端口。
-            if (authority[0] == '[')
-            {
-                int close = authority.IndexOf(']');
-                if (close > 0) return authority.Substring(0, close + 1);
-                return authority;
-            }
-
-            // 非方括号形式：多个冒号 ⇒ 裸 IPv6 字面量，整体就是主机名。
-            int colon = authority.IndexOf(':');
-            if (colon < 0) return authority;
-            if (colon != authority.LastIndexOf(':')) return authority;
-
-            // 单个冒号 ⇒ "host:port"（既有截断行为逐字不变）。
-            return authority.Substring(0, colon);
-        }
     }
 
     /// <summary>
@@ -1062,17 +998,12 @@ namespace LiteMonitor.src.Plugins
                     "带凭据的请求缺少目标地址，凭据未发送");
             }
 
-            if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+            if (url.Trim().StartsWith("native://", StringComparison.OrdinalIgnoreCase))
             {
-                throw new PluginSandboxException(
-                    PluginSandboxReasons.CredentialTargetNotAllowed,
-                    "带凭据的请求目标地址非法，凭据未发送");
+                PluginHostPolicy.ValidateRequestUrl(url);
+                return;
             }
-
-            // native:// 是本地处理器，不产生网络请求，也就没有凭据外发问题。
-            if (string.Equals(uri.Scheme, "native", StringComparison.OrdinalIgnoreCase)) return;
-
-            string host = uri.Host;
+            string host = PluginHostPolicy.RequireHttpHost(url);
             if (string.IsNullOrEmpty(host))
             {
                 throw new PluginSandboxException(
@@ -1106,41 +1037,7 @@ namespace LiteMonitor.src.Plugins
         }
 
         private static bool HostMatches(string allowed, string host)
-        {
-            string a = StripPort(allowed.Trim());
-            string h = StripPort(host.Trim());
-            return a.Length > 0 && string.Equals(a, h, StringComparison.OrdinalIgnoreCase);
-        }
+            => PluginHostPolicy.HostInSet(host, new[] { allowed });
 
-        /// <summary>
-        /// 去掉主机里的端口。
-        /// <para>[LM-079] **IPv6 字面量（带方括号）整体就是主机名**："[fd00::1]" / "[fd00::2]"
-        /// 只能**整体**带端口（"[fd00::1]:8080"），**不得**按最后一个冒号截断 ——
-        /// 否则两个不同的 IPv6 地址会被截成同一个 "[fd00:" ⇒ **地址碰撞**
-        /// （fail-open：声明了 [fd00::1] 却能把请求/凭据发往 [fd00::2]）。</para>
-        /// <para>非方括号形式：只有**单个**冒号才是 "host:port"；多个冒号是**裸 IPv6 字面量**，
-        /// 整体就是主机名（不得截出垃圾串）。</para>
-        /// </summary>
-        private static string StripPort(string value)
-        {
-            // 与原实现一致：null 会抛 NullReferenceException（调用方均已先行判空）。
-            if (value.Length == 0) return value;
-
-            // IPv6 字面量（带方括号）：方括号内整体是主机名，只可能整体带端口。
-            if (value[0] == '[')
-            {
-                int close = value.IndexOf(']');
-                if (close > 0) return value.Substring(0, close + 1);
-                return value;
-            }
-
-            // 非方括号形式：单个冒号才是 "host:port"；多个冒号 ⇒ 裸 IPv6 字面量，整体是主机名。
-            int colon = value.IndexOf(':');
-            if (colon > 0 && colon == value.LastIndexOf(':') && colon < value.Length - 1)
-            {
-                return value.Substring(0, colon);
-            }
-            return value;
-        }
     }
 }

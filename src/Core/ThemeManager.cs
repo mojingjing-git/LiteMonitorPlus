@@ -467,6 +467,41 @@ namespace LiteMonitor.src.Core
         }
 
         /// <summary>
+        /// 轻量判定主题是否声明了 GPU 渲染路线（读 <c>rendering.backend</c>）。
+        /// <para>★ 刻意用 <see cref="JsonDocument"/> 只读 <c>rendering</c> 块，
+        /// **不走** <see cref="Load"/>（那会设 <see cref="Current"/>、构建字体、产生全局副作用
+        /// ——设置页/托盘逐主题标注绝不能换掉当前主题，R3 §4.2-2.1）。</para>
+        /// <para>★ 容错（R3 §4.2-2.2）：缺文件 / 坏 JSON / 缺 rendering 或 backend 键
+        /// 一律归类为 legacy（false），不得抛到 UI 层。</para>
+        /// </summary>
+        public static bool IsGpuTheme(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            try
+            {
+                string path = Path.Combine(ThemeDir, $"{name}.json");
+                if (!File.Exists(path)) return false;
+
+                using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(path));
+                if (!doc.RootElement.TryGetProperty("rendering", out JsonElement rendering))
+                    return false;
+                if (rendering.ValueKind != JsonValueKind.Object) return false;
+                if (!rendering.TryGetProperty("backend", out JsonElement backend))
+                    return false;
+                if (backend.ValueKind != JsonValueKind.String) return false;
+
+                return string.Equals(
+                    backend.GetString()?.Trim(),
+                    ThemeRenderingConfig.GpuBackend,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// 统一的主题序列化选项：读写共用同一套选项，
         /// 保证"已知键"与"扩展键"的匹配规则一致（大小写不敏感），
         /// 避免同一份文件用不同选项读写时出现同名键重复写出。

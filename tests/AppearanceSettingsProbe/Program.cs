@@ -94,7 +94,7 @@ namespace LiteMonitor.AppearanceSettingsProbe
 
             try
             {
-                RunRuntimeChecks();
+                RunRuntimeChecks(outDir);
                 RunSourceLevelChecks(repoRootOverride);
             }
             catch (Exception ex)
@@ -127,7 +127,7 @@ namespace LiteMonitor.AppearanceSettingsProbe
         //  运行时断言
         // ==================================================================
 
-        private static void RunRuntimeChecks()
+        private static void RunRuntimeChecks(string outDir)
         {
             // ---- 抑制作用域的语义 ----
             var page = new ProbePage();
@@ -197,6 +197,39 @@ namespace LiteMonitor.AppearanceSettingsProbe
                 cmbF.SelectValue("devA");
             }
             Add("AddComboPair 抑制内改不回写", pairF == "orig", "程序化改动不得写回；实际=" + pairF);
+
+            // ---- 「渲染路线」页（R3 §4.1-1.4 / A06 教训）----
+            // 新页属**构造期代码**：SetContext(null MainForm/UI) + OnShow（卡片创建期）不抛，
+            // 且 null 的 MainForm/UI 必须被状态聚合的空传播接住（不得 NRE）。
+            try
+            {
+                var routeCfg = new Settings();
+                var routePage = new LiteMonitor.src.UI.SettingsPage.RenderingRoutePage();
+                routePage.SetContext(routeCfg, null!, null!);
+                routePage.OnShow();
+                Add("RenderingRoutePage 真实构造 + OnShow 不抛", true, "卡片创建期零异常即通过");
+
+                // 布局自证：按真实宽度渲染一帧，供目视核对行对齐（AddFullItem 整行、无错位）。
+                try
+                {
+                    routePage.Width = 860;
+                    routePage.Height = 460;
+                    routePage.PerformLayout();
+                    using var bmp = new System.Drawing.Bitmap(routePage.Width, routePage.Height);
+                    routePage.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height));
+                    string shotPath = Path.Combine(outDir, "rendering-route-page.png");
+                    bmp.Save(shotPath, System.Drawing.Imaging.ImageFormat.Png);
+                    Add("RenderingRoutePage 布局截图", true, shotPath);
+                }
+                catch (Exception shotEx)
+                {
+                    Add("RenderingRoutePage 布局截图", false, shotEx.GetType().Name + ": " + shotEx.Message);
+                }
+            }
+            catch (Exception routeEx)
+            {
+                Add("RenderingRoutePage 真实构造 + OnShow 不抛", false, routeEx.GetType().Name + ": " + routeEx.Message);
+            }
 
             string pairG = "orig";
             var cmbG = group.AddComboPair(page, "Probe",

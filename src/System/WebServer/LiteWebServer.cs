@@ -534,90 +534,113 @@ namespace LiteMonitor.src.WebServer
                 // 分组标题统一走 GroupTitleResolver, 保证与桌面端一致 (别名 / 显卡简称)。
                 string groupDisplay = GroupTitleResolver.Resolve(_cfg, item.UIGroup);
 
-                string valStr = "";
-                string unit = "";
-                double pct = 0;
-                int status = 0;
-                bool isPrimary = false;
-
-                if (item.Key.StartsWith("DASH."))
-                {
-                    // 特殊处理 DASH.HOST 等纯信息项 (以及插件项)
-                    string dashKey = item.Key.Substring(5);
-                    valStr = InfoService.Instance.GetValue(dashKey);
-                    
-                    // ★★★ 修复：读取插件写入的颜色状态 (.Color) ★★★
-                    // [Optimization] Use cached Dash keys
-                    string colorKey = !string.IsNullOrEmpty(item.CachedDashColorKey) ? item.CachedDashColorKey : dashKey + ".Color";
-                    string colorStr = InfoService.Instance.GetValue(colorKey);
-                    if (int.TryParse(colorStr, out int cVal)) status = cVal;
-
-                    // 读取插件写入的单位 (.Unit)
-                    string unitKey = !string.IsNullOrEmpty(item.CachedDashUnitKey) ? item.CachedDashUnitKey : dashKey + ".Unit";
-                    string unitStr = InfoService.Instance.GetValue(unitKey);
-                    if (!string.IsNullOrEmpty(unitStr)) unit = unitStr;
-                }
-                else
-                {
-                    // 硬件监控项
-                    // ★ FPS 需求规则 (计划 §4.4)：
-                    //   localFpsDemand = 本地 FPS 在面板或任务栏启用
-                    //   webFpsDemand    = 有合法 Web 数据需求 && WebFpsEnabled
-                    //   没有需求时：既不读取 FPS 数值（读取会触发外部 FPS 采集服务的惰性启动），
-                    //   也不把"未启动"伪报成 0，而是明确输出 "--"。
-                    //   有需求但首帧未到（hasFpsData == false）时同样输出 "--"，不是 0。
-                    var valueState = WebSnapshotValues.ResolveValue(item.Key, fpsDemand, hasFpsData, k => hw.Get(k), out string valueStr, out float? rawValue);
-
-                    // [Fix] 恢复过滤逻辑：跳过没有数据的监控项（如台式机的电池），以符合业务屏蔽需求
-                    // 布局顺序问题已由 CSS order (gidx) 机制解决，即使数据晚到也会插入正确位置
-                    if (valueState == WebSnapshotValueState.NoData) continue;
-
-                    valStr = valueStr;
-                    if (valueState == WebSnapshotValueState.HasData && rawValue.HasValue)
-                    {
-                        // [Refactor] 使用 MetricUtils 统一格式化逻辑，确保与桌面端完全一致 (包括单位换算、颜色阈值、内存显示模式)
-                        unit = MetricUtils.GetUnitStr(item.Key, rawValue.Value, MetricUtils.UnitContext.Panel);
-                        
-                        // GetProgressValue 返回 0.0-1.0，Web端通常需要 0-100
-                        pct = MetricUtils.GetProgressValue(item.Key, rawValue.Value) * 100.0;
-                        
-                        // 状态判断 (0=Safe, 1=Warn, 2=Crit)
-                        status = MetricUtils.GetState(item.Key, rawValue.Value);
-                    }
-                    else
-                    {
-                        // 明确未启用：单位与正常路径保持一致，数值是 "--" 占位
-                        unit = MetricUtils.GetUnitStr(item.Key, null, MetricUtils.UnitContext.Panel);
-                    }
-
-                    // Primary Logic
-                    if (item.Key == "BAT.Percent") isPrimary = true;
-                    else if (item.Key == "CPU.Load") isPrimary = true;
-                    else if (item.Key == "MEM.Load") isPrimary = true;
-                    // ★ [多显卡] 用基础 Key 归一化, 否则 "GPU.0.Load" / "GPU.1.Load" 匹配不上,
-                    //   GPU 分组就再也拿不到负载状态 (分组环/状态色会失真)。
-                    else if (item.Key == "GPU.Core.Load" || GpuKey.ToBaseKey(item.Key) == "GPU.Load") isPrimary = true;
-                    else isPrimary = false;
-                }
-
-                if (string.IsNullOrEmpty(valStr)) valStr = "--";
-                
-                writer.WriteStartObject();
-                writer.WriteString("k", item.Key);
-                writer.WriteString("n", displayName);
-                writer.WriteString("gid", groupId);
-                writer.WriteString("gn", groupDisplay);
-                // ★★★ 新增：发送组顺序索引，供前端 CSS order 使用 ★★★
-                writer.WriteNumber("gidx", groupIndices.TryGetValue(item.UIGroup, out int idx) ? idx : 999);
-                writer.WriteString("v", valStr);
-                writer.WriteString("u", unit);
-                writer.WriteNumber("pct", pct);
-                writer.WriteNumber("sts", status);
-                writer.WriteBoolean("primary", isPrimary);
-                writer.WriteEndObject();
+                WriteSnapshotItemJson(writer, item, displayName, groupId, groupDisplay,
+                    groupIndices.TryGetValue(item.UIGroup, out int idx) ? idx : 999,
+                    fpsDemand, hasFpsData, k => hw.Get(k), k => InfoService.Instance.GetValue(k));
             }
 
             writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        /// <summary>
+        /// Write one snapshot row using the same formatting path as the live server.
+        /// Value providers keep snapshot formatting independent of hardware and listeners.
+        /// </summary>
+        internal static void WriteSnapshotItemJson(
+            Utf8JsonWriter writer,
+            MonitorItemConfig item,
+            string displayName,
+            string groupId,
+            string groupDisplay,
+            int groupIndex,
+            bool fpsDemand,
+            bool hasFpsData,
+            Func<string, float?> readValue,
+            Func<string, string> readInfo)
+        {
+            string valStr = "";
+            string unit = "";
+            double pct = 0;
+            int status = 0;
+            bool isPrimary = false;
+
+            if (item.Key.StartsWith("DASH."))
+            {
+                // 特殊处理 DASH.HOST 等纯信息项 (以及插件项)
+                string dashKey = item.Key.Substring(5);
+                valStr = readInfo(dashKey);
+
+                // ★★★ 修复：读取插件写入的颜色状态 (.Color) ★★★
+                // [Optimization] Use cached Dash keys
+                string colorKey = !string.IsNullOrEmpty(item.CachedDashColorKey) ? item.CachedDashColorKey : dashKey + ".Color";
+                string colorStr = readInfo(colorKey);
+                if (int.TryParse(colorStr, out int cVal)) status = cVal;
+
+                // 读取插件写入的单位 (.Unit)
+                string unitKey = !string.IsNullOrEmpty(item.CachedDashUnitKey) ? item.CachedDashUnitKey : dashKey + ".Unit";
+                string unitStr = readInfo(unitKey);
+                if (!string.IsNullOrEmpty(unitStr)) unit = unitStr;
+            }
+            else
+            {
+                // 硬件监控项
+                // ★ FPS 需求规则 (计划 §4.4)：
+                //   localFpsDemand = 本地 FPS 在面板或任务栏启用
+                //   webFpsDemand    = 有合法 Web 数据需求 && WebFpsEnabled
+                //   没有需求时：既不读取 FPS 数值（读取会触发外部 FPS 采集服务的惰性启动），
+                //   也不把"未启动"伪报成 0，而是明确输出 "--"。
+                //   有需求但首帧未到（hasFpsData == false）时同样输出 "--"，不是 0。
+                var valueState = WebSnapshotValues.ResolveValue(item.Key, fpsDemand, hasFpsData, readValue, out string valueStr, out float? rawValue, item.UnitPanel);
+
+                // [Fix] 恢复过滤逻辑：跳过没有数据的监控项（如台式机的电池），以符合业务屏蔽需求
+                // 布局顺序问题已由 CSS order (gidx) 机制解决，即使数据晚到也会插入正确位置
+                if (valueState == WebSnapshotValueState.NoData) return;
+
+                valStr = valueStr;
+                if (valueState == WebSnapshotValueState.HasData && rawValue.HasValue)
+                {
+                    // [Refactor] 使用 MetricUtils 统一格式化逻辑，确保与桌面端完全一致 (包括单位换算、颜色阈值、内存显示模式)
+                    unit = MetricUtils.GetDisplayUnit(item.Key,
+                        MetricUtils.GetUnitStr(item.Key, rawValue.Value, MetricUtils.UnitContext.Panel), item.UnitPanel);
+
+                    // GetProgressValue 返回 0.0-1.0，Web端通常需要 0-100
+                    pct = MetricUtils.GetProgressValue(item.Key, rawValue.Value) * 100.0;
+
+                    // 状态判断 (0=Safe, 1=Warn, 2=Crit)
+                    status = MetricUtils.GetState(item.Key, rawValue.Value);
+                }
+                else
+                {
+                    // 明确未启用：单位与正常路径保持一致，数值是 "--" 占位
+                    unit = MetricUtils.GetDisplayUnit(item.Key,
+                        MetricUtils.GetUnitStr(item.Key, null, MetricUtils.UnitContext.Panel), item.UnitPanel);
+                }
+
+                // Primary Logic
+                if (item.Key == "BAT.Percent") isPrimary = true;
+                else if (item.Key == "CPU.Load") isPrimary = true;
+                else if (item.Key == "MEM.Load") isPrimary = true;
+                // ★ [多显卡] 用基础 Key 归一化, 否则 "GPU.0.Load" / "GPU.1.Load" 匹配不上,
+                //   GPU 分组就再也拿不到负载状态 (分组环/状态色会失真)。
+                else if (item.Key == "GPU.Core.Load" || GpuKey.ToBaseKey(item.Key) == "GPU.Load") isPrimary = true;
+                else isPrimary = false;
+            }
+
+            if (string.IsNullOrEmpty(valStr)) valStr = "--";
+
+            writer.WriteStartObject();
+            writer.WriteString("k", item.Key);
+            writer.WriteString("n", displayName);
+            writer.WriteString("gid", groupId);
+            writer.WriteString("gn", groupDisplay);
+            // ★★★ 新增：发送组顺序索引，供前端 CSS order 使用 ★★★
+            writer.WriteNumber("gidx", groupIndex);
+            writer.WriteString("v", valStr);
+            writer.WriteString("u", unit);
+            writer.WriteNumber("pct", pct);
+            writer.WriteNumber("sts", status);
+            writer.WriteBoolean("primary", isPrimary);
             writer.WriteEndObject();
         }
     }
@@ -696,6 +719,18 @@ namespace LiteMonitor.src.WebServer
             out string value,
             out float? raw)
         {
+            return ResolveValue(key, fpsDemand, hasFpsData, readValue, out value, out raw, userFormat: null);
+        }
+
+        internal static WebSnapshotValueState ResolveValue(
+            string key,
+            bool fpsDemand,
+            bool hasFpsData,
+            Func<string, float?> readValue,
+            out string value,
+            out float? raw,
+            string? userFormat)
+        {
             value = NotEnabled;
             raw = null;
 
@@ -714,7 +749,7 @@ namespace LiteMonitor.src.WebServer
             if (!v.HasValue) return WebSnapshotValueState.NoData;
 
             raw = v;
-            value = MetricUtils.GetValueStr(key, v.Value, false); // false = Panel Context (Standard)
+            value = MetricUtils.GetValueStr(key, v.Value, false, userFormat); // false = Panel Context (Standard)
             return WebSnapshotValueState.HasData;
         }
     }

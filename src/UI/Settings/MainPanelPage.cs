@@ -17,10 +17,8 @@ namespace LiteMonitor.src.UI.SettingsPage
         private Panel _container;
         private bool _isLoaded = false;
 
-        public bool GpuStartupRetryRequested { get; private set; }
-
-        public void AcknowledgeGpuStartupRetryRequest() =>
-            GpuStartupRetryRequested = false;
+        // ★ GPU 材质渲染卡已迁入「渲染路线」页（RenderingRoutePage，R3 §4.1）；
+        //   GpuStartupRetryRequested 重试申请随迁，由 SettingsForm 从新页读取。
 
         public MainPanelPage()
         {
@@ -41,7 +39,6 @@ namespace LiteMonitor.src.UI.SettingsPage
 
             CreateBehaviorCard();
             CreateAppearanceCard();
-            CreateGpuMaterialCard();
             CreateHorizontalModeGroup();
             CreateWebCard();
 
@@ -87,10 +84,18 @@ namespace LiteMonitor.src.UI.SettingsPage
         {
             var group = new LiteSettingsGroup(LanguageManager.T("Menu.Appearance"));
 
-            // 1. Theme
-            group.AddCombo(this, "Menu.Theme", ThemeManager.GetAvailableThemes(), 
-                () => Config.Skin, 
-                v => Config.Skin = v);
+            // 1. Theme —— 下拉项带渲染路线后缀（R3 §4.2）：每项显示"{主题}{（GPU 材质）/（GDI+）}"，
+            //    Value 仍是纯主题名（写回配置不变）。AddComboPair 第二参是**已本地化文本**。
+            group.AddComboPair(this, LanguageManager.T("Menu.Theme"),
+                ThemeManager.GetAvailableThemes().Select(n => (object)new
+                {
+                    Label = n + (ThemeManager.IsGpuTheme(n)
+                        ? LanguageManager.T("Menu.RouteSuffixGpu")
+                        : LanguageManager.T("Menu.RouteSuffixGdi")),
+                    Value = n
+                }),
+                () => Config.Skin,
+                v => Config.Skin = v ?? "");
 
             // 2. Orientation
             group.AddComboIndex(this, "Menu.DisplayMode", 
@@ -119,192 +124,13 @@ namespace LiteMonitor.src.UI.SettingsPage
                 () => (Config.UIScale * 100) + "%",
                 s => Config.UIScale = MetricUtils.ParseDouble(s) / 100.0);
 
-            // 6. 实时玻璃（M2 / A16）
-            //   ★ 默认关闭（M2 合同 §8.1）；开启是**显式**操作，且首次开启必须弹副作用提示。
-            var liveGlassCheck = new LiteCheck(Config.LiveGlassEnabled, LanguageManager.T("Menu.Enable"));
-            liveGlassCheck.CheckedChanged += (s, e) =>
-            {
-                bool want = liveGlassCheck.Checked;
-
-                if (want && !Config.LiveGlassHintShown)
-                {
-                    // ★ 首次提示（M2 合同 §8.3）：必须如实表述副作用。
-                    //   用户点"取消" ⇒ 不开启（把开关拨回去），不得"先开后问"。
-                    if (!ShowLiveGlassHint())
-                    {
-                        liveGlassCheck.Checked = false;
-                        return;
-                    }
-                    Config.LiveGlassHintShown = true;
-                }
-
-                Config.LiveGlassEnabled = want;
-                UI?.SetLiveGlassEnabled(want);
-                UpdateLiveGlassStatus();
-            };
-            group.AddItem(new LiteSettingsItem(LanguageManager.T("Menu.LiveGlass"), liveGlassCheck));
-
-            // 实际状态行：显示**真实**的降级原因，而不是只回显配置值
-            // （合同 §7「降级不静默」；A16「配置和实际降级状态一致」）。
-            _liveGlassStatusLabel = new Label
-            {
-                AutoSize = false,
-                Width = UIUtils.S(240),
-                Height = UIUtils.S(22),
-                TextAlign = ContentAlignment.MiddleLeft,
-                ForeColor = UIColors.TextSub,
-                Font = UIFonts.Regular(8F),
-                Text = UI?.LiveGlassStatusText ?? "实时玻璃未启用。",
-            };
-            group.AddItem(new LiteSettingsItem(LanguageManager.T("Menu.LiveGlassStatus"), _liveGlassStatusLabel));
+            // ★ 旧「实时玻璃」开关已随 R3 改动三移除（2026-10-24 步 0 实测 GPU 实时背景
+            //   在默认配置下可达，GPU 路线的「实时桌面背景」为替代功能，见「渲染路线」页）。
+            //   配置值由 SettingsHelper 每次加载强制置 false；UIController 的玻璃机器保留
+            //   （GDI+ 兜底路径 + 句柄代次消费方，LiveGlassRebuildWiringTests 护栏不因本次改动放宽）。
 
             AddGroupToPage(group);
 
-        }
-
-        /// <summary>实时玻璃的实际状态标签（设置页用；null = 页面尚未创建）。</summary>
-        private Label? _liveGlassStatusLabel;
-
-        private void CreateGpuMaterialCard()
-        {
-            string language = Config.Language ?? string.Empty;
-            bool chinese = language.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
-            string Text(string zh, string en) => chinese ? zh : en;
-
-            var group = new LiteSettingsGroup(Text("GPU 材质渲染", "GPU material rendering"));
-            group.AddToggle(
-                this,
-                Text("GPU 材质渲染", "GPU material rendering"),
-                () => Config.GpuThemeEffectsEnabled,
-                value =>
-                {
-                    Config.GpuThemeEffectsEnabled = value;
-                    if (value)
-                    {
-                        GpuStartupRetryRequested = true;
-                    }
-                });
-            group.AddHint(Text(
-                "只对带有 rendering.backend=gpu 的新主题生效；旧主题继续使用原 GDI+ 路径。",
-                "Only new themes with rendering.backend=gpu are affected; legacy themes keep the original GDI+ path."));
-
-            var liveBackground = new LiteCheck(
-                Config.GpuLiveBackgroundEnabled,
-                Text("启用", "Enable"));
-            liveBackground.CheckedChanged += (_, _) =>
-            {
-                if (IsWriteBackSuppressed)
-                {
-                    return;
-                }
-
-                bool want = liveBackground.Checked;
-                if (want && !Config.GpuWdaCapturePolicyAccepted)
-                {
-                    DialogResult accepted = MessageBox.Show(
-                        FindForm(),
-                        Text(
-                            "实时玻璃需要使用 Desktop Duplication，并通过 WDA_EXCLUDEFROMCAPTURE 排除整个顶层窗口。\n\n开启后，受支持的系统截图和录屏会看不到 LiteMonitor++。旧主题和固定输入模式不受影响。\n\n是否接受并开启实时背景？",
-                            "Live glass uses Desktop Duplication and excludes the entire top-level window with WDA_EXCLUDEFROMCAPTURE.\n\nWhile active, supported screenshots and recordings will not show LiteMonitor++. Legacy themes and fixed-input mode are unaffected.\n\nAccept and enable live background?"),
-                        Text("实时玻璃捕获说明", "Live glass capture policy"),
-                        MessageBoxButtons.OKCancel,
-                        MessageBoxIcon.Warning);
-                    if (accepted != DialogResult.OK)
-                    {
-                        using (BeginSuppressWriteBack())
-                        {
-                            liveBackground.Checked = false;
-                        }
-                        return;
-                    }
-
-                    Config.GpuWdaCapturePolicyAccepted = true;
-                }
-
-                Config.GpuLiveBackgroundEnabled = want;
-                if (want)
-                {
-                    GpuStartupRetryRequested = true;
-                }
-            };
-            group.AddItem(new LiteSettingsItem(
-                Text("实时桌面背景", "Live desktop background"),
-                liveBackground));
-            RegisterRefresh(() => liveBackground.Checked =
-                Config.GpuLiveBackgroundEnabled);
-            group.AddHint(Text(
-                "实时背景与旧 LiveGlassEnabled 完全独立；赛博朋克主题始终为零抓屏。",
-                "Live background is independent from legacy LiveGlassEnabled; cyberpunk always performs zero desktop capture."));
-
-            Label status = new()
-            {
-                AutoSize = false,
-                Width = UIUtils.S(320),
-                Height = UIUtils.S(34),
-                TextAlign = ContentAlignment.MiddleLeft,
-                ForeColor = UIColors.TextSub,
-                Font = UIFonts.Regular(8F),
-                Text = GpuStatusText(chinese)
-            };
-            group.AddItem(new LiteSettingsItem(
-                Text("实际状态", "Actual state"),
-                status));
-            RegisterRefresh(() => status.Text = GpuStatusText(chinese));
-
-            AddGroupToPage(group);
-        }
-
-        private string GpuStatusText(bool chinese)
-        {
-            if (UI?.IsGpuPresentationActive == true)
-            {
-                if (UI.IsGpuLiveBackgroundActive)
-                    return chinese ? "实时玻璃运行中（系统截图/录屏会排除整个窗口）。" :
-                        "Live glass is active; supported screenshots/recordings exclude the entire window.";
-                if (UI.IsGpuLiveBackgroundRequested)
-                    return chinese ? "正在显示固定背景，实时捕获暂不可用：" + UI.GpuRuntimeFailure :
-                        "Fixed background; live capture is unavailable: " + UI.GpuRuntimeFailure;
-                return chinese
-                    ? "GPU 材质运行中，使用固定背景（未捕获桌面）。"
-                    : "GPU material is active with a fixed background; desktop capture is off.";
-            }
-
-            string? fallback = UI?.GpuFallbackCode;
-            if (!string.IsNullOrWhiteSpace(fallback))
-            {
-                return chinese
-                    ? "当前未运行 GPU 呈现：" + fallback
-                    : "GPU presentation is inactive: " + fallback;
-            }
-
-            return chinese
-                ? "当前主题未请求 GPU 呈现。"
-                : "The current theme does not request GPU presentation.";
-        }
-
-        /// <summary>
-        /// 首次开启实时玻璃时的副作用提示。
-        /// <para>★ 文案由语言资源提供，必须如实表述：捕获瞬间面板可能从录屏/截图中短暂消失或闪动
-        /// （M2 合同 §8.3），不得承诺"所有录屏软件都无感"（§8.4）。</para>
-        /// </summary>
-        private bool ShowLiveGlassHint()
-        {
-            string title = LanguageManager.T("Menu.LiveGlass");
-            string text = LanguageManager.T("Menu.LiveGlassHint");
-
-            IWin32Window? owner = FindForm();
-            DialogResult result = owner is null
-                ? MessageBox.Show(text, title, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning)
-                : MessageBox.Show(owner, text, title, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
-
-            return result == DialogResult.OK;
-        }
-
-        /// <summary>刷新实时玻璃的实际状态显示。</summary>
-        private void UpdateLiveGlassStatus()
-        {
-            if (_liveGlassStatusLabel is null) return;
-            _liveGlassStatusLabel.Text = UI?.LiveGlassStatusText ?? "实时玻璃未启用。";
         }
 
         private void CreateHorizontalModeGroup()

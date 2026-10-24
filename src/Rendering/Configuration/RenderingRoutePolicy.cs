@@ -119,21 +119,15 @@ public static class RenderingRoutePolicy
                 errors);
         }
 
-        // 【T02 合同 §3.1 / GPU-003】期望仍是 GPU live，但窗口处于分层窗口 ⇒ 不得申请 WDA 排除
-        // ⇒ 降级为 GpuFixedInput（既有路线，RenderingRoutePolicy.cs:95-102 同一形状），
-        //    并给出独立原因码；期望路由 = 有效路由中的"有效"侧由协调器承担。
-        //
-        // 放置位置：既有 :104-113 的 WdaCapturePolicyAccepted 判定**之后** ⇒
-        // safe_mode（:61）、gpu_effects_opt_in_required（:66）等既有原因码**优先级不变**。
+        // 【步0 实验 2026-10-24 / R3 §3.2】layered 判定降级为**仅诊断**。
+        // 原硬闸（T02 合同 GPU-003："分层 ⇒ GpuFixedInput + wda_capture_policy_unsupported_on_layered_window"）
+        // 的前提"WS_EX_LAYERED 与 WDA_EXCLUDEFROMCAPTURE 互斥"已被 legacy 路线在**同一块分层窗口**
+        // （Opacity=0.85）上实测证伪（R3 §1.4：生效模式=Glass、已发布帧持续增长、亲和性 0x11）。
+        // 本实验不再因分层改变 Route；分层事实以诊断条目记入 Errors，供状态行与排障读取。
+        // 实测结论决定本改动去留（R3 §3.4 三分支：A 保留 / C 强制不透明 / B 另出计划）。
         if (request.WindowIsLayered)
         {
-            return new RenderingRouteDecision(
-                RenderingRoute.GpuFixedInput,
-                RenderBackendKind.Gpu,
-                MaterialKind.LiquidGlass,
-                CaptureRequested: false,
-                FallbackCode: "wda_capture_policy_unsupported_on_layered_window",
-                errors);
+            errors = errors.Append("diagnostic_window_is_layered").ToList();
         }
 
         return new RenderingRouteDecision(

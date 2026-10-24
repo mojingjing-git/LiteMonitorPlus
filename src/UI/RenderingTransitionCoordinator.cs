@@ -433,17 +433,32 @@ namespace LiteMonitor
         /// （计划 §4.2 :147，既有设计必须保持）；过渡期间 GPU 启动次数必须为零。</para>
         /// <param name="controlled"><c>true</c> = 判别位命中（受控重建）；<c>false</c> = 构造期首次创建 / 非受控创建。</param>
         /// <param name="newHandleGeneration">推进后的句柄代次。</param>
-        internal void OnHandleCreated(bool controlled, long newHandleGeneration)
+        /// <returns>是否接受了新的句柄代次；重复、过期或关闭期间的通知返回 false。</returns>
+        internal bool OnHandleCreated(bool controlled, long newHandleGeneration)
         {
-            _state = _state with { HandleGeneration = newHandleGeneration };
+            // MainForm 已先 Advance 真相源，因此必须与已记账的旧快照比较。
+            // 同时拒绝落后于真相源、但尚未记账的通知；保留直接传入新代次的测试接缝。
+            if (_closing ||
+                newHandleGeneration <= _state.HandleGeneration ||
+                newHandleGeneration < _handleGeneration.Current)
+            {
+                return false;
+            }
+
+            _state = _state with
+            {
+                HandleGeneration = newHandleGeneration,
+                BindingState = PresentationBindingState.Unbound,
+            };
 
             if (!controlled)
             {
                 // 构造期首次创建 / 非受控创建 ⇒ **不进入** GPU 重建路径，也不推进到 Restoring。
-                return;
+                return true;
             }
 
             _state = _state with { Phase = RenderingTransitionPhase.Restoring };
+            return true;
         }
 
         /// <summary>
@@ -550,8 +565,23 @@ namespace LiteMonitor
         /// <summary>记录 HWND 呈现历史（合同 §2 维度 6；单调推进，不回退）。</summary>
         internal void RecordBindingState(PresentationBindingState bindingState)
         {
+            // 宿主被替换或启动失败不代表 HWND 被替换；低状态只能描述新宿主，不能抹去窗口历史。
+            if (BindingStateRank(bindingState) <= BindingStateRank(_state.BindingState))
+            {
+                return;
+            }
+
             _state = _state with { BindingState = bindingState };
         }
+
+        private static int BindingStateRank(PresentationBindingState state) => state switch
+        {
+            PresentationBindingState.Unbound => 0,
+            PresentationBindingState.Bound => 1,
+            PresentationBindingState.PresentAttempted => 2,
+            PresentationBindingState.Presented => 3,
+            _ => -1,
+        };
 
         /// <summary>
         /// 【合同 §4 步 4 / 计划 §4.1 :123-126】受控 HWND 重建的触发依据。

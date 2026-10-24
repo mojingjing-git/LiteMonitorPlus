@@ -390,7 +390,12 @@ namespace LiteMonitor
 
             foreach (var name in ThemeManager.GetAvailableThemes())
             {
-                var item = new ToolStripMenuItem(name)
+                // ★ 主题项带渲染路线后缀（R3 §4.2-2.6）：与设置页共用同一 helper 与同一 i18n key，
+                //   避免两处文案漂移。Click 写回的仍是纯主题名（后缀只影响显示文本）。
+                string routeSuffix = ThemeManager.IsGpuTheme(name)
+                    ? LanguageManager.T("Menu.RouteSuffixGpu")
+                    : LanguageManager.T("Menu.RouteSuffixGdi");
+                var item = new ToolStripMenuItem(name + routeSuffix)
                 {
                     Checked = name.Equals(cfg.Skin, StringComparison.OrdinalIgnoreCase)
                 };

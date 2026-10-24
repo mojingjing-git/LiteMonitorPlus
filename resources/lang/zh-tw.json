@@ -78,6 +78,18 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "RenderingRoute": "渲染路線",
+    "RouteSuffixGpu": "（GPU 材質）",
+    "RouteSuffixGdi": "（GDI+）",
+    "RouteStatus": {
+      "LegacyTheme": "目前主題走 GDI+ 舊路線（未宣告 GPU 材質）。",
+      "GpuRunning": "GPU 材質執行中。",
+      "LiveBackgroundOn": "即時桌面背景執行中（系統截圖/錄影會排除整個視窗）。",
+      "LiveBackgroundOff": "GPU 執行中，使用固定背景（即時背景未開啟）。",
+      "LiveBackgroundUnavailable": "即時背景已開啟但暫不可用",
+      "NotStarted": "GPU 呈現未執行",
+      "LayeredNote": "目前視窗為分層視窗（透明度<100%）；2026-10-24 實測不影響即時背景。"
+    },
         "IpTrafficExclusion": "依 IP 排除即時網速",
         "IpTrafficExclusionEnabled": "啟用依 IP 排除流量",
         "ExcludedTrafficIps": "要排除的遠端 IP（每行一個，僅支援精確 IPv4/IPv6）",

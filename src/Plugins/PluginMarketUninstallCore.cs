@@ -19,6 +19,17 @@ namespace LiteMonitor.src.Plugins
             if (findRecord == null) throw new ArgumentNullException(nameof(findRecord));
             if (removeRecord == null) throw new ArgumentNullException(nameof(removeRecord));
 
+            lock (PluginMarketInstallCore.TransactionGate)
+                return UninstallLocked(entry, pluginsDirectory, findRecord, removeRecord, out reason);
+        }
+
+        private static bool UninstallLocked(
+            MarketPluginEntry? entry,
+            string pluginsDirectory,
+            Func<string, MarketPluginRecord?> findRecord,
+            Action<string> removeRecord,
+            out MarketErrorReason reason)
+        {
             if (!TryCreatePlan(
                     entry,
                     pluginsDirectory,
@@ -28,10 +39,34 @@ namespace LiteMonitor.src.Plugins
                 return false;
 
             PluginUninstallPlan plan = createdPlan!;
-            if (File.Exists(plan.TargetPath))
-                File.Delete(plan.TargetPath);
+            PluginMarketInstallCore.EnsureNoPendingInstall(pluginsDirectory, plan.RecordId);
+            string backupName = Path.GetFileName(plan.TargetPath) + "." + Guid.NewGuid().ToString("N") + ".uninstall";
+            if (!PluginMarketInstallCore.TryResolveDirectChildPath(
+                    pluginsDirectory, Path.GetFileName(plan.TargetPath), out _, out _) ||
+                !PluginMarketInstallCore.TryResolveDirectChildPath(
+                    pluginsDirectory, backupName, out string backupPath, out _))
+            {
+                reason = MarketErrorReason.RecordCorrupted;
+                return false;
+            }
 
-            removeRecord(plan.RecordId);
+            bool hadFile = File.Exists(plan.TargetPath);
+            if (hadFile) File.Copy(plan.TargetPath, backupPath, overwrite: false);
+            try
+            {
+                if (hadFile) File.Delete(plan.TargetPath);
+                removeRecord(plan.RecordId);
+            }
+            catch
+            {
+                // Strict record removal restores its own memory on save failure.
+                // Restore the payload too, retaining the copy if restoration fails.
+                if (hadFile) File.Move(backupPath, plan.TargetPath, overwrite: true);
+                throw;
+            }
+
+            // The uninstall is durable; a leftover .uninstall file is only garbage.
+            try { if (hadFile) File.Delete(backupPath); } catch { }
             return true;
         }
 
