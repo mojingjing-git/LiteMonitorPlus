@@ -19,7 +19,7 @@ public enum HardwareState { Stopped, Starting, Ready, Degraded, Unresponsive, St
 public interface IHardwareClient : IDisposable
 {
     HardwareSnapshot GetLatestSnapshot();                    // 同步读最新完整快照，不触发采样
-    Task<DeviceCatalog> GetCatalogAsync(CancellationToken ct); // 完整版本目录；不向调用方暴露对象锁
+    Task<HardwareCatalog> GetCatalogAsync(CancellationToken ct); // 完整版本目录；不向调用方暴露对象锁
     SamplingApplyResult ApplyConfig(SamplingConfig config);   // 返回生效 revision 或明确失败
     void SubmitDemand(SamplingDemand demand);                 // UI/任务栏/Web/历史/传感器窗口需求合并
     HardwareHealth GetHealth();
@@ -39,10 +39,10 @@ public sealed record HardwareSnapshot(long BatchId, long CatalogVersion, int Con
     IReadOnlyList<MetricSample> Samples, TimeSpan SamplingDuration,
     double TimestampMonoMs);                    // 批次原子替换；真实0=Good+0，缺失=Missing+原因，过期=Stale
 
-public sealed record DeviceCatalogEntry(string StableId, string RuntimeId, string? ParentStableId,
+public sealed record HardwareCatalogEntry(string StableId, string RuntimeId, string? ParentStableId,
     string DeviceType, string? SensorType, bool Available);   // StableId 承载 F07 稳定身份语义
 
-public sealed record DeviceCatalog(long Version, IReadOnlyList<DeviceCatalogEntry> Entries);
+public sealed record HardwareCatalog(long Version, IReadOnlyList<HardwareCatalogEntry> Entries);
 
 public sealed record HardwareHealth(HardwareState State, string? CurrentOperation,
     long ProgressSeq, string? DiagnosticReason);

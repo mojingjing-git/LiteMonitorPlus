@@ -11,7 +11,7 @@ public interface IHardwareClient : IDisposable
     HardwareSnapshot GetLatestSnapshot();
 
     /// <summary>异步获取完整版本设备/传感器目录；不向调用方暴露对象锁或 LHM 对象。</summary>
-    Task<DeviceCatalog> GetCatalogAsync(CancellationToken cancellationToken);
+    Task<HardwareCatalog> GetCatalogAsync(CancellationToken cancellationToken);
 
     /// <summary>应用采集配置与设备选择，返回生效 revision 或明确失败原因。</summary>
     SamplingApplyResult ApplyConfig(SamplingConfig config);

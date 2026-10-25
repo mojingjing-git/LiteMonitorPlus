@@ -112,5 +112,5 @@
 
 1. 契约消费者 = §1.2 的 11 文件；采样入口 = §1.3 的 2 处；LHM 泄漏面 = §1.4 的 3 文件。
 2. `SamplingConfig` 语义清单：现有设置 + F08b `ControllerProbePolicy`（探测策略/排除清单/构造前开关）+ 既有 `DiskProbePolicy`。
-3. `DeviceCatalog` 需承载 F07 稳定设备身份语义；`HardwareSnapshot` 需承载 F03/F03b 网络样本时效与缓存窗口语义。
+3. `HardwareCatalog`（原拟名 DeviceCatalog，B1 实施时因与 F07 既有类型撞名而改）需承载 F07 稳定设备身份语义；`HardwareSnapshot` 需承载 F03/F03b 网络样本时效与缓存窗口语义。
 4. 静态发布器（§5）首版留在进程内适配器后，I3 再字段化——B1 不强制搬。

@@ -71,7 +71,7 @@ flowchart TD
 
 ### 4.1 采集边界C1：与Plan A共用
 
-统一采用`IHardwareClient`、`SamplingConfig`、`SamplingDemand`、`HardwareSnapshot`、`DeviceCatalog`和`HardwareHealth`。这些类型的字段语义与Plan A第4节一致。
+统一采用`IHardwareClient`、`SamplingConfig`、`SamplingDemand`、`HardwareSnapshot`、`HardwareCatalog`（原拟名`DeviceCatalog`，B1实施时因与F07既有类型撞名而改）和`HardwareHealth`。这些类型的字段语义与Plan A第4节一致。
 
 本计划先提供进程内适配器：仍由当前`HardwareMonitor`与采样协调器完成工作，接口调用不引入额外轮询。UI/Web/历史消费同一完整快照，保持真实0、缺失、过期、设备代次和配置revision语义。
 

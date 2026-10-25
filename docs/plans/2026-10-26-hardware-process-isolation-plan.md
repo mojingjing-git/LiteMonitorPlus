@@ -72,7 +72,7 @@ flowchart LR
 - `SamplingConfig`：设备选择、探测策略及采样参数；没有皮肤、窗体、菜单、API Key或Web口令。
 - `SamplingDemand`：UI、任务栏、已授权Web、历史和传感器窗口的需求合并结果。保留既有日志采集策略，不在本计划中顺带改变记录范围。
 - `HardwareSnapshot`：完整采样批次、值/单位/质量/原因、设备身份、采样耗时、配置版本、目录版本。
-- `DeviceCatalog`：设备/传感器的稳定身份、运行身份、父子关系、类型、能力和可用状态。
+- `HardwareCatalog`：设备/传感器的稳定身份、运行身份、父子关系、类型、能力和可用状态。（2026-10-26 B1 实施时由 `DeviceCatalog` 改名：与 F07 既有公开类型 `DeviceIdentity.DeviceCatalog` 撞名，后者是本类型的数据源之一。）
 - `HardwareHealth`：启动/就绪/采样/降级/停止状态、当前操作、进度序号及可诊断原因。
 
 原有`GPU.{index}.*`等外部指标Key保持兼容，由稳定设备绑定解释；不得通过IPC改造另起一套指标命名。主程序一次原子替换完整快照，避免值与GPU名称来自不同代次。

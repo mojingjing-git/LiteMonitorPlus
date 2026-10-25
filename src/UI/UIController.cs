@@ -1,6 +1,7 @@
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices.InfoService;
 using LiteMonitor.src.SystemServices;
+using LiteMonitor.SystemServices; // B1：HardwareClientAdapter（目标命名空间方案）
 using LiteMonitor.src.UI.Helpers;
 using LiteMonitor.src.WebServer;
 using LiteMonitor.Rendering;
@@ -21,6 +22,7 @@ namespace LiteMonitor
         private readonly Settings _cfg;
         private readonly Form _form;
         private readonly HardwareMonitor _mon;
+        private readonly LiteMonitor.Contracts.IHardwareClient _hwClient;
         private readonly System.Windows.Forms.Timer _timer;
 
         private UILayout _layout;
@@ -132,6 +134,8 @@ namespace LiteMonitor
             _cfg = cfg;
             _form = form;
             _mon = new HardwareMonitor(cfg);
+            // B1/C1 最小接线：UI 持有采集契约；Tick 采样暂仍走 _mon 旧路径，B2 迁移时切换消费面。
+            _hwClient = new HardwareClientAdapter(_mon, cfg.MonitorItems.Select(x => x.Key).ToList());
 
             _layout = new UILayout(ThemeManager.Current);
 
@@ -2173,6 +2177,7 @@ namespace LiteMonitor
             _timer.Stop();
             _timer.Dispose();
             _mon.Dispose();
+            _hwClient.Dispose();
 
             // 释放外观运行时持有的纹理/画刷/噪点位图。
             // 背景帧与预览源是借用引用，AppearanceRuntime 不会释放它们。
