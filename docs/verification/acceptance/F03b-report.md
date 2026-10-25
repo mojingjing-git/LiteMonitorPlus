@@ -61,10 +61,15 @@ Set-Location 'G:\TOOL\LiteMonitor-fork\.worktrees\f03b'
 | 命令 | 目的 | 结果（发现数/通过/失败） |
 |---|---|---|
 | `dotnet build LiteMonitor.sln -c Debug --nologo --no-incremental` | 全解构建 | **0 错误**（529 警告全部为仓库既有警告；本包新增/修改文件 **0 警告**） |
-| `dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Debug --no-build --nologo` | 主测试 | **1954 发现 / 1947 通过 / 0 失败 / 7 跳过** |
+| `dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Debug --no-build --nologo` | 主测试（CI 等价环境） | **1954 发现 / 1953 通过 / 0 失败 / 1 跳过** |
 | `dotnet test tests/LiteMonitor.GpuNonperformance.Tests/… -c Debug --no-build --nologo` | GPU 非性能 | **19 发现 / 19 通过 / 0 失败** |
 | `dotnet test tests/LiteMonitor.Updater.Tests/… -c Debug --no-build --nologo` | Updater | **73 发现 / 73 通过 / 0 失败** |
-| 合计 | | **2046 发现**（基线 2028 **+18**） |
+| `合计` | | **2046 发现**（开工基线 2028 **+18**；注意 master 期间已前进到 `dd04fdd`，其基线为 2029，集成后应为 **2047**） |
+
+> 主测试工程共跑 **4 轮**（含一次 `--no-incremental` 全量重建后的最终验收轮）：
+> ① 1947 通过 / 7 跳过 / 0 失败（本机默认环境）→ ② 1953 通过 / 1 跳过 / 0 失败（CI 等价环境）→
+> ③ **1952 通过 / 1 跳过 / 1 失败**（§4.2 的已知 flaky 偶发）→ ④ 重跑 **1953 通过 / 1 跳过 / 0 失败**。
+> 除 ③ 那一类外，**本包新增的 18 条用例在每一轮都全绿**。
 
 ### 4.1 跳过用例说明（重要）
 
@@ -83,10 +88,30 @@ Set-Location 'G:\TOOL\LiteMonitor-fork\.worktrees\f03b'
 
 - 两种环境**发现总数相同**（1936 → 1954，**+18**），差异只在通过/跳过分布，**与本包改动无关**。
 - CI 门禁 `MAX_SKIPPED_TESTS: 1` 在 CI 等价环境下**仍然成立**（跳过数仍为 1）。
-- ⚠️ 集成提示：`MIN_TEST_TOTAL` 需由协调者从 **2028 上调到 2046**（= 2028 + 本包新增 18 条）。
-  三个工程合计：1954 + 19 + 73 = **2046**。
+- ⚠️ 集成提示（阈值）：本包开工时 master 的门禁是 `MIN_TEST_TOTAL: 2028`；
+  **期间 master 已前进到 `dd04fdd`**（F08a 集成），两个 workflow 的阈值现为 **`MIN_TEST_TOTAL: 2029`**。
+  集成本包后需要上调到 **2029 + 18 = 2047**（ci.yml 与 release.yml 逐字一致），
+  `MAX_SKIPPED_TESTS: 1` **不得放宽**。
+  本包自身**一字未动**两个 workflow。
 
-### 4.2 红 → 绿证明（变异测试）
+### 4.2 已知 flaky（与本包无关，未修）
+
+第 ③ 轮全量跑出现 **1 条**失败：
+
+- `LiteMonitor.Tests.ReviewMarketPersistenceRegressionTests.ExtendedJournalMetadata_IsValidatedBeforeRecovery`
+  （`tests/LiteMonitor.Tests/ReviewMarketPersistenceRegressionTests.cs:437`）
+
+- 归因：**派发单已记录**的既有 flaky —— `src/Plugins/PluginMarket.cs:1038` 的
+  `File.Move(stagePath, targetPath, overwrite: true)` 偶发返回 Win32 `ERROR_ACCESS_DENIED`
+  （`UnauthorizedAccessException: Access to the path is denied`）；受害用例随机轮换。
+- 证据链：
+  1. 本包**未触及**插件市场代码（改动文件清单见 §9，全在 `src/System/HardwareServices/` 与 `tests/LiteMonitor.Tests/NetworkCacheWindowTests.cs`）；
+  2. 同一份提交的第 ② 轮与第 ④ 轮**都全绿**（0 失败），第 ③ 轮才偶发 ⇒ 间歇性；
+  3. 派发单记录协调者已在**纯净基线 `d52c0ab` 上复现**同一现象 ⇒ 与任何新改动无关。
+- 处理：按派发单要求**重跑一次确认**（第 ④ 轮 0 失败），**不修**（属主题市场工作线）。
+- 本包新增的 18 条用例在 4 轮中**始终全绿**。
+
+### 4.3 红 → 绿证明（变异测试）
 
 由于本包是在既有实现上"改窗口语义"，先写测试再改实现无法产生"编译期红"，
 因此采用**变异验证**：把实现逐项改回旧语义，确认对应用例**确实变红**，再恢复。
@@ -151,6 +176,7 @@ Set-Location 'G:\TOOL\LiteMonitor-fork\.worktrees\f03b'
 | `src/System/HardwareMonitor.cs` | **未改动**（禁改清单）。`HardwareMonitor.GetNetworkIP()` 签名与行为保持不变。 |
 | `.github/workflows/ci.yml` / `release.yml` | **一字未动**（`MIN_TEST_TOTAL: 2028` / `MAX_SKIPPED_TESTS: 1` 保持原样）。集成时需由协调者把 `MIN_TEST_TOTAL` 上调到 **2046**。 |
 | `GetCurrentIP()` 的返回契约 | 保持"无地址时返回 null"（旧实现 `_staticIPCache = null` 的行为），未改成 `""`，以免影响 `LiteWebServer.cs:487` 的 `?? "127.0.0.1"` 兜底。新的 `GetCurrentIPResult()` 才返回 `""` + `Missing` 状态。 |
+| **基线漂移** | 本分支基于 `bbbfdaf`。完工时 master 已前进到 `dd04fdd`（F08a 集成 + F17 派发单），改动文件为 `DiskProbePolicy.cs` / `DiskProbePolicyTests.cs` / `DiskProbeSettingsMigrationTests.cs` / 两个 workflow —— **与本包的 6 个改动文件无重叠**，可直接合并，无需 rebase 冲突处理。 |
 
 ### 7.2 发现的相邻问题（不属于本包，建议归属）
 
@@ -165,8 +191,9 @@ Set-Location 'G:\TOOL\LiteMonitor-fork\.worktrees\f03b'
    这是"用 0.0.0.0 冒充有效地址"的既有写法（与本包代码约束第 3 条精神相悖）。
    本包未改（不在授权清单内），但**建议**后续统一为缺失占位（如 `--`）。→ 建议归属：UI/信息层。
 4. **基线 flaky（与本包无关）**：`tests/LiteMonitor.Tests/ReviewMarketPersistenceRegressionTests.cs` 间歇失败
-   （`src/Plugins/PluginMarket.cs:1038` 的 `File.Move(..., overwrite: true)` 偶发 `ERROR_ACCESS_DENIED`）。
-   本包**未触及**插件市场代码；本次全量跑**未复现**该失败。→ 归属：主题市场工作线（按派发单要求不修）。
+   （`src/Plugins/PluginMarket.cs:1038` 的 `File.Move(..., overwrite: true)` 偶发 Win32 `ERROR_ACCESS_DENIED`）。
+   本包**未触及**插件市场代码（改动文件清单见 §9）。实测情况见 §4.3。
+   → 归属：主题市场工作线（按派发单要求**不修**）。
 
 ## 8. 证据锚点（真实文件 : 行号）
 
@@ -192,20 +219,20 @@ Set-Location 'G:\TOOL\LiteMonitor-fork\.worktrees\f03b'
 
 | 行号 | 内容 |
 |---|---|
-| 25–41 | `NetworkState`：`NativeAdapter` 改为 `INetworkAdapterSnapshot?`；新增 `ForceRematch` / `ConsecutiveMatchFailures` / `AppliedInvalidationGeneration` |
-| 52–66 | 新字段：`_addressCache` / `_refreshGate` / `_adapters` / `_changeSource` / `_adapterInvalidationGeneration`（旧 `_staticIPCache` / `_lastIPCheckTimestamp` / `_hasIPCheck` / `_shouldResetAdapters` 已删除） |
-| 116–133 | 新的重匹配退避阶梯常量：`RematchRetryIntervalSeconds = 1.0` / `MaxImmediateRematchAttempts = 3` / `RematchThrottleSeconds = 10.0` |
-| 136–166 | 构造签名：**只追加** 3 个可选参数（`adapterSource` / `changeSource` / `addressCache`），旧调用点全部兼容 |
-| 173–185 | `OnNetworkChanged()` —— **事件驱动**入口：推进代次（旧 IP 立即作废）+ 作废已锁定的原生网卡（重匹配立即放行） |
-| 423–436 | `ApplyAdapterInvalidation()` —— 按代次作废单个网卡的原生实例（旧的 `_shouldResetAdapters` 全局标志的精确化替代） |
-| 441–449 | `GetCurrentIP()` —— 保持既有契约（无地址返回 null），委托给新 API |
-| 454–494 | `GetCurrentIPResult()` —— **新**：缓存命中 → 闸门判定（有界）→ 真正取值 → 区分 Missing / Failed / Retained |
-| 496–556 | `ResolveCurrentIP()` —— 策略 A（已锁定网卡）/ 策略 B（枚举兜底）；**枚举异常 ⇒ `Failed`**，无 IPv4 ⇒ `Missing` |
-| 558–594 | `GetIPv4FromAdapter(INetworkAdapterSnapshot)` —— 保留既有语义（忽略 APIPA、优先 192.168.x.x） |
-| 851–872 | `AccumulateTraffic`：计数读取失败 ⇒ 作废网卡 + `ForceRematch`（立即重匹配），并修正 `UpdateExclusionTarget` 的空引用风险 |
-| 892–899 | `NativeMismatch` ⇒ 作废网卡 + `ForceRematch` |
-| 919–995 | `MatchNativeNetworkAdapter()` —— **退避阶梯**：失效信号立即 / 1 秒快速重试 ≤3 次 / 退避 10 秒 |
-| 1025–1038 | `SetNativeAdapter(INetworkAdapterSnapshot, …)` —— 计数不可用即视为未匹配 |
+| 25–37 | `NetworkState`：`NativeAdapter` 改为 `INetworkAdapterSnapshot?`（:25）；新增 `ForceRematch`（:33）/ `ConsecutiveMatchFailures`（:35）/ `AppliedInvalidationGeneration`（:37） |
+| 57–65 | 新字段：`_addressCache`（:57）/ `_refreshGate`（:59）/ `_adapters`（:61）/ `_changeSource`（:63）/ `_adapterInvalidationGeneration`（:65）（旧 `_staticIPCache` / `_lastIPCheckTimestamp` / `_hasIPCheck` / `_shouldResetAdapters` 已删除） |
+| 116–134 | 新的重匹配退避阶梯常量：`RematchRetryIntervalSeconds = 1.0`（:121）/ `MaxImmediateRematchAttempts = 3`（:127）/ `RematchThrottleSeconds = 10.0`（:133） |
+| 136–168 | 构造签名：**只追加** 3 个可选参数（`adapterSource` / `changeSource` / `addressCache`），旧调用点全部兼容 |
+| 173–185 | `OnNetworkChanged()`（:173）—— **事件驱动**入口：推进代次（旧 IP 立即作废）+ 作废已锁定的原生网卡（重匹配立即放行） |
+| 423–436 | `ApplyAdapterInvalidation()`（:423）—— 按代次作废单个网卡的原生实例（旧的 `_shouldResetAdapters` 全局标志的精确化替代） |
+| 441–449 | `GetCurrentIP()`（:441）—— 保持既有契约（无地址返回 null），委托给新 API |
+| 454–494 | `GetCurrentIPResult()`（:454）—— **新**：缓存命中 → 闸门判定（有界）→ 真正取值 → 区分 Missing / Failed / Retained |
+| 496–570 | `ResolveCurrentIP()`（:496）—— 策略 A（已锁定网卡）/ 策略 B（枚举兜底）；**枚举异常 ⇒ `Failed`**、无 IPv4 ⇒ `Missing`（:569） |
+| 572–605 | `GetIPv4FromAdapter(INetworkAdapterSnapshot)`（:577）—— 保留既有语义（忽略 APIPA、优先 192.168.x.x） |
+| 850–872 | `AccumulateTraffic`：计数读取失败 ⇒ 作废网卡 + `ForceRematch`（立即重匹配），并修正 `UpdateExclusionTarget` 的空引用风险 |
+| 893–899 | `NativeMismatch`（:893）⇒ 作废网卡 + `ForceRematch` |
+| 919–992 | `MatchNativeNetworkAdapter()`（:919）—— **退避阶梯**：失效信号立即 / 1 秒快速重试 ≤3 次 / 退避 10 秒 |
+| 1028–1038 | `SetNativeAdapter(INetworkAdapterSnapshot, …)`（:1028）—— 计数不可用即视为未匹配 |
 
 ### 8.3 测试文件 `tests/LiteMonitor.Tests/NetworkCacheWindowTests.cs`
 
