@@ -15,12 +15,30 @@ namespace LiteMonitor.src.Plugins
             Func<string, MarketPluginRecord?> findRecord,
             Action<string> removeRecord,
             out MarketErrorReason reason)
+            => Uninstall(entry, pluginsDirectory, findRecord, removeRecord,
+                PluginConstants.BuiltinPluginIds, PluginMarket.FileContentIdMatches, out reason);
+
+        /// <summary>
+        /// 卸载（M1 资产类型泛化）。<paramref name="builtinIds"/> 为 null 时跳过内置清单检查
+        /// （主题没有内置常量表："内置 = 无安装记录"，NotManaged 已覆盖）；
+        /// <paramref name="contentIdentityMatches"/> 决定"文件内容与记录身份一致"的判据
+        /// （插件 = 内容 id 匹配；主题 = JSON 可解析，完整性由记录摘要比对兜底，F16）。
+        /// </summary>
+        internal static bool Uninstall(
+            MarketPluginEntry? entry,
+            string pluginsDirectory,
+            Func<string, MarketPluginRecord?> findRecord,
+            Action<string> removeRecord,
+            HashSet<string>? builtinIds,
+            Func<string, string, bool>? contentIdentityMatches,
+            out MarketErrorReason reason)
         {
             if (findRecord == null) throw new ArgumentNullException(nameof(findRecord));
             if (removeRecord == null) throw new ArgumentNullException(nameof(removeRecord));
 
             lock (PluginMarketInstallCore.TransactionGate)
-                return UninstallLocked(entry, pluginsDirectory, findRecord, removeRecord, out reason);
+                return UninstallLocked(entry, pluginsDirectory, findRecord, removeRecord,
+                    builtinIds, contentIdentityMatches, out reason);
         }
 
         private static bool UninstallLocked(
@@ -28,12 +46,16 @@ namespace LiteMonitor.src.Plugins
             string pluginsDirectory,
             Func<string, MarketPluginRecord?> findRecord,
             Action<string> removeRecord,
+            HashSet<string>? builtinIds,
+            Func<string, string, bool>? contentIdentityMatches,
             out MarketErrorReason reason)
         {
             if (!TryCreatePlan(
                     entry,
                     pluginsDirectory,
                     findRecord,
+                    builtinIds,
+                    contentIdentityMatches,
                     out PluginUninstallPlan? createdPlan,
                     out reason))
                 return false;
@@ -76,6 +98,19 @@ namespace LiteMonitor.src.Plugins
             Func<string, MarketPluginRecord?> findRecord,
             out PluginUninstallPlan? plan,
             out MarketErrorReason reason)
+            => TryCreatePlan(entry, pluginsDirectory, findRecord,
+                PluginConstants.BuiltinPluginIds, PluginMarket.FileContentIdMatches,
+                out plan, out reason);
+
+        /// <summary>M1 资产类型泛化的卸载计划创建（参数语义见 <see cref="Uninstall"/>）。</summary>
+        internal static bool TryCreatePlan(
+            MarketPluginEntry? entry,
+            string pluginsDirectory,
+            Func<string, MarketPluginRecord?> findRecord,
+            HashSet<string>? builtinIds,
+            Func<string, string, bool>? contentIdentityMatches,
+            out PluginUninstallPlan? plan,
+            out MarketErrorReason reason)
         {
             plan = null;
             reason = MarketErrorReason.Unknown;
@@ -86,7 +121,7 @@ namespace LiteMonitor.src.Plugins
                 return false;
             }
 
-            if (PluginConstants.BuiltinPluginIds.Contains(entry.Id))
+            if (builtinIds != null && builtinIds.Contains(entry.Id))
             {
                 reason = MarketErrorReason.BuiltinConflict;
                 return false;
@@ -106,7 +141,7 @@ namespace LiteMonitor.src.Plugins
                 return false;
             }
 
-            if (PluginConstants.BuiltinPluginIds.Contains(record.Id))
+            if (builtinIds != null && builtinIds.Contains(record.Id))
             {
                 reason = MarketErrorReason.BuiltinConflict;
                 return false;
@@ -121,9 +156,9 @@ namespace LiteMonitor.src.Plugins
             }
 
             // A missing payload is an already-removed file. An existing payload
-            // must still identify the same managed plugin.
+            // must still identify the same managed asset.
             if (File.Exists(targetPath) &&
-                !PluginMarket.FileContentIdMatches(targetPath, record.Id))
+                !(contentIdentityMatches ?? PluginMarket.FileContentIdMatches)(targetPath, record.Id))
             {
                 reason = MarketErrorReason.RecordCorrupted;
                 return false;

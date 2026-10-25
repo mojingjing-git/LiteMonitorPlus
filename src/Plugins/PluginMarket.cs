@@ -166,14 +166,23 @@ namespace LiteMonitor.src.Plugins
         /// "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/plugins/../evil"
         /// 这类路径穿越、以及 "https://raw.githubusercontent.com/.../plugins.evil.tld/x" 这类
         /// "前缀后面接别的域名/路径" 的写法绕过。现在改成：
-        /// 先用 <see cref="Uri"/> 解析，再逐项比对 Host 与路径前缀。
+        /// 先用 <see cref="Uri"/> 解析，再比对 Host 与路径前缀。
         /// </summary>
-        private static readonly AllowedDownloadSource[] AllowedDownloadSources =
-        {
-            new AllowedDownloadSource(
-                "raw.githubusercontent.com",
-                "/mojingjing-git/awesome-litemonitor-plugins/main/plugins/")
-        };
+        /// <summary>下载源 Host：精确匹配（不分大小写）。</summary>
+        internal const string DownloadHost = "raw.githubusercontent.com";
+
+        /// <summary>仓库 main 分支的基路径，资产前缀（plugins/、themes/）拼接在其后。</summary>
+        private const string RepoMainBasePath = "/mojingjing-git/awesome-litemonitor-plugins/main/";
+
+        /// <summary>插件资产前缀（默认资产类型，保持既有行为）。</summary>
+        internal const string PluginsAssetPrefix = "plugins/";
+
+        /// <summary>主题资产前缀（主题市场；M1 资产类型泛化）。</summary>
+        internal const string ThemesAssetPrefix = "themes/";
+
+        /// <summary>按资产类型解析出允许的下载源（Host + 完整路径前缀）。</summary>
+        private static AllowedDownloadSource SourceForAsset(string assetPrefix)
+            => new AllowedDownloadSource(DownloadHost, RepoMainBasePath + assetPrefix);
 
         /// <summary>索引拉取用（沿用原行为：允许自动跳转）。</summary>
         private static readonly HttpClient _http = new HttpClient
@@ -212,12 +221,17 @@ namespace LiteMonitor.src.Plugins
             return TryResolveAllowedDownloadUri(url, out _, out _);
         }
 
+        /// <summary>解析并校验下载地址（插件资产前缀，保持既有行为）。</summary>
+        internal static bool TryResolveAllowedDownloadUri(string? rawUrl, out Uri allowed, out string reason)
+            => TryResolveAllowedDownloadUri(rawUrl, PluginsAssetPrefix, out allowed, out reason);
+
         /// <summary>
-        /// 解析并校验下载地址（LM-007）。通过时 <paramref name="allowed"/> 是可用于下载的绝对 URI。
-        /// 校验项：绝对 URI、HTTPS、无 userinfo、默认端口、Host 精确命中白名单、
+        /// 解析并校验下载地址（LM-007；M1 资产类型泛化）。通过时 <paramref name="allowed"/> 是可用于下载的绝对 URI。
+        /// <paramref name="assetPrefix"/> 决定路径前缀（plugins/ 或 themes/），其余校验项完全同口径：
+        /// 绝对 URI、HTTPS、无 userinfo、默认端口、Host 精确命中白名单、
         /// 路径无编码分隔符/无 ".."/无空段、路径前缀命中白名单。
         /// </summary>
-        internal static bool TryResolveAllowedDownloadUri(string? rawUrl, out Uri allowed, out string reason)
+        internal static bool TryResolveAllowedDownloadUri(string? rawUrl, string assetPrefix, out Uri allowed, out string reason)
         {
             allowed = null!;
             reason = "";
@@ -258,25 +272,13 @@ namespace LiteMonitor.src.Plugins
             string rawPath = ExtractRawPath(trimmed, parsed);
             if (!TryValidateRawPath(rawPath, out reason)) return false;
 
-            bool hostMatched = false;
-            bool pathMatched = false;
-            foreach (var source in AllowedDownloadSources)
-            {
-                if (!string.Equals(parsed.Host, source.Host, StringComparison.OrdinalIgnoreCase)) continue;
-                hostMatched = true;
-                if (rawPath.StartsWith(source.PathPrefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    pathMatched = true;
-                    break;
-                }
-            }
-
-            if (!hostMatched)
+            AllowedDownloadSource source = SourceForAsset(assetPrefix);
+            if (!string.Equals(parsed.Host, source.Host, StringComparison.OrdinalIgnoreCase))
             {
                 reason = "主机 " + parsed.Host + " 不在允许的下载源白名单内";
                 return false;
             }
-            if (!pathMatched)
+            if (!rawPath.StartsWith(source.PathPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 reason = "路径不在允许的下载源前缀内：" + rawPath;
                 return false;
@@ -459,17 +461,27 @@ namespace LiteMonitor.src.Plugins
         public static bool IsTargetAvailable(string pluginId, out string reason)
             => IsTargetAvailable(pluginId, PluginMarketState.Find, out reason);
 
+        /// <summary>目标文件是否允许被市场写入（插件口径：内容身份 = 内容 id 匹配）。</summary>
+        internal static bool IsTargetAvailable(
+            string pluginId,
+            Func<string, MarketPluginRecord?> findRecord,
+            out string reason)
+            => IsTargetAvailable(pluginId, findRecord, FileContentIdMatches, out reason);
+
         /// <summary>
-        /// 目标文件是否允许被市场写入（LM-008 加固）。
+        /// 目标文件是否允许被市场写入（LM-008 加固；M1 资产类型泛化）。
         ///
-        /// 只有"文件在 + 有市场安装记录 + 记录指向这个文件 + 文件内容 id 一致 + 文件内容仍与
-        /// 安装时记录的摘要一致"时才允许覆盖（更新流程）。
+        /// 只有"文件在 + 有市场安装记录 + 记录指向这个文件 + 内容身份一致
+        /// （<paramref name="contentIdentityMatches"/>：插件 = 内容 id 匹配；主题 = JSON 可解析，
+        /// 完整性由安装记录摘要比对兜底，F16）+ 文件内容仍与安装时记录的摘要一致"时
+        /// 才允许覆盖（更新流程）。
         /// 摘要不一致说明用户装完之后自己改过这个文件 —— 市场不得静默覆盖用户的改动。
         /// 用户自己放的、没记录的文件（内置插件、手动安装、旧版残留）一律拒绝。
         /// </summary>
         internal static bool IsTargetAvailable(
             string pluginId,
             Func<string, MarketPluginRecord?> findRecord,
+            Func<string, string, bool> contentIdentityMatches,
             out string reason)
         {
             string fileName = GetInstallFileName(pluginId);
@@ -478,7 +490,7 @@ namespace LiteMonitor.src.Plugins
 
             // 文件在，且确认是本市场装的这个 id → 允许（这是"更新"）
             var record = findRecord(pluginId);
-            if (record != null && FileContentIdMatches(path, pluginId))
+            if (record != null && contentIdentityMatches(path, pluginId))
             {
                 if (!string.Equals(record.File, fileName, StringComparison.OrdinalIgnoreCase))
                 {
