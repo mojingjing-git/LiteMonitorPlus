@@ -83,6 +83,9 @@ namespace LiteMonitor.src.UI.SettingsPage
         private int _contentGeneration;   // 已呈现内容的代次（签名维度）
         private bool _disposed;
 
+        /// <summary>创建页面的线程（= UI 线程）：后台线程不得直接碰控件。</summary>
+        private readonly int _uiThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+
         // ================================================================
         // 数据源
         // ================================================================
@@ -1253,15 +1256,26 @@ namespace LiteMonitor.src.UI.SettingsPage
             if (_disposed) return;
             try
             {
-                if (IsHandleCreated && InvokeRequired)
+                if (IsHandleCreated)
                 {
-                    BeginInvoke(action);
+                    if (InvokeRequired)
+                    {
+                        BeginInvoke(action);
+                        return;
+                    }
+                    action();
                     return;
                 }
+
+                // 句柄还没建起来 ⇒ 只有 UI 线程本身可以安全地碰控件；
+                // 后台线程来的回调直接丢弃（页面再次显示时会重建预览）。
+                if (Thread.CurrentThread.ManagedThreadId == _uiThreadId)
+                {
+                    action();
+                }
             }
-            catch (ObjectDisposedException) { return; }
-            catch (InvalidOperationException) { return; }
-            action();
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
 
         private static void OpenUrl(string url)
