@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    P-F08b Spike —— 变体 Latest：F09a 推荐的升级目标 LibreHardwareMonitorLib 0.9.7-pre771
+    （传递依赖 DiskInfoToolkit 2.2.2，库内带 ExcludeUsbDevices / StopMonitoring）
+
+    用途：判定"升级到 F09a 推荐组合后，是否就能拿到'允许列表式'的按需枚举"。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Spike.Latest</AssemblyName>
+    <RootNamespace>F08b.Spike</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Probe.Shared\SpikeRunner.cs" Link="SpikeRunner.cs" />
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.7-pre771" />
+  </ItemGroup>
+
+</Project>
