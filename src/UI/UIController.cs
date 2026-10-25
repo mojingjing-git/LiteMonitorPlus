@@ -1054,10 +1054,10 @@ namespace LiteMonitor
                     StartGpuPresentation();
                 }
 
-                // ★ 只请求"到期才采"的一次硬件采集：
+                // ★ 只请求"到期才采"的一次硬件采集（B2 起统一走 C1 契约入口，委托同一协调器，语义不变）：
                 //   未到期时这里立即返回，不会创建任何硬件任务，
                 //   但下面的取值 / 平滑 / 绘制仍然按界面频率执行。
-                await _mon.UpdateIfDueAsync();
+                await _hwClient.RequestRescanAsync();
 
                 // ★ 关闭竞态：异步回调回来时窗体/控制器可能已经释放，
                 //   此时不能再触碰界面对象，也不能触发重建。
@@ -2077,7 +2077,7 @@ namespace LiteMonitor
                  // 避免异步等待导致的 "?"
                  if (dashKey == "IP")
                  {
-                      string cachedIP = HardwareMonitor.Instance?.GetNetworkIP();
+                      string cachedIP = _hwClient.GetNetworkIP();
                       if (!string.IsNullOrEmpty(cachedIP) && cachedIP != "?")
                       {
                            InfoService.Instance.InjectIP(cachedIP);

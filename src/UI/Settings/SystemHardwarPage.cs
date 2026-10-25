@@ -340,14 +340,14 @@ namespace LiteMonitor.src.UI.SettingsPage
             {
                 string strAuto = LanguageManager.T("Menu.Auto");
 
-                // 1. 并行等待所有数据返回 (使用 HardwareScanner)
+                // 1. 并行等待所有数据返回 (改走 HardwareMonitor 无参静态 —— B2：UI 侧不再触碰采集器内部对象与锁)
                 // ★ [F07] 磁盘改成 **Label + Value**（值 = 稳定设备身份）——
                 //   同型号的两块盘必须能分别选择，旧实现按显示名去重只剩一块（#538）。
-                var taskDisks = Task.Run(() => HardwareScanner.ListAllDiskOptions(HardwareMonitor.Instance.ComputerInstance));
-                var taskNets  = Task.Run(() => HardwareScanner.ListAllNetworks(HardwareMonitor.Instance.ComputerInstance));
+                var taskDisks = Task.Run(() => HardwareMonitor.ListAllDiskOptions());
+                var taskNets  = Task.Run(() => HardwareMonitor.ListAllNetworks());
                 var taskGpus  = Task.Run(() => HardwareMonitor.ListAllGpuOptions());
-                var taskFans  = Task.Run(() => HardwareScanner.ListAllFans(HardwareMonitor.Instance.ComputerInstance, HardwareMonitor.Instance.SyncLock));
-                var taskMobo  = Task.Run(() => HardwareScanner.ListAllMoboTemps(HardwareMonitor.Instance.ComputerInstance, HardwareMonitor.Instance.SyncLock));
+                var taskFans  = Task.Run(() => HardwareMonitor.ListAllFans());
+                var taskMobo  = Task.Run(() => HardwareMonitor.ListAllMoboTemps());
                 // ★ [#166] CPU 电压候选：只读**已发布**的快照（不扫硬件树、不触发采集）
                 var taskCpuVoltage = Task.Run(() => HardwareMonitor.ListCpuVoltageCandidates());
 

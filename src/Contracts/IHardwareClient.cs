@@ -22,6 +22,9 @@ public interface IHardwareClient : IDisposable
     /// <summary>查询采集层健康状态与当前操作。</summary>
     HardwareHealth GetHealth();
 
+    /// <summary>获取当前网络出口 IP（委托既有 NetworkManager 缓存逻辑，不新增探测）。</summary>
+    string? GetNetworkIP();
+
     /// <summary>请求有界重扫；重复请求合并，关闭后拒绝新操作。</summary>
-    Task<bool> RequestRescanAsync(CancellationToken cancellationToken);
+    Task<bool> RequestRescanAsync(CancellationToken cancellationToken = default);
 }

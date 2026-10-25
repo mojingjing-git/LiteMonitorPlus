@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using LibreHardwareMonitor.Hardware; // 目录枚举在采集层内进行（System 层允许引用 LHM；UI/Web 不允许）
 using LiteMonitor.Contracts;
 using LiteMonitor.src.SystemServices; // HardwareMonitor 与既有 HardwareServices 类型（B5 命名空间统一前的现状）
 
@@ -19,6 +20,7 @@ public sealed class HardwareClientAdapter : IHardwareClient
     private readonly HardwareMonitor _monitor;
     private readonly IReadOnlyList<string> _snapshotKeys;
     private long _batchId;
+    private volatile SamplingDemand? _lastDemand;
     private volatile bool _disposed;
 
     /// <param name="monitor">被包装的采集器（由组合根创建并持有）。</param>
@@ -59,16 +61,46 @@ public sealed class HardwareClientAdapter : IHardwareClient
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
         var entries = new List<HardwareCatalogEntry>();
-        if (_monitor.IsReady)
+        var computer = _monitor.ComputerInstance;
+        if (computer != null && _monitor.IsReady)
         {
-            foreach (var name in HardwareMonitor.ListAllNetworks()) entries.Add(Entry(name, "Network"));
-            foreach (var name in HardwareMonitor.ListAllDisks()) entries.Add(Entry(name, "Disk"));
-            foreach (var name in HardwareMonitor.ListAllGpus()) entries.Add(Entry(name, "Gpu"));
-            foreach (var name in HardwareMonitor.ListAllFans()) entries.Add(Entry(name, "Fan"));
-            foreach (var name in HardwareMonitor.ListAllMoboTemps()) entries.Add(Entry(name, "MoboTemp"));
+            // 锁内一次性快照设备/传感器树（含当前值与峰值），消费方不再持有 LHM 活对象。
+            lock (_monitor.SyncLock)
+            {
+                foreach (IHardware hw in computer.Hardware)
+                    AddHardwareEntries(entries, hw, parentStableId: null);
+            }
         }
-        var catalog = new HardwareCatalog(_monitor.SamplingGeneration, entries);
-        return Task.FromResult(catalog);
+        return Task.FromResult(new HardwareCatalog(_monitor.SamplingGeneration, entries));
+    }
+
+    private static void AddHardwareEntries(List<HardwareCatalogEntry> entries, IHardware hw, string? parentStableId)
+    {
+        string id = hw.Identifier.ToString();
+        entries.Add(new HardwareCatalogEntry(
+            StableId: id,
+            RuntimeId: id,
+            ParentStableId: parentStableId,
+            DeviceType: hw.HardwareType.ToString(),
+            SensorType: null,
+            Available: true,
+            Name: hw.Name));
+        foreach (ISensor sensor in hw.Sensors)
+        {
+            string sensorId = sensor.Identifier.ToString();
+            entries.Add(new HardwareCatalogEntry(
+                StableId: sensorId,
+                RuntimeId: sensorId,
+                ParentStableId: id,
+                DeviceType: hw.HardwareType.ToString(),
+                SensorType: sensor.SensorType.ToString(),
+                Available: true,
+                Name: sensor.Name,
+                Value: sensor.Value,
+                Max: sensor.Max));
+        }
+        foreach (IHardware sub in hw.SubHardware)
+            AddHardwareEntries(entries, sub, id);
     }
 
     public SamplingApplyResult ApplyConfig(SamplingConfig config)
@@ -100,8 +132,10 @@ public sealed class HardwareClientAdapter : IHardwareClient
     {
         ThrowIfDisposed();
         if (demand == null) throw new ArgumentNullException(nameof(demand));
-        // V1 仅映射 Web 通道（现状唯一显式需求入口）；UI/任务栏/历史当前隐式常开，B2 迁移时逐通道接线。
-        _monitor.SetWebDataDemand(demand.Web);
+        // V1 只存储合并需求记录、不驱动采集层：Web 通道仍由 LiteWebServer 的需求回调持有
+        // （此处若强行映射 SetWebDataDemand，传感器窗口提交需求会把 Web 需求误关掉）。
+        // 各通道真实合流随 B3 应用协调接线；记录可从 GetHealth/诊断侧观察。
+        _lastDemand = demand;
     }
 
     public HardwareHealth GetHealth()
@@ -112,6 +146,12 @@ public sealed class HardwareClientAdapter : IHardwareClient
             CurrentOperation: null,
             ProgressSeq: _monitor.SamplingGeneration,
             DiagnosticReason: HardwareMonitor.LastHardwareError);
+    }
+
+    public string? GetNetworkIP()
+    {
+        ThrowIfDisposed();
+        return _monitor.GetNetworkIP();
     }
 
     public Task<bool> RequestRescanAsync(CancellationToken cancellationToken)
@@ -126,14 +166,6 @@ public sealed class HardwareClientAdapter : IHardwareClient
         // 只标记自身关闭、拒绝后续操作；被包装的采集器由组合根（UIController）拥有并释放（Plan B §4.4）。
         _disposed = true;
     }
-
-    private static HardwareCatalogEntry Entry(string name, string deviceType) => new(
-        StableId: name,          // B2：SystemHardwarPage/LiteTreeView 迁移时替换为 F07 稳定身份
-        RuntimeId: name,
-        ParentStableId: null,
-        DeviceType: deviceType,
-        SensorType: null,
-        Available: true);
 
     private void ThrowIfDisposed()
     {

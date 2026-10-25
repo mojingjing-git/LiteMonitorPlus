@@ -1,10 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
-using LibreHardwareMonitor.Hardware;
 using LiteMonitor;
+using LiteMonitor.Contracts;          // B2：消费平台无关目录，不再引用 LHM
 using LiteMonitor.src.SystemServices;
+using LiteMonitor.SystemServices;     // B2：HardwareClientAdapter（默认组装用，见构造函数注释）
 using LiteMonitor.src.Core;
 using LiteMonitor.src.UI.Controls;
 
@@ -16,13 +19,23 @@ namespace LiteMonitor.src.UI
         private System.Windows.Forms.Timer _refreshTimer;
         private Panel _headerPanel;
          private TextBox _searchInput;
-        
-        private Settings _settings = Settings.Load();
-        
-        private string T(string en, string zh) => _settings.Language.ToLower().StartsWith("zh") ? zh : en; 
 
-        public HardwareInfoForm()
+        private Settings _settings = Settings.Load();
+
+        // B2：目录缓存与查找（每次刷新整体原子替换，树节点持有条目快照而非 LHM 活对象）
+        private readonly IHardwareClient _client;
+        private readonly bool _ownsClient;
+        private HardwareCatalog? _catalog;
+        private ILookup<string?, HardwareCatalogEntry>? _children;
+        private Dictionary<string, HardwareCatalogEntry>? _sensorById;
+
+        private string T(string en, string zh) => _settings.Language.ToLower().StartsWith("zh") ? zh : en;
+
+        // hardwareClient 由菜单链路注入为佳；默认就地包装 Instance 属临时组装例外（撤除阶段 B3，见 B1B2 报告）
+        public HardwareInfoForm(IHardwareClient? hardwareClient = null)
         {
+            _client = hardwareClient ?? new HardwareClientAdapter(HardwareMonitor.Instance!);
+            _ownsClient = hardwareClient == null;
             this.Text = T("LiteMonitor++ - Hardware Info", "LiteMonitor++ - 系统硬件详情");
             this.Size = new Size(UIUtils.S(600), UIUtils.S(750)); // 稍微加宽一点
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -69,7 +82,7 @@ namespace LiteMonitor.src.UI
                     return;
                 }
 
-                bool isSensor = node.Tag is ISensor;
+                bool isSensor = node.Tag is HardwareCatalogEntry { SensorType: not null };
                 
                 // 任何节点都可以复制名称
                 itemCopyName.Visible = true;
@@ -85,12 +98,31 @@ namespace LiteMonitor.src.UI
             this.Controls.Add(_headerPanel);
             this.Controls.Add(pnlToolbar);
 
-            RebuildTree("");
+            // B2：显式登记传感器窗口需求（契约侧存储，通道合流在 B3 接线），关闭时在 OnFormClosed 释放
+            _client.SubmitDemand(new SamplingDemand(Ui: false, Taskbar: false, Web: false, History: false, SensorWindow: true));
+            _ = LoadCatalogAsync(rebuild: true);
 
-            // 局部刷新定时器
+            // 局部刷新定时器：刷新目录缓存后只更新可见节点数值，不重建树（保持展开状态）
             _refreshTimer = new System.Windows.Forms.Timer { Interval = 1000 };
-            _refreshTimer.Tick += (s, e) => UpdateVisibleNodesSmart();
+            _refreshTimer.Tick += (s, e) => { _ = LoadCatalogAsync(rebuild: false); UpdateVisibleNodesSmart(); };
             _refreshTimer.Start();
+        }
+
+        private async Task LoadCatalogAsync(bool rebuild)
+        {
+            try
+            {
+                var catalog = await _client.GetCatalogAsync(default).ConfigureAwait(true);
+                if (IsDisposed) return;
+                _catalog = catalog;
+                _children = catalog.Entries.ToLookup(e => e.ParentStableId);
+                _sensorById = catalog.Entries.Where(e => e.SensorType != null).ToDictionary(e => e.StableId);
+                if (rebuild) RebuildTree(_searchInput.Text.Trim());
+            }
+            catch (ObjectDisposedException)
+            {
+                // 关闭竞态：窗体/适配器已释放，静默退出
+            }
         }
 
         private void UpdateVisibleNodesSmart()
@@ -100,7 +132,12 @@ namespace LiteMonitor.src.UI
             while (node != null)
             {
                 if (node.Bounds.Top > _tree.ClientSize.Height) break;
-                if (node.Tag is ISensor) _tree.InvalidateSensorValue(node);
+                if (node.Tag is HardwareCatalogEntry { SensorType: not null } entry)
+                {
+                    // 用最新目录快照原位替换 Tag（值/峰值更新），不重建节点
+                    if (_sensorById != null && _sensorById.TryGetValue(entry.StableId, out var latest)) node.Tag = latest;
+                    _tree.InvalidateSensorValue(node);
+                }
                 node = node.NextVisibleNode;
             }
         }
@@ -160,8 +197,9 @@ namespace LiteMonitor.src.UI
             _tree.BeginUpdate();
             _tree.Nodes.Clear();
 
-            var computer = HardwareMonitor.Instance?.ComputerInstance;
-            if (computer == null || computer.Hardware.Count == 0) 
+            var catalog = _catalog;
+            var children = _children;
+            if (catalog == null || children == null || catalog.Entries.Count == 0)
             {
                 _tree.Nodes.Add(new TreeNode(T("Initializing...", "初始化中...")));
                 _tree.EndUpdate();
@@ -169,7 +207,7 @@ namespace LiteMonitor.src.UI
             }
 
             bool isFirstHardware = true;
-            foreach (var hw in computer.Hardware)
+            foreach (var hw in children[null].Where(e => e.SensorType == null))
             {
                 AddHardwareNode(_tree.Nodes, hw, filter, !string.IsNullOrEmpty(filter), isFirstHardware && string.IsNullOrEmpty(filter));
                 isFirstHardware = false;
@@ -177,9 +215,9 @@ namespace LiteMonitor.src.UI
             _tree.EndUpdate();
         }
 
-        private void AddHardwareNode(TreeNodeCollection parentNodes, IHardware hw, string filter, bool isSearch, bool isFirstHardware)
+        private void AddHardwareNode(TreeNodeCollection parentNodes, HardwareCatalogEntry hw, string filter, bool isSearch, bool isFirstHardware)
         {
-            string typeStr = GetHardwareTypeString(hw.HardwareType);
+            string typeStr = GetHardwareTypeString(hw.DeviceType);
             // ★★★ 替换这里：使用强力白名单清洗 ★★★
             string cleanName = SanitizeHardwareName(hw.Name);
             string label = $"{typeStr} {cleanName}";
@@ -187,13 +225,14 @@ namespace LiteMonitor.src.UI
             var hwNode = new TreeNode(label) { Tag = hw };
             bool hasContent = false;
 
-            var groups = hw.Sensors.GroupBy(s => s.SensorType).OrderBy(g => g.Key);
+            var groups = _children![hw.StableId].Where(e => e.SensorType != null)
+                .GroupBy(s => s.SensorType).OrderBy(g => g.Key);
             foreach (var group in groups)
             {
                 string typeIcon = GetSensorTypeString(group.Key);
-                string typeName = $"{typeIcon} {group.Key}"; 
-                
-                // ★★★ 修改：创建节点时，把 SensorType (group.Key) 存入 Tag ★★★
+                string typeName = $"{typeIcon} {group.Key}";
+
+                // ★★★ 修改：创建节点时，把传感器类型字符串存入 Tag ★★★
                 var typeNode = new TreeNode(typeName) { Tag = group.Key };
 
                 bool groupHasMatch = false;
@@ -214,7 +253,7 @@ namespace LiteMonitor.src.UI
                 }
             }
 
-            foreach (var subHw in hw.SubHardware)
+            foreach (var subHw in _children![hw.StableId].Where(e => e.SensorType == null))
             {
                 // 如果当前是第一个硬件节点，其子硬件也需要展开分组
                 AddHardwareNode(hwNode.Nodes, subHw, filter, isSearch, isFirstHardware);
@@ -249,20 +288,20 @@ namespace LiteMonitor.src.UI
             if (type == "Name")
             {
                 // ★★★ 智能复制逻辑 (升级版) ★★★
-                if (node.Tag is IHardware hw)
+                if (node.Tag is HardwareCatalogEntry { SensorType: null } hw)
                 {
                     // 1. 硬件/子硬件：使用与显示逻辑一致的“强力清洗”
                     Clipboard.SetText(SanitizeHardwareName(hw.Name));
                 }
-                else if (node.Tag is ISensor s)
+                else if (node.Tag is HardwareCatalogEntry s)
                 {
                     // 2. 传感器：直接复制名称 (如 "CPU Core #1")
                     Clipboard.SetText(s.Name ?? "");
                 }
-                else if (node.Tag is SensorType st)
+                else if (node.Tag is string st)
                 {
                     // 3. ★新增★ 类型分组 (如 "Temperature")：只复制纯文本名称，不带 Emoji
-                    Clipboard.SetText(st.ToString()); 
+                    Clipboard.SetText(st);
                 }
                 else
                 {
@@ -270,10 +309,10 @@ namespace LiteMonitor.src.UI
                     Clipboard.SetText(node.Text ?? "");
                 }
             }
-            else if (node.Tag is ISensor s)
+            else if (node.Tag is HardwareCatalogEntry sensorEntry)
             {
-                if (type == "Value") Clipboard.SetText(s.Value?.ToString() ?? "");
-                else if (type == "ID") Clipboard.SetText(s.Identifier.ToString());
+                if (type == "Value") Clipboard.SetText(sensorEntry.Value?.ToString() ?? "");
+                else if (type == "ID") Clipboard.SetText(sensorEntry.RuntimeId);
             }
         }
 
@@ -281,44 +320,51 @@ namespace LiteMonitor.src.UI
         {
             _refreshTimer.Stop();
             _refreshTimer.Dispose();
+            // B2：释放传感器窗口需求；仅释放自组装的适配器（注入的共享客户端归组合根所有）
+            try
+            {
+                _client.SubmitDemand(new SamplingDemand(Ui: false, Taskbar: false, Web: false, History: false, SensorWindow: false));
+                if (_ownsClient) _client.Dispose();
+            }
+            catch (ObjectDisposedException) { }
             base.OnFormClosed(e);
             this.Dispose();
         }
 
-        private string GetHardwareTypeString(HardwareType type)
+        private string GetHardwareTypeString(string type)
         {
             switch (type) {
-                case HardwareType.Cpu: return T("[CPU]", "[处理器]");
-                case HardwareType.GpuNvidia:
-                case HardwareType.GpuAmd:
-                case HardwareType.GpuIntel: return T("[GPU]", "[显卡]");
-                case HardwareType.Memory: return T("[Memory]", "[内存]");
-                case HardwareType.Motherboard: return T("[Motherboard]", "[主板]");
-                case HardwareType.Storage: return T("[Storage]", "[硬盘]");
-                case HardwareType.Network: return T("[Network]", "[网卡]"); 
-                case HardwareType.SuperIO: return T("[SuperIO]", "[IO芯片]");
+                case "Cpu": return T("[CPU]", "[处理器]");
+                case "GpuNvidia":
+                case "GpuAmd":
+                case "GpuIntel": return T("[GPU]", "[显卡]");
+                case "Memory": return T("[Memory]", "[内存]");
+                case "Motherboard": return T("[Motherboard]", "[主板]");
+                case "Storage": return T("[Storage]", "[硬盘]");
+                case "Network": return T("[Network]", "[网卡]");
+                case "SuperIO": return T("[SuperIO]", "[IO芯片]");
                 // 可选：如果遇到水冷控制器等
-                case HardwareType.Cooler: return T("[Cooler]", "[散热器]");
+                case "Cooler": return T("[Cooler]", "[散热器]");
                 default: return $"[{type}]";
             }
         }
-        private string GetSensorTypeString(SensorType type)
+        private string GetSensorTypeString(string type)
         {
             switch (type) {
-                case SensorType.Temperature: return T("[Temperature]", "[温度]");
-                case SensorType.Load: return T("[Load]", "[负载]");
-                case SensorType.Fan: return T("[Fan]", "[风扇]");
-                case SensorType.Power: return T("[Power]", "[功耗]");
-                case SensorType.Clock: return T("[Clock]", "[频率]");
-                case SensorType.Control: return T("[Control]", "[控制]");
-                case SensorType.Voltage: return T("[Voltage]", "[电压]");
-                case SensorType.Data: return T("[Data]", "[数据]");
-                case SensorType.SmallData: return T("[SmallData]", "[小型数据]");
-                case SensorType.Throughput: return T("[Throughput]", "[吞吐量]");
+                case "Temperature": return T("[Temperature]", "[温度]");
+                case "Load": return T("[Load]", "[负载]");
+                case "Fan": return T("[Fan]", "[风扇]");
+                case "Power": return T("[Power]", "[功耗]");
+                case "Clock": return T("[Clock]", "[频率]");
+                case "Control": return T("[Control]", "[控制]");
+                case "Voltage": return T("[Voltage]", "[电压]");
+                case "Data": return T("[Data]", "[数据]");
+                case "SmallData": return T("[SmallData]", "[小型数据]");
+                case "Throughput": return T("[Throughput]", "[吞吐量]");
                 // ★★★ 新增以下三项 ★★★
-                case SensorType.Level: return T("[Level]", "[剩余/寿命]"); // 用于 SSD 寿命或油箱液位
-                case SensorType.Factor: return T("[Factor]", "[系数]");      // 用于写入放大系数等
-                case SensorType.Timing: return T("[Timing]", "[时序]");
+                case "Level": return T("[Level]", "[剩余/寿命]"); // 用于 SSD 寿命或油箱液位
+                case "Factor": return T("[Factor]", "[系数]");      // 用于写入放大系数等
+                case "Timing": return T("[Timing]", "[时序]");
                 default: return $"[{type}]";
             }
         }

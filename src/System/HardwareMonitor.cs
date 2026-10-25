@@ -1415,6 +1415,10 @@ namespace LiteMonitor.src.SystemServices
 
         public static List<string> ListAllDisks() => HardwareScanner.ListAllDisks(Instance!._computer);
 
+        // B2：设置页下拉改走无参静态，消除 UI 侧对 ComputerInstance/SyncLock 的直接引用
+        public static List<DeviceOption> ListAllDiskOptions() =>
+            HardwareScanner.ListAllDiskOptions(Instance!._computer);
+
         public static List<string> ListAllGpus()
         {
             lock (Instance!._lock)

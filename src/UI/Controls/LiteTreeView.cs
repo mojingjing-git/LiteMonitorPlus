@@ -2,7 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
-using LibreHardwareMonitor.Hardware;
+using LiteMonitor.Contracts; // B2：树节点 Tag 为平台无关的 HardwareCatalogEntry，不再持有 LHM 活对象
 using LiteMonitor.src.Core;
 
 namespace LiteMonitor.src.UI.Controls
@@ -167,7 +167,7 @@ namespace LiteMonitor.src.UI.Controls
             if (e.Node.Nodes.Count > 0) DrawChevron(g, chevronRect, e.Node.IsExpanded);
 
             // 5. 绘制右侧数值 (仅传感器)
-            if (e.Node.Tag is ISensor sensor)
+            if (e.Node.Tag is HardwareCatalogEntry { SensorType: not null } sensor)
             {
                 string maxStr = FormatValue(sensor.Max, sensor.SensorType);
                 TextRenderer.DrawText(g, maxStr, _baseFont, maxRect, Color.DimGray, 
@@ -183,9 +183,9 @@ namespace LiteMonitor.src.UI.Controls
             Color txtColor;
             Font font;
 
-            // 样式选择
-            if (e.Node.Tag is IHardware) { font = _boldFont; txtColor = Color.FromArgb(20, 20, 20); }
-            else if (e.Node.Tag is ISensor) { font = _baseFont; txtColor = Color.Black; }
+            // 样式选择（设备条目加粗，传感器条目常规，分组节点加粗）
+            if (e.Node.Tag is HardwareCatalogEntry { SensorType: null }) { font = _boldFont; txtColor = Color.FromArgb(20, 20, 20); }
+            else if (e.Node.Tag is HardwareCatalogEntry) { font = _baseFont; txtColor = Color.Black; }
             else { font = _boldFont; txtColor = Color.FromArgb(30, 30, 30); }
 
             int textStartX = chevronRect.Right + UIUtils.S(5);
@@ -197,7 +197,7 @@ namespace LiteMonitor.src.UI.Controls
             TextFormatFlags flags = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
 
             // 区分处理
-            if (e.Node.Tag is ISensor)
+            if (e.Node.Tag is HardwareCatalogEntry { SensorType: not null })
             {
                 // 传感器：必须避让右侧数值区，并在不够时显示省略号
                 int maxTextWidth = rightZoneStart - textStartX - UIUtils.S(10);
@@ -241,43 +241,43 @@ namespace LiteMonitor.src.UI.Controls
             }
         }
 
-        private Color GetColorByType(SensorType type)
+        private Color GetColorByType(string? type)
         {
             switch (type) {
-                case SensorType.Temperature: return Color.FromArgb(200, 60, 0); 
-                case SensorType.Load: return Color.FromArgb(0, 100, 0); 
-                case SensorType.Power: return Color.Purple;
-                case SensorType.Clock: return Color.DarkBlue;
+                case "Temperature": return Color.FromArgb(200, 60, 0);
+                case "Load": return Color.FromArgb(0, 100, 0);
+                case "Power": return Color.Purple;
+                case "Clock": return Color.DarkBlue;
                 // ★★★ 修改：默认颜色改为绿色 ★★★
                 default: return Color.FromArgb(34, 139, 34); // ForestGreen
             }
         }
 
-        private string FormatValue(float? val, SensorType type)
+        private string FormatValue(float? val, string? type)
         {
             if (!val.HasValue) return "-";
             float v = val.Value;
 
             // 1. 数据类特殊处理 (LHM 单位转 Bytes)
-            if (type == SensorType.Data) return MetricUtils.FormatDataSize((double)v * 1073741824.0);
-            if (type == SensorType.SmallData) return MetricUtils.FormatDataSize((double)v * 1048576.0);
+            if (type == "Data") return MetricUtils.FormatDataSize((double)v * 1073741824.0);
+            if (type == "SmallData") return MetricUtils.FormatDataSize((double)v * 1048576.0);
 
-            if (type == SensorType.Throughput) 
+            if (type == "Throughput")
             {
-                string dummyKey = "NET.Throughput"; 
+                string dummyKey = "NET.Throughput";
                 return MetricUtils.GetValueStr(dummyKey, v) + MetricUtils.GetUnitStr(dummyKey, v, MetricUtils.UnitContext.Panel);
             }
 
-            // 2. 映射到 MetricUtils 的 Key
+            // 2. 映射到 MetricUtils 的 Key（SensorType 字符串来自适配器的 sensor.SensorType.ToString()）
             string key = type switch
             {
-                SensorType.Voltage => "VOLTAGE",
-                SensorType.Clock => "CLOCK",
-                SensorType.Temperature => "TEMP",
-                SensorType.Load => "LOAD",
-                SensorType.Level => "LOAD",
-                SensorType.Fan => "FAN",
-                SensorType.Power => "POWER",
+                "Voltage" => "VOLTAGE",
+                "Clock" => "CLOCK",
+                "Temperature" => "TEMP",
+                "Load" => "LOAD",
+                "Level" => "LOAD",
+                "Fan" => "FAN",
+                "Power" => "POWER",
                 _ => ""
             };
 
