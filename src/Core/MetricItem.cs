@@ -1,8 +1,7 @@
 using System;
 using System.Drawing;
-using System.Linq; // 需要 Linq 来查询 Config
-using LiteMonitor.src.Core;
-using LiteMonitor.src.SystemServices.InfoService; // [New] For Plugin Color Override
+using LiteMonitor.src.Core; // Theme/MonitorItemConfig/UIUtils（现状命名空间；B4-1 仅移除 InfoService）
+using LiteMonitor.Core;     // B4-1：纯格式化编排器（不依赖全局服务）
 
 namespace LiteMonitor
 {
@@ -17,6 +16,17 @@ namespace LiteMonitor
     {
         // [新增] 绑定原始配置对象，实现动态 Label
         public MonitorItemConfig BoundConfig { get; set; }
+
+        // ── B4-1：组合根接线点（应用层持有全局查询，MetricItem 自身不再引用 InfoService/Settings）──
+        /// <summary>插件色解析（组合根设置，如 k =&gt; InfoService.Instance.GetValue(k)）；ThemeEditor 等场景自动继承。</summary>
+        public static Func<string, string?>? DefaultPluginColorResolver { get; set; }
+        /// <summary>BoundConfig 缺失时的配置兜底查找（组合根设置）；保持 ThemeEditor 预览项沿用用户单位格式的历史行为。</summary>
+        public static Func<string, MonitorItemConfig?>? DefaultConfigLookup { get; set; }
+
+        /// <summary>实例级覆盖；未设置时回落到 <see cref="DefaultPluginColorResolver"/>。</summary>
+        public Func<string, string?>? PluginColorResolver { get; set; }
+        /// <summary>实例级覆盖；未设置时回落到 <see cref="DefaultConfigLookup"/>。</summary>
+        public Func<string, MonitorItemConfig?>? ConfigLookup { get; set; }
 
         private string _key = "";
         
@@ -78,145 +88,62 @@ namespace LiteMonitor
         public string TextValue { get; set; } = null;
 
         // =============================
-        // 缓存字段
+        // 格式化缓存（B4-1：纯数据状态委托给 MetricFormatterState；UI 独有状态仍在下方）
         // =============================
-        private float _cachedDisplayValue = -99999f; 
-        private (bool Ac, bool Charging) _cachedPowerState = (false, false); // [Fix] 缓存完整电源状态
-        private string _cachedNormalText = "";       // 完整文本 (值+单位)
-        private string _cachedHorizontalText = "";   // 完整横屏文本
-        
-        // ★★★ [新增] 分离缓存 ★★★
-        public string CachedValueText { get; private set; } = "";
-        public string CachedUnitText { get; private set; } = "";
-        public bool HasCustomUnit { get; private set; } = false; // 标记是否使用了自定义单位
+        private MetricFormatterState _fmt = new();
 
-
-        public int CachedColorState { get; private set; } = 0;
-        public double CachedPercent { get; private set; } = 0.0;
+        public string CachedValueText => _fmt.CachedValueText;
+        public string CachedUnitText => _fmt.CachedUnitText;
+        public bool HasCustomUnit => _fmt.HasCustomUnit;
+        public int CachedColorState => _fmt.CachedColorState;
+        public double CachedPercent => _fmt.CachedPercent;
 
         public Color GetTextColor(Theme t)
         {
             return UIUtils.GetStateColor(CachedColorState, t, true);
         }
 
+        /// <summary>解析插件色 override：插件项返回状态值（无覆盖=0），非插件项返回 null。</summary>
+        private int? ResolvePluginColorOverride()
+        {
+            if (_dashColorKey == null) return null;
+            var resolver = PluginColorResolver ?? DefaultPluginColorResolver;
+            string colorVal = resolver?.Invoke(_dashColorKey);
+            if (!string.IsNullOrEmpty(colorVal) && int.TryParse(colorVal, out int state))
+            {
+                return state;
+            }
+            return 0; // 插件项但无有效覆盖 → 安全默认
+        }
+
         public string GetFormattedText(bool isHorizontal)
         {
-            // [Debug & Fix] 1. Always update color state for Plugin Items FIRST
-            if (_dashColorKey != null) // Use cached check
-            {
-                string colorVal = InfoService.Instance.GetValue(_dashColorKey);
-                
-                if (!string.IsNullOrEmpty(colorVal))
-                {
-                    if (int.TryParse(colorVal, out int state)) 
-                    {
-                        CachedColorState = state;
-                    }
-                }
-                else
-                {
-                    CachedColorState = 0; // Default Safe if no color override
-                }
-            }
+            // B4-1：配置解析与全局读取在此收口为显式输入；决策逻辑全部在 MetricItemFormatter（纯）。
+            var cfg = BoundConfig ?? (ConfigLookup ?? DefaultConfigLookup)?.Invoke(Key);
 
-            // 2. Load Config (Optimized)
-            var cfg = BoundConfig;
-            if (cfg == null)
-            {
-                 // Fallback: This should rarely happen if initialized correctly
-                 cfg = Settings.Load().MonitorItems.FirstOrDefault(x => x.Key == Key);
-            }
-            
-            string userFormat = isHorizontal ? cfg?.UnitTaskbar : cfg?.UnitPanel;
-            HasCustomUnit = !string.IsNullOrEmpty(userFormat);
+            var result = MetricItemFormatter.Format(
+                key: Key,
+                displayValue: DisplayValue,
+                textValue: TextValue,
+                isHorizontal: isHorizontal,
+                userFormatPanel: cfg?.UnitPanel,
+                userFormatTaskbar: cfg?.UnitTaskbar,
+                pluginColorOverride: ResolvePluginColorOverride(),
+                currentPower: MetricUtils.GetPowerStatus(),
+                prev: _fmt,
+                r: _resolvers);
 
-            // 3. Return TextValue (Plugin/Dashboard items)
-           if (TextValue != null) 
-            {
-                // [Optimization] 统一使用 MetricUtils 处理单位逻辑
-                // 1. 获取默认单位 (自动处理：插件查InfoService，硬件查表)
-                var ctx = isHorizontal ? MetricUtils.UnitContext.Taskbar : MetricUtils.UnitContext.Panel;
-                string defUnit = MetricUtils.GetUnitStr(Key, null, ctx);
-
-                // 2. 确定最终单位 (自动处理：用户设为Null时用默认，否则用自定义)
-                string finalUnit = MetricUtils.GetDisplayUnit(Key, defUnit, userFormat);
-
-                // 3. 智能拼接：如果文本里还没包含这个单位，就拼上去
-                if (!string.IsNullOrEmpty(finalUnit) && !TextValue.EndsWith(finalUnit))
-                {
-                    return TextValue + finalUnit;
-                }
-
-                return TextValue;
-            }
-
-            // 4. Numeric Value Processing (Hardware items)
-            // [Fix] 增加充电状态检查：如果数值变了 OR (是电池相关项 AND 电源状态变了) -> 强制刷新
-            bool isBat = Key.StartsWith("BAT", StringComparison.OrdinalIgnoreCase);
-            var currentPower = MetricUtils.GetPowerStatus();
-            bool powerChanged = isBat && (_cachedPowerState != currentPower);
-
-            // [Fix] 降低缓存失效阈值：从 0.05 降低到 0.005
-            // 之前的 0.05 太大，导致当数值从 0.06 变为 0.00 时，虽然 DisplayValue 变了，
-            // 但因为 delta (0.06) 刚刚好大于 0.05 可能触发更新，
-            // 但如果是 0.04 -> 0.00，delta=0.04 < 0.05，导致文本缓存不更新，UI 仍显示 0.04。
-            // 考虑到显示精度通常为 0.00，阈值应至少小于 0.01。
-            if (Math.Abs(DisplayValue - _cachedDisplayValue) > 0.005f || powerChanged)
-            {
-                _cachedDisplayValue = DisplayValue;
-                if (isBat) _cachedPowerState = currentPower;
-
-                // [Refactor] 使用新的原子函数分别构建普通和紧凑文本
-                
-                // === 1. 更新主界面缓存 (Panel) ===
-                // ★ 把该监控项自己的单位格式一起传进去：内存容量模式下若用户把单位写成 %，
-                //   数值必须保持百分比，不能换算成 GB —— 见 MetricUtils.IsPercentUnitOverride。
-                string userFmtPanel = cfg?.UnitPanel;
-                string valNormal = MetricUtils.GetValueStr(Key, DisplayValue, false, userFmtPanel);
-                string unitNormal = MetricUtils.GetUnitStr(Key, DisplayValue, MetricUtils.UnitContext.Panel);
-                
-                string finalUnitPanel = MetricUtils.GetDisplayUnit(Key, unitNormal, userFmtPanel);
-                _cachedNormalText = valNormal + finalUnitPanel;
-
-                // === 2. 更新任务栏缓存 (Taskbar/Horizontal) ===
-                // 逻辑修正：任务栏模式下，必须使用 Taskbar 上下文 (例如不带 /s)
-                string userFmtTaskbar = cfg?.UnitTaskbar;
-                bool hasCustomTaskbar = !string.IsNullOrEmpty(userFmtTaskbar);
-                
-                // 自动模式：启用数值压缩 (Compact=true) 和 紧凑单位 (Taskbar Context)
-                // 自定义模式：不做数值压缩 (false)，但单位仍需基于 Taskbar 上下文计算基础值
-                bool compact = !hasCustomTaskbar;
-                
-                string valTaskbar = MetricUtils.GetValueStr(Key, DisplayValue, compact, userFmtTaskbar);
-                string unitTaskbar = MetricUtils.GetUnitStr(Key, DisplayValue, MetricUtils.UnitContext.Taskbar);
-                
-                string finalUnitTaskbar = MetricUtils.GetDisplayUnit(Key, unitTaskbar, userFmtTaskbar);
-                _cachedHorizontalText = valTaskbar + finalUnitTaskbar;
-
-                // 更新公共属性以便调试 (显示当前请求模式的值)
-                if (isHorizontal)
-                {
-                    CachedValueText = valTaskbar;
-                    CachedUnitText = finalUnitTaskbar;
-                    HasCustomUnit = hasCustomTaskbar;
-                }
-                else
-                {
-                    CachedValueText = valNormal;
-                    CachedUnitText = finalUnitPanel;
-                    HasCustomUnit = !string.IsNullOrEmpty(userFmtPanel);
-                }
-
-                // Only calculate color if NOT a plugin item (already handled above)
-                if (!Key.StartsWith("DASH."))
-                {
-                    CachedColorState = MetricUtils.GetState(Key, DisplayValue);
-                }
-                
-                CachedPercent = MetricUtils.GetProgressValue(Key, DisplayValue);
-            }
-            return isHorizontal ? _cachedHorizontalText : _cachedNormalText;
+            _fmt = result.State;
+            return result.Text;
         }
+
+        /// <summary>解析委托（适配层固定指向 MetricUtils 方法组）。</summary>
+        private readonly MetricFormatResolvers _resolvers = new(
+            GetValueStr: (key, value, compact, userFormat) => MetricUtils.GetValueStr(key, value, compact, userFormat),
+            GetUnitStr: (key, value, ctx) => MetricUtils.GetUnitStr(key, value, ctx == MetricFormatContext.Taskbar ? MetricUtils.UnitContext.Taskbar : MetricUtils.UnitContext.Panel),
+            GetDisplayUnit: (key, unit, fmt) => MetricUtils.GetDisplayUnit(key, unit, fmt),
+            GetState: (key, value) => MetricUtils.GetState(key, value),
+            GetProgressValue: (key, value) => MetricUtils.GetProgressValue(key, value));
 
         public MetricRenderStyle Style { get; set; } = MetricRenderStyle.StandardBar;
         public Rectangle Bounds { get; set; } = Rectangle.Empty;

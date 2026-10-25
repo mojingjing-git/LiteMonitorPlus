@@ -1,7 +1,7 @@
 # Plan B：架构解耦与职责整理
 
 - 日期：2026-10-26。
-- 状态：B0～B3**已完成**（B0～B2 于 [首批验收](../verification/acceptance/first-batch-B0B2-I0I1.md)（门禁 2414）；B3 经并行派工与评审后实施，见 [B3 验收记录](../verification/acceptance/B3-report.md)——设置投影/模块服务/Instance 例外清偿与网关收口/选择性应用；门禁随集成统一上调）；B4～B6维持评估稿。
+- 状态：B0～B3**已完成**（B0～B2 于 [首批验收](../verification/acceptance/first-batch-B0B2-I0I1.md)（门禁 2414）；B3 经并行派工与评审后实施，见 [B3 验收记录](../verification/acceptance/B3-report.md)）；**B4-1 已落地**（[P-B4](dispatch/P-B4.md)：MetricItemFormatter 纯编排器 + MetricItem 适配化——插件色/配置兜底经组合根委托，护栏可执行化；fixture 181+22 全绿为准绳；MetricUtils 深度净化留 B4-2）；B4-2～B6维持评估稿。
 - 源码观察基线：`1f652c1f0e402f124c4535fcf878f19c216c5e39`。B0 启动基线：`9da07af`（2026-10-26，W3 合并后），盘点见 [B0/I0 基线盘点](2026-10-26-B0-I0-baseline-inventory.md)。
 - 对应问题：UI、硬件采集、全局设置、格式化和应用副作用相互引用，修改一处容易影响多条路径。
 - 关联：[Plan A：采集进程隔离](2026-10-26-hardware-process-isolation-plan.md)、[原R06需求](2026-10-24-architecture-debt-requirements.md)、[原R06计划](2026-10-24-architecture-debt-plan.md)。

@@ -7,7 +7,7 @@
     "C-3": 173,
     "C-4": 353,
     "A-1": 1,
-    "A-2": 6,
+    "A-2": 5,
     "A-3": 3,
     "A-4": 1,
     "A-5": 1,
@@ -35,6 +35,11 @@
       "date": "2026-10-26",
       "commit": "B3 gateway",
       "event": "B3 例外清偿:WebActions/AppActions 移除 SystemServices using 改走网关(全限定);A-2 8→6(改善方向)"
+    },
+    {
+      "date": "2026-10-26",
+      "commit": "B4-1",
+      "event": "MetricItem 移除 InfoService using(插件色改经组合根静态委托);A-2 6→5(改善方向)"
     }
   ]
 }

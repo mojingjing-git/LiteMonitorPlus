@@ -144,6 +144,11 @@ namespace LiteMonitor
             // Host 模式下网关的契约面（Client）同样是管道客户端——经网关取数的消费方（传感器窗口）读到 Host 快照。
             HardwareGateway.Register(_mon, _hwClient);
 
+            // B4-1：组合根接线——插件色与配置兜底的全局查询收口到应用层 lambda
+            // （MetricItem 自身不再引用 InfoService/Settings；ThemeEditor 预览项自动继承同款行为）。
+            MetricItem.DefaultPluginColorResolver ??= k => InfoService.Instance.GetValue(k);
+            MetricItem.DefaultConfigLookup ??= k => Settings.Load().MonitorItems.FirstOrDefault(x => x.Key == k);
+
             _layout = new UILayout(ThemeManager.Current);
 
             _timer = new System.Windows.Forms.Timer { Interval = ComputeUiRefreshIntervalMs(_cfg.RefreshMs) };
