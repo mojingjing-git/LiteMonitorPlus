@@ -519,7 +519,7 @@ namespace LiteMonitor.src.Plugins
                 if (IsUsableSha256(record.Sha256))
                 {
                     string actual;
-                    try { actual = ComputeSha256(File.ReadAllBytes(path)); }
+                    try { actual = ComputeSha256(MarketFileIo.ReadAllBytesShared(path)); }
                     catch { actual = ""; }
 
                     if (!string.Equals(actual, record.Sha256.Trim(), StringComparison.OrdinalIgnoreCase))
@@ -542,7 +542,7 @@ namespace LiteMonitor.src.Plugins
         {
             try
             {
-                using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                using var doc = JsonDocument.Parse(MarketFileIo.ReadAllTextShared(path));
                 if (doc.RootElement.TryGetProperty("id", out var idEl))
                 {
                     string id = idEl.GetString() ?? "";
@@ -1035,7 +1035,7 @@ namespace LiteMonitor.src.Plugins
 
                     faultInjector?.Invoke("afterStage");
 
-                    File.Move(stagePath, targetPath, overwrite: true);
+                    MarketFileIo.MoveAtomic(stagePath, targetPath);
                     movedToTarget = true;
 
                     faultInjector?.Invoke("afterMove");
@@ -1114,7 +1114,7 @@ namespace LiteMonitor.src.Plugins
             string rawText;
             try
             {
-                rawText = File.ReadAllText(logPath);
+                rawText = MarketFileIo.ReadAllTextShared(logPath);
             }
             catch
             {
@@ -1216,7 +1216,7 @@ namespace LiteMonitor.src.Plugins
                 if (!HasContent(paths.TargetPath, tx.PreviousFileSha256))
                 {
                     RequireContent(paths.BackupPath, tx.PreviousFileSha256);
-                    File.Move(paths.BackupPath, paths.TargetPath, overwrite: true);
+                    MarketFileIo.MoveAtomic(paths.BackupPath, paths.TargetPath);
                 }
                 RequireContent(paths.TargetPath, tx.PreviousFileSha256);
             }
@@ -1240,7 +1240,7 @@ namespace LiteMonitor.src.Plugins
                 if (!HasContent(paths.TargetPath, record.Sha256))
                 {
                     RequireContent(paths.BackupPath, record.Sha256);
-                    File.Move(paths.BackupPath, paths.TargetPath, overwrite: true);
+                    MarketFileIo.MoveAtomic(paths.BackupPath, paths.TargetPath);
                 }
                 RequireContent(paths.TargetPath, record.Sha256);
             }
@@ -1255,7 +1255,7 @@ namespace LiteMonitor.src.Plugins
             {
                 // Legacy journals have no old hash. Only their reconstructed,
                 // validated backup path can supply the previous payload.
-                File.Move(paths.BackupPath, paths.TargetPath, overwrite: true);
+                MarketFileIo.MoveAtomic(paths.BackupPath, paths.TargetPath);
             }
             else if (HasContent(paths.TargetPath, tx.Sha256))
             {
@@ -1539,7 +1539,7 @@ namespace LiteMonitor.src.Plugins
         /// <summary>读日志的原始字节（隔离留证时逐字节保留）。</summary>
         private static byte[]? ReadLogBytes(string logPath)
         {
-            try { return File.ReadAllBytes(logPath); }
+            try { return MarketFileIo.ReadAllBytesShared(logPath); }
             catch { return null; }
         }
 
@@ -1610,7 +1610,7 @@ namespace LiteMonitor.src.Plugins
         {
             string path = LogPath(pluginsDir);
             string raw;
-            try { raw = File.ReadAllText(path); }
+            try { raw = MarketFileIo.ReadAllTextShared(path); }
             catch (FileNotFoundException) { return new MarketInstallTxnLog(); }
             catch (DirectoryNotFoundException) { return new MarketInstallTxnLog(); }
             if (!TryParseLogText(raw, out MarketInstallTxnLog log))
@@ -1624,7 +1624,7 @@ namespace LiteMonitor.src.Plugins
             string path = LogPath(pluginsDir);
             string tmp = path + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(log, _jsonOpts), new UTF8Encoding(false));
-            File.Move(tmp, path, overwrite: true);
+            MarketFileIo.MoveAtomic(tmp, path);
         }
 
         private static void AppendPending(string pluginsDir, MarketInstallTransaction tx)
@@ -1649,7 +1649,7 @@ namespace LiteMonitor.src.Plugins
         }
 
         private static string ComputeFileSha(string path)
-            => PluginMarket.ComputeSha256(File.ReadAllBytes(path));
+            => PluginMarket.ComputeSha256(MarketFileIo.ReadAllBytesShared(path));
 
         private static bool ShaEquals(string? a, string? b)
         {
