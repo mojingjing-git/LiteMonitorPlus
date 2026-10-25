@@ -12,6 +12,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.Plugins;
+using LiteMonitor.src.SystemServices;   // ★ [F08a] DiskProbePolicy（磁盘探测策略常量）
 namespace LiteMonitor
 {
     public class Settings
@@ -66,6 +67,16 @@ namespace LiteMonitor
         //   "" = 自动（按来源可信度自动挑选）。
         //   ★ 旧配置没有这个字段时反序列化为 ""（System.Text.Json 的缺省行为）⇒ 视为自动，不报错。
         public string PreferredCpuVoltageSensor { get; set; } = "";
+
+        // ★ [#466/#601/#245 止血] 磁盘探测策略。
+        //   0 = 仅计数器（默认）：不构造存储设备、不做 SMART 探测；
+        //       磁盘速度/活动率走 Windows 计数器，磁盘温度/SMART 缺失（显示 "--"，不是 0）。
+        //   1 = 兼容模式：恢复旧行为，允许 LHM 打开存储设备（SMART / 温度）——
+        //       代价是可能占用可移动磁盘、无法安全移除，并可能与 HWiNFO 等工具冲突。
+        //   -1 = 未设置（旧配置缺字段）：★ 迁移状态 ⇒ 首次打开硬件前一律按"仅计数器"运行，
+        //       并在设置页提示；用户明确选择后写入 0 / 1。
+        //   ★ 用户的磁盘偏好（PreferredDisk / LastAutoDisk）与监控项**不因迁移被改动**。
+        public int DiskProbeMode { get; set; } = DiskProbePolicy.UnconfiguredModeValue;
 
         // ====== [#610] 按指定 IP 排除实时网速 ======
         // ★ 默认关闭。关闭或没有有效规则时**不启动任何额外事件采集**（零新增会话/逐包处理）。
