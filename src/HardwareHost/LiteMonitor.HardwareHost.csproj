@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- P-I2 / Plan A §7 I2 行：HardwareHost 采集子进程（WinExe，无 WinForms）。
+       ★ 只引用 LibreHardwareMonitorLib 与 LiteMonitor.Contracts——禁止反向引用主 WinExe
+         取 Settings/UI 工具（Plan A §4）；生产采集器（HardwareMonitor 及其依赖树）的
+         迁移属 I3，本工程只内置"最小真实采样器"证明隔离与 IPC 语义。
+       ★ 主 WinExe（LiteMonitor.csproj）以 Compile Remove 排除本目录源码，经
+         ReferenceOutputAssembly=false 的 ProjectReference 保证构建顺序，产物以复制项
+         进入主输出目录（发布打包属 I5）。 -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>LiteMonitor.HardwareHost</AssemblyName>
+    <RootNamespace>LiteMonitor.HardwareHost</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <Version>1.0.0</Version>
+    <Product>LiteMonitor++ HardwareHost</Product>
+    <Company>mojingjing-git</Company>
+    <Description>LiteMonitor++ 硬件采集宿主进程（P-I2 原型：最小真实采样器 + 命名管道）</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Contracts\LiteMonitor.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>
