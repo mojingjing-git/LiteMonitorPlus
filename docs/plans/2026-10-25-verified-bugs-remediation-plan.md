@@ -452,7 +452,7 @@ Release同样执行；TRX交给仓库现有门禁脚本核对发现数/跳过数
 | 包 | 分支 | 主要产物 | 新增用例 |
 |---|---|---|---|
 | F03 | `fix/F03-network-sample-freshness` | `NetworkSampleFreshness.cs`（新）、`NetworkManager.cs` 四层收口 | 27 |
-| F08a | `fix/F08a-disk-counters-only` | `DiskProbePolicy.cs`（新）、`Settings.cs` +10、`HardwareMonitor.cs` +29（≤30 限域） | 23 |
+| F08a | `fix/F08a-disk-counters-only` | `DiskProbePolicy.cs`（新）、`Settings.cs` 最小改动、`HardwareMonitor.cs` +29（≤30 限域）；收尾把 `DiskProbeMode` 改成 `int?` + `JsonIgnore(WhenWritingNull)` ⇒ **旧配置一个字节都不被改写** | 24 |
 | F01 | `fix/F01-ws-upgrade-parse` | 结构化升级头解析（删正则） | 46 |
 | F04 | `fix/F04-taskbar-host-lifecycle` | `TaskbarRecoveryCoordinator.cs`（新）、目标屏缺失不再回退主屏 | 12 |
 | F12 | `fix/F12-font-measure-safety` | `FontMetricsCache.cs`（新）、`GetHeight(Graphics)` → `GetHeight(dpi)` | 25 |
@@ -466,10 +466,10 @@ Release同样执行；TRX交给仓库现有门禁脚本核对发现数/跳过数
 |---|---|
 | `dotnet build LiteMonitor.sln -c Debug` | 0 错误 / 529 警告（与基线同量级） |
 | `dotnet build LiteMonitor.sln -c Release` | 0 错误 / 529 警告 |
-| `LiteMonitor.Tests` | **1936 总数**（flaky 不命中时 1935 通过 + 1 指定 E2E 跳过） |
+| `LiteMonitor.Tests` | **1937 总数**（flaky 不命中时 1936 通过 + 1 指定 E2E 跳过） |
 | `LiteMonitor.Updater.Tests` | 73 |
 | `LiteMonitor.GpuNonperformance.Tests` | 19 |
-| 合计 | **2028** ⇒ `MIN_TEST_TOTAL` 由 1876 上调至 **2028**（`ci.yml` / `release.yml` **逐字一致**；`MAX_SKIPPED_TESTS: 1` **未放宽**） |
+| 合计 | **2029** ⇒ `MIN_TEST_TOTAL` 由 1876 上调至 **2029**（`ci.yml` / `release.yml` **逐字一致**；`MAX_SKIPPED_TESTS: 1` **未放宽**） |
 | `pwsh scripts/run-probes.ps1 -Groups web` | **PASS**：C5/C6 由 `200 + 登录页 HTML` 翻为 **101**（WEB-OWS 红灯翻绿）；C1–C4=101、C7=403、C8=403、C9/C10=400、C11=401、C12=101 全部保持 |
 
 **⚠️ 门禁上暴露的既有缺陷（**非 W1 引入**，归属主题市场工作线）**
@@ -495,11 +495,21 @@ System.UnauthorizedAccessException: Access to the path is denied.
 | `integration/w1` 整类单跑（失败轮） | 33 | 1 | `CommitAndRecovery_UseOneTransactionGate(update: True, crash: False)` ← **拿到完整异常原文** |
 | 单条用例单跑 | — | 0 | — |
 
-排除项（已实测）：本机 **Windows Defender 实时保护为关闭状态**（`Get-MpComputerStatus` → `AntivirusEnabled=False`）⇒ 不是杀软抢文件。
+排除项（已实测）：
+- 本机 **Windows Defender 实时保护为关闭状态**（`Get-MpComputerStatus` → `AntivirusEnabled=False`）⇒ **不是杀软抢文件**。
+- 全仓**只有 `ReviewMarketPersistenceRegressionTests.cs` 自身**写 `SettingsHelper.PathOverride`（594/605/606/752 行）⇒ **不是** `MarketE2ETests` 并发改全局设置所致。*（F08a 执行者曾提出该假设，经逐行核对不成立，已撤回。）*
 
-**W1 八分支零触碰该域任何文件**（已逐一核对文件集）⇒ 判定为**主题市场工作线的既有缺陷**。F08a 执行者已就其自身贡献做过一处修复（`2bb2e25`：迁移用例还原全局 `Settings` 单例），但**残余失败仍在**，说明另有来源。
+**根因（协调者核实，落在产品侧）**
 
-⚠️ **CI 的 `MUST_EXECUTE_TEST_CLASS` 钉死了该类 ⇒ 一旦命中即流水线红**（全量跑命中概率约 2/3），须由该工作线尽快收口：建议优先在**测试侧**把沙箱从 `AppContext.BaseDirectory`（`bin\Debug\net8.0-windows\`）迁到独立临时目录，并让 `File.Move` 的失败路径可区分「占用」与「权限」，而不是让随机用例替它背锅。
+Windows 上 `MoveFileEx(..., MOVEFILE_REPLACE_EXISTING)` 要求对**目标文件**具备 DELETE 访问权；而读取侧 `PluginMarketState.FindPersisted` → `ComputeFileSha` → **`File.ReadAllBytes(path)`**（`src/Plugins/PluginMarket.cs:522` 与 `:1652`）以 `FileShare.Read` 打开，**不共享 Delete** ⇒ **并发读取者存在时，原子替换直接返回 Win32 `ERROR_ACCESS_DENIED`**，.NET 抛 `UnauthorizedAccessException`（而不是可识别的"文件被占用"异常）。
+
+`CommitAndRecovery_UseOneTransactionGate` 这条用例**故意**让恢复线程与提交线程并发 ⇒ 正好撞上这个窗口；窗口窄 ⇒ 表现为**间歇失败**、**受害用例随机轮换**（任何走 `CommitInstall` 的用例都可能中招），单条单跑则全绿。
+
+**归属**：`src/Plugins/PluginMarket.cs` 属**主题市场工作线**；安装事务的并发替换失败路径**没有有界重试**（与「恢复有界」约束不符）。**W1 八分支零触碰该文件**（已逐一核对文件集）⇒ 判定为**既有缺陷**，非 W1 引入。
+
+**建议修法（属该工作线）**：① `CommitInstall` 的原子替换对 `UnauthorizedAccessException` / `IOException` 做**有界重试**（配合既有写前日志 + 恢复机制，符合「恢复有界」）；或 ② 读取侧（`ComputeFileSha` / `FindPersisted`）改用 `FileShare.ReadWrite | FileShare.Delete` 打开。两条都不在 W1 的授权文件清单内，故本轮未改。
+
+⚠️ **CI 的 `MUST_EXECUTE_TEST_CLASS` 钉死了该类 ⇒ 一旦命中即流水线红**（全量跑命中概率约 2/3），须由该工作线尽快收口。
 
 **F01 遗留裁定（→ F16 发布说明）**
 
