@@ -377,7 +377,8 @@ namespace LiteMonitor.src.Plugins
                             foreach (var step in tmpl.Execution.Steps)
                             {
                                 if (token.IsCancellationRequested) return false;
-                                await ExecuteStepWithScopeAsync(inst, step, inputs, keySuffix, token, scope, declaredHosts);
+                                // [F13] 走带兜底语义的入口：continue_on_error 的步骤失败后仍可继续下一步。
+                                await ExecuteStepWithFallbackAsync(inst, step, inputs, keySuffix, token, scope, declaredHosts);
                             }
                         }
                     }
@@ -446,7 +447,93 @@ namespace LiteMonitor.src.Plugins
                 }
             });
 
-            await ExecuteStepWithScopeAsync(inst, step, context, keySuffix, token, scope, declaredHosts);
+            await ExecuteStepWithFallbackAsync(inst, step, context, keySuffix, token, scope, declaredHosts);
+        }
+
+        /// <summary>
+        /// [F13] 步骤执行入口（带**步骤级失败兜底**语义）。
+        ///
+        /// <para><b>默认路径</b>（<c>continue_on_error = false</c>）与既有行为**逐字一致**：
+        /// 步骤失败即把异常照旧向上抛，由外层统一发布错误状态。</para>
+        ///
+        /// <para><b>可回退路径</b>（<c>continue_on_error = true</c>）：
+        /// ① 用<b>临时 context</b> 执行该步骤，<b>只有成功</b>才把变量合并回链上下文
+        ///    ⇒ 失败不会留下半成品（❓ / ❌）误触发后续步骤的 <c>skip_if_set</c>；
+        /// ② 只有<b>业务可恢复失败</b>（请求失败 / 无有效数据 / 字段提取失败 / 单请求超时）
+        ///    会被吞掉并继续下一步；
+        /// ③ <b>外层取消、单次执行总时长耗尽、沙箱违规</b>（并发 / 响应体 / 步数 / 目标数 /
+        ///    凭据目标 / 重定向）一律**不可吞** —— 它们照旧中断整条链，
+        ///    绝不被降级成"看起来正常的备用值"。</para>
+        /// </summary>
+        private async Task ExecuteStepWithFallbackAsync(PluginInstanceConfig inst, PluginExecutionStep step,
+            Dictionary<string, string> context, string keySuffix, System.Threading.CancellationToken token,
+            PluginSandboxScope scope, HashSet<string> declaredHosts)
+        {
+            if (step == null) return;
+
+            if (!step.ContinueOnError)
+            {
+                await ExecuteStepWithScopeAsync(inst, step, context, keySuffix, token, scope, declaredHosts);
+                return;
+            }
+
+            // 可回退的步骤只在成功后合并变量，避免部分结果或错误标记阻止备用步骤。
+            var stepContext = new Dictionary<string, string>(context);
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                await ExecuteStepWithScopeAsync(inst, step, stepContext, keySuffix, token, scope, declaredHosts);
+                token.ThrowIfCancellationRequested();
+                foreach (var kv in stepContext) context[kv.Key] = kv.Value;
+            }
+            catch (OperationCanceledException oce)
+            {
+                // 外层取消 ⇒ 不可吞（调用方要看到取消语义，而不是"降级成功"）。
+                if (token.IsCancellationRequested) throw;
+
+                // 单次执行总时长耗尽 ⇒ 不可吞（内核已转成带原因码的 PluginSandboxException；
+                // 这里再判一次令牌状态，防止竞态把它降级成"可恢复失败"）。
+                if (scope != null && scope.Token.IsCancellationRequested) throw;
+
+                // 走到这里，取消只可能来自**单请求期限**（HttpClient.Timeout / 正文读取期限）
+                // ⇒ 单请求超时是业务可恢复失败，允许进入备用步骤。
+                LogRecoverableStepFailure(step, oce);
+            }
+            catch (Exception ex)
+            {
+                if (!IsRecoverableStepFailure(ex)) throw;
+                LogRecoverableStepFailure(step, ex);
+            }
+        }
+
+        /// <summary>
+        /// [F13] 该异常是否是**业务可恢复失败**（允许 <c>continue_on_error</c> 的步骤吞掉并继续下一步）。
+        /// <para><b>可恢复</b>：请求失败（网络故障 / 非 2xx 状态码）、响应体不是合法 JSON、
+        /// 字段提取失败（提取值为 ❓ / ❌）、网络客户端被重置导致的在途中止。</para>
+        /// <para><b>不可恢复</b>：沙箱违规（<see cref="PluginSandboxException"/> 的任何原因码）、
+        /// 外层取消、单次执行总时长耗尽，以及任何**未列入上面**的异常类型 ——
+        /// 未知的失败不允许被降级成"看起来正常的备用值"。</para>
+        /// </summary>
+        private static bool IsRecoverableStepFailure(Exception ex)
+        {
+            // 沙箱违规（并发 / 响应体 / 步数 / 目标数 / 总截止 / 凭据目标 / 重定向）⇒ 不可吞。
+            if (ex is PluginSandboxException) return false;
+            // 网络客户端被替换 / 释放导致在途中止 ⇒ 瞬时故障，可回退。
+            if (ex is PluginClientDisposedException) return true;
+            // 字段提取失败（提取值为 ❓ / ❌）⇒ 可回退。
+            if (ex is PluginStepDataException) return true;
+            // 请求失败：网络故障 / 非 2xx 状态码 ⇒ 可回退。
+            if (ex is HttpRequestException) return true;
+            // 响应体不是合法 JSON ⇒ 可回退。
+            if (ex is JsonException) return true;
+            return false;
+        }
+
+        /// <summary>[F13] 记录一次被兜底吞掉的步骤失败（只补诊断，不改变任何数据状态）。</summary>
+        private static void LogRecoverableStepFailure(PluginExecutionStep step, Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[F13] Step {step?.Id} failed but continue_on_error is set, falling back to the next step: {ex?.Message}");
         }
 
         /// <summary>
@@ -623,8 +710,9 @@ namespace LiteMonitor.src.Plugins
                             if (val == PluginConstants.STATUS_UNKNOWN || val == PluginConstants.STATUS_ERROR)
                             {
                                 // [Fix] Fail fast if critical extraction failed
-                                // [F13] 改用**专用异常类型**（消息与既有实现逐字一致）：
-                                // "字段提取失败"是可分类的业务失败，不得与"未知异常"混为一谈。
+                                // [F13] 改用**专用异常类型**：它是"业务可恢复失败"的一种
+                                // （continue_on_error 的步骤可吞掉它并进入备用步骤），
+                                // 但它**绝不会被当成正常值发布** —— 消息与既有实现逐字一致。
                                 throw new PluginStepDataException(step.Id, kv.Key, val);
                             }
                         }
@@ -757,6 +845,13 @@ namespace LiteMonitor.src.Plugins
                 string fb = args.TryGetValue("fallback", out var fv) ? fv : "";
                 return await CryptoNative.FetchLeasedAsync(s, fb, nativeToken, maxResponseBytes, allowedHosts,
                     inflightScopeKey, _publication.Value).ConfigureAwait(false);
+            }
+            else if (uri.Host.Equals("newyear", StringComparison.OrdinalIgnoreCase))
+            {
+                // [F13] 元旦倒计时**本地兜底**：纯本地计算，不触网 ⇒ 不占并发槽位、不产生响应体。
+                // 只按本机日期算"距离元旦还有多少天"，**不推测调休安排**、不冒充法定节假日数据。
+                // 时钟可注入（Clock）⇒ 跨年 / 闰年 / 时区可被确定性测试覆盖。
+                return NewYearNative.GetCountdownJson(Clock);
             }
 
             throw new Exception($"Unknown native host: {uri.Host}");
