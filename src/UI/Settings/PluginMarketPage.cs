@@ -424,8 +424,12 @@ namespace LiteMonitor.src.UI.SettingsPage
         private string ComputeInstallStateDigest()
         {
             var sb = new StringBuilder();
-            if (_index == null) return MarketDigest.Of(string.Empty);
 
+            // ★ "没有索引"与"索引里一条都没有"是两种不同状态，摘要必须能区分
+            //   （否则一次失败的刷新会被当成"内容没变"，列表就不更新了）。
+            if (_index == null) return MarketDigest.Of("no-index");
+
+            sb.Append('|');
             if (_category == MarketCategory.Themes)
             {
                 foreach (MarketThemeEntry entry in _index.Themes)
