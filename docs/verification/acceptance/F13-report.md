@@ -29,9 +29,7 @@
 
 ## 3. 用例与命令（可从干净检出复现）
 
-> ⚠️ **命令偏差**：派发单里的 `dotnet build LiteMonitor.sln` **在本仓不可用** —— 仓库里**没有 `.sln` 文件**
-> （`Get-ChildItem -Filter '*.sln'` 在 master 与本 worktree 均为空）。故改为逐工程构建/测试，
-> 覆盖范围与 `.sln` 等价（主工程 + 三个测试工程）。
+> **命令说明（协调者复核后更正）**：派发单里的 `dotnet build LiteMonitor.sln` **本仓可用** —— `LiteMonitor.sln` 在 master 与本 worktree 均存在（`Get-ChildItem -Filter '*.sln'` 可查到）。本包仍按逐工程构建/测试执行，覆盖范围与 `.sln` 等价（主工程 + 三个测试工程）。
 
 | 命令 | 目的 | 结果（发现数/通过/失败） |
 |---|---|---|
@@ -117,7 +115,7 @@
 
 ### 7.1 与派发单的偏离
 
-1. **构建命令**：`dotnet build LiteMonitor.sln` 不可用（仓库无 `.sln`），改为逐工程构建（§3 已说明）。
+1. **构建命令**：本包按逐工程构建执行（覆盖与 `.sln` 等价；`LiteMonitor.sln` 实际存在，详见 §3 协调者复核说明）。
 2. **短标签**：内置 `Holiday.json` 的 `short_label` 由 fork 原值 `"放假"` 改回上游 v1.1 的 `"🏖️"`。
    理由：取证报告 §4.4 把该项列为 v1.0 降级点之一；emoji 与界面语言无关、且不挤占窄任务栏宽度。
    若协调者认为该 UI 变更超出本包范围，回退该行即可，不影响兜底语义。
@@ -195,7 +193,7 @@ public bool ContinueOnError { get; set; } = false;   // 默认 false
 
 ### 7.4 发现的相邻问题（不属于本包，建议归属）
 
-1. **仓库缺少 `.sln`**：派发单 / README 里的 `dotnet build LiteMonitor.sln` 在本仓不可执行，
+1. **构建命令采用逐工程方式**（协调者复核更正：`LiteMonitor.sln` **存在**于 master 与本 worktree，命令本身可用；本包逐工程构建覆盖等价）：
    建议协调者要么补一个解决方案文件，要么把文档里的命令改成逐工程。
 2. **`resources/plugins/*.json` 全部没有 `_en` 变体**：`PluginMeta` / `PluginOutput` 支持
    `name_en` / `label_en` / `short_label_en`，但 12 个内置插件**一个都没用** ⇒ 英文界面下内置插件的
