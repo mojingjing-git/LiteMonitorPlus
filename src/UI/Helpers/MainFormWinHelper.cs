@@ -66,7 +66,12 @@ namespace LiteMonitor.src.UI.Helpers
             //   这里不再重复绑定 —— 两处绑定会让窗口轮廓被无谓地重建两遍。
         }
 
-        public bool IsTopMostStyleApplied()
+        /// <summary>
+        /// 置顶样式位（<c>WS_EX_TOPMOST</c>）是否已应用。
+        /// <para>★ virtual 的原因：与 <see cref="RefreshTopMost"/> 同理 —— 置顶看门狗的
+        /// 双判逻辑需要在测试里被真实调用（见 <c>MainFormBizHelper.MaintainTopMost</c>）。</para>
+        /// </summary>
+        public virtual bool IsTopMostStyleApplied()
         {
             try
             {
@@ -81,7 +86,90 @@ namespace LiteMonitor.src.UI.Helpers
             }
         }
 
-        public void RefreshTopMost(bool enabled, bool forceReinsert = false)
+        /// <summary>
+        /// 【P-F06 / #612】置顶的<b>实际可见层级</b>是否仍然有效。
+        /// <para>★ 为什么需要"双判"：<see cref="IsTopMostStyleApplied"/> 只读
+        /// <c>WS_EX_TOPMOST</c> <b>样式位</b>。样式位只能说明"窗口被标记成置顶"，
+        /// 不能证明它现在<b>真的</b>待在置顶层 —— 第三方窗口、驱动/合成层变化、
+        /// 句柄重建都可能让一个"带着置顶样式位"的窗口实际掉到普通层里。
+        /// 旧看门狗只看样式位 ⇒ 那种情况下它认为"一切正常"，什么都不做。</para>
+        /// <para>★ 判定方法：沿 <c>GW_HWNDPREV</c> 链向前看，只要前方有一个<b>可见</b>且
+        /// <b>非置顶</b>的窗口，就说明我们<b>已经不在置顶层</b>。这是"同级/分层"的真实定义，
+        /// 不遍历系统窗口（母计划 F06 第 2 步明确禁止）。链上的<b>置顶</b>窗口不算问题 ——
+        /// 强行把它们压下去就是"抢其它置顶程序的 Z 序"，规格明确不允许。</para>
+        /// </summary>
+        public virtual bool IsTopMostLayeringEffective()
+        {
+            try
+            {
+                if (_form.IsDisposed || !_form.IsHandleCreated) return false;
+
+                // 样式位都不在 ⇒ 根本谈不上"置顶生效"。
+                if (!IsTopMostStyleApplied()) return false;
+
+                IntPtr self = _form.Handle;
+                if (self == IntPtr.Zero) return false;
+
+                IntPtr previous = GetWindow(self, GW_HWNDPREV);
+                for (int i = 0; previous != IntPtr.Zero && i < LayeringScanLimit; i++)
+                {
+                    if (IsWindowVisible(previous) &&
+                        (GetWindowLong(previous, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0)
+                    {
+                        return false;   // 一个普通窗口压在"置顶窗口"上面 ⇒ 置顶已失效
+                    }
+
+                    previous = GetWindow(previous, GW_HWNDPREV);
+                }
+
+                return true;
+            }
+            catch
+            {
+                // 读取 Z 序失败 ⇒ 无法证明异常，按"有效"处理，避免误判导致反复重插。
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// 【P-F06 / #612】前景窗口是否<b>整屏覆盖</b>本窗口所在显示器
+        /// （全屏游戏 / 全屏视频 / 锁屏与安全桌面都属于这一类）。
+        /// <para>★ 用途：置顶恢复的<b>抑制</b>条件 —— 用户正在看全屏内容时，
+        /// 看门狗不得把悬浮窗插到全屏窗口上面（规格：尊重全屏行为、不压安全桌面）。</para>
+        /// </summary>
+        public static bool IsForegroundCoveringMonitor(IntPtr ourHandle)
+        {
+            if (ourHandle == IntPtr.Zero) return false;
+
+            try
+            {
+                IntPtr foreground = GetForegroundWindow();
+                if (foreground == IntPtr.Zero || foreground == ourHandle) return false;
+
+                if (!GetWindowRect(foreground, out RECT fg)) return false;
+
+                Screen? screen = Screen.FromHandle(ourHandle);
+                if (screen == null) return false;
+
+                Rectangle bounds = screen.Bounds;
+                return fg.left <= bounds.Left &&
+                       fg.top <= bounds.Top &&
+                       fg.right >= bounds.Right &&
+                       fg.bottom >= bounds.Bottom;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 应用 / 摘除置顶。
+        /// <para>★ virtual 的原因：置顶看门狗（<c>MainFormBizHelper.MaintainTopMost</c>）的
+        /// 决策逻辑需要在测试里被<b>真实调用</b>并观察它"到底请求了什么"，
+        /// 而真实 Win32 上无法稳定复现"样式位在、层级已掉"的状态（见 F06 验收报告）。</para>
+        /// </summary>
+        public virtual void RefreshTopMost(bool enabled, bool forceReinsert = false)
         {
             try
             {
@@ -315,6 +403,13 @@ namespace LiteMonitor.src.UI.Helpers
         [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
         [DllImport("user32.dll", SetLastError = true)] private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll", SetLastError = true)] private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+        [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+        [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int left, top, right, bottom; }
         [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint flags);
         [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindow(IntPtr hWnd);
         [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
@@ -335,6 +430,14 @@ namespace LiteMonitor.src.UI.Helpers
         private const int DWMWA_COLOR_NONE = unchecked((int)0xFFFFFFFE);
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_TOPMOST = 0x00000008;
+
+        /// <summary>
+        /// 【P-F06 / #612】沿 Z 序链向前扫描的上限（有界，绝不无限遍历系统窗口）。
+        /// </summary>
+        private const int LayeringScanLimit = 64;
+
+        /// <summary>GetWindow 的关系命令：取 Z 序上"前一个"（更靠前）的窗口。</summary>
+        private const uint GW_HWNDPREV = 3;
         private const int WS_EX_TRANSPARENT = 0x20;
         private const int WS_EX_LAYERED = 0x80000;
 

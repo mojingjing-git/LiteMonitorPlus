@@ -162,6 +162,17 @@ namespace LiteMonitor
             _recovery.RequestRecovery(reason);
         }
 
+        /// <summary>
+        /// 【P-F06 / #599】显示变化（分辨率 / 拓扑 / DPI / 任务栏设置）之后立即检查一次
+        /// 同级 Z 序，并排定有限次后续检查以覆盖<b>迟到</b>的合成层。
+        /// <para>★ 由主窗在收到 WM_DISPLAYCHANGE / WM_SETTINGCHANGE / WM_DPICHANGED 时调用
+        /// （与已投递的恢复请求并列 —— 两者互不替代）。</para>
+        /// </summary>
+        public void NotifyDisplayChanged()
+        {
+            _winHelper.RequestDisplayChangeCheck();
+        }
+
         /// <summary>解析目标任务栏宿主（目标缺失时**不回退主屏**）。</summary>
         public TaskbarHostResolution ResolveTarget() => _bizHelper.ResolveTarget();
 
@@ -369,6 +380,11 @@ namespace LiteMonitor
 
             // ★ 在 UI 消息循环里执行（到期的）恢复动作：单次在途、绝不递归重建。
             _recovery.Pump();
+
+            // ★ P-F06 / #599：同级 Z 序的低成本后续检查（覆盖迟到的合成层）。
+            //   只有"定位/显示变化排定的配额"还没用完时才看一眼，用完即止 ——
+            //   不每帧无条件置顶、不遍历系统窗口、不反复重挂钩子。
+            _winHelper.PumpZOrderMaintenance();
 
             // [限频] 主题检查改为单调截止时间驱动（约每 5 秒一次）：
             // 正常重复 Tick 不再反复读取系统主题 / 反复应用分层样式。

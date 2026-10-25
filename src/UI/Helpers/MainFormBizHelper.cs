@@ -12,6 +12,70 @@ using LiteMonitor.src.SystemServices;
 namespace LiteMonitor.src.UI.Helpers
 {
     /// <summary>
+    /// 【P-F06 / #612】置顶重插的<b>抑制</b>判定来源。
+    /// <para>★ 为什么要有这层接缝：菜单打开、自动隐藏收起、前景全屏这些"让路"语义，
+    /// 在自动化测试里<b>无法</b>靠真实前台窗口稳定复现（测试机随时可能有别的窗口）。
+    /// 把它做成可注入接口 ⇒ 断言写的是<b>产品代码的分派逻辑</b>，而不是测试机的偶然状态。</para>
+    /// </summary>
+    public interface ITopMostSuppressionProvider
+    {
+        /// <summary>此刻是否应当抑制"重插 Z 序"（让路给菜单 / 自动隐藏 / 全屏 / 安全桌面）。</summary>
+        bool ShouldSuppressZOrderReinsert(Form form);
+    }
+
+    /// <summary>
+    /// 生产实现的可替换基类：把"前景是否全屏"这一支做成可替换的接缝。
+    /// <para>★ 为什么要分层：测试进程里 <c>Form.Activate()</c> 不会真的改变系统前台窗口
+    /// （无真实输入焦点），"前景全屏"这一支必须由测试替身驱动。
+    /// <see cref="DefaultTopMostSuppressionProvider"/> 仍是生产使用的实现。</para>
+    /// </summary>
+    public abstract class TopMostSuppressionProviderBase : ITopMostSuppressionProvider
+    {
+        public abstract bool ShouldSuppressZOrderReinsert(Form form);
+
+        /// <summary>
+        /// 前景窗口是否整屏覆盖本窗所在显示器（全屏 / 锁屏 / 安全桌面）。
+        /// </summary>
+        protected virtual bool IsForegroundFullscreen(Form form)
+        {
+            return MainFormWinHelper.IsForegroundCoveringMonitor(form.Handle);
+        }
+    }
+
+    /// <summary>
+    /// 生产实现：菜单打开 / 自动隐藏已收起 / 前景窗口整屏覆盖本窗所在显示器 ⇒ 让路。
+    /// </summary>
+    public sealed class DefaultTopMostSuppressionProvider : TopMostSuppressionProviderBase
+    {
+        /// <summary>进程内共享实例。</summary>
+        public static readonly DefaultTopMostSuppressionProvider Instance = new DefaultTopMostSuppressionProvider();
+
+        public override bool ShouldSuppressZOrderReinsert(Form form)
+        {
+            if (form == null || form.IsDisposed || !form.IsHandleCreated) return true;
+
+            // ① 右键菜单打开中：不要抢它的 Z 序
+            if (form.ContextMenuStrip != null && form.ContextMenuStrip.Visible) return true;
+
+            // ② 自动隐藏已把面板收起：收起状态下重插没有意义，还可能露出边缘
+            if (IsAutoHidden(form)) return true;
+
+            // ③ 前景全屏（全屏游戏 / 视频 / 锁屏 / 安全桌面）：不压上去
+            return IsForegroundFullscreen(form);
+        }
+
+        /// <summary>
+        /// 该窗体当前是否处于"自动隐藏已收起"状态。
+        /// <para>★ 只有宿主是 <see cref="MainForm"/> 时才读它的状态；其它窗体（如任务栏面板）
+        /// 没有自动隐藏语义 ⇒ 一律按"未收起"处理。</para>
+        /// </summary>
+        private static bool IsAutoHidden(Form form)
+        {
+            return form is MainForm main && main.IsAutoHidden;
+        }
+    }
+
+    /// <summary>
     /// 主窗口业务助手 (Business Helper)
     /// 职责：自动隐藏、托盘交互、快捷动作、启动流程、布局切换
     /// </summary>
@@ -91,6 +155,65 @@ namespace LiteMonitor.src.UI.Helpers
 
         private void AutoHideTick(object? sender, EventArgs e) => CheckAutoHide();
 
+        // =================================================================
+        // 置顶看门狗（P-F06 / #612）
+        // =================================================================
+
+        /// <summary>
+        /// 置顶维护是否应当<b>暂时让路</b>（菜单打开 / 自动隐藏已收起 / 前景全屏）。
+        /// <para>★ 规格要求"尊重用户主动关闭置顶、自动隐藏、菜单与全屏行为，不压安全桌面"。
+        /// 这些情形下重插 Z 序会把面板顶到用户正在操作的内容上面，属于回归。</para>
+        /// <para>★ 可注入（<see cref="SetTopMostSuppressionProvider"/>）⇒ 这些语义能被
+        /// <b>真实调用</b>验证，而不必依赖测试机的真实前台窗口。</para>
+        /// </summary>
+        private ITopMostSuppressionProvider _suppression = DefaultTopMostSuppressionProvider.Instance;
+
+        /// <summary>替换置顶抑制判定来源（测试用；生产用默认实现）。</summary>
+        public void SetTopMostSuppressionProvider(ITopMostSuppressionProvider provider)
+        {
+            _suppression = provider ?? DefaultTopMostSuppressionProvider.Instance;
+        }
+
+        /// <summary>
+        /// 置顶看门狗的一次维护动作。
+        /// <para>★ <b>#612 的核心修复</b>：旧实现第一行是 <c>if (!_form.Visible) return;</c>
+        /// ⇒ 纯任务栏模式（用户把主面板藏起来，只留任务栏）下置顶维护<b>完全停摆</b>，
+        /// 等用户重新显示主窗时置顶状态已经错了。置顶是<b>窗口属性</b>，不是"可见性属性"
+        /// ⇒ 维护必须独立于 <c>Visible</c>。</para>
+        /// <para>★ 双判（PR #373 意图）：既看样式位 <see cref="MainFormWinHelper.IsTopMostStyleApplied"/>,
+        /// 也看<b>实际可见层级</b> <see cref="MainFormWinHelper.IsTopMostLayeringEffective"/>。
+        /// 只看样式位会漏掉"样式位在、但层级已经掉下去"的情况。</para>
+        /// <para>★ 单向：用户主动关闭置顶后只做"摘掉残留样式位"，<b>绝不</b>反向把置顶打开 ——
+        /// 恢复的是"用户要的置顶"，不是"看门狗想要的置顶"。</para>
+        /// </summary>
+        public void MaintainTopMost()
+        {
+            if (_form.IsDisposed || !_form.IsHandleCreated) return;
+
+            if (_cfg.TopMost)
+            {
+                // ★ 尊重用户/系统当下的行为：菜单打开、自动隐藏已收起、前景全屏 ⇒ 让路
+                // （"不压安全桌面"是同一条规则：安全桌面就是全屏前景的一种）。
+                if (_suppression.ShouldSuppressZOrderReinsert(_form)) return;
+
+                bool styleApplied = _winHelper.IsTopMostStyleApplied();
+
+                // ★ 双判：样式位缺失 ⇒ 补；样式位在但**实际层级**已掉 ⇒ 也要补。
+                if (!styleApplied || !_winHelper.IsTopMostLayeringEffective())
+                {
+                    _winHelper.RefreshTopMost(true, forceReinsert: true);
+                }
+
+                return;
+            }
+
+            // 用户主动关闭了置顶 ⇒ 只摘残留样式位，绝不重新打开。
+            if (_winHelper.IsTopMostStyleApplied())
+            {
+                _winHelper.RefreshTopMost(false);
+            }
+        }
+
         private void StartTopMostTimer()
         {
             _topMostTimer ??= new System.Windows.Forms.Timer { Interval = 10000 };
@@ -101,19 +224,8 @@ namespace LiteMonitor.src.UI.Helpers
 
         private void TopMostTick(object? sender, EventArgs e)
         {
-            if (!_form.Visible) return;
-
-            if (_cfg.TopMost)
-            {
-                if (!_winHelper.IsTopMostStyleApplied())
-                {
-                    _winHelper.RefreshTopMost(true, forceReinsert: true);
-                }
-            }
-            else if (_winHelper.IsTopMostStyleApplied())
-            {
-                _winHelper.RefreshTopMost(false);
-            }
+            // ★ P-F06：不再因 !_form.Visible 早退 —— 见 MaintainTopMost 的注释。
+            MaintainTopMost();
         }
 
         private void CheckAutoHide()
