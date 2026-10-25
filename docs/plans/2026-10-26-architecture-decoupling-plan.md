@@ -197,6 +197,8 @@ Draft-Commit保证用户草稿隔离，不代表多个外部服务动作天然�
 
 **执行核对（2026-10-26，W3 合并后）**：F08b（含接线）/f14b/f06 已合入，F17 已放弃，r06c 已封存并摘取脚本——棘轮基线随 W3 上调（C-1=147、C-3=172、C-4=353，+5 文件/+15 public 类型，均为已验收代码；A 组零变化），历史见 `scripts/architecture-baseline.json`。autohide 未合入（待实机冒烟 4 步），其落点为 `AppActions`/`MainForm_Transparent` 等 B3 文件、不在冻结清单，不阻塞 B0～B2/I0～I1；B3 启动前必须合入或明确搁置。B0 已启动，静态盘点完成，见 [B0/I0 基线盘点](2026-10-26-B0-I0-baseline-inventory.md)。
 
+**分工拍板（2026-10-26）**：B0 收尾（行为 fixture + 性能基线）派发 [P-B0b](dispatch/P-B0b.md) 由独立会话在工作树执行；B1+B2（≙Plan A 的 I1）由主会话按 [P-B1B2](dispatch/P-B1B2.md) 执行，C1 契约已在派工单字段级固定。
+
 ## 8. 提交与回滚
 
 - 按B阶段拆小提交；文件移动、类型/命名空间改名与行为修改分开，便于检查差异。
