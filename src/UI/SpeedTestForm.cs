@@ -1,3 +1,4 @@
+using LiteMonitor.SystemServices; // B3:应用层硬件网关
 using System;
 using System.Drawing;
 using System.Threading.Tasks;
@@ -301,11 +302,10 @@ namespace LiteMonitor
         {
             try
             {
-                var hardwareMonitor = HardwareMonitor.Instance;
-                if (hardwareMonitor != null)
+                // B3:经应用层网关取值(未注册时返回 null,与原 Instance 空检查等价)
                 {
-                    float? uploadBps = hardwareMonitor.Get("NET.Up");
-                    float? downloadBps = hardwareMonitor.Get("NET.Down");
+                    float? uploadBps = HardwareGateway.GetSampleValue("NET.Up");
+                    float? downloadBps = HardwareGateway.GetSampleValue("NET.Down");
 
                     // 转换为MB/s
                     double currentLocalDownload = downloadBps.HasValue ? downloadBps.Value / 1024f / 1024f : 0f;

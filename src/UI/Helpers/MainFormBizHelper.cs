@@ -1,3 +1,4 @@
+using LiteMonitor.SystemServices; // B3:应用层硬件网关
 using System;
 using System.Diagnostics;
 using System.Drawing;
@@ -597,7 +598,7 @@ namespace LiteMonitor.src.UI.Helpers
         {
             try
             {
-                if (HardwareMonitor.Instance != null) await HardwareMonitor.Instance.SmartCheckDriver();
+                await HardwareGateway.SmartCheckDriverAsync();
                 await UpdateChecker.CheckAsync();
                 CheckUpdateSuccess();
 

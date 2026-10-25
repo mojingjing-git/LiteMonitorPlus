@@ -1,3 +1,4 @@
+using LiteMonitor.SystemServices; // B3:应用层硬件网关
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -206,7 +207,7 @@ namespace LiteMonitor.src.WebServer
             _demandSync = new WebDemandSynchronizer(
                 demandProvider: () => _sessionManager.HasWebDataDemand,
                 applyDemand: _demandApplier,
-                targetProvider: () => HardwareMonitor.Instance);
+                targetProvider: () => HardwareGateway.RegisteredTarget);
 
             // ★ 需求变化（连接增删 / HTTP 租期授予 / 停止清空）立刻同步，不等广播周期
             _sessionManager.DemandChanged = () => _demandSync.SyncNow();
@@ -214,14 +215,12 @@ namespace LiteMonitor.src.WebServer
 
         /// <summary>
         /// 默认共享采样入口：走采集协调器（1 秒 1 次 + 并发合并）。
-        /// ★ <see cref="HardwareMonitor.Instance"/> **每次取值时再取**，不在构造时缓存：
+        /// ★ 经应用层网关**每次取值时再取**，不在构造时缓存：
         ///   硬件层可能比 Web 服务更晚创建。
         /// </summary>
         private static Task<bool> DefaultSamplingRequester(CancellationToken cancellationToken)
         {
-            var hw = HardwareMonitor.Instance;
-            if (hw == null) return Task.FromResult(false);
-            return hw.UpdateIfDueAsync(cancellationToken);
+            return HardwareGateway.RequestSamplingAsync(cancellationToken);
         }
 
         /// <summary>
@@ -230,10 +229,7 @@ namespace LiteMonitor.src.WebServer
         /// </summary>
         private static bool ApplyWebDataDemandToHardware(bool hasDemand)
         {
-            var hw = HardwareMonitor.Instance;
-            if (hw == null) return false;
-            hw.SetWebDataDemand(hasDemand);
-            return true;
+            return HardwareGateway.TrySetWebDataDemand(hasDemand);
         }
 
         public bool Start(out string errorMsg)
@@ -477,8 +473,7 @@ namespace LiteMonitor.src.WebServer
 
         private void WriteSnapshotJson(Utf8JsonWriter writer)
         {
-            var hw = HardwareMonitor.Instance;
-            if (hw == null)
+            if (!HardwareGateway.IsRegistered)
             {
                 writer.WriteStartObject();
                 writer.WriteEndObject();
@@ -509,7 +504,7 @@ namespace LiteMonitor.src.WebServer
                 }
             }
 
-            string localIp = hw.GetNetworkIP() ?? "127.0.0.1";
+            string localIp = HardwareGateway.NetworkIP ?? "127.0.0.1";
 
             // ★ FPS 需求规则 (计划 §4.4)：本地启用 或 (有合法 Web 需求 且 显式开启网页版帧率)
             //   没有需求时 Web 端输出 "--" 占位，不读取数值、不伪造 0。
@@ -519,7 +514,7 @@ namespace LiteMonitor.src.WebServer
             // ★ 当前是否有**可信**的 FPS 数据：
             //   有需求但服务刚启动、首帧未到时，hw.Get("FPS") 会返回 0f —— 那是"没有数据"而不是"真的是 0"。
             //   用 HasFpsData 区分两者，前者输出 "--"，后者输出真实的 0。
-            bool hasFpsData = hw.HasFpsData;
+            bool hasFpsData = HardwareGateway.HasFpsData;
 
             writer.WriteStartObject();
 
@@ -561,7 +556,7 @@ namespace LiteMonitor.src.WebServer
 
                 WriteSnapshotItemJson(writer, item, displayName, groupId, groupDisplay,
                     groupIndices.TryGetValue(item.UIGroup, out int idx) ? idx : 999,
-                    fpsDemand, hasFpsData, k => hw.Get(k), k => InfoService.Instance.GetValue(k));
+                    fpsDemand, hasFpsData, k => HardwareGateway.GetSampleValue(k), k => InfoService.Instance.GetValue(k));
             }
 
             writer.WriteEndArray();

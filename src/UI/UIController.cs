@@ -136,6 +136,8 @@ namespace LiteMonitor
             _mon = new HardwareMonitor(cfg);
             // B1/C1 最小接线：UI 持有采集契约；Tick 采样暂仍走 _mon 旧路径，B2 迁移时切换消费面。
             _hwClient = new HardwareClientAdapter(_mon, cfg.MonitorItems.Select(x => x.Key).ToList());
+            // B3 阶段三：应用层网关注册（组合根唯一注册点；全部消费方经网关取用，Instance 已降 internal）
+            HardwareGateway.Register(_mon, _hwClient);
 
             _layout = new UILayout(ThemeManager.Current);
 
@@ -2176,6 +2178,7 @@ namespace LiteMonitor
             _disposed = true;
             _timer.Stop();
             _timer.Dispose();
+            HardwareGateway.Unregister();
             _mon.Dispose();
             _hwClient.Dispose();
 

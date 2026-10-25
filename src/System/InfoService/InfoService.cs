@@ -295,8 +295,8 @@ namespace LiteMonitor.src.SystemServices.InfoService
         {
             try
             {
-                // Delegate to HardwareMonitor's NetworkManager (handles caching & multi-interface logic)
-                string ip = HardwareMonitor.Instance?.GetNetworkIP();
+                // Delegate to gateway (NetworkManager 缓存与多接口逻辑,组合根注册)
+                string ip = LiteMonitor.SystemServices.HardwareGateway.NetworkIP ?? "";
 
                 // Validate IP
                 if (!string.IsNullOrEmpty(ip) && ip != DEFAULT_IP)

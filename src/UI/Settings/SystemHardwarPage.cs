@@ -1,3 +1,4 @@
+using LiteMonitor.SystemServices; // B3:应用层硬件网关
 using System;
 using System.Drawing;
 using System.Windows.Forms;
@@ -104,7 +105,7 @@ namespace LiteMonitor.src.UI.SettingsPage
         {
             if (_diskProbeStatusLabel == null) return;
 
-            DiskProbePolicy? policy = HardwareMonitor.Instance?.DiskProbePolicy;
+            DiskProbePolicy? policy = HardwareGateway.DiskProbePolicy;
             string stateKey = policy == null ? "Menu.DiskProbeStateCountersOnly" : policy.State switch
             {
                 DiskProbeState.SmartAllowed => "Menu.DiskProbeStateSmartAllowed",
@@ -140,16 +141,15 @@ namespace LiteMonitor.src.UI.SettingsPage
         /// </summary>
         private void ApplyDiskProbeModeToRuntime()
         {
-            HardwareMonitor? monitor = HardwareMonitor.Instance;
-            if (monitor == null || Config == null) return;
+            if (Config == null || !HardwareGateway.IsRegistered) return;
 
             DiskProbeMode target = Config.DiskProbeMode == (int)DiskProbeMode.SmartAllowed
                 ? DiskProbeMode.SmartAllowed
                 : DiskProbeMode.CountersOnly;
 
-            if (target == monitor.DiskProbePolicy.Mode) return;
+            if (HardwareGateway.DiskProbePolicy is not { } policy || target == policy.Mode) return;
 
-            Task.Run(() => monitor.ApplyDiskProbeMode(target));
+            Task.Run(() => HardwareGateway.ApplyDiskProbeMode(target));
         }
 
         public override void Save()
@@ -301,7 +301,7 @@ namespace LiteMonitor.src.UI.SettingsPage
         {
             if (_ipStatusLabel == null) { return; }
 
-            NetworkTrafficExclusionStatus? status = HardwareMonitor.Instance?.GetTrafficExclusionStatus();
+            NetworkTrafficExclusionStatus? status = HardwareGateway.TrafficExclusionStatus;
             if (status == null)
             {
                 _ipStatusLabel.Text = LanguageManager.T("Menu.IpExclusionStatus") + ": " +

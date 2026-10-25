@@ -1,3 +1,4 @@
+using LiteMonitor.SystemServices; // B3:应用层硬件网关
 using System;
 using System.IO;
 using System.Linq;
@@ -416,11 +417,11 @@ namespace LiteMonitor
             // --- [系统硬件详情] ---
             var btnHardware = new ToolStripMenuItem(LanguageManager.T("Menu.HardwareInfo")); 
             btnHardware.Image = Properties.Resources.HardwareInfo; // 或者找个图标
-            btnHardware.Click += (s, e) => 
+            btnHardware.Click += (s, e) =>
             {
                 // 这里的模式是：每次点击都 new 一个新的，关闭即销毁。
-                // 不占用后台内存。
-                var form = new HardwareInfoForm();
+                // 不占用后台内存。B3:客户端经组合根注册的网关传入(不再默认就地组装)。
+                var form = new HardwareInfoForm(HardwareGateway.Client);
                 form.Show(); // 非模态显示，允许用户一边看一边操作其他
             };
             menu.Items.Add(btnHardware);

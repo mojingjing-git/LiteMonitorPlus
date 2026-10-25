@@ -167,5 +167,7 @@
     <InternalsVisibleTo Include="LiteMonitor.Tests" />
     <InternalsVisibleTo Include="LiteMonitor.GpuNonperformance.Tests" />
     <InternalsVisibleTo Include="AppearanceWindowShapeProbe" />
+    <!-- B3：Instance 降 internal 后，主窗生命周期探针同样需要可见（与其他测试工程同待遇） -->
+    <InternalsVisibleTo Include="GpuHostLifecycleProbe" />
   </ItemGroup>
 </Project>

@@ -1,3 +1,4 @@
+using LiteMonitor.SystemServices; // B3:应用层硬件网关
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -142,7 +143,7 @@ namespace LiteMonitor.src.UI
                     // 限频变量：避免过于频繁刷新 UI 导致卡顿
                     long lastTick = 0;
 
-                    HardwareMonitor.Instance?.CleanMemory(progress => 
+                    HardwareGateway.CleanMemory(progress =>
                     {
                         long now = DateTime.Now.Ticks;
                         // 如果进度未完成且距离上次刷新不足 15ms (约 60FPS)，则跳过刷新

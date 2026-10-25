@@ -1,7 +1,7 @@
 using System;
 using System.Diagnostics;
 using LiteMonitor.src.WebServer;
-using LiteMonitor.src.SystemServices;
+// B3:改走应用层网关(全限定引用,不在 src/Core 新增 SystemServices using——A-2 棘轮只减不增)
 
 namespace LiteMonitor.src.Core.Actions
 {
@@ -11,7 +11,7 @@ namespace LiteMonitor.src.Core.Actions
         {
             // 不再阻断，只尝试获取运行端口，如果没运行则使用配置端口
             int port = 0;
-            
+
             if (LiteWebServer.Instance != null && LiteWebServer.Instance.IsRunning)
             {
                 port = LiteWebServer.Instance.CurrentRunningPort;
@@ -27,13 +27,10 @@ namespace LiteMonitor.src.Core.Actions
             {
                 string host = "localhost";
                 // 优先使用内网IP
-                if (HardwareMonitor.Instance != null)
+                string? gatewayIp = LiteMonitor.SystemServices.HardwareGateway.NetworkIP;
+                if (!string.IsNullOrEmpty(gatewayIp) && gatewayIp != "0.0.0.0" && gatewayIp != "127.0.0.1")
                 {
-                    string ip = HardwareMonitor.Instance.GetNetworkIP();
-                    if (!string.IsNullOrEmpty(ip) && ip != "0.0.0.0" && ip != "127.0.0.1") 
-                    {
-                        host = ip;
-                    }
+                    host = gatewayIp;
                 }
 
                 string url = $"http://{host}:{port}";

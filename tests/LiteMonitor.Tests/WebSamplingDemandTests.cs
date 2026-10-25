@@ -1695,11 +1695,20 @@ namespace LiteMonitor.Tests
                 "构造函数必须把 DefaultSamplingRequester 作为 samplingRequester 的默认实现");
 
             // ③ 默认采样入口必须走共享限频采样（不是各自为政的全量采集）
+            //   B3 后链路为 LiteWebServer → HardwareGateway → 协调器：字面锚点跟随链路，
+            //   本文件锚定网关入口、网关源码锚定 UpdateIfDueAsync，护栏意图不变。
             string requester = ExtractMethodBody(code, "DefaultSamplingRequester");
             Assert.True(requester != null,
                 "LiteWebServer.cs 里找不到默认采样入口 DefaultSamplingRequester");
-            Assert.True(requester.Contains("UpdateIfDueAsync("),
-                "默认采样入口必须走 HardwareMonitor.UpdateIfDueAsync（共享限频采样）");
+            Assert.True(requester.Contains("HardwareGateway.RequestSamplingAsync("),
+                "默认采样入口必须走 HardwareGateway.RequestSamplingAsync（应用层网关）");
+
+            string gatewayPath = FindRepoFile(Path.Combine("src", "System", "AppHardwareGateway.cs"));
+            Assert.True(gatewayPath != null && File.Exists(gatewayPath), "找不到 AppHardwareGateway.cs");
+            string gatewayCode = StripComments(File.ReadAllText(gatewayPath));
+            string gatewayRequester = ExtractMethodBody(gatewayCode, "RequestSamplingAsync");
+            Assert.True(gatewayRequester != null && gatewayRequester.Contains("UpdateIfDueAsync("),
+                "网关的采样入口必须走 HardwareMonitor.UpdateIfDueAsync（共享限频采样）");
 
             // ④ ★ F6：语义必须正确 —— 把"是否有需求"**原样**写进采集层。
             //   之前的护栏只查 token 存在性，变异 M11（SetWebDataDemand(!hasDemand) 语义反转）

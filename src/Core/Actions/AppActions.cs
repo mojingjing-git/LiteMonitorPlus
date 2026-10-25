@@ -4,7 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Windows.Forms;
 using LiteMonitor.src.UI;
-using LiteMonitor.src.SystemServices;
+// B3:HardwareMonitor 相关改走应用层网关(全限定),SystemServices using 移除(A-2 棘轮下降)
 using LiteMonitor.src.WebServer; // ★★★ 引用 WebServer 命名空间 ★★★
 using LiteMonitor.src.Plugins;
 using System.Linq;
@@ -77,7 +77,7 @@ namespace LiteMonitor.src.Core.Actions
 
         public static void ApplyAutoStart(Settings cfg)
         {
-            AutoStart.Set(cfg.AutoStart);
+            LiteMonitor.src.SystemServices.AutoStart.Set(cfg.AutoStart);
         }
 
         // =============================================================
@@ -189,7 +189,7 @@ namespace LiteMonitor.src.Core.Actions
             if (cfg != null)
             {
                 // ★ 非阻塞取实际卡数 (见 Step 1.5): 绝不 lock 硬件锁 ★
-                int detectedGpuCount = HardwareMonitor.TryGetDetectedGpuCount();
+                int detectedGpuCount = LiteMonitor.SystemServices.HardwareGateway.DetectedGpuCount;
 
                 // 探测不到时 (0) 不做夹紧, 但仍然要按配置数量重新生成监控项 ——
                 // 否则用户改了「监控显卡数量」保存后不会生效。
@@ -202,7 +202,7 @@ namespace LiteMonitor.src.Core.Actions
 
             // ★★★ [新增] 动态检查硬件开启需求 (热切换) ★★★
             // 如果用户开启了风扇/水泵，自动开启 USB 控制器；反之关闭
-            HardwareMonitor.Instance?.RefreshHardwareConfig();
+            LiteMonitor.SystemServices.HardwareGateway.RefreshHardwareConfig();
 
             // 重新计算哪些格子要显示 (主界面和任务栏的数据列都会重建)
             ui?.RebuildLayout();

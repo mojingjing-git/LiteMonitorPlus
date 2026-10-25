@@ -18,7 +18,9 @@ namespace LiteMonitor.src.SystemServices
         public const int DefaultRefreshMs = 1000;
 
         #region Singleton & Events
-        public static HardwareMonitor? Instance { get; private set; }
+        // B3 阶段三：降为 internal——程序集外不可见（IVT 仅覆盖测试/探针工程），
+        // 应用内消费方一律经 HardwareGateway（组合根注册）；B5 拆 Sampling 程序集后此字段彻底退役。
+        internal static HardwareMonitor? Instance { get; private set; }
         public event Action? OnValuesUpdated;
 
         /// <summary>

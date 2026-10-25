@@ -24,18 +24,16 @@ namespace LiteMonitor.src.UI
 
         // B2：目录缓存与查找（每次刷新整体原子替换，树节点持有条目快照而非 LHM 活对象）
         private readonly IHardwareClient _client;
-        private readonly bool _ownsClient;
         private HardwareCatalog? _catalog;
         private ILookup<string?, HardwareCatalogEntry>? _children;
         private Dictionary<string, HardwareCatalogEntry>? _sensorById;
 
         private string T(string en, string zh) => _settings.Language.ToLower().StartsWith("zh") ? zh : en;
 
-        // hardwareClient 由菜单链路注入为佳；默认就地包装 Instance 属临时组装例外（撤除阶段 B3，见 B1B2 报告）
-        public HardwareInfoForm(IHardwareClient? hardwareClient = null)
+        // B3:客户端必传(组合根经网关注入,MenuManager 构造);不再默认就地组装
+        public HardwareInfoForm(IHardwareClient hardwareClient)
         {
-            _client = hardwareClient ?? new HardwareClientAdapter(HardwareMonitor.Instance!);
-            _ownsClient = hardwareClient == null;
+            _client = hardwareClient ?? throw new ArgumentNullException(nameof(hardwareClient));
             this.Text = T("LiteMonitor++ - Hardware Info", "LiteMonitor++ - 系统硬件详情");
             this.Size = new Size(UIUtils.S(600), UIUtils.S(750)); // 稍微加宽一点
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -320,11 +318,10 @@ namespace LiteMonitor.src.UI
         {
             _refreshTimer.Stop();
             _refreshTimer.Dispose();
-            // B2：释放传感器窗口需求；仅释放自组装的适配器（注入的共享客户端归组合根所有）
+            // B2：释放传感器窗口需求；客户端归组合根所有，此处不释放
             try
             {
                 _client.SubmitDemand(new SamplingDemand(Ui: false, Taskbar: false, Web: false, History: false, SensorWindow: false));
-                if (_ownsClient) _client.Dispose();
             }
             catch (ObjectDisposedException) { }
             base.OnFormClosed(e);
