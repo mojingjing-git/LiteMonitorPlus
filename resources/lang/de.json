@@ -133,7 +133,7 @@
     "DiskProbeStateSmartAllowed": "Kompatibilitätsmodus",
     "DiskProbeStateTransitioning": "Wird gewechselt",
     "DiskProbeStateDegraded": "Eingeschränkt (Wechsel fehlgeschlagen)",
-    "DiskProbeMigrationNotice": "In Ihrer alten Konfiguration fehlt die Erfassungsstrategie für Datenträger: Sie läuft jetzt im Modus [Nur Zähler] (SMART und Datenträgertemperatur sind nicht verfügbar, Geschwindigkeit und Aktivität kommen weiterhin aus Windows-Zählern). Für SMART wählen Sie den Kompatibilitätsmodus.",
+    "DiskProbeMigrationNotice": "Die Erfassungsstrategie für Datenträger ist noch nicht festgelegt (aktuell [Nur Zähler]): SMART und Datenträgertemperatur sind nicht verfügbar, Geschwindigkeit und Aktivität kommen weiterhin aus Windows-Zählern. Für SMART wählen Sie den Kompatibilitätsmodus.",
     "DiskProbeHint": "Im Modus „Nur Zähler“ wird kein Speichergerät geöffnet: Wechseldatenträger werden nicht belegt und es gibt keine Konflikte mit HWiNFO oder ähnlichen Werkzeugen; der Preis ist, dass Datenträgertemperatur und SMART nicht verfügbar sind (wird als -- angezeigt).",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "Optionen",

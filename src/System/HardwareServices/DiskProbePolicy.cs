@@ -69,9 +69,8 @@ namespace LiteMonitor.src.SystemServices
     public sealed class DiskProbePolicy
     {
         /// <summary>
-        /// 配置里的"未设置"哨兵值。
-        /// ★ 用 -1 而不是 0：旧配置缺字段时必须与"用户明确选了仅计数器"**区分开**，
-        /// 否则迁移状态会被静默吞掉（用户永远不知道自己处在兼容模式之外）。
+        /// 配置里的"未设置"哨兵值（内部用）。
+        /// ★ 配置里用 <c>null</c> 表示"键不存在"（旧配置），因此 <c>null</c> 会被归一到本值。
         /// </summary>
         public const int UnconfiguredModeValue = -1;
 
@@ -113,7 +112,7 @@ namespace LiteMonitor.src.SystemServices
 
         /// <summary>
         /// 按配置构造策略。
-        /// <para>★ 旧配置缺字段（<see cref="UnconfiguredModeValue"/>）⇒ 一律按
+        /// <para>★ 配置里没有该字段（<c>null</c>，旧配置）⇒ 一律按
         /// <see cref="DiskProbeMode.CountersOnly"/> 生效（首次打开硬件前不碰存储设备），
         /// 同时进入 <see cref="DiskProbeMigrationState.Unconfigured"/> 迁移状态，等用户明确选择。</para>
         /// </summary>

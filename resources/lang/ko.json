@@ -133,7 +133,7 @@
     "DiskProbeStateSmartAllowed": "호환 모드",
     "DiskProbeStateTransitioning": "전환 중",
     "DiskProbeStateDegraded": "저하됨 (전환 실패)",
-    "DiskProbeMigrationNotice": "기존 설정에 디스크 탐색 정책이 없습니다: [카운터만 사용]으로 실행됩니다 (SMART와 디스크 온도는 사용할 수 없으며, 속도와 활동량은 Windows 카운터에서 가져옵니다). SMART가 필요하면 호환 모드를 선택하세요.",
+    "DiskProbeMigrationNotice": "디스크 탐색 정책이 아직 설정되지 않았습니다(현재 [카운터만 사용]으로 실행): SMART와 디스크 온도는 사용할 수 없으며, 속도와 활동량은 Windows 카운터에서 가져옵니다. SMART가 필요하면 호환 모드를 선택하세요.",
     "DiskProbeHint": "카운터만 사용 모드는 저장소 장치를 전혀 열지 않으므로: 이동식 디스크를 점유하지 않고 HWiNFO 같은 도구와도 충돌하지 않습니다. 대신 디스크 온도와 SMART는 사용할 수 없습니다 (-- 로 표시).",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "설정 패널",

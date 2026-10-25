@@ -134,7 +134,7 @@
     "DiskProbeStateSmartAllowed": "互換モード",
     "DiskProbeStateTransitioning": "切り替え中",
     "DiskProbeStateDegraded": "劣化（切り替え失敗）",
-    "DiskProbeMigrationNotice": "旧設定にディスク探索ポリシーがありません: [カウンタのみ] で実行されます（SMART とディスク温度は利用不可、速度とアクティビティは Windows カウンタから取得）。SMART が必要な場合は互換モードを選択してください。",
+    "DiskProbeMigrationNotice": "ディスク探索ポリシーが未設定です（現在は [カウンタのみ] で実行）: SMART とディスク温度は利用不可、速度とアクティビティは Windows カウンタから取得されます。SMART が必要な場合は互換モードを選択してください。",
     "DiskProbeHint": "カウンタのみではストレージデバイスを一切開かないため: リムーバブルディスクを占有せず、HWiNFO などのツールとも競合しません。代わりにディスク温度と SMART は利用できません（-- と表示）。",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "設定パネル",

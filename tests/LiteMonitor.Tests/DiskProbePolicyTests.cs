@@ -137,7 +137,7 @@ namespace LiteMonitor.Tests
         public void 旧配置缺字段_首次打开前禁止设备构造次数为0()
         {
             // ★ 迁移语义：旧配置没有该字段 ⇒ 第一次打开硬件前仍必须是仅计数器。
-            var cfg = new Settings { DiskProbeMode = DiskProbePolicy.UnconfiguredModeValue };
+            var cfg = new Settings { DiskProbeMode = null };
             var policy = DiskProbePolicy.FromSettings(cfg);
 
             Assert.Equal(DiskProbeMode.CountersOnly, policy.Mode);
@@ -157,7 +157,7 @@ namespace LiteMonitor.Tests
         [Fact]
         public void 未配置_按仅计数器生效且进入迁移状态()
         {
-            var policy = DiskProbePolicy.FromSettings(new Settings { DiskProbeMode = DiskProbePolicy.UnconfiguredModeValue });
+            var policy = DiskProbePolicy.FromSettings(new Settings { DiskProbeMode = null });
 
             Assert.Equal(DiskProbeMode.CountersOnly, policy.Mode);
             Assert.Equal(DiskProbeMigrationState.Unconfigured, policy.MigrationState);
