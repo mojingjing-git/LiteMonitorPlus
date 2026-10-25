@@ -551,10 +551,27 @@ Windows 文件替换语义（**实测**，非推测）：
 |---|---|
 | `dotnet build LiteMonitor.sln -c Debug --no-incremental` | 0 错误 / **530 警告**（**同口径** master `dd04fdd` W1 基线也是 530 ⇒ **本次新增代码零警告增量**）。W2 五包合并态一度为 547，来源全部是**新增测试文件**的 CS8632（本工程 `<Nullable>disable</Nullable>` 且无 `#nullable` 上下文）⇒ 已按包分 8 个提交清理干净；**基线历史文件**的同款写法不在本次范围内，不动 |
 | `dotnet build LiteMonitor.sln -c Release --no-incremental` | 0 错误 / **530 警告** |
-| `LiteMonitor.Tests` | **2047 总数**（2046 通过 + 1 指定 E2E 跳过）⇒ **全量连跑 5 轮全部 0 失败**（F17 收口前同口径约 **1/3** 轮命中 flaky） |
+| `LiteMonitor.Tests` | **2048 总数**（2047 通过 + 1 指定 E2E 跳过）⇒ **全量连跑 5 轮全部 0 失败**（F17 收口前同口径约 **1/3** 轮命中 flaky） |
 | `LiteMonitor.Updater.Tests` | 73 |
 | `LiteMonitor.GpuNonperformance.Tests` | 19 |
-| 合计 | **2139** ⇒ `MIN_TEST_TOTAL` 由 2029 上调至 **2139**（`ci.yml` / `release.yml` **逐字一致**；`MAX_SKIPPED_TESTS: 1` **未放宽**） |
+| 合计（TRX `total` 口径） | **2140**（通过 2139 / 失败 0 / 跳过 1）⇒ `MIN_TEST_TOTAL` 由 2029 上调至 **2139**（`ci.yml` / `release.yml` **逐字一致**；`MAX_SKIPPED_TESTS: 1` **未放宽**） |
+
+> **口径说明（2026-10-26 复核时订正）**：`MIN_TEST_TOTAL` 曾按"**通过数**"推导（2047+73+19=2139），而断言脚本实际比较的是 TRX 的 **`total`** 属性（2048+73+19=**2140**），两者差 1 —— 主工程有 1 条联网 E2E 被跳过，它计入 `total` 但不计入 `passed`。`MinTotal` 是 `sumTotal >= MinTotal` 的**下限断言**，2140 ≥ 2139 成立；偏差方向是安全的（门槛比实际低 1 条，删减用例仍会触发红灯），故**保持 2139 不动**。后续批次上调阈值一律以 TRX `total` 为准，勿再用通过数口径。
+
+**CI 断言脚本 `.github/workflows/assert-test-counts.ps1` 本地实跑（CI 等价布局，2026-10-26）**
+
+以 `ci-artifacts/test-results/Debug/<Assembly>/results.trx` 布局产出三份 TRX 后，按 `ci.yml` 同参数调用，**退出码 0 / 校验通过**：
+
+| 程序集 | 总计 | 通过 | 失败 | 跳过 |
+|---|---|---|---|---|
+| `LiteMonitor.Tests` | 2048 | 2047 | 0 | 1 |
+| `LiteMonitor.Updater.Tests` | 73 | 73 | 0 | 0 |
+| `LiteMonitor.GpuNonperformance.Tests` | 19 | 19 | 0 | 0 |
+| **合计** | **2140** | **2139** | **0** | **1** |
+
+唯一被跳过的用例是 `MarketE2ETests.端到端_拉索引_安装_校验_卸载`（需 `LITEMONITOR_E2E=1`，CI 故意不设）。`MUST_EXECUTE_TEST_CLASS` 五类**全部真正执行且零跳过**：`MarketIndexContractTests` 6 条、`ReviewMarketPersistenceRegressionTests` 33 条、`ReviewMarketInstallRaceRegressionTests` **6** 条、`ThemeMarketContractTests` 8 条、`ThemeMarketPolicyTests` 6 条。
+
+> 跑批要点（已踩过，勿复现）：本地复现必须设 `LITEMONITOR_PLUGIN_REPO` / `LITEMONITOR_THEME_REPO` 指向 `tests/fixtures/plugin-repo` / `theme-repo`，否则 `MarketIndexContractTests` 的 6 条契约用例会被记为 Skipped ⇒ 跳过数 7 > `MAX_SKIPPED_TESTS: 1`，断言必红。**那是环境变量缺失，不是代码问题。**
 | `MUST_EXECUTE_TEST_CLASS` | 新增 `ReviewMarketInstallRaceRegressionTests`（执行体交付 5 条 < 门槛 6 ⇒ 集成期补足第 6 条后入选）⇒ 该类**一条都不许被跳过**，被删减到 6 条以下即 CI 红；两 workflow **逐字一致** |
 | `pwsh scripts/run-probes.ps1 -Groups web` | **PASS**：C5/C6 = 101；**C7 由 403 翻 101**（#580）；**C13 = 403**（未授权外部域名）、**C14 = 101**（转发头指向未授权域名但信任开关关 ⇒ 证明转发头未被采信）；C1–C6 / C8 / C9 / C10 / C11 / C12 全部保持 |
 
