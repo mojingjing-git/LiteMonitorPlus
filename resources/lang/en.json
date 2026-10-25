@@ -133,7 +133,7 @@
     "DiskProbeStateSmartAllowed": "Compatibility mode",
     "DiskProbeStateTransitioning": "Switching",
     "DiskProbeStateDegraded": "Degraded (switch failed)",
-    "DiskProbeMigrationNotice": "Your old configuration has no disk probe strategy: it now runs in [Counters only] (SMART and disk temperature are unavailable; speed and activity still come from the Windows counters). Pick compatibility mode if you need SMART.",
+    "DiskProbeMigrationNotice": "Disk probe strategy is not set yet (running in [Counters only]): SMART and disk temperature are unavailable; speed and activity still come from the Windows counters. Pick compatibility mode if you need SMART.",
     "DiskProbeHint": "Counters only never opens a storage device: removable disks are not held and no longer clash with HWiNFO or similar tools; the cost is that disk temperature and SMART are unavailable (shown as --).",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "Settings",

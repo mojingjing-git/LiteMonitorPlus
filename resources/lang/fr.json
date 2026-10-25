@@ -134,7 +134,7 @@
     "DiskProbeStateSmartAllowed": "Mode compatibilité",
     "DiskProbeStateTransitioning": "Basculement en cours",
     "DiskProbeStateDegraded": "Dégradé (basculement échoué)",
-    "DiskProbeMigrationNotice": "Votre ancienne configuration ne contient pas de stratégie de sondage des disques : l'application fonctionne désormais en mode [Compteurs uniquement] (SMART et température du disque indisponibles ; la vitesse et l'activité proviennent toujours des compteurs Windows). Choisissez le mode compatibilité si vous avez besoin de SMART.",
+    "DiskProbeMigrationNotice": "La stratégie de sondage des disques n'est pas encore définie (l'application fonctionne en mode [Compteurs uniquement]) : SMART et température du disque indisponibles ; la vitesse et l'activité proviennent toujours des compteurs Windows. Choisissez le mode compatibilité si vous avez besoin de SMART.",
     "DiskProbeHint": "Le mode « Compteurs uniquement » n'ouvre aucun périphérique de stockage : les disques amovibles ne sont pas bloqués et n'entrent plus en conflit avec HWiNFO ou des outils similaires ; en contrepartie, la température du disque et SMART sont indisponibles (affichés par « -- »).",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "Options",

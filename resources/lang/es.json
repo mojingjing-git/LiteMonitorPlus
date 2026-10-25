@@ -133,7 +133,7 @@
     "DiskProbeStateSmartAllowed": "Modo de compatibilidad",
     "DiskProbeStateTransitioning": "Cambiando",
     "DiskProbeStateDegraded": "Degradado (cambio fallido)",
-    "DiskProbeMigrationNotice": "Su configuración antigua no tiene estrategia de sondeo de discos: ahora se ejecuta en modo [Solo contadores] (SMART y la temperatura del disco no están disponibles; la velocidad y la actividad siguen viniendo de los contadores de Windows). Elija el modo de compatibilidad si necesita SMART.",
+    "DiskProbeMigrationNotice": "La estrategia de sondeo de discos aún no está configurada (ahora se ejecuta en modo [Solo contadores]): SMART y la temperatura del disco no están disponibles; la velocidad y la actividad siguen viniendo de los contadores de Windows. Elija el modo de compatibilidad si necesita SMART.",
     "DiskProbeHint": "El modo «Solo contadores» no abre ningún dispositivo de almacenamiento: los discos extraíbles no quedan bloqueados y deja de haber conflictos con HWiNFO u otras herramientas; el precio es que la temperatura del disco y SMART no están disponibles (se muestra como --).",
     "__Comment_Global__": "--- Global ---",
     "SettingsPanel": "Ajustes",

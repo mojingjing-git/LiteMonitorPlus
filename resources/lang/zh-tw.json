@@ -133,7 +133,7 @@
         "DiskProbeStateSmartAllowed": "相容模式",
         "DiskProbeStateTransitioning": "正在切換",
         "DiskProbeStateDegraded": "降級（切換失敗）",
-        "DiskProbeMigrationNotice": "舊設定裡沒有磁碟探測策略：已按【僅計數器】執行（SMART 與磁碟溫度不可用，速度與活動率仍來自 Windows 計數器）。需要 SMART 請選擇相容模式。",
+        "DiskProbeMigrationNotice": "尚未設定磁碟探測策略（目前按【僅計數器】執行）：SMART 與磁碟溫度不可用，速度與活動率仍來自 Windows 計數器。需要 SMART 請選擇相容模式。",
         "DiskProbeHint": "僅計數器模式不會開啟任何儲存裝置：可移除磁碟不會被占用、不與 HWiNFO 等工具競爭裝置；代價是磁碟溫度與 SMART 不可用（顯示為 --）。",
         "__Comment_Global__": "--- 全域/按鈕/右鍵選單 ---",
         "SettingsPanel": "設定面板",

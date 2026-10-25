@@ -93,13 +93,30 @@ namespace LiteMonitor.Tests
 
             LiteMonitor.Settings cfg = LiteMonitor.SettingsHelper.Load(forceReload: true);
 
-            // ① 缺字段 ⇒ 哨兵值 -1（**不是** 0）：必须能与"用户明确选了仅计数器"区分开。
-            Assert.Equal(DiskProbePolicy.UnconfiguredModeValue, cfg.DiskProbeMode);
+            // ① 缺字段 ⇒ null（键不存在）：必须能与"用户明确选了仅计数器"区分开。
+            Assert.Null(cfg.DiskProbeMode);
 
             var policy = DiskProbePolicy.FromSettings(cfg);
             Assert.Equal(DiskProbeMode.CountersOnly, policy.Mode);
             Assert.Equal(DiskProbeMigrationState.Unconfigured, policy.MigrationState);
             Assert.False(policy.StorageProbeEnabled);
+        }
+
+        [Fact]
+        public void 未设置策略时_不往旧配置里写任何新键()
+        {
+            // ★ 迁移只发生在**内存**里：用户没做选择前，旧配置文件**一个字节都不该被改写**
+            //   （不凭空多出 DiskProbeMode 键，也不动用户原有的磁盘偏好与监控项）。
+            WriteLegacyConfig();
+
+            LiteMonitor.Settings cfg = LiteMonitor.SettingsHelper.Load(forceReload: true);
+            cfg.Save();
+
+            string json = File.ReadAllText(MainPath);
+            using JsonDocument doc = JsonDocument.Parse(json);
+            Assert.False(
+                doc.RootElement.TryGetProperty("DiskProbeMode", out _),
+                "用户还没选择策略时，旧配置里不应出现 DiskProbeMode 键");
         }
 
         [Fact]
