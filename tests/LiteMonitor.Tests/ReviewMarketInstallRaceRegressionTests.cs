@@ -1,3 +1,5 @@
+#nullable enable annotations
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -19,6 +21,10 @@ namespace LiteMonitor.Tests
     /// （.NET 表现为 <see cref="UnauthorizedAccessException"/>）。
     /// 因此：只要有读者正拿着目标文件（插件加载器、恢复对账、可用性校验……），原子替换就会当场失败，
     /// 安装被静默打断并留下事务日志 ⇒ 下次启动被回滚 ⇒ 用户的安装丢失且没有明确报错。
+    ///
+    /// ★ 两类语义要分清（实测）：<b>replace-existing</b>（目标已存在）要求目标无任何打开的句柄，
+    /// 哪怕对方共享 <c>FILE_SHARE_DELETE</c> 也照样 <c>ERROR_ACCESS_DENIED</c>；
+    /// 而 <b>rename-away</b>（改名挪走，目标不存在）只要求源允许 delete 共享 —— 共享读对它有效。
     /// </para>
     ///
     /// <para>
@@ -226,6 +232,33 @@ namespace LiteMonitor.Tests
 
             Assert.False(File.Exists(scope.Target));
             Assert.True(File.Exists(scope.RetiredPath));
+        }
+
+        /// <summary>
+        /// 源文件缺失 ⇒ **不进入重试**：<see cref="FileNotFoundException"/> 不是"瞬时占用"，
+        /// 重试它只会白白烧掉 300ms 预算，且必须**立刻**抛出原始异常（不得被包装成
+        /// <see cref="MarketFileReplaceBlockedException"/>，否则调用方会误判成"文件被占用"）。
+        /// 目标文件必须**原封不动**。
+        /// </summary>
+        [Fact]
+        public void MoveAtomic_MissingSource_FailsImmediatelyWithoutBurningTheRetryBudget()
+        {
+            using var scope = new InstallScope();
+            int retries = 0;
+            scope.InstallPolicy = new MarketFileIo.ReplacePolicy
+            {
+                Clock = scope.Clock,
+                Wait = delay => { scope.Clock.Advance(delay); return true; },
+                OnRetry = (_, _) => retries++,
+            };
+
+            string missing = Path.Combine(scope.PluginsDir, "does-not-exist.tmp");
+            Assert.Throws<FileNotFoundException>(() => MarketFileIo.MoveAtomic(missing, scope.Target));
+
+            // 关键：源缺失不是瞬时占用 ⇒ 一次都不该重试。
+            Assert.Equal(0, retries);
+            // 目标文件必须原封不动。
+            Assert.Equal(scope.OldBytes, File.ReadAllBytes(scope.Target));
         }
 
         // ================================================================
