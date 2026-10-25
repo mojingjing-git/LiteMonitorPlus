@@ -293,6 +293,12 @@ namespace LiteMonitor.src.Core.Actions
             bool bindModeChanged = server.CurrentBindMode.HasValue
                 && server.CurrentBindMode.Value != targetBindMode;
 
+            // ★ [F02] 访问边界（允许的外部地址 / 可信代理 / 信任开关）变了 ⇒ 必须重启：
+            //   重启会撤销全部会话 / 票据 / 已建立的 WS 连接 ⇒ 白名单收紧后旧连接无法绕过新策略。
+            string targetPolicyFingerprint = WebServerAccessPolicy.BuildBoundary(cfg, targetPort).Fingerprint;
+            bool accessPolicyChanged = !string.Equals(
+                server.CurrentAccessPolicyFingerprint, targetPolicyFingerprint, StringComparison.Ordinal);
+
             // ★ 运行时监听策略：配置要求监听局域网，**或**运行时实际绑在非回环地址上
             bool runtimeLanExposed = server.IsLanExposed;
 
@@ -317,6 +323,23 @@ namespace LiteMonitor.src.Core.Actions
                 return result;
             }
 
+            // ★ [F02] 「外部（反向代理）暴露 + 没有有效凭据」⇒ 同样停止服务。
+            //   与局域网那条**共用同一套凭据口径**：反代从环回连进来也算对外暴露，
+            //   不继承"环回无凭据"的信任。
+            if (shouldRun && WebServerAccessPolicy.IsExternalAccessForbidden(cfg, false))
+            {
+                if (isRunning)
+                {
+                    server.Stop();
+                }
+                result.RejectedExternalWithoutPassword = true;
+                result.ServiceRunning = server.IsRunning;
+                result.ErrorMessage = "配置了允许的外部地址（反向代理）就必须设置访问口令：网页服务已停止" +
+                                      "（不会以无口令方式继续对外提供访问）。";
+                System.Diagnostics.Debug.WriteLine("[WebServer] " + result.ErrorMessage);
+                return result;
+            }
+
             if (shouldRun)
             {
                 if (!isRunning)
@@ -327,9 +350,10 @@ namespace LiteMonitor.src.Core.Actions
                         System.Diagnostics.Debug.WriteLine("WebServer start failed: " + err);
                     }
                 }
-                else if (targetPort != currentPort || credentialChanged || bindModeChanged)
+                else if (targetPort != currentPort || credentialChanged || bindModeChanged || accessPolicyChanged)
                 {
-                    // ★ 端口变更 / **凭据变更**（含"凭据被清掉"）/ **监听范围变更** 均触发重启
+                    // ★ 端口变更 / **凭据变更**（含"凭据被清掉"）/ **监听范围变更** /
+                    //   **访问边界变更**（白名单 / 可信代理）均触发重启
                     //   ⇒ 重启会撤销全部会话 / 票据 / WS 连接
                     server.Stop();
                     if (!server.Start(out string err))
@@ -428,6 +452,16 @@ namespace LiteMonitor.src.Core.Actions
 
         /// <summary>本次应用是否拒绝了「局域网模式 + 无有效凭据」（服务已被停止）。</summary>
         public bool RejectedLanWithoutPassword { get; set; }
+
+        /// <summary>
+        /// 本次应用是否拒绝了「配置了外部地址（反代）+ 无有效凭据」（服务已被停止）。
+        /// </summary>
+        /// <remarks>
+        /// ★ [F02] 与 <see cref="RejectedLanWithoutPassword"/> **分开**：两条规则的触发条件不同
+        ///   （外部暴露由「允许的外部地址」白名单决定，与监听范围无关），
+        ///   混成一个标记会让设置界面无法区分"为什么被停"。
+        /// </remarks>
+        public bool RejectedExternalWithoutPassword { get; set; }
 
         /// <summary>失败 / 拒绝的原因（成功时为空串）。</summary>
         public string ErrorMessage { get; set; } = "";

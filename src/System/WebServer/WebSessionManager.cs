@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -335,6 +336,9 @@ namespace LiteMonitor.src.WebServer
         /// <summary>签发时的口令指纹。</summary>
         public string PasswordFingerprint = "";
 
+        /// <summary>[F02] 签发时的**访问边界策略代次**（白名单收紧 ⇒ 代次变 ⇒ 本会话失效）。</summary>
+        public int PolicyGeneration;
+
         /// <summary>撤销标记。</summary>
         public bool Revoked;
     }
@@ -354,6 +358,9 @@ namespace LiteMonitor.src.WebServer
 
         /// <summary>该连接所属的主会话 ID（握手时从票据带出来）；空串 = 未绑定会话。</summary>
         public string SessionId = "";
+
+        /// <summary>[F02] 登记时的**访问边界策略代次**（边界收紧 ⇒ 该连接按代次失效）。</summary>
+        public int PolicyGeneration;
     }
 
     /// <summary>
@@ -375,6 +382,9 @@ namespace LiteMonitor.src.WebServer
 
         /// <summary>申请时的口令指纹（改密 ⇒ 票据立即作废）。</summary>
         public string PasswordFingerprint = "";
+
+        /// <summary>[F02] 申请时的**访问边界策略代次**（边界收紧 ⇒ 票据立即作废）。</summary>
+        public int PolicyGeneration;
     }
 
     /// <summary>
@@ -465,6 +475,12 @@ namespace LiteMonitor.src.WebServer
         private readonly object _authGate = new object();
         private readonly Dictionary<string, WebSessionRecord> _sessions = new Dictionary<string, WebSessionRecord>();
         private readonly Dictionary<string, WebTicketRecord> _tickets = new Dictionary<string, WebTicketRecord>();
+
+        // ★ [F02] 访问边界的**策略代次**：边界指纹一变就 +1。
+        //   会话 / 票据 / WebSocket 连接都记住自己诞生时的代次 ⇒ 边界收紧后按代次失效。
+        private readonly object _policyGate = new object();
+        private string _policyFingerprint = "";
+        private int _policyGeneration = 0;
 
         // TTL 以单调时钟刻度表示（TimeProvider 可注入 ⇒ TTL 用例完全确定性）
         private readonly long _sessionAbsoluteTtlTicks;
@@ -754,6 +770,12 @@ namespace LiteMonitor.src.WebServer
             //   Stop 之后才完成的握手 / 才到达的请求一律不再登记需求（见 AddClient / HandleHttpRequest）。
             int connectionGeneration = Volatile.Read(ref _generation);
 
+            // ★ [F02] **实际 TCP 对端地址**：可信代理判定必须看真实对端，
+            //   而不是 Host / 头里的任何声明。
+            IPAddress? peerAddress = null;
+            try { peerAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address; }
+            catch (Exception) { peerAddress = null; }
+
             // ★ 服务级取消令牌：Stop 时取消，在途的采样等待立刻退出
             CancellationToken lifetimeToken = _lifetimeToken;
 
@@ -807,7 +829,7 @@ namespace LiteMonitor.src.WebServer
 
                 if (decision == UpgradeDecision.Handshake)
                 {
-                    if (Handshake(stream, info, out string wsSessionId))
+                    if (Handshake(stream, info, peerAddress, out string wsSessionId))
                     {
                         // 握手成功 = 已鉴权，登记为有效 Web 需求
                         // ★ 同时把**所属主会话**一起记下来：会话失效时才能反查并断开这条连接。
@@ -841,7 +863,7 @@ namespace LiteMonitor.src.WebServer
                 else
                 {
                     // ★ HTTP 路径改成可等待：鉴权 → 授予租期 → 共享采样 → 序列化 → 响应
-                    await HandleHttpRequestAsync(stream, info, leftoverBody, connectionGeneration, lifetimeToken).ConfigureAwait(false);
+                    await HandleHttpRequestAsync(stream, info, leftoverBody, connectionGeneration, lifetimeToken, peerAddress).ConfigureAwait(false);
                     client.Close(); // HTTP 是短连接
                 }
             }
@@ -898,6 +920,9 @@ namespace LiteMonitor.src.WebServer
         }
 
         /// <summary>签发一个主会话。</summary>
+        /// <remarks>
+        /// ★ [F02] 会话记住诞生时的**访问边界策略代次** ⇒ 白名单收紧后旧会话按代次失效。
+        /// </remarks>
         private WebSessionRecord CreateSession(string passwordFingerprint)
         {
             long now = _time.GetTimestamp();
@@ -906,7 +931,8 @@ namespace LiteMonitor.src.WebServer
                 Id = GenerateSecureToken(),
                 CreatedTicks = now,
                 LastUsedTicks = now,
-                PasswordFingerprint = passwordFingerprint ?? ""
+                PasswordFingerprint = passwordFingerprint ?? "",
+                PolicyGeneration = CurrentPolicyGeneration
             };
 
             List<string> pruned;
@@ -927,8 +953,10 @@ namespace LiteMonitor.src.WebServer
         /// 取出一个仍然有效的主会话；无效时返回 false。
         /// </summary>
         /// <remarks>
-        /// ★ 判定口径（HTTP 与 WS 完全一致）：撤销标记 / 绝对 TTL / 空闲 TTL / 口令指纹。
+        /// ★ 判定口径（HTTP 与 WS 完全一致）：撤销标记 / 绝对 TTL / 空闲 TTL / 口令指纹 / **策略代次**。
         /// ★ 口令指纹对不上 ⇒ <b>撤销全部</b>会话与票据（契约 W2「改密 ⇒ 全部撤销」）。
+        /// ★ [F02] 策略代次对不上 ⇒ 该会话诞生时的访问边界已经变了（白名单收紧 / 撤销代理信任）
+        ///   ⇒ 同样作废，不让旧会话绕过新策略。
         /// </remarks>
         private bool TryGetSession(string sessionId, string passwordFingerprint, out WebSessionRecord record)
         {
@@ -937,6 +965,7 @@ namespace LiteMonitor.src.WebServer
 
             bool revokeAll = false;
             bool sessionGone = false;
+            int currentGeneration = CurrentPolicyGeneration;
             lock (_authGate)
             {
                 if (!_sessions.TryGetValue(sessionId, out var s)) return false;
@@ -950,6 +979,12 @@ namespace LiteMonitor.src.WebServer
                 {
                     // ★ 口令变了（或被清空）⇒ 全部会话与票据立即作废
                     revokeAll = true;
+                }
+                else if (s.PolicyGeneration != currentGeneration)
+                {
+                    // ★ [F02] 访问边界已变（白名单收紧 / 撤销代理信任）⇒ 本会话作废
+                    _sessions.Remove(sessionId);
+                    sessionGone = true;
                 }
                 else
                 {
@@ -1107,6 +1142,7 @@ namespace LiteMonitor.src.WebServer
             {
                 if (!_sessions.TryGetValue(sessionId, out var s)) return false;
                 if (s.Revoked) return false;
+                if (s.PolicyGeneration != CurrentPolicyGeneration) return false;   // ★ [F02] 边界已变 ⇒ 失效
 
                 long now = _time.GetTimestamp();
                 if (_sessionAbsoluteTtlTicks > 0 && now - s.CreatedTicks >= _sessionAbsoluteTtlTicks) return false;
@@ -1133,7 +1169,8 @@ namespace LiteMonitor.src.WebServer
                 Id = GenerateSecureToken(),
                 ExpiryTicks = now + _ticketTtlTicks,
                 SessionId = sessionId ?? "",
-                PasswordFingerprint = passwordFingerprint ?? ""
+                PasswordFingerprint = passwordFingerprint ?? "",
+                PolicyGeneration = CurrentPolicyGeneration
             };
 
             lock (_authGate)
@@ -1180,6 +1217,9 @@ namespace LiteMonitor.src.WebServer
                 if (_time.GetTimestamp() >= t.ExpiryTicks) return false;
                 if (!string.Equals(t.PasswordFingerprint, passwordFingerprint ?? "", StringComparison.Ordinal)) return false;
 
+                // ★ [F02] 申请票据时的访问边界已变 ⇒ 票据作废（白名单收紧后旧票据不放行）
+                if (t.PolicyGeneration != CurrentPolicyGeneration) return false;
+
                 // 申请它的主会话必须仍然有效（会话被注销 / 过期 ⇒ 票据一并作废）
                 if (!string.IsNullOrEmpty(t.SessionId) && !SessionStillValidLocked(t.SessionId, passwordFingerprint))
                 {
@@ -1196,6 +1236,7 @@ namespace LiteMonitor.src.WebServer
             if (!_sessions.TryGetValue(sessionId, out var s)) return false;
             if (s.Revoked) return false;
             if (!string.Equals(s.PasswordFingerprint, passwordFingerprint ?? "", StringComparison.Ordinal)) return false;
+            if (s.PolicyGeneration != CurrentPolicyGeneration) return false;   // ★ [F02] 边界已变 ⇒ 失效
             long now = _time.GetTimestamp();
             if (_sessionAbsoluteTtlTicks > 0 && now - s.CreatedTicks >= _sessionAbsoluteTtlTicks) return false;
             if (_sessionIdleTtlTicks > 0 && now - s.LastUsedTicks >= _sessionIdleTtlTicks) return false;
@@ -1263,7 +1304,8 @@ namespace LiteMonitor.src.WebServer
                 if (_wsClients.TryAdd(client, new WsClientBinding
                 {
                     Generation = connectionGeneration,
-                    SessionId = sessionId ?? ""
+                    SessionId = sessionId ?? "",
+                    PolicyGeneration = CurrentPolicyGeneration
                 }))
                 {
                     _demand.AddAuthenticatedConnection();
@@ -1531,7 +1573,7 @@ namespace LiteMonitor.src.WebServer
         /// ★ <paramref name="info"/> 是与 WS 握手**共用**的那份结构化解析结果（不二次解析）。
         /// </remarks>
         private async Task HandleHttpRequestAsync(NetworkStream stream, HttpRequestInfo info, byte[] leftoverBody,
-            int connectionGeneration, CancellationToken cancellationToken)
+            int connectionGeneration, CancellationToken cancellationToken, IPAddress? peerAddress)
         {
             if (string.IsNullOrEmpty(info.Method)) return;
 
@@ -1544,14 +1586,32 @@ namespace LiteMonitor.src.WebServer
                 return;
             }
 
-            // ② Host / Origin 校验（防 DNS Rebinding / 跨源读取）
-            if (!IsHostAllowed(info, policy) || !IsOriginAllowed(info, policy))
+            // ② [F02] 解析有效 authority（协议 + 主机 + 端口）。
+            //    ★ 错误优先级：**转发头歧义（400）先于** Host / Origin 不通过（403）。
+            WebAuthorityOutcome outcome = ResolveEffectiveAuthority(info, policy, peerAddress);
+            if (!outcome.IsAllowed)
+            {
+                SendErrorResponse(stream, outcome.ErrorCode, outcome.ErrorMessage, info, policy);
+                return;
+            }
+
+            // ③ Host / Origin 校验（防 DNS Rebinding / 跨源读取）
+            if (!IsOriginAllowed(info, policy, outcome.Authority))
             {
                 SendErrorResponse(stream, 403, "Host / Origin 校验未通过。", info, policy);
                 return;
             }
 
-            // ③ OPTIONS 预检：走**同一套** Host / Origin 校验（上面已经过了）
+            // ④ [F02] 外部（反代）访问**必须**有口令：
+            //    反代即使从环回连进来也算对外暴露，不继承"环回无凭据"的信任。
+            if (outcome.Authority.IsExternal && !policy.PasswordRequired)
+            {
+                SendErrorResponse(stream, 403,
+                    "外部访问未开放：尚未配置访问口令（通过反向代理访问必须配置访问口令）。", info, policy);
+                return;
+            }
+
+            // ⑤ OPTIONS 预检：走**同一套** Host / Origin 校验（上面已经过了）
             if (string.Equals(info.Method, "OPTIONS", StringComparison.OrdinalIgnoreCase))
             {
                 SendPreflightResponse(stream, info, policy);
@@ -1561,7 +1621,7 @@ namespace LiteMonitor.src.WebServer
             switch (info.Path)
             {
                 case "/api/auth/login":
-                    await HandleLoginAsync(stream, info, policy, leftoverBody, cancellationToken).ConfigureAwait(false);
+                    await HandleLoginAsync(stream, info, policy, outcome.Authority, leftoverBody, cancellationToken).ConfigureAwait(false);
                     return;
 
                 case "/api/auth/ticket":
@@ -1569,7 +1629,7 @@ namespace LiteMonitor.src.WebServer
                     return;
 
                 case "/api/auth/logout":
-                    await HandleLogoutAsync(stream, info, policy).ConfigureAwait(false);
+                    await HandleLogoutAsync(stream, info, policy, outcome.Authority).ConfigureAwait(false);
                     return;
             }
 
@@ -1624,7 +1684,8 @@ namespace LiteMonitor.src.WebServer
         ///   + 体 <c>{"csrf":"…"}</c>（CSRF 令牌由登录响应下发 —— 前端读不到 HttpOnly Cookie）。
         /// ★ 失败：401（口令错误）/ 400（体不合规）/ 403（Host、Origin 不通过，已在上面处理）。
         /// </remarks>
-        private async Task HandleLoginAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy, byte[] leftoverBody, CancellationToken cancellationToken)
+        private async Task HandleLoginAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy,
+            WebEffectiveAuthority authority, byte[] leftoverBody, CancellationToken cancellationToken)
         {
             if (!string.Equals(info.Method, "POST", StringComparison.OrdinalIgnoreCase))
             {
@@ -1639,10 +1700,12 @@ namespace LiteMonitor.src.WebServer
             //   （契约所有者裁定：L0 下以 {"password":""} 登录必须成功 ——
             //     "空口令"就是"无口令"，没有可拒绝的理由；而若 L0 让 HTTP API 无会话直通，
             //     就会形成第二套鉴权口径。）
+            // ★ [F02] 外部（反代）访问在 L0 下**不可用**：没有口令就没有任何凭据可校验，
+            //   路由层已经把它挡成 403（见 HandleHttpRequestAsync 的第 ④ 步）。
             if (!cfg.HasWebPasswordConfigured())
             {
                 WebSessionRecord l0Session = CreateSession(cfg.GetWebPasswordFingerprint());
-                SendLoginSuccess(stream, l0Session, info, policy);
+                SendLoginSuccess(stream, l0Session, info, policy, authority);
                 return;
             }
 
@@ -1671,7 +1734,7 @@ namespace LiteMonitor.src.WebServer
             }
 
             WebSessionRecord session = CreateSession(cfg.GetWebPasswordFingerprint());
-            SendLoginSuccess(stream, session, info, policy);
+            SendLoginSuccess(stream, session, info, policy, authority);
         }
 
         /// <summary>
@@ -1679,13 +1742,21 @@ namespace LiteMonitor.src.WebServer
         /// </summary>
         /// <remarks>
         /// ★ <c>Set-Cookie: lmsid=…; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800</c>
-        ///   —— 不加 <c>Secure</c>：本机是 HTTP，加了浏览器就不回传（功能直接坏掉）。
+        ///   —— 本机是 HTTP，**不加** <c>Secure</c>：加了浏览器就不回传（功能直接坏掉）。
+        /// ★ [F02] Cookie 的 <c>Secure</c> 判定用**已验证的有效协议**：
+        ///   有效 authority 是外部的 https ⇒ 加 <c>Secure</c>（反代终结 TLS 的真实形态）；
+        ///   其余（本地 http）⇒ 不加。
         /// ★ CSRF 令牌必须随登录响应下发：HttpOnly 的 Cookie 前端 JS 读不到。
         /// </remarks>
-        private void SendLoginSuccess(NetworkStream stream, WebSessionRecord session, HttpRequestInfo info, WebAccessPolicy policy)
+        private void SendLoginSuccess(NetworkStream stream, WebSessionRecord session, HttpRequestInfo info,
+            WebAccessPolicy policy, WebEffectiveAuthority authority)
         {
             string csrf = ComputeCsrfToken(session.Id);
             string cookie = $"{SessionCookieName}={session.Id}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SessionAbsoluteTtl.TotalSeconds:0}";
+            if (authority.IsExternal && string.Equals(authority.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+            {
+                cookie += "; Secure";
+            }
             byte[] payload = Encoding.UTF8.GetBytes("{\"csrf\":\"" + csrf + "\"}");
             SendHttpResponse(stream, 200, "application/json; charset=utf-8", payload, payload.Length, info, policy,
                 new List<string> { "Set-Cookie: " + cookie });
@@ -1730,7 +1801,8 @@ namespace LiteMonitor.src.WebServer
         /// <summary>
         /// <c>POST /api/auth/logout</c>：显式注销当前主会话。
         /// </summary>
-        private async Task HandleLogoutAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy)
+        private async Task HandleLogoutAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy,
+            WebEffectiveAuthority authority)
         {
             if (!string.Equals(info.Method, "POST", StringComparison.OrdinalIgnoreCase))
             {
@@ -1761,6 +1833,12 @@ namespace LiteMonitor.src.WebServer
 
             // ★ 清 Cookie：Max-Age=0 让浏览器立即丢弃（Path 必须与签发时一致）
             string clear = $"{SessionCookieName}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict";
+            // ★ [F02] 清除 Cookie 的 Secure 属性必须与**签发时**一致，
+            //   否则浏览器可能因为属性不匹配而**不删除**旧 Cookie（会话"注销不掉"）。
+            if (authority.IsExternal && string.Equals(authority.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+            {
+                clear += "; Secure";
+            }
             SendHttpResponse(stream, 204, "application/json; charset=utf-8", Array.Empty<byte>(), 0, info, policy,
                 new List<string> { "Set-Cookie: " + clear });
         }
@@ -2208,61 +2286,191 @@ namespace LiteMonitor.src.WebServer
         }
 
         /// <summary>
-        /// 构造当前的访问边界策略（Host / Origin 白名单 + 口令状态）。
+        /// 构造当前的访问边界策略（Host / Origin 白名单 + 口令状态 + 外部 authority + 可信代理）。
         /// </summary>
+        /// <remarks>
+        /// ★ [F02] 判定口径统一收敛到 <see cref="WebServerAccessPolicy.BuildBoundary"/>：
+        ///   本机 / 局域网白名单、跨源白名单、外部 authority 白名单、可信代理列表
+        ///   全部从**同一份**边界快照里取，避免两处口径分叉。
+        /// </remarks>
         private WebAccessPolicy BuildAccessPolicy()
         {
             Settings cfg = Settings.Load();
-            var policy = new WebAccessPolicy();
+            WebAccessBoundary boundary = WebServerAccessPolicy.BuildBoundary(cfg, ListenPort);
 
-            policy.PasswordRequired = cfg.HasWebPasswordConfigured();
-            policy.PasswordFingerprint = cfg.GetWebPasswordFingerprint();
-            policy.TrustProxyHeaders = cfg.WebServerTrustProxyHeaders;
-
-            // 本机地址始终允许（契约 W5）
-            policy.AllowedHosts.Add("127.0.0.1");
-            policy.AllowedHosts.Add("localhost");
-            policy.AllowedHosts.Add("::1");
-
-            // 局域网模式：额外允许用户配置的地址
-            if (cfg.WebServerBindMode == WebServerBindMode.Lan)
+            var policy = new WebAccessPolicy
             {
-                foreach (string addr in SplitConfigList(cfg.WebServerLanAddresses))
-                {
-                    string host = NormalizeHost(addr);
-                    if (host.Length > 0) policy.AllowedHosts.Add(host);
-                }
-            }
+                PasswordRequired = cfg.HasWebPasswordConfigured(),
+                PasswordFingerprint = cfg.GetWebPasswordFingerprint(),
+                TrustProxyHeaders = boundary.TrustProxyHeaders,
+                Generation = EnsurePolicyGeneration(boundary.Fingerprint)
+            };
 
-            // 显式配置的跨源（精确匹配）
-            foreach (string origin in SplitConfigList(cfg.WebServerAllowedOrigins))
-            {
-                string o = origin.Trim().TrimEnd('/');
-                if (o.Length > 0) policy.AllowedOrigins.Add(o);
-            }
+            foreach (string host in boundary.AllowedHosts) policy.AllowedHosts.Add(host);
+            foreach (string origin in boundary.AllowedOrigins) policy.AllowedOrigins.Add(origin);
+            foreach (WebAuthorityEntry entry in boundary.ExternalAuthorities) policy.ExternalAuthorities.Add(entry);
+            foreach (string proxy in boundary.TrustedProxies) policy.TrustedProxies.Add(proxy);
 
             return policy;
         }
 
-        /// <summary>Host 头是否在允许集合内（防 DNS Rebinding）。</summary>
-        private bool IsHostAllowed(HttpRequestInfo info, WebAccessPolicy policy)
+        /// <summary>
+        /// 访问边界的**策略代次**：边界指纹一变，代次 +1。
+        /// </summary>
+        /// <remarks>
+        /// ★ [F02] 白名单收紧 / 撤销代理信任 ⇒ 指纹变 ⇒ 代次变 ⇒
+        ///   **旧会话与旧 WebSocket 连接按代次失效**（见 <see cref="WebSessionRecord.PolicyGeneration"/>
+        ///   与 <see cref="WsClientBinding.PolicyGeneration"/>），不让旧连接绕过新策略。
+        /// </remarks>
+        private int EnsurePolicyGeneration(string fingerprint)
         {
-            string? hostHeader = info.GetSingleHeader("host");
-            if (string.IsNullOrEmpty(hostHeader)) return false;      // 没有 Host ⇒ 拒绝
-
-            SplitHostPort(hostHeader, out string host, out int? port);
-            host = NormalizeHost(host);
-            if (host.Length == 0) return false;
-            if (!policy.AllowedHosts.Contains(host)) return false;
-
-            // 端口必须与实际监听端口一致（端口未知时不校验端口，只校验主机名）
-            if (port.HasValue && ListenPort.HasValue && port.Value != ListenPort.Value) return false;
-
-            return true;
+            lock (_policyGate)
+            {
+                if (!string.Equals(_policyFingerprint, fingerprint, StringComparison.Ordinal))
+                {
+                    _policyFingerprint = fingerprint;
+                    _policyGeneration++;
+                }
+                return _policyGeneration;
+            }
         }
 
-        /// <summary>Origin 头是否允许（缺失 ⇒ 允许；"null" ⇒ 拒绝；不在集合 ⇒ 拒绝）。</summary>
-        private bool IsOriginAllowed(HttpRequestInfo info, WebAccessPolicy policy)
+        /// <summary>当前的访问边界策略代次（只读快照）。</summary>
+        private int CurrentPolicyGeneration
+        {
+            get { lock (_policyGate) return _policyGeneration; }
+        }
+
+        /// <summary>
+        /// 解析这次请求的**有效 authority**（协议 + 主机 + 端口），并判定它是否被访问边界放行。
+        /// </summary>
+        /// <remarks>
+        /// ★ [F02] 判定链（顺序固定，错误优先级固定）：
+        ///   <list type="number">
+        ///   <item><b>对端可信吗？</b>＝ <c>TrustProxyHeaders</c> 打开 <b>且</b> 对端 IP 命中
+        ///     <c>WebServerTrustedProxies</c>。<b>不</b>可信 ⇒ 转发头<b>完全不参与</b>判定
+        ///     （连"它是不是歧义"都不看 —— 不可信对端的头既不能帮忙也不能捣乱）。</item>
+        ///   <item><b>可信时才读转发头</b>：<c>X-Forwarded-Proto</c> / <c>X-Forwarded-Host</c>
+        ///     必须<b>唯一</b>（重复头、逗号多值一律 400），否则 400（歧义不猜）。</item>
+        ///   <item><b>取 authority</b>：可信且带 <c>X-Forwarded-Host</c> ⇒ 用它；否则用 <c>Host</c> 头。
+        ///     <c>Host</c> 缺失 / 重复 / 端口非法 ⇒ 403。</item>
+        ///   <item><b>本机 / 局域网</b> ⇒ 保持 fork 既有的严格校验（显式端口必须与真实监听端口一致）。</item>
+        ///   <item><b>外部</b> ⇒ 必须命中 <c>WebServerAllowedHosts</c> 白名单，否则 403。</item>
+        ///   </list>
+        /// ★ 外部 authority 的端口<b>绝不</b>与内部监听端口比较（外部 443 ≠ 内部 5000）。
+        /// </remarks>
+        private WebAuthorityOutcome ResolveEffectiveAuthority(
+            HttpRequestInfo info, WebAccessPolicy policy, IPAddress? peerAddress)
+        {
+            // ① 对端是否可信代理
+            bool peerTrusted = policy.TrustProxyHeaders
+                && WebServerAccessPolicy.IsTrustedProxyAddress(policy.TrustedProxies, peerAddress);
+
+            string scheme = "http";
+            string authorityText = "";
+            bool authorityFromForwarded = false;
+
+            if (peerTrusted)
+            {
+                // ② X-Forwarded-Proto：唯一头 + 唯一值 + 合法协议
+                IReadOnlyList<string> protoValues = info.GetHeaderValues("x-forwarded-proto");
+                if (protoValues.Count > 1)
+                {
+                    return WebAuthorityOutcome.Fail(400, "X-Forwarded-Proto 重复：转发头必须唯一。");
+                }
+                if (protoValues.Count == 1)
+                {
+                    string proto = protoValues[0].Trim();
+                    if (proto.IndexOf(',') >= 0)
+                    {
+                        return WebAuthorityOutcome.Fail(400, "X-Forwarded-Proto 含多个值：转发头必须唯一。");
+                    }
+                    proto = proto.ToLowerInvariant();
+                    if (proto != "http" && proto != "https")
+                    {
+                        return WebAuthorityOutcome.Fail(400, "X-Forwarded-Proto 非法（只接受 http / https）。");
+                    }
+                    scheme = proto;
+                }
+
+                // ③ X-Forwarded-Host：唯一头 + 唯一值（值本身的合法性稍后统一解析）
+                IReadOnlyList<string> forwardedHosts = info.GetHeaderValues("x-forwarded-host");
+                if (forwardedHosts.Count > 1)
+                {
+                    return WebAuthorityOutcome.Fail(400, "X-Forwarded-Host 重复：转发头必须唯一。");
+                }
+                if (forwardedHosts.Count == 1)
+                {
+                    authorityText = forwardedHosts[0].Trim();
+                    if (authorityText.IndexOf(',') >= 0)
+                    {
+                        return WebAuthorityOutcome.Fail(400, "X-Forwarded-Host 含多个值：转发头必须唯一。");
+                    }
+                    authorityFromForwarded = true;
+                }
+            }
+
+            // ④ 取 authority 文本（不可信对端 ⇒ 一律用 Host 头）
+            if (!authorityFromForwarded)
+            {
+                string? hostHeader = info.GetSingleHeader("host");
+                if (string.IsNullOrEmpty(hostHeader))
+                {
+                    bool duplicated = info.HasHeader("host");
+                    return WebAuthorityOutcome.Fail(403,
+                        duplicated ? "Host 头重复：必须唯一。" : "缺少 Host 头。");
+                }
+                authorityText = hostHeader.Trim();
+            }
+
+            // ⑤ 严格解析 authority（非法端口 ⇒ 不猜）
+            if (!WebServerAccessPolicy.TryParseAuthority(authorityText, out string rawHost, out int? explicitPort))
+            {
+                return authorityFromForwarded
+                    ? WebAuthorityOutcome.Fail(400, "X-Forwarded-Host 非法（主机名 / 端口格式错误）。")
+                    : WebAuthorityOutcome.Fail(403, "Host 头非法（主机名 / 端口格式错误）。");
+            }
+
+            string host = WebServerAccessPolicy.NormalizeHost(rawHost);
+            if (host.Length == 0)
+            {
+                return WebAuthorityOutcome.Fail(403, "Host 头非法（主机名为空）。");
+            }
+
+            // ⑥ 本机 / 局域网：保持 fork 既有的严格校验（端口必须与真实监听端口一致）
+            if (policy.AllowedHosts.Contains(host))
+            {
+                if (explicitPort.HasValue && ListenPort.HasValue && explicitPort.Value != ListenPort.Value)
+                {
+                    return WebAuthorityOutcome.Fail(403, "Host 端口与实际监听端口不一致。");
+                }
+
+                int localPort = explicitPort ?? WebServerAccessPolicy.DefaultPortOf(scheme);
+                return WebAuthorityOutcome.Ok(new WebEffectiveAuthority(scheme, host, localPort, false));
+            }
+
+            // ⑦ 外部：必须命中外部 authority 白名单
+            if (!WebServerAccessPolicy.MatchExternalAuthority(
+                    policy.ExternalAuthorities, scheme, host, explicitPort, out WebEffectiveAuthority external))
+            {
+                return WebAuthorityOutcome.Fail(403,
+                    "Host 不在允许的外部地址白名单内（请在【设置 → 网页服务】里配置「允许的外部地址」）。");
+            }
+
+            return WebAuthorityOutcome.Ok(external);
+        }
+
+        /// <summary>
+        /// Origin 头是否允许（缺失 ⇒ 允许；"null" ⇒ 拒绝；不在集合 ⇒ 拒绝）。
+        /// </summary>
+        /// <remarks>
+        /// ★ [F02] 同源判定改用**有效外部 authority**（协议 + 主机 + 端口）：
+        ///   代理保留 Host 的场景里，浏览器的 Origin 是 <c>https://tunnel.example.com</c>，
+        ///   而"有效 authority"正是它 ⇒ 同源放行；跨源例外仍归 <c>AllowedOrigins</c>。
+        /// ★ 本机 / 局域网请求额外保留既有口径（Origin 主机在允许集合内且端口与监听端口一致），
+        ///   不回退 fork 已有能力。
+        /// </remarks>
+        private bool IsOriginAllowed(HttpRequestInfo info, WebAccessPolicy policy, WebEffectiveAuthority authority)
         {
             string? origin = info.GetSingleHeader("origin");
             if (string.IsNullOrEmpty(origin)) return true;      // 非浏览器客户端 ⇒ 允许（Host 仍须通过）
@@ -2275,69 +2483,26 @@ namespace LiteMonitor.src.WebServer
             string scheme = uri.Scheme.ToLowerInvariant();
             if (scheme != "http" && scheme != "https") return false;
 
-            string host = NormalizeHost(uri.Host);
+            string host = WebServerAccessPolicy.NormalizeHost(uri.Host);
             if (host.Length == 0) return false;
-            if (!policy.AllowedHosts.Contains(host)) return false;
 
-            if (ListenPort.HasValue && uri.Port != ListenPort.Value) return false;
-            return true;
-        }
-
-        /// <summary>拆分 Host 头的主机名与端口。</summary>
-        private static void SplitHostPort(string value, out string host, out int? port)
-        {
-            host = "";
-            port = null;
-            string v = (value ?? "").Trim();
-            if (v.Length == 0) return;
-
-            if (v.StartsWith("[", StringComparison.Ordinal))
+            // ① 同源：与「有效 authority」逐项相等
+            if (string.Equals(scheme, authority.Scheme, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(host, authority.Host, StringComparison.OrdinalIgnoreCase)
+                && uri.Port == authority.Port)
             {
-                int close = v.IndexOf(']');
-                if (close > 0)
-                {
-                    host = v.Substring(1, close - 1);
-                    if (close + 1 < v.Length && v[close + 1] == ':' &&
-                        int.TryParse(v.Substring(close + 2), out int p))
-                    {
-                        port = p;
-                    }
-                    return;
-                }
+                return true;
             }
 
-            int colon = v.LastIndexOf(':');
-            if (colon > 0 && v.IndexOf(':') == colon)
+            // ② 本机 / 局域网请求：保留既有口径（跨源例外仍归 AllowedOrigins）
+            if (!authority.IsExternal
+                && policy.AllowedHosts.Contains(host)
+                && (!ListenPort.HasValue || uri.Port == ListenPort.Value))
             {
-                host = v.Substring(0, colon);
-                if (int.TryParse(v.Substring(colon + 1), out int p2)) port = p2;
-                return;
+                return true;
             }
 
-            host = v;
-        }
-
-        /// <summary>主机名归一化（小写、去 IPv6 方括号、去掉端口）。</summary>
-        private static string NormalizeHost(string host)
-        {
-            if (string.IsNullOrEmpty(host)) return "";
-            string h = host.Trim().ToLowerInvariant();
-            if (h.StartsWith("[", StringComparison.Ordinal) && h.EndsWith("]", StringComparison.Ordinal))
-            {
-                h = h.Substring(1, h.Length - 2);
-            }
-            return h.Trim();
-        }
-
-        /// <summary>按逗号 / 分号 / 换行拆分配置列表。</summary>
-        private static IEnumerable<string> SplitConfigList(string? value)
-        {
-            if (string.IsNullOrEmpty(value)) yield break;
-            foreach (string part in value.Split(new[] { ',', ';', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
-            {
-                string p = part.Trim();
-                if (p.Length > 0) yield return p;
-            }
+            return false;
         }
 
         /// <summary>
@@ -2357,8 +2522,49 @@ namespace LiteMonitor.src.WebServer
             /// <summary>显式允许的跨源（精确匹配）。</summary>
             public readonly HashSet<string> AllowedOrigins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            /// <summary>[F02] 外部 authority 白名单（反代场景；精确匹配，无通配符）。</summary>
+            public readonly List<WebAuthorityEntry> ExternalAuthorities = new List<WebAuthorityEntry>();
+
+            /// <summary>[F02] 可信代理的 TCP 对端 IP（精确匹配）。</summary>
+            public readonly HashSet<string> TrustedProxies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             /// <summary>是否信任转发头（降级开关，默认 false）。</summary>
             public bool TrustProxyHeaders;
+
+            /// <summary>[F02] 访问边界的策略代次（白名单 / 代理信任变更 ⇒ 代次变）。</summary>
+            public int Generation;
+        }
+
+        /// <summary>
+        /// [F02] 有效 authority 的解析结果（放行 / 拒绝 + 原因）。
+        /// </summary>
+        private readonly struct WebAuthorityOutcome
+        {
+            /// <summary>是否放行。</summary>
+            public bool IsAllowed { get; }
+
+            /// <summary>拒绝时的状态码（400 / 403）。</summary>
+            public int ErrorCode { get; }
+
+            /// <summary>拒绝时的原因（**不含**口令 / cookie / 票据原文）。</summary>
+            public string ErrorMessage { get; }
+
+            /// <summary>放行时的有效 authority。</summary>
+            public WebEffectiveAuthority Authority { get; }
+
+            private WebAuthorityOutcome(bool isAllowed, int errorCode, string errorMessage, WebEffectiveAuthority authority)
+            {
+                IsAllowed = isAllowed;
+                ErrorCode = errorCode;
+                ErrorMessage = errorMessage;
+                Authority = authority;
+            }
+
+            public static WebAuthorityOutcome Ok(WebEffectiveAuthority authority)
+                => new WebAuthorityOutcome(true, 0, "", authority);
+
+            public static WebAuthorityOutcome Fail(int code, string message)
+                => new WebAuthorityOutcome(false, code, message, default);
         }
 
         /// <summary>
@@ -2655,6 +2861,14 @@ namespace LiteMonitor.src.WebServer
 
                                 var client = entry.Key;
 
+                                // ★ [F02] 访问边界**策略代次**已变（白名单收紧 / 撤销代理信任）
+                                //   ⇒ 这条连接按代次失效：断开，不得再收到监控数据。
+                                if (entry.Value.PolicyGeneration != CurrentPolicyGeneration)
+                                {
+                                    CloseWebSocketClient(client);
+                                    continue;
+                                }
+
                                 // ★ 收件人的**主会话**必须仍然有效：
                                 //   注销 / 绝对 TTL / 空闲 TTL 之后，已建立的 WS 不得再收到监控数据
                                 //   （否则撤销只挡住了后续 HTTP，挡不住已在推送的 WS 数据流）。
@@ -2802,20 +3016,38 @@ namespace LiteMonitor.src.WebServer
         /// ★ Host / Origin 校验与 HTTP 完全一致（同一套判定口径）。
         /// ★ <paramref name="info"/> 是分流时那份**结构化解析结果** —— 握手不再二次扫描原文，
         ///   与 HTTP 路由看到的头字段完全是同一份。
+        /// ★ <paramref name="peerAddress"/> 是**实际 TCP 对端地址** —— 可信代理判定只看它。
         /// ★ 错误优先级（固定，写进测试）：
-        ///   403（Host/Origin）→ 401（旧 ?pwd=）→ 401（票据）→ 400（Key）→ 400（版本）。
+        ///   400（[F02] 转发头歧义）→ 403（Host/Origin）→ 403（[F02] 外部访问无口令）→
+        ///   401（旧 ?pwd=）→ 401（票据）→ 400（Key）→ 400（版本）。
         /// </remarks>
-        private bool Handshake(NetworkStream stream, HttpRequestInfo info, out string sessionId)
+        private bool Handshake(NetworkStream stream, HttpRequestInfo info, IPAddress? peerAddress, out string sessionId)
         {
             sessionId = "";
             try
             {
                 WebAccessPolicy policy = BuildAccessPolicy();
 
-                // ① Host / Origin（防 DNS Rebinding / 跨源建连）
-                if (!IsHostAllowed(info, policy) || !IsOriginAllowed(info, policy))
+                // ① [F02] 有效 authority + Host / Origin（防 DNS Rebinding / 跨源建连）
+                //    ★ 错误优先级：**转发头歧义（400）先于** Host / Origin 不通过（403）。
+                WebAuthorityOutcome outcome = ResolveEffectiveAuthority(info, policy, peerAddress);
+                if (!outcome.IsAllowed)
+                {
+                    SendErrorResponse(stream, outcome.ErrorCode, outcome.ErrorMessage, info, policy);
+                    return false;
+                }
+
+                if (!IsOriginAllowed(info, policy, outcome.Authority))
                 {
                     SendErrorResponse(stream, 403, "Host / Origin 校验未通过。", info, policy);
+                    return false;
+                }
+
+                // ①b [F02] 外部（反代）访问必须配置口令（不继承"环回无凭据"的信任）
+                if (outcome.Authority.IsExternal && !policy.PasswordRequired)
+                {
+                    SendErrorResponse(stream, 403,
+                        "外部访问未开放：尚未配置访问口令（通过反向代理访问必须配置访问口令）。", info, policy);
                     return false;
                 }
 

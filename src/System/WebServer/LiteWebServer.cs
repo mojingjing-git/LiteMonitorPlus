@@ -112,6 +112,16 @@ namespace LiteMonitor.src.WebServer
         internal WebServerBindMode? CurrentBindMode { get; private set; }
 
         /// <summary>
+        /// 启动那一刻的**访问边界指纹**（Host / 外部 authority / 可信代理）。
+        /// </summary>
+        /// <remarks>
+        /// ★ [F02] 用途：运行中改了「允许的外部地址 / 可信代理 / 信任开关」时，
+        ///   指纹与新配置不一致 ⇒ 必须**重启**服务 ⇒ 旧会话与旧 WS 全部撤销，
+        ///   不让旧连接绕过新策略（"白名单收紧后按连接代次撤销旧会话 / WS"）。
+        /// </remarks>
+        internal string CurrentAccessPolicyFingerprint { get; private set; } = "";
+
+        /// <summary>
         /// 当前是否**对局域网暴露**（实际监听在非回环地址上）。
         /// </summary>
         /// <remarks>
@@ -252,6 +262,17 @@ namespace LiteMonitor.src.WebServer
                     return false;
                 }
 
+                // ★ [F02] 外部（反向代理）暴露同样**必须**有口令：
+                //   反代即使从环回连进来也算对外暴露 —— 不继承"环回无凭据"的信任。
+                //   判定与"运行中变更"共用同一条规则（WebServerAccessPolicy），绕不过冷启动约束。
+                if (WebServerAccessPolicy.IsExternalAccessForbidden(_cfg, false))
+                {
+                    errorMsg = "配置了允许的外部地址（反向代理）却还没有访问口令：已拒绝启动。" +
+                               "请在【设置 → 网页服务】里填写访问口令后再启用外部访问。";
+                    Debug.WriteLine("WebServer Start Error: " + errorMsg);
+                    return false;
+                }
+
                 IPAddress? listenAddress = ListenAddress;
                 if (listenAddress != null)
                 {
@@ -297,6 +318,10 @@ namespace LiteMonitor.src.WebServer
                 // ★ 记录**实际生效**的监听范围（与上面建监听套接字用的判定同源）：
                 //   "只改监听范围"必须能触发重绑，就靠它和配置比对（见 AppActions.ApplyWebServerWithResult）。
                 CurrentBindMode = lanMode ? WebServerBindMode.Lan : WebServerBindMode.Loopback;
+
+                // ★ [F02] 记录启动那一刻的**访问边界指纹**：
+                //   运行中改了白名单 / 可信代理 ⇒ 指纹不一致 ⇒ 触发重启（撤销旧会话与旧 WS）。
+                CurrentAccessPolicyFingerprint = WebServerAccessPolicy.BuildBoundary(_cfg, port).Fingerprint;
 
                 // ★ Host / Origin 校验需要知道真实监听端口
                 _sessionManager.ListenPort = port;

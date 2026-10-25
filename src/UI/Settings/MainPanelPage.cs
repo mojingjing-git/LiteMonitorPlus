@@ -220,6 +220,36 @@ namespace LiteMonitor.src.UI.SettingsPage
                 ? "⚠ 局域网模式下 HTTP 与 WebSocket 均为**明文传输**，局域网内可被嗅探：请自行部署反向代理提供 TLS，或只在可信网络中使用。"
                 : "⚠ In LAN mode both HTTP and WebSocket are transported in **clear text** and can be sniffed on the LAN: deploy a TLS reverse proxy yourself, or use it on a trusted network only.");
 
+            // ================================================================
+            // ★ [F02] 反向代理 / 外部访问（#580）
+            // ================================================================
+
+            // 允许的外部地址（外部 authority 白名单）
+            group.AddInput(this, "Menu.WebServerAllowedHosts",
+                () => Config.WebServerAllowedHosts,
+                v => Config.WebServerAllowedHosts = v,
+                LanguageManager.T("Menu.WebServerAllowedHostsTip"),
+                220);
+
+            // 可信代理（精确 IP）
+            group.AddInput(this, "Menu.WebServerTrustedProxies",
+                () => Config.WebServerTrustedProxies,
+                v => Config.WebServerTrustedProxies = v,
+                LanguageManager.T("Menu.WebServerTrustedProxiesTip"),
+                220);
+
+            // 信任转发头开关
+            group.AddToggle(this, "Menu.WebServerTrustProxyHeaders",
+                () => Config.WebServerTrustProxyHeaders,
+                v => Config.WebServerTrustProxyHeaders = v);
+
+            group.AddHint(LanguageManager.T("Menu.WebServerTrustProxyHeadersTip"));
+
+            // 范例与错误原因
+            group.AddHint(LanguageManager.T("Menu.WebServerReverseProxyExamples"));
+
+            group.AddHint(LanguageManager.T("Menu.WebServerReverseProxyErrors"));
+
             // ★ 实际监听地址与端口（契约 W11：设置界面必须显示实际监听地址）
             var listenInfo = new LiteLink("", () => { });
             group.AddAction(isChinese ? "实际监听地址" : "Listening address", listenInfo);
