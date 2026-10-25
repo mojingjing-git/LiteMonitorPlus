@@ -1,7 +1,7 @@
 # Plan B：架构解耦与职责整理
 
 - 日期：2026-10-26。
-- 状态：B0～B2已批准（2026-10-26，与Plan A的I0～I1同批拍板）；B3～B6维持评估稿，由首批结果再评估。尚未开始实施，本文不表示架构已完成拆分。
+- 状态：B0～B2**已完成并整体验收**（2026-10-26，[首批验收记录](../verification/acceptance/first-batch-B0B2-I0I1.md)；门禁 2414）；B3～B6维持评估稿，启动前需另行拍板。
 - 源码观察基线：`1f652c1f0e402f124c4535fcf878f19c216c5e39`。B0 启动基线：`9da07af`（2026-10-26，W3 合并后），盘点见 [B0/I0 基线盘点](2026-10-26-B0-I0-baseline-inventory.md)。
 - 对应问题：UI、硬件采集、全局设置、格式化和应用副作用相互引用，修改一处容易影响多条路径。
 - 关联：[Plan A：采集进程隔离](2026-10-26-hardware-process-isolation-plan.md)、[原R06需求](2026-10-24-architecture-debt-requirements.md)、[原R06计划](2026-10-24-architecture-debt-plan.md)。
