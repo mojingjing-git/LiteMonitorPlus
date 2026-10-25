@@ -32,6 +32,9 @@ namespace LiteMonitor.src.Core.Actions
         }
 
         internal static ApplyPlan ResolveApplyPlan(System.Collections.Generic.IEnumerable<LiteMonitor.Core.Actions.Services.SettingsFieldDiff> diffs)
+            => ResolveApplyPlan(diffs, credentialChanged: false);
+
+        internal static ApplyPlan ResolveApplyPlan(System.Collections.Generic.IEnumerable<LiteMonitor.Core.Actions.Services.SettingsFieldDiff> diffs, bool credentialChanged)
         {
             bool ui = false, web = false, plugins = false;
             foreach (var d in diffs)
@@ -43,6 +46,9 @@ namespace LiteMonitor.src.Core.Actions
                     default: ui = true; break;
                 }
             }
+            // R7：内存口令不进持久化快照比对——真实凭据变更由此显式触发 Web 应用，
+            // 既修"空保存幻影 Web 差异"，也不丢真实改口令后的生效路径。
+            if (credentialChanged) web = true;
             return new ApplyPlan(ui, web, plugins);
         }
 
@@ -54,7 +60,8 @@ namespace LiteMonitor.src.Core.Actions
         public static string ApplySettingsSelectively(Settings before, Settings cfg, MainForm mainForm, UIController ui, bool applyAutoStart)
         {
             var diffs = LiteMonitor.src.Core.Actions.SettingsChanger.ComputeDiff(before, cfg);
-            var plan = ResolveApplyPlan(diffs);
+            bool credentialChanged = !string.Equals(before.WebServerPassword, cfg.WebServerPassword, StringComparison.Ordinal);
+            var plan = ResolveApplyPlan(diffs, credentialChanged);
             if (!plan.Any) return "no-change";
 
             if (plan.UiGroup)

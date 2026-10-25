@@ -56,10 +56,18 @@ public sealed class HardwareClientAdapter : IHardwareClient
             TimestampMonoMs: Environment.TickCount64);
     }
 
+    // R3：目录构建改到线程池单飞执行——调用线程（UI）只负责拿 Task，不再在返回 Task 前
+    // 同步等待 SyncLock（传感器窗口每秒轮询，采样持锁时会把整条 UI 消息循环拖住）。
+    private CatalogSnapshotCache? _catalogCache;
+
     public Task<HardwareCatalog> GetCatalogAsync(CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        cancellationToken.ThrowIfCancellationRequested();
+        return (_catalogCache ??= new CatalogSnapshotCache(BuildCatalog)).GetAsync(cancellationToken);
+    }
+
+    private HardwareCatalog BuildCatalog()
+    {
         var entries = new List<HardwareCatalogEntry>();
         var computer = _monitor.ComputerInstance;
         if (computer != null && _monitor.IsReady)
@@ -71,7 +79,7 @@ public sealed class HardwareClientAdapter : IHardwareClient
                     AddHardwareEntries(entries, hw, parentStableId: null);
             }
         }
-        return Task.FromResult(new HardwareCatalog(_monitor.SamplingGeneration, entries));
+        return new HardwareCatalog(_monitor.SamplingGeneration, entries);
     }
 
     private static void AddHardwareEntries(List<HardwareCatalogEntry> entries, IHardware hw, string? parentStableId)
@@ -165,10 +173,51 @@ public sealed class HardwareClientAdapter : IHardwareClient
     {
         // 只标记自身关闭、拒绝后续操作；被包装的采集器由组合根（UIController）拥有并释放（Plan B §4.4）。
         _disposed = true;
+        // R3 关闭边界：在飞目录构建自然完成（消费方各自检查disposed），此后新调用被拒。
+        _catalogCache = null;
     }
 
     private void ThrowIfDisposed()
     {
         if (_disposed) throw new ObjectDisposedException(nameof(HardwareClientAdapter));
+    }
+}
+
+/// <summary>
+/// R3：目录构建的在途合并缓存。同一时刻至多一个构建在飞（不增加并发 LHM 访问），
+/// 构建期间的请求共享同一 Task；完成后下一次调用触发新构建（传感器窗口轮询取到的
+/// 始终是"最近一次完成"的完整目录）。取消在消费侧（各调用方自行检查 disposed/可见性）。
+/// </summary>
+public sealed class CatalogSnapshotCache
+{
+    private readonly Func<HardwareCatalog> _build;
+    private readonly object _gate = new();
+    private Task<HardwareCatalog>? _inFlight;
+    private int _buildCount;
+
+    public CatalogSnapshotCache(Func<HardwareCatalog> build) => _build = build ?? throw new ArgumentNullException(nameof(build));
+
+    /// <summary>已触发的构建次数（测试观测：在途合并不新增构建）。</summary>
+    public int BuildCount { get { lock (_gate) return _buildCount; } }
+
+    public Task<HardwareCatalog> GetAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (_inFlight != null) return _inFlight; // 在途合并
+            _buildCount++;
+            var build = Task.Run(() =>
+            {
+                try { return _build(); }
+                finally { ResetInFlight(); }
+            });
+            _inFlight = build;
+            return build;
+        }
+    }
+
+    private void ResetInFlight()
+    {
+        lock (_gate) { _inFlight = null; }
     }
 }

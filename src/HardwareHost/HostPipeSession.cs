@@ -105,6 +105,14 @@ internal sealed class HostPipeSession
             return 1;
         }
 
+        if (_fault == "protocol-violation")
+        {
+            // R2 探针同型：合法握手完成后发送非法长度帧（长度前缀 = -1），然后**保持存活**——
+            // 监督器必须把会话判失败、回收子进程并按退避重启，而不是退出循环/误报 Ready。
+            await pipe.WriteAsync(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF }, cts.Token).ConfigureAwait(false);
+            await Task.Delay(Timeout.Infinite, cts.Token).ConfigureAwait(false);
+        }
+
         // ── 初始化：先报 Starting（设备 Open 属初始化预算，§6.1 上限 60s）──
         await writer.WriteAsync(Heartbeat(HardwareState.Starting, "open-hardware"), cts.Token).ConfigureAwait(false);
 

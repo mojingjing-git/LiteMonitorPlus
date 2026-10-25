@@ -174,12 +174,27 @@ public sealed class HardwareHostSupervisor : IDisposable
     private async Task<SessionOutcome> RunSingleSessionAsync(CancellationToken ct)
     {
         SetState(HardwareState.Starting, "spawn");
-        var endpoint = PipeServerEndpoint.Create();
-        _endpoint = endpoint;
+        // R2：endpoint 创建/SpawnHost/会话全程都在收口范围内——启动失败（缺文件/权限）与
+        // 合法握手后的协议异常同样转成失败会话，监督循环不退出。
+        PipeServerEndpoint? endpoint = null;
+        Process? process = null;
+        try
+        {
+            endpoint = PipeServerEndpoint.Create();
+            _endpoint = endpoint;
 
-        Process process = SpawnHost(endpoint);
-        _hostProcess = process;
-        _spawnCount++;
+            process = SpawnHost(endpoint);
+            _hostProcess = process;
+            _spawnCount++;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return new SessionOutcome { Reason = "cancelled", HealthyLongEnough = false };
+        }
+        catch (Exception ex)
+        {
+            return new SessionOutcome { Reason = $"spawn-error:{ex.GetType().Name}", HealthyLongEnough = false };
+        }
         try
         {
             _job!.TryAssign(process);
@@ -245,10 +260,33 @@ public sealed class HardwareHostSupervisor : IDisposable
             SessionClosed?.Invoke(violation);
             return new SessionOutcome { Reason = violation!, HealthyLongEnough = healthyLongEnough };
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return new SessionOutcome { Reason = "cancelled", HealthyLongEnough = false };
+        }
+        catch (Exception ex)
+        {
+            // R2：合法握手后的协议异常（ReadLoop 重抛）等一切未收口异常都转成失败会话——
+            // 不让监督循环退出、状态不误报 Ready。
+            string reason = $"session-error:{ex.GetType().Name}";
+            SetState(HardwareState.Unresponsive, reason);
+            SessionClosed?.Invoke(reason);
+            return new SessionOutcome { Reason = reason, HealthyLongEnough = false };
+        }
         finally
         {
             _connection = null;
-            CleanupSession(process, endpoint);
+            // R2：无论路径如何，已启动的子进程必须被终止并确认退出，才允许进入下一会话。
+            if (process != null)
+            {
+                try
+                {
+                    if (!process.HasExited) TerminateHost(process, "session-cleanup");
+                }
+                catch { /* 回收尽力而为；Job Object 兜底 */ }
+            }
+            if (process != null && endpoint != null) CleanupSession(process, endpoint);
+            else endpoint?.Dispose();
         }
     }
 

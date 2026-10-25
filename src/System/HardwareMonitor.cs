@@ -285,8 +285,10 @@ namespace LiteMonitor.src.SystemServices
 
             // ★★★ [需求变更] 关闭风扇/水泵不需要重载，仅首次开启时重载 ★★★
             // 避免关闭监控项时触发重载导致软件短暂卡顿或设备重连
-            // 如果当前已开启 (true) 且目标是关闭 (false)，则保持开启状态，不执行重载
-            if (currentState && !targetState)
+            // 如果当前已开启 (true) 且目标是关闭 (false)，则保持开启状态，不执行重载。
+            // R1：该 latch 只为监控项热切换的体验而设——策略为**显式 Off** 时必须放行关闭
+            //（否则用户切 Off 后下次 Refresh 又把关闭吞掉）。
+            if (currentState && !targetState && _controllerProbePolicy.Mode != ControllerProbeMode.Off)
             {
                 System.Diagnostics.Debug.WriteLine($"[HotSwap] Controller disable requested but ignored to avoid reload (Latch Mode).");
                 return;
@@ -999,21 +1001,36 @@ namespace LiteMonitor.src.SystemServices
         // ★★★ [新增] 动态判断是否需要开启控制器 ★★★
         private bool ShouldEnableController()
         {
-            // 检查是否开启了任何需要读取外部控制器的监控项。
-            // 主板温度走 Motherboard/SuperIO 硬件树，不应该因此打开 Controller 扫描。
-            bool fanMetricsNeeded =
-                   _cfg.IsAnyEnabled("CPU.Fan")
-                || _cfg.IsAnyEnabled("CPU.Pump")
-                || _cfg.IsAnyEnabled("CASE.Fan");
-
-            // ★ [F08b #245 缓解] 交给策略裁决（而不是在这里直接返回 fanMetricsNeeded）：
-            //   策略的 Auto 分支**就是**上面这套既有规则 ⇒ 未配置用户的行为一字不变；
-            //   Off 则无条件关闭（永不构造 8 个控制器组，IL 级构造前隔离）；
-            //   On 为排查/对照用。
-            bool shouldProbe = _controllerProbePolicy.ShouldProbe(fanMetricsNeeded);
+            bool shouldProbe = _controllerProbePolicy.ShouldProbe(FanMetricsNeeded());
             _controllerProbePolicy.MarkOpened(shouldProbe);
             return shouldProbe;
         }
+
+        // 检查是否开启了任何需要读取外部控制器的监控项。
+        // 主板温度走 Motherboard/SuperIO 硬件树，不应该因此打开 Controller 扫描。
+        private bool FanMetricsNeeded() =>
+               _cfg.IsAnyEnabled("CPU.Fan")
+            || _cfg.IsAnyEnabled("CPU.Pump")
+            || _cfg.IsAnyEnabled("CASE.Fan");
+
+        /// <summary>
+        /// R1：按目标语义直接设置控制器启用状态并触发重载。
+        /// 状态位同步设置（verify 读的是真实状态），重载沿用 HotSwap 的异步边界。
+        /// </summary>
+        private void ApplyControllerEnabledState(bool enable)
+        {
+            if (_computer.IsControllerEnabled == enable) return;
+            _computer.IsControllerEnabled = enable;
+            _ = Task.Run(ReloadComputerSafe);
+        }
+
+        /// <summary>目标模式 → 控制器启用语义（纯映射，供测试；Auto 按监控项需求）。</summary>
+        internal static bool ControllerTargetEnabled(ControllerProbeMode target, bool fanMetricsNeeded) => target switch
+        {
+            ControllerProbeMode.Off => false,
+            ControllerProbeMode.On => true,
+            _ => fanMetricsNeeded,
+        };
 
         /// <summary>
         /// ★ [F08b #245 缓解] 切换控制器探测模式（关闭 / 自动 / 强制开启）。
@@ -1023,10 +1040,19 @@ namespace LiteMonitor.src.SystemServices
         /// <returns>切换是否成功；失败时策略进入降级态，<b>不把失败伪装成成功</b>。</returns>
         public bool ApplyControllerProbeMode(ControllerProbeMode mode)
         {
+            // R1：apply 必须按**目标**模式执行——旧回调经 RefreshHardwareConfig 读旧策略，
+            // On→Off 仍算出"应开启"；HotSwap 的 true→false latch 也会吞掉显式关闭，
+            // 结果是"报成功、设备仍开"。显式切换在此直接落到目标状态并同步验证。
             return _controllerProbePolicy.ApplyMode(
                 mode,
-                apply: _ => RefreshHardwareConfig(),
-                verify: null);
+                apply: target => ApplyControllerEnabledState(
+                    ControllerTargetEnabled(target, FanMetricsNeeded())),
+                verify: target => target switch
+                {
+                    ControllerProbeMode.Off => !_computer.IsControllerEnabled,
+                    ControllerProbeMode.On => _computer.IsControllerEnabled,
+                    _ => true,
+                });
         }
 
         private void WarmUpMotherboardSensors()

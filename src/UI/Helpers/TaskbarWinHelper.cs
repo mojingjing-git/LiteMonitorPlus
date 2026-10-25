@@ -619,12 +619,22 @@ namespace LiteMonitor.src.UI.Helpers
         /// <para>★ 链上可能有不可见的占位窗口（隐藏层、零面积层），它们<b>不会</b>遮挡内容
         /// ⇒ 只看可见窗口，避免"明明没被挡却反复重排"的抖动。</para>
         /// </summary>
+        // R6：有界遍历同级前驱并跳过不可见窗口——只看紧邻窗口会漏掉
+        // "可见遮挡层 → 隐藏窗口 → 面板"层级里的真实遮挡；有界防异常窗口链拖死调用方。
+        private const int MaxSiblingHops = 64;
+
         public static bool IsCoveredByVisibleSibling(IntPtr hWnd)
         {
             if (hWnd == IntPtr.Zero) return false;
 
             IntPtr previous = GetWindow(hWnd, GW_HWNDPREV);
-            return previous != IntPtr.Zero && IsWindowVisible(previous);
+            int hops = 0;
+            while (previous != IntPtr.Zero && hops++ < MaxSiblingHops)
+            {
+                if (IsWindowVisible(previous)) return true;
+                previous = GetWindow(previous, GW_HWNDPREV);
+            }
+            return false;
         }
 
         /// <summary>

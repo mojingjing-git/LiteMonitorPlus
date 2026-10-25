@@ -105,6 +105,18 @@ namespace LiteMonitor.src.UI.Helpers
         private DateTime _keepVisibleUntil = DateTime.MinValue;
 
         public bool IsHidden => _isHidden;
+
+        /// <summary>
+        /// R5：泊出态的<b>完整</b>退出（四个字段一体复位）。RestorePos、显示拓扑恢复、
+        /// 看门狗夹取、禁用与手动恢复等路径一律复用本方法，不得只清部分字段。
+        /// </summary>
+        private void ExitParkedState()
+        {
+            _isHidden = false;
+            _dock = AutoHideLogic.DockEdge.None;
+            _parkedArea = null;
+            _parkedScreenDevice = null;
+        }
         public bool IsDragging { get; set; } = false;
 
         public void ReconcileDisplayChange()
@@ -502,10 +514,10 @@ namespace LiteMonitor.src.UI.Helpers
                 int y = _cfg.Position.Y;
                 SetSafeLocation(area, x, y);
                 
-                // [Fix #288] 恢复位置后，重置隐藏状态，并让 Timer 重新接管
-                // 防止之前是 Hidden 状态，恢复后 Location 变了但 _isHidden 仍为 true，导致自动隐藏逻辑失效
-                _isHidden = false;
-                _dock = AutoHideLogic.DockEdge.None;
+                // [Fix #288] 恢复位置后完整退出泊出态并让 Timer 重新接管。
+                // R5：旧实现只清 _isHidden/_dock，留下 _parkedArea——下一次检查仍进"已泊出"分支
+                // 而 dock=None，纯决策返回 None ⇒ 自动隐藏卡死。
+                ExitParkedState();
                 KeepVisible(0.5); // 短暂保持可见，让用户确认位置，随后由 Timer 自动隐藏
             }
             else

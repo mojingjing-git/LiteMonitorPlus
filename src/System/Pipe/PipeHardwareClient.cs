@@ -22,7 +22,8 @@ public sealed record PipeClientMetrics(
     double? PublishToReceiveP50Ms,
     double? PublishToReceiveP95Ms,
     double? PublishToReceiveMaxMs,
-    double? SampleToReceiveP95Ms);
+    double? SampleToReceiveP95Ms,
+    long SnapshotBatchGaps = 0);
 
 /// <summary>
 /// P-I2 / Plan A §4：IHardwareClient 的管道实现。主程序侧持有监督器（启动/监督/重启/回收
@@ -61,11 +62,14 @@ public sealed class PipeHardwareClient : IHardwareClient
     // 指标
     private long _snapshotCount;
     private long _sequenceGaps;
+    private long _snapshotBatchGaps;
     private long _lateResponses;
     private long _commandTimeouts;
     private long _lastSequence = -1;
-    private readonly List<long> _publishToReceive = new(capacity: 4096);
-    private readonly List<long> _sampleToReceive = new(capacity: 4096);
+    private long _lastBatchId = -1;
+    // R8：延迟样本改固定环形窗口（旧 List 只增不淘汰，长跑无界增长且 ReadMetrics 全量复制排序）。
+    private readonly LatencyWindow _publishToReceive = new(LatencyWindow.DefaultCapacity);
+    private readonly LatencyWindow _sampleToReceive = new(LatencyWindow.DefaultCapacity);
     private readonly string? _metricsPath;
     private long _metricsWriteTick;
 
@@ -97,6 +101,14 @@ public sealed class PipeHardwareClient : IHardwareClient
 
     private void OnMessage(IpcEnvelope envelope)
     {
+        // R9：帧序号在统一接收入口跟踪（心跳/应答/快照共用一个方向序号——
+        // 只在快照里跟踪会把正常心跳误计为缺口）。
+        long seq = envelope.Header.Sequence;
+        long last = Interlocked.Read(ref _lastSequence);
+        if (last >= 0 && seq > last + 1)
+            Interlocked.Add(ref _sequenceGaps, seq - last - 1);
+        Interlocked.Exchange(ref _lastSequence, seq);
+
         switch (envelope.Header.Type)
         {
             case IpcProtocol.TypeSnapshot:
@@ -116,11 +128,12 @@ public sealed class PipeHardwareClient : IHardwareClient
         IpcSnapshotMessage message = envelope.PayloadAs<IpcSnapshotMessage>();
         long now = Environment.TickCount64;
 
-        // 序号缺口可观察（§5.3：传输合并/丢帧不得静默）。
-        long seq = envelope.Header.Sequence;
-        long last = _lastSequence;
-        if (last >= 0 && seq > last + 1) _sequenceGaps += seq - last - 1;
-        _lastSequence = seq;
+        // R9：采样批次缺口按 BatchId 另行统计（快照槽位合并/丢批 ≠ 帧序号缺口）。
+        long batchId = message.Snapshot.BatchId;
+        long lastBatch = Interlocked.Read(ref _lastBatchId);
+        if (lastBatch >= 0 && batchId > lastBatch + 1)
+            Interlocked.Add(ref _snapshotBatchGaps, batchId - lastBatch - 1);
+        Interlocked.Exchange(ref _lastBatchId, batchId);
 
         // 首个有效样本：已过期则不置 Fresh、不作为首样（继续等新批次，§5.3）。
         long age = (long)(now - message.Snapshot.TimestampMonoMs);
@@ -137,11 +150,8 @@ public sealed class PipeHardwareClient : IHardwareClient
         _staleCopy = null; // 新批次使旧降级副本失效
         Interlocked.Increment(ref _snapshotCount);
 
-        lock (_publishToReceive)
-        {
-            _publishToReceive.Add(now - message.PublishTickMs);
-            _sampleToReceive.Add(age);
-        }
+        _publishToReceive.Add(now - message.PublishTickMs);
+        _sampleToReceive.Add(age);
         MaybeWriteMetrics(now);
     }
 
@@ -368,22 +378,22 @@ public sealed class PipeHardwareClient : IHardwareClient
     public PipeClientMetrics ReadMetrics()
     {
         double? p50 = null, p95 = null, max = null, s95 = null;
-        lock (_publishToReceive)
+        long[] pub = _publishToReceive.SnapshotInOrder();
+        long[] samp = _sampleToReceive.SnapshotInOrder();
+        if (pub.Length > 0)
         {
-            if (_publishToReceive.Count > 0)
-            {
-                long[] sorted = _publishToReceive.OrderBy(v => v).ToArray();
-                p50 = Percentile(sorted, 0.50);
-                p95 = Percentile(sorted, 0.95);
-                max = sorted[^1];
-            }
-            if (_sampleToReceive.Count > 0)
-                s95 = Percentile(_sampleToReceive.OrderBy(v => v).ToArray(), 0.95);
+            long[] sorted = pub.OrderBy(v => v).ToArray();
+            p50 = Percentile(sorted, 0.50);
+            p95 = Percentile(sorted, 0.95);
+            max = sorted[^1];
         }
+        if (samp.Length > 0)
+            s95 = Percentile(samp.OrderBy(v => v).ToArray(), 0.95);
         return new PipeClientMetrics(
             _createdTick, _firstSnapshotDelayMs, Interlocked.Read(ref _snapshotCount),
-            _sequenceGaps, _lateResponses, _commandTimeouts,
-            _supervisor.SessionCount, _supervisor.RestartCount, p50, p95, max, s95);
+            Interlocked.Read(ref _sequenceGaps), Interlocked.Read(ref _lateResponses), Interlocked.Read(ref _commandTimeouts),
+            _supervisor.SessionCount, _supervisor.RestartCount, p50, p95, max, s95,
+            Interlocked.Read(ref _snapshotBatchGaps));
     }
 
     private static double Percentile(long[] sorted, double q)
@@ -426,4 +436,45 @@ public sealed class PipeHardwareClient : IHardwareClient
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+}
+
+/// <summary>
+/// R8：固定容量环形延迟窗口。Add 只覆盖最旧样本（内存有界），SnapshotInOrder 返回
+/// 插入序副本；总样本数由调用方独立计数（SnapshotCount），窗口只服务分位数。
+/// </summary>
+public sealed class LatencyWindow
+{
+    public const int DefaultCapacity = 512;
+
+    private readonly long[] _buffer;
+    private readonly object _gate = new();
+    private int _next;
+    private int _count;
+
+    public LatencyWindow(int capacity = DefaultCapacity) => _buffer = new long[Math.Max(1, capacity)];
+
+    public int Count { get { lock (_gate) return _count; } }
+    public int Capacity => _buffer.Length;
+
+    public void Add(long value)
+    {
+        lock (_gate)
+        {
+            _buffer[_next] = value;
+            _next = (_next + 1) % _buffer.Length;
+            if (_count < _buffer.Length) _count++;
+        }
+    }
+
+    /// <summary>按插入序返回窗口内样本副本（调用方可自由排序/聚合）。</summary>
+    public long[] SnapshotInOrder()
+    {
+        lock (_gate)
+        {
+            var result = new long[_count];
+            int start = _count < _buffer.Length ? 0 : _next;
+            for (int i = 0; i < _count; i++) result[i] = _buffer[(start + i) % _buffer.Length];
+            return result;
+        }
+    }
 }

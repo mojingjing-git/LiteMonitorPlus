@@ -259,7 +259,11 @@ namespace LiteMonitor.src.Core.Actions
             "ScreenDevice", "MaxLimitTipShown",
             "TotalUpload", "TotalDownload",
             "SessionUploadBytes", "SessionDownloadBytes",
-            "LastAutoSaveTime", "LastAlertTime"
+            "LastAutoSaveTime", "LastAlertTime",
+            // R7：内存口令为 [JsonIgnore] 运行态——CloneForDiff 的持久化 JSON 往返拿不到它，
+            // 拿它做差异比较必然产生幻影差异（空保存被误判成 Web 变更）。真实凭据变更
+            // 由应用编排（AppActions.ApplySettingsSelectively）在快照外显式比对触发。
+            "WebServerPassword",
         };
     }
 }

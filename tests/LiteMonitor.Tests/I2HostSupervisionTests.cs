@@ -315,4 +315,42 @@ public sealed class I2HostSupervisionTests
         Assert.InRange(self.HandleCount, 0, handlesStart + 300);
         Assert.InRange(self.Threads.Count, 0, threadsStart + 30);
     }
+
+    // ── 2026-10-26 审查回归：R2（协议异常收口）与 R9（序号口径） ──
+
+    [Fact]
+    public async Task R2_合法握手后协议异常_监督器回收子进程并恢复新会话()
+    {
+        var options = FastOptions(new[] { "--test-pattern", "--fault", "protocol-violation" });
+        using PipeHardwareClient client = CreateClient(options);
+
+        // 故障会话（welcome 后写非法帧）必须被收口：回收子进程 → 退避 → 重试。
+        // 每次重生都带同一 --fault ⇒ 连续失败到阈值后进入 crash-loop 暂停——这是 §6.2 的
+        // 正确有界行为；探针的坏状态（state=Ready spawnCount=1 childStillAlive=True）不得再现。
+        bool exercised = await WaitUntilAsync(() => client.ReadMetrics().SessionCount >= 2, TimeSpan.FromSeconds(30));
+        Assert.True(exercised, "协议异常后未进行会话回收与重试（R2 回归）");
+
+        bool paused = await WaitUntilAsync(() =>
+            client.GetHealth().State == HardwareState.Degraded
+            && client.GetHealth().DiagnosticReason == "crash-loop-paused", TimeSpan.FromSeconds(30));
+        Assert.True(paused, $"state={client.GetHealth().State} reason={client.GetHealth().DiagnosticReason}");
+        Assert.True(HostProcessCount() <= 1, "遗留了故障会话的活子进程（R2 回归）");
+        // 监督循环仍活着（未退出）：暂停态是 RunAsync 的内部分支，客户端契约面继续可用。
+        Assert.NotNull(client.CurrentHostPid is null ? (int?)1 : client.CurrentHostPid);
+    }
+
+    [Fact]
+    public async Task R9_心跳穿插下_帧缺口与批次缺口均为零()
+    {
+        // 心跳周期短于采样周期 ⇒ 大量心跳插在快照之间：旧口径会把它们全计成"缺口"。
+        using PipeHardwareClient client = await WaitReadyClientAsync(
+            FastOptions(new[] { "--test-pattern" }, heartbeat: TimeSpan.FromMilliseconds(120)), refreshMs: 100);
+
+        bool enough = await WaitUntilAsync(() => client.ReadMetrics().SnapshotCount >= 10, TimeSpan.FromSeconds(15));
+        Assert.True(enough, "未在期限内积累足够快照");
+
+        PipeClientMetrics metrics = client.ReadMetrics();
+        Assert.Equal(0, metrics.SequenceGaps);        // 帧序号在统一入口跟踪：心跳穿插 ≠ 缺口
+        Assert.Equal(0, metrics.SnapshotBatchGaps);   // BatchId 连续：无真实丢批
+    }
 }

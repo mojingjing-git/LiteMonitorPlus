@@ -88,7 +88,12 @@ namespace LiteMonitor.Core
 
             if (!refresh)
             {
-                var kept = prev with { HasCustomUnit = hasCustomUnit };
+                // R4：插件色独立于文本缓存——数值未变时仍要应用本次 override（旧实现在缓存判定前更新）。
+                var kept = prev with
+                {
+                    HasCustomUnit = hasCustomUnit,
+                    CachedColorState = pluginColorOverride ?? prev.CachedColorState,
+                };
                 return new MetricFormatterResult(kept, isHorizontal ? prev.CachedHorizontalText : prev.CachedNormalText);
             }
 
