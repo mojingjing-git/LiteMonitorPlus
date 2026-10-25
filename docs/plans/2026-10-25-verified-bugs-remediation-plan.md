@@ -474,20 +474,32 @@ Release同样执行；TRX交给仓库现有门禁脚本核对发现数/跳过数
 
 **⚠️ 门禁上暴露的既有缺陷（**非 W1 引入**，归属主题市场工作线）**
 
-`tests/LiteMonitor.Tests/ReviewMarketPersistenceRegressionTests.cs` 存在**类内跨用例状态污染**型间歇失败：
+`tests/LiteMonitor.Tests/ReviewMarketPersistenceRegressionTests.cs` 存在**间歇失败**。协调者已把它定位到**文件系统层**（不是逻辑状态污染）：
+
+```
+System.UnauthorizedAccessException: Access to the path is denied.
+   at System.IO.FileSystem.MoveFile(String sourceFullPath, String destFullPath, Boolean overwrite)
+   at LiteMonitor.src.Plugins.PluginMarketInstallCore.CommitInstall(...)
+```
+
+即 `src/Plugins/PluginMarket.cs:1038` 的 `File.Move(stagePath, targetPath, overwrite: true)`（写前日志 → 同目录暂存 → 备份 → 原子替换的落盘顺序里那一步）偶发返回 Win32 `ERROR_ACCESS_DENIED`。**受害用例随机轮换**（因为任何走 `CommitInstall` 的用例都可能中招），单条单跑全绿。
 
 | 场景 | 总数 | 失败 | 失败用例 |
 |---|---|---|---|
 | **纯净基线 `d52c0ab`（无任何 W1 改动）** 全量 | 1784 | 1 | `GenericCallback_MutatesMemoryThenThrows_IsCompensated` |
 | `integration/w1` 全量 | 1936 | 1 | `AfterRecordFileRestorationFailure_RemainsPendingUntilRequiredMoveOrDeleteSucceeds` |
+| `integration/w1` 全量（**F08a 单例修复并入后**） | 1936 | 1 | `ExtendedJournalMetadata_IsValidatedBeforeRecovery` |
 | `integration/w1` 整类单跑（第 1 轮） | 33 | 1 | `Recovery_CorruptPrimaryDoesNotUseBackupOrLiveRecordAsCommitEvidence` |
 | `integration/w1` 整类单跑（第 2 轮） | 33 | **0** | — |
 | `integration/w1` 整类单跑（第 3 轮） | 33 | 1 | `SuccessfulInstallAndUpdate_PersistRecordAndPayload` |
+| `integration/w1` 整类单跑（失败轮） | 33 | 1 | `CommitAndRecovery_UseOneTransactionGate(update: True, crash: False)` ← **拿到完整异常原文** |
 | 单条用例单跑 | — | 0 | — |
 
-特征：**失败受害者逐轮轮换**、单条单跑全绿、整类约 2/3 概率挂 ⇒ 进程级静态（`SettingsHelper.PathOverride`、`Settings._instance`、`SettingsHelper._saveBlockOwner`、`PluginMarket.PluginsDirOverride`、`PluginMarket._recoveredDirs`）在用例之间泄漏。**W1 八分支零触碰该域任何文件**（已逐一核对文件集），故判定为**主题市场工作线的既有缺陷**，本轮不修（修复需触及产品侧静态语义，与并行会话冲突）。
+排除项（已实测）：本机 **Windows Defender 实时保护为关闭状态**（`Get-MpComputerStatus` → `AntivirusEnabled=False`）⇒ 不是杀软抢文件。
 
-⚠️ **但 CI 的 `MUST_EXECUTE_TEST_CLASS` 钉死了该类 ⇒ 一旦命中即流水线红**，须由该工作线尽快收口。
+**W1 八分支零触碰该域任何文件**（已逐一核对文件集）⇒ 判定为**主题市场工作线的既有缺陷**。F08a 执行者已就其自身贡献做过一处修复（`2bb2e25`：迁移用例还原全局 `Settings` 单例），但**残余失败仍在**，说明另有来源。
+
+⚠️ **CI 的 `MUST_EXECUTE_TEST_CLASS` 钉死了该类 ⇒ 一旦命中即流水线红**（全量跑命中概率约 2/3），须由该工作线尽快收口：建议优先在**测试侧**把沙箱从 `AppContext.BaseDirectory`（`bin\Debug\net8.0-windows\`）迁到独立临时目录，并让 `File.Move` 的失败路径可区分「占用」与「权限」，而不是让随机用例替它背锅。
 
 **F01 遗留裁定（→ F16 发布说明）**
 
@@ -497,12 +509,14 @@ Release同样执行；TRX交给仓库现有门禁脚本核对发现数/跳过数
 4. **`Sec-WebSocket-Version` 缺失仍放行**：**本轮不收紧**——收紧需同步改 `tests/LiteMonitor.Tests/WebAuthHardeningTests.cs`（不在 F01 授权清单内，且会掐断既有兼容面）。归属后续包/F16。
 5. **转发头零消费**（`WebServerTrustProxyHeaders` 是死设置）⇒ 归 **P-F02**。
 
-**F03 / F15 发现、待后续包认领的相邻问题**
+**F03 / F15 发现、已指派的相邻问题**
 
-1. `GetCurrentIP()` 的 30 秒 IP 缓存窗在多网卡热插拔时滞后。
-2. `MatchNativeNetworkAdapter` 的 10 秒重匹配节流。
-3. 产品无「完全关闭 GPU 传感器采样」开关（`MonitoredGpuCount` 下限 1）⇒ 建议转交 P-F10。
-4. `Intel GCL Initialized` 只出现在整机报告，而非单卡 `GetReport()`。
+| # | 问题 | 归属包 | 说明 |
+|---|---|---|---|
+| 1 | `GetCurrentIP()` 的 30 秒 IP 缓存窗在多网卡热插拔时滞后 | **P-F03b**（新建，W2 并行） | 落在 #96 关闭条件「实际网络切换/恢复通过」之内，属 F03 未收口项 |
+| 2 | `MatchNativeNetworkAdapter` 的 10 秒重匹配节流 | **P-F03b**（新建，W2 并行） | 同上 |
+| 3 | 产品无「完全关闭 GPU 传感器采样」开关（`MonitoredGpuCount` 下限 1） | **P-F10** | 与 #450/#592 一起收口 |
+| 4 | `Intel GCL Initialized` 只出现在整机报告，而非单卡 `GetReport()` | **P-F10** | 支撑 #592 的「GCL 真机可读才算采集修复」 |
 
 ## 8. 实施启动清单
 
