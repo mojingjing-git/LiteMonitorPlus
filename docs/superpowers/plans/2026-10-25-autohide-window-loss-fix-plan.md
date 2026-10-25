@@ -39,7 +39,15 @@
   看门狗判据 ×2、落盘守卫 ×2、DPI ×3——期望值全部由公式推导，无硬编码 -1440）。
 - Updater.Tests 73/0；GpuNonperformance.Tests 19/0。总计 **2051 / 2050 / 1**，阈值 2051。
 - 构建零错误；锚点重验：F04 批次未触碰 `MainFormBizHelper.cs`（`8041df8` 仅任务栏域），锚点零漂移。
-- 终验：连续 2 次全量绿（见提交后补记）+ 实机冒烟（用户桌面：副屏贴边泊出 → 30px 带弹出 → 关 AutoHide 自动恢复）。
+- 终验（已执行，2026-10-26）：
+  - Debug：第 1 轮出现 1 条 `ReviewMarketPersistenceRegressionTests` 瞬态失败
+    （`File.Move` 被 `UnauthorizedAccessException` 拒绝——C-1 已知的 PluginMarket 域间歇类，
+    **F17 主控现役领域，本分支零触碰**；与自动隐藏改动无关），第 2、3 轮连续全绿；
+  - Release：构建零错误，全量 **1959（1958 / 0 失败 / 1 指定 E2E 跳过）**；
+  - Updater.Tests 73/0、GpuNonperformance.Tests 19/0；门禁 **2051**（ci/release 逐字一致）；
+  - 实机冒烟：**待人工执行**（步骤：① 副屏贴边放置面板 → 250ms 后泊出（仅 6px 条可见）；
+    ② 鼠标贴该屏边缘 30px 带内 → 应弹出；③ 设置里关"靠边自动隐藏" → 若在泊出态应立即恢复；
+    ④ 人工把窗口拖到虚拟桌面外 >5s → 看门狗拉回 + `window-watchdog.log` 落盘）。
 
 ## 4. 已知边界
 
