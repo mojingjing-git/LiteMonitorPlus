@@ -49,6 +49,15 @@ namespace LiteMonitor.src.Plugins
         private readonly AsyncLocal<PluginPublicationLease> _publication = new();
         private readonly object _standalonePublicationGate = new();
 
+        /// <summary>
+        /// [F13] 可注入时钟。
+        /// <para>生产用系统时钟（<see cref="TimeProvider.System"/>）；测试可注入固定时钟，
+        /// 使"本地兜底"类原生处理器的跨年 / 闰年 / 时区行为可被**确定性**断言。</para>
+        /// <para>★ 只有需要"今天是哪天"的原生处理器（<c>native://newyear</c>）会读它；
+        /// 网络请求与重试退避仍走各自既有的单调 / 墙钟口径，本包不改动。</para>
+        /// </summary>
+        internal TimeProvider Clock { get; set; } = TimeProvider.System;
+
         // Test barriers run before the gate. Identity validation and writes stay together.
         internal Func<string, string, Task> BeforePublicationAsync { get; set; }
 
@@ -614,7 +623,9 @@ namespace LiteMonitor.src.Plugins
                             if (val == PluginConstants.STATUS_UNKNOWN || val == PluginConstants.STATUS_ERROR)
                             {
                                 // [Fix] Fail fast if critical extraction failed
-                                throw new Exception($"Step {step.Id} failed: Extracted invalid value for '{kv.Key}'. Value: '{val}'");
+                                // [F13] 改用**专用异常类型**（消息与既有实现逐字一致）：
+                                // "字段提取失败"是可分类的业务失败，不得与"未知异常"混为一谈。
+                                throw new PluginStepDataException(step.Id, kv.Key, val);
                             }
                         }
                     }
@@ -1580,6 +1591,29 @@ namespace LiteMonitor.src.Plugins
         {
             DeclaredLength = declaredLength;
             Limit = limit;
+        }
+    }
+
+    /// <summary>
+    /// [F13] 步骤的**字段提取失败**：关键变量取到 ❓ / ❌（无有效数据）。
+    /// <para>它属于**业务可恢复失败**：<c>continue_on_error</c> 的步骤可以吞掉它并进入备用步骤；
+    /// 但它**绝不会被当成正常值发布** —— 未开启兜底时它照旧中断整条链并发布错误状态。</para>
+    /// </summary>
+    public sealed class PluginStepDataException : Exception
+    {
+        /// <summary>失败步骤的 id。</summary>
+        public string StepId { get; }
+        /// <summary>取到无效值的变量名。</summary>
+        public string Variable { get; }
+        /// <summary>取到的无效值（❓ / ❌）。</summary>
+        public string Value { get; }
+
+        public PluginStepDataException(string stepId, string variable, string value)
+            : base($"Step {stepId} failed: Extracted invalid value for '{variable}'. Value: '{value}'")
+        {
+            StepId = stepId;
+            Variable = variable;
+            Value = value;
         }
     }
 

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
@@ -12,6 +13,8 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using LiteMonitor.src.Plugins;
+using LiteMonitor.src.Plugins.Native;
+using LiteMonitor.src.SystemServices.InfoService;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -785,6 +788,424 @@ namespace LiteMonitor.Tests
         }
 
         // ==========================================================
+        // 9. [F13] 步骤级失败兜底（continue_on_error）与本地倒计时兜底
+        // ==========================================================
+
+        /// <summary>
+        /// [F13] 主源返回 <c>null</c>（issue #611 的真实症状）时，
+        /// <b>不得</b>只显示错误标记 ⇒ 必须回落到本地元旦倒计时，且显示的是"距离元旦 N 天"。
+        /// <para>本用例走**生产入口** <c>ExecuteInstanceAsync</c>（真实步骤链 + 真实发布路径）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 兜底_主源返回null_发布元旦倒计时而非错误标记()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Text("null")));
+            using var exec = new PluginExecutor();
+            exec.Clock = new FixedTimeProvider(new DateTime(2026, 12, 31, 10, 0, 0), TimeZoneInfo.Utc);
+
+            var inst = NewInstance("inst-f13-null");
+            var tmpl = HolidayChainTemplate(server.Url + "/next");
+
+            bool ok = await exec.ExecuteInstanceAsync(inst, tmpl);
+
+            Assert.True(ok);
+            Assert.Equal("1", InfoService.Instance.GetValue("inst-f13-null.next"));
+            Assert.Equal("距离元旦", InfoService.Instance.GetValue("PROP.Label.DASH.inst-f13-null.next"));
+            Assert.NotEqual(PluginConstants.STATUS_ERROR, InfoService.Instance.GetValue("inst-f13-null.next"));
+        }
+
+        /// <summary>
+        /// [F13] 主源正常时**不得**触发兜底：发布的是真实节假日数据，标签仍是主源给出的节假日名。
+        /// </summary>
+        [Fact]
+        public async Task 兜底_主源正常_不触发兜底且发布真实节假日数据()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(
+                TestResponse.Text("{\"holiday\":{\"name\":\"国庆\",\"date\":\"2026-10-01\",\"rest\":5}}")));
+            using var exec = new PluginExecutor();
+            exec.Clock = new FixedTimeProvider(new DateTime(2026, 12, 31, 10, 0, 0), TimeZoneInfo.Utc);
+
+            var inst = NewInstance("inst-f13-ok");
+            var tmpl = HolidayChainTemplate(server.Url + "/next");
+
+            bool ok = await exec.ExecuteInstanceAsync(inst, tmpl);
+
+            Assert.True(ok);
+            Assert.Equal("5", InfoService.Instance.GetValue("inst-f13-ok.next"));
+            // 标签来自主源的节假日名 ⇒ 证明兜底步骤被 skip_if_set 跳过
+            Assert.Equal("距离国庆", InfoService.Instance.GetValue("PROP.Label.DASH.inst-f13-ok.next"));
+        }
+
+        /// <summary>
+        /// [F13] 主源返回**非法 JSON**（业务可恢复失败）⇒ 兜底生效，发布元旦倒计时。
+        /// </summary>
+        [Fact]
+        public async Task 兜底_主源非法JSON_发布元旦倒计时()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Text("{\"holiday\":")));
+            using var exec = new PluginExecutor();
+            exec.Clock = new FixedTimeProvider(new DateTime(2026, 12, 31, 10, 0, 0), TimeZoneInfo.Utc);
+
+            var inst = NewInstance("inst-f13-badjson");
+            var tmpl = HolidayChainTemplate(server.Url + "/next");
+
+            bool ok = await exec.ExecuteInstanceAsync(inst, tmpl);
+
+            Assert.True(ok);
+            Assert.Equal("1", InfoService.Instance.GetValue("inst-f13-badjson.next"));
+            Assert.NotEqual(PluginConstants.STATUS_ERROR, InfoService.Instance.GetValue("inst-f13-badjson.next"));
+        }
+
+        /// <summary>
+        /// [F13] 主源返回 HTTP 500（请求失败）⇒ 兜底生效，发布元旦倒计时。
+        /// </summary>
+        [Fact]
+        public async Task 兜底_主源HTTP失败_发布元旦倒计时()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(
+                new TestResponse { Status = 500, Body = Encoding.UTF8.GetBytes("boom") }));
+            using var exec = new PluginExecutor();
+            exec.Clock = new FixedTimeProvider(new DateTime(2026, 12, 31, 10, 0, 0), TimeZoneInfo.Utc);
+
+            var inst = NewInstance("inst-f13-500");
+            var tmpl = HolidayChainTemplate(server.Url + "/next");
+
+            bool ok = await exec.ExecuteInstanceAsync(inst, tmpl);
+
+            Assert.True(ok);
+            Assert.Equal("1", InfoService.Instance.GetValue("inst-f13-500.next"));
+            Assert.NotEqual(PluginConstants.STATUS_ERROR, InfoService.Instance.GetValue("inst-f13-500.next"));
+        }
+
+        /// <summary>
+        /// [F13] 主源**单请求超时** ⇒ 与"总预算耗尽"区分开：单请求超时是业务可恢复失败，兜底生效。
+        /// <para>把客户端超时缩短到 300 ms（生产值 10 s），服务器挂起不回应 ⇒ 必然触发单请求超时。</para>
+        /// </summary>
+        [Fact]
+        public async Task 兜底_主源单请求超时_发布元旦倒计时()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Text("ok")));
+            server.ArmHold();
+            using var exec = new PluginExecutor();
+            exec.Clock = new FixedTimeProvider(new DateTime(2026, 12, 31, 10, 0, 0), TimeZoneInfo.Utc);
+            SetHttpTimeout(exec, TimeSpan.FromMilliseconds(300));
+
+            var inst = NewInstance("inst-f13-timeout");
+            var tmpl = HolidayChainTemplate(server.Url + "/next");
+
+            bool ok = await exec.ExecuteInstanceAsync(inst, tmpl);
+
+            Assert.True(ok);
+            Assert.Equal("1", InfoService.Instance.GetValue("inst-f13-timeout.next"));
+            Assert.NotEqual(PluginConstants.STATUS_ERROR, InfoService.Instance.GetValue("inst-f13-timeout.next"));
+        }
+
+        /// <summary>
+        /// [F13] 主源**字段提取失败**时，失败步骤留下的半成品<b>不得</b>污染链上下文：
+        /// 提取成功的 <c>rest=5</c> 不得被合并回去、也不得让兜底步骤的 <c>skip_if_set</c> 误跳过。
+        /// <para>断言：发布的是元旦倒计时（1），<b>不是</b>主源那个半成品 5。</para>
+        /// </summary>
+        [Fact]
+        public async Task 兜底_主源字段提取失败_半成品不污染变量且不误触发skip_if_set()
+        {
+            // 缺 name ⇒ 提取得到 ❓ ⇒ 该步骤判定失败（但 rest 提取成功 = 5）
+            using var server = new TinyHttpServer(_ => Task.FromResult(
+                TestResponse.Text("{\"holiday\":{\"date\":\"2026-10-01\",\"rest\":5}}")));
+            using var exec = new PluginExecutor();
+            exec.Clock = new FixedTimeProvider(new DateTime(2026, 12, 31, 10, 0, 0), TimeZoneInfo.Utc);
+
+            var inst = NewInstance("inst-f13-partial");
+            var tmpl = HolidayChainTemplate(server.Url + "/next");
+
+            bool ok = await exec.ExecuteInstanceAsync(inst, tmpl);
+
+            Assert.True(ok);
+            // 兜底步骤确实执行了（skip_if_set 没有被半成品触发）
+            Assert.Equal("距离元旦", InfoService.Instance.GetValue("PROP.Label.DASH.inst-f13-partial.next"));
+            // 发布值是元旦倒计时，而不是主源那个"提取成功但整体失败"的 5
+            Assert.Equal("1", InfoService.Instance.GetValue("inst-f13-partial.next"));
+            Assert.NotEqual("5", InfoService.Instance.GetValue("inst-f13-partial.next"));
+            Assert.NotEqual(PluginConstants.STATUS_UNKNOWN, InfoService.Instance.GetValue("inst-f13-partial.next"));
+        }
+
+        /// <summary>
+        /// [F13] 兜底源**也失败** ⇒ 整条链失败 ⇒ 发布**错误状态**（不得当成正常值）。
+        /// </summary>
+        [Fact]
+        public async Task 兜底_备用源也失败_发布错误状态而非正常值()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(
+                new TestResponse { Status = 500, Body = Encoding.UTF8.GetBytes("boom") }));
+            using var exec = new PluginExecutor();
+
+            var inst = NewInstance("inst-f13-both-fail");
+            var tmpl = TwoStepHttpTemplate(server.Url + "/primary", server.Url + "/backup");
+
+            bool ok = await exec.ExecuteInstanceAsync(inst, tmpl);
+
+            Assert.False(ok);
+            Assert.Equal(PluginConstants.STATUS_ERROR, InfoService.Instance.GetValue("inst-f13-both-fail.next"));
+        }
+
+        /// <summary>
+        /// [F13] <c>continue_on_error</c> **缺省为 false** ⇒ 步骤失败照旧中断整条链（既有行为不变）。
+        /// </summary>
+        [Fact]
+        public async Task 兜底_缺省continue_on_error为false_步骤失败仍中断整条链()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(
+                new TestResponse { Status = 500, Body = Encoding.UTF8.GetBytes("boom") }));
+            using var exec = new PluginExecutor();
+
+            var inst = NewInstance("inst-f13-default-false");
+            var tmpl = TwoStepHttpTemplate(server.Url + "/primary", server.Url + "/backup",
+                primaryContinueOnError: false);
+
+            bool ok = await exec.ExecuteInstanceAsync(inst, tmpl);
+
+            Assert.False(ok);
+            // 第二步根本没被执行
+            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(PluginConstants.STATUS_ERROR, InfoService.Instance.GetValue("inst-f13-default-false.next"));
+        }
+
+        /// <summary>
+        /// [F13] **外层取消不可被兜底吞掉**：取消后整条链必须终止，备用步骤不得执行。
+        /// </summary>
+        [Fact]
+        public async Task 兜底_外层取消不被吞掉_备用步骤不得执行()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Text("ok")));
+            server.ArmHold();
+            using var exec = new PluginExecutor();
+            using var cts = new CancellationTokenSource();
+
+            var inst = NewInstance("inst-f13-cancel");
+            var tmpl = TwoStepHttpTemplate(server.Url + "/primary", server.Url + "/backup");
+
+            var task = exec.ExecuteInstanceAsync(inst, tmpl, cts.Token);
+            Assert.True(await WaitUntilAsync(() => server.RequestCount >= 1, TimeSpan.FromSeconds(10)),
+                "主源请求未发出（用例可能挂死）");
+
+            cts.Cancel();
+            bool ok = await task;
+
+            Assert.False(ok);
+            // 备用步骤没有被执行 ⇒ 取消没有被降级成"兜底成功"
+            Assert.Equal(1, server.RequestCount);
+        }
+
+        /// <summary>
+        /// [F13] **单次执行总时长耗尽不可被兜底吞掉**：原因码仍是 LM009_DEADLINE_EXCEEDED，
+        /// 备用步骤不得执行。
+        /// </summary>
+        [Fact]
+        public async Task 兜底_总时长耗尽不被吞掉_仍抛LM009_DEADLINE_EXCEEDED()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Text("ok")));
+            server.ArmHold();
+            using var exec = new PluginExecutor();
+
+            var inst = NewInstance("inst-f13-deadline");
+            var tmpl = TwoStepHttpTemplate(server.Url + "/primary", server.Url + "/backup");
+
+            using var scope = new PluginSandboxScope(
+                CancellationToken.None,
+                TimeSpan.FromMilliseconds(400),
+                PluginSandboxLimits.MaxStepsPerExecution,
+                PluginSandboxLimits.MaxTargetsPerStep);
+
+            var task = RunInstanceWithScopeAsync(exec, inst, tmpl, scope,
+                PluginProcessor.GetDeclaredHosts(tmpl));
+
+            var finished = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(30)));
+            Assert.True(ReferenceEquals(finished, task), "总时长上限未在预期时间内生效（用例可能挂死）");
+
+            var ex = await Assert.ThrowsAnyAsync<PluginSandboxException>(() => task);
+            Assert.Equal(PluginSandboxReasons.DeadlineExceeded, ex.Reason);
+            Assert.Equal(1, server.RequestCount);
+        }
+
+        /// <summary>
+        /// [F13] **沙箱违规不可被兜底吞掉**：响应体超限仍抛 LM009_RESPONSE_TOO_LARGE，
+        /// 备用步骤不得执行。
+        /// </summary>
+        [Fact]
+        public async Task 兜底_响应体超沙箱天花板不被吞掉_仍抛LM009_RESPONSE_TOO_LARGE()
+        {
+            var payload = new byte[PluginSandboxLimits.MaxResponseBytes + 4096];
+            using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Bytes(payload)));
+            using var exec = new PluginExecutor();
+
+            var inst = NewInstance("inst-f13-toolarge");
+            var tmpl = TwoStepHttpTemplate(server.Url + "/primary", server.Url + "/backup");
+
+            var ex = await Assert.ThrowsAnyAsync<PluginSandboxException>(() => exec.ExecuteInstanceAsync(inst, tmpl));
+
+            Assert.Equal(PluginSandboxReasons.ResponseTooLarge, ex.Reason);
+            Assert.Equal(1, server.RequestCount);
+        }
+
+        /// <summary>
+        /// [F13] **步骤数上限不可被兜底吞掉**：仍抛 LM009_STEP_LIMIT。
+        /// </summary>
+        [Fact]
+        public async Task 兜底_步骤数超限不被吞掉_仍抛LM009_STEP_LIMIT()
+        {
+            using var server = new TinyHttpServer(_ => Task.FromResult(TestResponse.Text("ok")));
+            using var exec = new PluginExecutor();
+
+            var inst = NewInstance("inst-f13-steplimit");
+            var tmpl = ManyStepTemplate(server.Url, PluginSandboxLimits.MaxStepsPerExecution + 1);
+
+            var ex = await Assert.ThrowsAnyAsync<PluginSandboxException>(() => exec.ExecuteInstanceAsync(inst, tmpl));
+
+            Assert.Equal(PluginSandboxReasons.StepLimit, ex.Reason);
+        }
+
+        /// <summary>
+        /// [F13] 主源**恢复**后自动回切：下一次执行必须回到真实节假日数据，
+        /// 兜底值不得继续留在界面上。
+        /// </summary>
+        [Fact]
+        public async Task 兜底_主源恢复后自动回切到真实节假日数据()
+        {
+            bool healthy = false;
+            using var server = new TinyHttpServer(_ => Task.FromResult(healthy
+                ? TestResponse.Text("{\"holiday\":{\"name\":\"国庆\",\"date\":\"2026-10-01\",\"rest\":5}}")
+                : TestResponse.Text("null")));
+            using var exec = new PluginExecutor();
+            exec.Clock = new FixedTimeProvider(new DateTime(2026, 12, 31, 10, 0, 0), TimeZoneInfo.Utc);
+
+            var inst = NewInstance("inst-f13-recover");
+            var tmpl = HolidayChainTemplate(server.Url + "/next");
+
+            Assert.True(await exec.ExecuteInstanceAsync(inst, tmpl));
+            Assert.Equal("1", InfoService.Instance.GetValue("inst-f13-recover.next"));
+
+            healthy = true;
+            Assert.True(await exec.ExecuteInstanceAsync(inst, tmpl));
+
+            Assert.Equal("5", InfoService.Instance.GetValue("inst-f13-recover.next"));
+            Assert.Equal("距离国庆", InfoService.Instance.GetValue("PROP.Label.DASH.inst-f13-recover.next"));
+        }
+
+        // ==========================================================
+        // 10. [F13] native://newyear 本地兜底计算
+        // ==========================================================
+
+        /// <summary>[F13] 跨年：12-31 的元旦倒计时是 1 天，目标日期是次年 1 月 1 日。</summary>
+        [Fact]
+        public void 元旦倒计时_跨年十二三十一日为一天()
+        {
+            var json = NewYearNative.GetCountdownJson(new DateTime(2026, 12, 31));
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            Assert.Equal("2027-01-01", root.GetProperty("date").GetString());
+            Assert.Equal(1, root.GetProperty("rest").GetInt32());
+        }
+
+        /// <summary>[F13] 元旦当天：倒计时为 <b>0 天</b>（元旦就是今天），目标日期仍是当天。</summary>
+        [Fact]
+        public void 元旦倒计时_元旦当天为零天()
+        {
+            var json = NewYearNative.GetCountdownJson(new DateTime(2027, 1, 1));
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            Assert.Equal("2027-01-01", root.GetProperty("date").GetString());
+            Assert.Equal(0, root.GetProperty("rest").GetInt32());
+        }
+
+        /// <summary>
+        /// [F13] 闰年：倒计时区间**跨过 2 月 29 日**时多算一天
+        /// （2027-02-28 → 2028-01-01 共 307 天；2028-02-28 → 2029-01-01 共 308 天）。
+        /// </summary>
+        [Fact]
+        public void 元旦倒计时_闰年跨过二月二十九日多算一天()
+        {
+            using var normal = JsonDocument.Parse(NewYearNative.GetCountdownJson(new DateTime(2027, 2, 28)));
+            using var leap = JsonDocument.Parse(NewYearNative.GetCountdownJson(new DateTime(2028, 2, 28)));
+
+            Assert.Equal("2028-01-01", normal.RootElement.GetProperty("date").GetString());
+            Assert.Equal(307, normal.RootElement.GetProperty("rest").GetInt32());
+
+            Assert.Equal("2029-01-01", leap.RootElement.GetProperty("date").GetString());
+            Assert.Equal(308, leap.RootElement.GetProperty("rest").GetInt32());
+        }
+
+        /// <summary>
+        /// [F13] 时区：按**本地日期**计算 —— 同一瞬间在 UTC 下还是 12-30，
+        /// 在 UTC+14 下已是 12-31 ⇒ 倒计时必须跟着本地日期变（2 天 vs 1 天）。
+        /// </summary>
+        [Fact]
+        public void 元旦倒计时_按本地日期计算_时区跨日结果不同()
+        {
+            var instant = new DateTime(2026, 12, 30, 23, 30, 0, DateTimeKind.Utc);
+            var plus14 = TimeZoneInfo.CreateCustomTimeZone("F13+14", TimeSpan.FromHours(14), "F13+14", "F13+14");
+
+            var utcJson = NewYearNative.GetCountdownJson(new FixedTimeProvider(instant, TimeZoneInfo.Utc));
+            var plus14Json = NewYearNative.GetCountdownJson(new FixedTimeProvider(instant, plus14));
+
+            using var utcDoc = JsonDocument.Parse(utcJson);
+            using var plus14Doc = JsonDocument.Parse(plus14Json);
+
+            Assert.Equal("2027-01-01", utcDoc.RootElement.GetProperty("date").GetString());
+            Assert.Equal(2, utcDoc.RootElement.GetProperty("rest").GetInt32());
+
+            Assert.Equal("2027-01-01", plus14Doc.RootElement.GetProperty("date").GetString());
+            Assert.Equal(1, plus14Doc.RootElement.GetProperty("rest").GetInt32());
+        }
+
+        /// <summary>
+        /// [F13] 本地兜底**不冒充法定节假日 / 调休数据**：名称恒为"元旦"，
+        /// 且显式标注数据来源为本地推算。
+        /// </summary>
+        [Fact]
+        public void 元旦倒计时_不冒充法定节假日_名称恒为元旦且标注本地来源()
+        {
+            var json = NewYearNative.GetCountdownJson(new DateTime(2026, 10, 1));
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            Assert.Equal("元旦", root.GetProperty("name").GetString());
+            Assert.Equal("local", root.GetProperty("source").GetString());
+            // 不得出现调休 / 法定节假日名相关的字段
+            Assert.False(root.TryGetProperty("holiday", out _));
+            Assert.False(root.TryGetProperty("workday", out _));
+        }
+
+        /// <summary>
+        /// [F13] 随包发布的内置 Holiday 模板必须具备"HTTPS 主源 + 步骤级兜底 + 本地兜底步骤"。
+        /// <para>这是模板契约：缺任何一项，#611 的降级路径就不成立。</para>
+        /// </summary>
+        [Fact]
+        public void 内置Holiday模板_主源HTTPS且带步骤级兜底与本地兜底步骤()
+        {
+            string dir = Path.Combine(AppContext.BaseDirectory, "resources", "plugins");
+            string file = Path.Combine(dir, "Holiday.json");
+            Assert.True(File.Exists(file), $"未找到内置插件模板：{file}");
+
+            var tmpl = JsonSerializer.Deserialize<PluginTemplate>(File.ReadAllText(file));
+            Assert.NotNull(tmpl);
+            Assert.Equal("Holiday", tmpl.Id);
+
+            var steps = tmpl.Execution?.Steps;
+            Assert.NotNull(steps);
+            Assert.True(steps.Count >= 2, "内置 Holiday 模板缺少兜底步骤");
+
+            var primary = steps[0];
+            Assert.StartsWith("https://", primary.Url, StringComparison.Ordinal);
+            Assert.True(primary.ContinueOnError, "主源步骤必须声明 continue_on_error 才能进入兜底步骤");
+
+            var fallback = steps[1];
+            Assert.Equal("native://newyear", fallback.Url);
+            Assert.Equal("rest", fallback.SkipIfSet);
+            Assert.False(fallback.ContinueOnError, "兜底步骤本身失败时必须照旧失败（不得再兜底一层）");
+        }
+
+        // ==========================================================
         // 工具
         // ==========================================================
 
@@ -801,6 +1222,170 @@ namespace LiteMonitor.Tests
         }
 
         private static PluginInstanceConfig NewInstance(string id) => new PluginInstanceConfig { Id = id };
+
+        /// <summary>
+        /// [F13] 构造"主源 → 本地兜底"链式模板（与随包发布的内置 Holiday 模板同构）：
+        /// 主源声明 <c>continue_on_error</c>，兜底步骤用 <c>skip_if_set="rest"</c>。
+        /// </summary>
+        private static PluginTemplate HolidayChainTemplate(string primaryUrl)
+        {
+            return new PluginTemplate
+            {
+                Id = "tmpl",
+                Meta = new PluginMeta { Name = "放假倒计时" },
+                Execution = new PluginExecution
+                {
+                    Type = "chain",
+                    Steps = new List<PluginExecutionStep>
+                    {
+                        new PluginExecutionStep
+                        {
+                            Id = "fetch_holiday",
+                            Url = primaryUrl,
+                            Method = "GET",
+                            ResponseEncoding = "utf-8",
+                            ResponseFormat = "json",
+                            ContinueOnError = true,
+                            Extract = new Dictionary<string, string>
+                            {
+                                ["name"] = "holiday.name",
+                                ["date"] = "holiday.date",
+                                ["rest"] = "holiday.rest"
+                            }
+                        },
+                        new PluginExecutionStep
+                        {
+                            Id = "fallback_newyear",
+                            Url = "native://newyear",
+                            Method = "GET",
+                            ResponseEncoding = "utf-8",
+                            ResponseFormat = "json",
+                            SkipIfSet = "rest",
+                            Extract = new Dictionary<string, string>
+                            {
+                                ["name"] = "name",
+                                ["date"] = "date",
+                                ["rest"] = "rest"
+                            }
+                        }
+                    }
+                },
+                Outputs = new List<PluginOutput>
+                {
+                    new PluginOutput
+                    {
+                        Key = "next",
+                        Label = "距离{{name}}",
+                        ShortLabel = "🏖️",
+                        Format = "{{rest}}",
+                        Unit = " 天"
+                    }
+                }
+            };
+        }
+
+        /// <summary>
+        /// [F13] 构造"主源（可回退） → 备用源（不可回退）"两个 HTTP 步骤的模板：
+        /// 用于断言"兜底源也失败 ⇒ 错误状态"以及"取消 / 沙箱违规不得被吞掉"。
+        /// </summary>
+        private static PluginTemplate TwoStepHttpTemplate(string primaryUrl, string backupUrl,
+            bool primaryContinueOnError = true)
+        {
+            return new PluginTemplate
+            {
+                Id = "tmpl",
+                Meta = new PluginMeta { Name = "两步" },
+                Execution = new PluginExecution
+                {
+                    Type = "chain",
+                    Steps = new List<PluginExecutionStep>
+                    {
+                        new PluginExecutionStep
+                        {
+                            Id = "primary",
+                            Url = primaryUrl,
+                            Method = "GET",
+                            ResponseEncoding = "utf-8",
+                            ResponseFormat = "json",
+                            ContinueOnError = primaryContinueOnError,
+                            Extract = new Dictionary<string, string> { ["rest"] = "data.rest" }
+                        },
+                        new PluginExecutionStep
+                        {
+                            Id = "backup",
+                            Url = backupUrl,
+                            Method = "GET",
+                            ResponseEncoding = "utf-8",
+                            ResponseFormat = "json",
+                            Extract = new Dictionary<string, string> { ["rest"] = "data.rest" }
+                        }
+                    }
+                },
+                Outputs = new List<PluginOutput>
+                {
+                    new PluginOutput { Key = "next", Label = "值", ShortLabel = "v", Format = "{{rest}}" }
+                }
+            };
+        }
+
+        /// <summary>
+        /// [F13] 构造 N 步的链式模板（每步 URL 不同，避免在途请求被合并）。
+        /// </summary>
+        private static PluginTemplate ManyStepTemplate(string url, int stepCount)
+        {
+            var steps = new List<PluginExecutionStep>();
+            for (int i = 0; i < stepCount; i++)
+            {
+                int n = i;
+                steps.Add(new PluginExecutionStep
+                {
+                    Id = "s" + n,
+                    Url = url + "/s" + n,
+                    Method = "GET",
+                    ResponseEncoding = "utf-8",
+                    ResponseFormat = "text",
+                    ContinueOnError = true,
+                    Extract = new Dictionary<string, string> { ["v"] = "$" }
+                });
+            }
+
+            return new PluginTemplate
+            {
+                Id = "tmpl",
+                Meta = new PluginMeta { Name = "多步" },
+                Execution = new PluginExecution { Type = "chain", Steps = steps },
+                Outputs = new List<PluginOutput>()
+            };
+        }
+
+        /// <summary>把生产客户端的单请求超时缩短（必须在第一次请求之前调用）。</summary>
+        private static void SetHttpTimeout(PluginExecutor exec, TimeSpan timeout)
+        {
+            var field = typeof(PluginExecutor).GetField("_http", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(field);
+            var client = field.GetValue(exec) as HttpClient;
+            Assert.NotNull(client);
+            client.Timeout = timeout;
+        }
+
+        /// <summary>
+        /// [F13] 固定时钟：让"本地兜底"的跨年 / 闰年 / 时区行为可被确定性断言。
+        /// </summary>
+        private sealed class FixedTimeProvider : TimeProvider
+        {
+            private readonly DateTimeOffset _utcNow;
+            private readonly TimeZoneInfo _localZone;
+
+            public FixedTimeProvider(DateTime utcNow, TimeZoneInfo localZone)
+            {
+                _utcNow = new DateTimeOffset(DateTime.SpecifyKind(utcNow, DateTimeKind.Utc));
+                _localZone = localZone;
+            }
+
+            public override DateTimeOffset GetUtcNow() => _utcNow;
+
+            public override TimeZoneInfo LocalTimeZone => _localZone;
+        }
 
         private static PluginExecutionStep NewStep(string url, string method = "GET", string body = "",
             Dictionary<string, string> headers = null, string encoding = "utf-8", int cacheMinutes = 0)
