@@ -116,8 +116,9 @@ namespace LiteMonitor.src.UI.SettingsPage
             string text = LanguageManager.T("Menu.DiskProbeStatus") + ": " + LanguageManager.T(stateKey);
             if (!string.IsNullOrEmpty(policy?.LastError)) text += " (" + policy.LastError + ")";
 
-            // ★ 迁移状态：配置里没有该字段（-1）⇒ 明确提示"当前按仅计数器运行"。
-            //   用户的磁盘偏好与监控项**不受影响**（迁移不清空、不改绑）。
+            // ★ 迁移状态：配置里**没有该字段**（落盘时该键根本不存在 ⇒ 读回为 null）⇒ 明确提示"当前按仅计数器运行"。
+            //   ★ null 在内存里统一归一到 UnconfiguredModeValue(-1)（见 DiskProbePolicy.FromSettings），
+            //     所以这里用 ?? UnconfiguredModeValue 判断；用户的磁盘偏好与监控项**不受影响**（迁移不清空、不改绑）。
             bool unconfigured = (Config?.DiskProbeMode ?? DiskProbePolicy.UnconfiguredModeValue) == DiskProbePolicy.UnconfiguredModeValue;
             if (unconfigured)
             {
