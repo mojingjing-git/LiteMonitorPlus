@@ -44,6 +44,9 @@ namespace LiteMonitor.src.SystemServices
         private readonly DiskProbePolicy _diskProbePolicy;
         private readonly DiskProbeGate _diskProbeGate;
 
+        // ★ [F08b #245 缓解] 控制器（USB/HID）探测策略：关闭模式下 LHM 不构造任何控制器组。
+        private readonly ControllerProbePolicy _controllerProbePolicy;
+
         // ★ [#610] IP 流量排除后端（按需创建：功能关闭时不创建任何会话/后台线程）。
         private NetworkTrafficExclusionService? _trafficExclusion;
         private readonly FpsCounter _fpsCounter;
@@ -147,6 +150,10 @@ namespace LiteMonitor.src.SystemServices
             // ★ [F08a] 策略必须先于 Computer 构造（它决定 IsStorageEnabled）。
             _diskProbePolicy = DiskProbePolicy.FromSettings(cfg);
             _diskProbeGate = new DiskProbeGate(_diskProbePolicy);
+
+            // ★ [F08b #245 缓解] 同样必须先于 Computer 构造（它决定 IsControllerEnabled）。
+            //   FromSettings 对"键不存在"返回 Auto ⇒ 既有用户行为一字不变。
+            _controllerProbePolicy = ControllerProbePolicy.FromSettings(cfg);
 
             // 1. 初始化 Computer
             _computer = new Computer()
@@ -992,10 +999,32 @@ namespace LiteMonitor.src.SystemServices
         {
             // 检查是否开启了任何需要读取外部控制器的监控项。
             // 主板温度走 Motherboard/SuperIO 硬件树，不应该因此打开 Controller 扫描。
-            if (_cfg.IsAnyEnabled("CPU.Fan")) return true;
-            if (_cfg.IsAnyEnabled("CPU.Pump")) return true;
-            if (_cfg.IsAnyEnabled("CASE.Fan")) return true;
-            return false;
+            bool fanMetricsNeeded =
+                   _cfg.IsAnyEnabled("CPU.Fan")
+                || _cfg.IsAnyEnabled("CPU.Pump")
+                || _cfg.IsAnyEnabled("CASE.Fan");
+
+            // ★ [F08b #245 缓解] 交给策略裁决（而不是在这里直接返回 fanMetricsNeeded）：
+            //   策略的 Auto 分支**就是**上面这套既有规则 ⇒ 未配置用户的行为一字不变；
+            //   Off 则无条件关闭（永不构造 8 个控制器组，IL 级构造前隔离）；
+            //   On 为排查/对照用。
+            bool shouldProbe = _controllerProbePolicy.ShouldProbe(fanMetricsNeeded);
+            _controllerProbePolicy.MarkOpened(shouldProbe);
+            return shouldProbe;
+        }
+
+        /// <summary>
+        /// ★ [F08b #245 缓解] 切换控制器探测模式（关闭 / 自动 / 强制开启）。
+        /// <para>关闭模式下 LHM **根本不构造**控制器组（构造前隔离，有 IL 级保证），
+        /// 因此不会触碰任何 HID/USB 设备 —— 这是 #245（DAPLink 冲突）的明确开关。</para>
+        /// </summary>
+        /// <returns>切换是否成功；失败时策略进入降级态，<b>不把失败伪装成成功</b>。</returns>
+        public bool ApplyControllerProbeMode(ControllerProbeMode mode)
+        {
+            return _controllerProbePolicy.ApplyMode(
+                mode,
+                apply: _ => RefreshHardwareConfig(),
+                verify: null);
         }
 
         private void WarmUpMotherboardSensors()
