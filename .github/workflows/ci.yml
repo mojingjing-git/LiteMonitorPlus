@@ -101,7 +101,10 @@ jobs:
       #    → 2436（+22 = autohide R2：AutoHideLogic 纯函数核心【泊出/弹出数学、30px 弹出带、
       #      DPI 现算、看门狗判据、落盘守卫、用户几何复现】；实机冒烟 4 步全过后合入；
       #      合并后 Debug 实测主工程发现数 2352（2345 执行全通 + 7 跳过）+ Updater 73 + GPU 19 = 2444）。
-      MIN_TEST_TOTAL: 2444
+      #    → 2504（+58 = P-I2 监督/协议/原子性/百次启停 +33 与 B3 模块服务/选择性应用 +25；
+      #      I2+B3 双包合并后 Debug 实测主工程发现数 2412（2405 执行全通 + 7 跳过）
+      #      + Updater 73 + GPU 19 = 2504）。
+      MIN_TEST_TOTAL: 2504
       # ★ 必须出现的测试程序集。少任何一个都会让断言失败
       #   （防止某个测试工程悄悄没被测到）。
       EXPECTED_TEST_ASSEMBLIES: 'LiteMonitor.Tests, LiteMonitor.Updater.Tests, LiteMonitor.GpuNonperformance.Tests'

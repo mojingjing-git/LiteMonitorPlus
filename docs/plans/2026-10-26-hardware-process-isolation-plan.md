@@ -1,7 +1,7 @@
 # Plan A：硬件采集进程隔离
 
 - 日期：2026-10-26。
-- 状态：I0～I1**已完成并整体验收**（≙Plan B 首批，2026-10-26，[验收记录](../verification/acceptance/first-batch-B0B2-I0I1.md)；C1 契约已就位）；I2～I5维持评估稿，I2 启动前需另行拍板。
+- 状态：I0～I1 已验收（[首批记录](../verification/acceptance/first-batch-B0B2-I0I1.md)）；**I2 原型已完成并合入 master**（2026-10-26，[I2 验收记录](../verification/acceptance/I2-report.md)：故障矩阵/协议/百次启停全过，A/B 实测额外私有字节 +38MB、接收 p95 15ms 达标，额外 CPU +58ms/s 如实报不达标并归因为双采集器原型口径）；I3～I5 维持评估稿——**I2 后产品评估点已就绪**，是否继续 I3（完整资源迁移，消除双采集器叠加使 CPU 阈值可复测）由拍板决定。
 - 源码观察基线：`1f652c1f0e402f124c4535fcf878f19c216c5e39`。I0 启动基线：`9da07af`（2026-10-26，W3 合并后），盘点见 [B0/I0 基线盘点](2026-10-26-B0-I0-baseline-inventory.md)。
 - 对应问题：底层采集库崩溃、原生调用卡住时，尽量保住主界面、任务栏和用户操作能力。
 - 关联：[Plan B：架构解耦](2026-10-26-architecture-decoupling-plan.md)、[已核实问题修复计划](2026-10-25-verified-bugs-remediation-plan.md)。
