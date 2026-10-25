@@ -46,6 +46,13 @@ namespace LiteMonitor.src.SystemServices
         // ★★★ [限频] 单调时钟 ★★★
         private readonly TimeProvider _time;
 
+        // ★ [F08a] 磁盘探测策略（null = 不施加任何限制，仅供兼容调用点/单元测试）。
+        //   产品路径**必须**显式传入：只有它知道"能不能碰存储设备"。
+        private readonly DiskProbePolicy? _policy;
+
+        // ★ [F08a] Windows 磁盘计数器来源（仅计数器模式下提供速度/活动率）。
+        private readonly IDiskCounterSource? _counters;
+
         /// <summary>
         /// 采集统计计数器。
         /// 由拥有 <see cref="HardwareSamplingStatistics"/> 的服务（HardwareMonitor）在构造后接线，
@@ -54,9 +61,16 @@ namespace LiteMonitor.src.SystemServices
         public HardwareSamplingStatistics? SamplingStatistics { get; set; }
 
         /// <param name="timeProvider">可注入的单调时钟，默认 <see cref="TimeProvider.System"/>。</param>
-        public DiskManager(TimeProvider? timeProvider = null)
+        /// <param name="policy">
+        /// 磁盘探测策略。**null 表示不施加任何限制**（保持改动前的行为，仅供兼容调用点与单元测试）；
+        /// 产品路径必须显式传入 —— 否则"仅计数器"这条止血规则会静默失效。
+        /// </param>
+        /// <param name="counters">Windows 磁盘计数器来源（仅计数器模式下提供速度/活动率）。</param>
+        public DiskManager(TimeProvider? timeProvider = null, DiskProbePolicy? policy = null, IDiskCounterSource? counters = null)
         {
             _time = timeProvider ?? TimeProvider.System;
+            _policy = policy;
+            _counters = counters;
         }
 
         public void ClearCache()
@@ -85,6 +99,10 @@ namespace LiteMonitor.src.SystemServices
         /// </param>
         public void ProcessUpdate(IHardware hw, Settings cfg, bool isSlowScanTick, bool needDiskBgScan)
         {
+            // ★ [F08a] 仅计数器模式下**不对存储设备发起任何 Update**：
+            //   Update 会重新读取设备（等价于再次触碰设备句柄），与"不占用可移动磁盘"的止血目标冲突。
+            if (_policy != null && !_policy.AllowsSmart) return;
+
             // 1. 严格遵守首选磁盘锁定（手动指定设备的语义保持不变）
             if (!string.IsNullOrEmpty(cfg.PreferredDisk) && 
                 !hw.Name.Equals(cfg.PreferredDisk, StringComparison.OrdinalIgnoreCase))
@@ -245,6 +263,16 @@ namespace LiteMonitor.src.SystemServices
                 catch { return 0f; }
             }
 
+            // ★ [F08a] 仅计数器模式：速度/活动率走 **Windows 计数器**，温度/SMART **缺失**。
+            //   - 缺失 = 返回 null（界面显示 "--"），**绝不显示 0**，也绝不回退到上一代的旧温度；
+            //   - 这里不读任何 LHM 存储传感器（仅计数器模式下硬件树里本来就没有存储设备）。
+            if (_policy != null && !_policy.AllowsSmart)
+            {
+                if (key == "DISK.Temp") return null;
+                if (key == "DISK.Read" || key == "DISK.Write" || key == "DISK.Activity")
+                    return ReadCounterValue(key, cfg);
+            }
+
             // 1. 运行时缓存 (针对自动选择模式)
             if (_cachedDiskHw != null)
             {
@@ -329,6 +357,24 @@ namespace LiteMonitor.src.SystemServices
 
             lock (syncLock) { if (lastValidMap.TryGetValue(key, out var last)) return last; }
             return null;
+        }
+
+        /// <summary>
+        /// 读 Windows 磁盘计数器（仅计数器模式下的速度/活动率来源）。
+        /// <para>★ 用户关掉"优先使用系统计数器"时返回 null（缺失），**不伪造 0**。</para>
+        /// </summary>
+        private float? ReadCounterValue(string key, Settings cfg)
+        {
+            if (_counters == null) return null;
+            if (!cfg.UseWinPerCounters) return null;
+
+            switch (key)
+            {
+                case "DISK.Read": return _counters.GetDiskRead();
+                case "DISK.Write": return _counters.GetDiskWrite();
+                case "DISK.Activity": return _counters.GetDiskActive();
+                default: return null;
+            }
         }
 
         public static ISensor? FindBestTempSensor(IHardware hw)

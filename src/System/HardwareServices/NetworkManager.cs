@@ -51,6 +51,17 @@ namespace LiteMonitor.src.SystemServices
         private bool _hasIPCheck;
         private volatile bool _shouldResetAdapters = false; // [Fix #287] 网络变更标记
 
+        // ★ [#96 / F03] 网络样本登记处：值 + 成功采样时间 + 设备身份 + 设备代次。
+        //   旧实现把"最后有效值"放在永不失效的 lastValidMap 里，传感器停更时旧值会被
+        //   无限期重发布为"新样本"（面板上的数字卡住不动）。这里用带时效的登记处替代它。
+        private readonly NetworkSampleRegistry _samples;
+
+        // ★ [F03] 设备代次：设备删除 / 首选变化 / 硬件重载时 +1（用于识别"旧值属于另一台设备"）。
+        private long _deviceGeneration;
+
+        // ★ [F03] 当前选中的网卡（手动选卡或自动选优的结果），用于样本的设备身份。
+        private string _selectedDeviceName = "";
+
         // ★★★ 依赖注入：性能计数器 (用于获取 SMB 流量) ★★★
         private readonly PerformanceCounterManager _perfManager;
 
@@ -65,6 +76,20 @@ namespace LiteMonitor.src.SystemServices
         /// <summary>归属映射的最短重建间隔（秒）：地址热变更的刷新代价与及时性的折中。</summary>
         private const double ResolverRebuildIntervalSeconds = 30.0;
 
+        /// <summary>
+        /// [F03] 重选窗口（秒）：读取失败后最多每 3 秒触发一次全盘重选（去抖 + 退避）。
+        /// </summary>
+        private const double ReselectIntervalSeconds = 3.0;
+
+        /// <summary>
+        /// [F03] 自动选优评分里的"采样成功"权重：它必须大于任何可能的流量值，
+        /// 这样"采样成功的空闲网卡"永远优于"采样失败的网卡"（空闲 ≠ 坏网卡）。
+        /// </summary>
+        private const double SampleSuccessBonus = 1e12;
+
+        /// <summary>[F03] 虚拟网卡（VPN / 虚拟交换机等）的评分惩罚，保持既有"优先物理网卡"的语义。</summary>
+        private const double VirtualAdapterPenalty = -1e9;
+
         // ★★★ [限频] 单调时钟：流量间隔必须来自两次真实采集之间的经过时间 ★★★
         private readonly TimeProvider _time;
 
@@ -75,12 +100,15 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         public HardwareSamplingStatistics? SamplingStatistics { get; set; }
 
-        public NetworkManager(PerformanceCounterManager perfManager = null, TimeProvider? timeProvider = null)
+        public NetworkManager(PerformanceCounterManager perfManager = null, TimeProvider? timeProvider = null, NetworkSampleFreshnessPolicy? freshnessPolicy = null)
         {
             // 允许为空 (为了兼容性)，如果为空则内部功能自动禁用
             _perfManager = perfManager ?? new PerformanceCounterManager(); 
             _time = timeProvider ?? TimeProvider.System;
             _startTimestamp = _time.GetTimestamp();   // 启动时间（单调时钟）
+
+            // ★ [#96 / F03] 样本时效策略与登记处：时钟必须与本类一致，测试可注入假时钟。
+            _samples = new NetworkSampleRegistry(freshnessPolicy ?? new NetworkSampleFreshnessPolicy(_time));
             
             // [Fix #287] 监听网络地址变更事件，强制刷新 IP 和 网卡缓存
             // 当用户切换 WIFI 或插拔网线时，IP地址和网卡实例都会失效，必须重置
@@ -94,6 +122,89 @@ namespace LiteMonitor.src.SystemServices
         {
             _netStates.Clear();
             _cachedNetHw = null;
+            // ★ [F03] 硬件重载：旧样本与速率差分基线一并作废，
+            //   新设备不得继承上一台设备的累计量。
+            _samples.InvalidateAll();
+            _selectedDeviceName = "";
+            Interlocked.Increment(ref _deviceGeneration);
+        }
+
+        // ===========================================================
+        // ★ [F03] 网络样本：时效、失效与设备代次
+        // ===========================================================
+
+        /// <summary>网络样本登记处（值、成功采样时间、设备身份、设备代次）。</summary>
+        public NetworkSampleRegistry Samples => _samples;
+
+        /// <summary>设备代次：设备删除 / 首选变化 / 硬件重载时 +1。</summary>
+        public long DeviceGeneration => Interlocked.Read(ref _deviceGeneration);
+
+        /// <summary>当前选中的网卡名（空 = 尚未选出）。</summary>
+        public string SelectedDeviceName => _selectedDeviceName;
+
+        /// <summary>
+        /// 作废网络样本缓存与速率差分基线。
+        /// <para>调用时机：设备删除、首选网卡变化、硬件重载。</para>
+        /// <para>★ 同时推进设备代次：旧样本带着旧代次，不会被当成新设备的读数。</para>
+        /// </summary>
+        public void InvalidateNetworkSamples()
+        {
+            _samples.InvalidateAll();
+            // 差分基线一并作废：新设备不继承上一台设备的累计量（也不产生流量尖峰）。
+            _netStates.Clear();
+            _cachedNetHw = null;
+            _selectedDeviceName = "";
+            Interlocked.Increment(ref _deviceGeneration);
+        }
+
+        /// <summary>按配置刷新周期刷新"预定采样周期"（保留窗口 = 周期数 × 周期，上限 15 秒）。</summary>
+        private void EnsureSampleCycle(Settings cfg)
+        {
+            double cycle = NetworkSampleFreshnessPolicy.ResolveSampleCycleSeconds(cfg.RefreshMs);
+            if (Math.Abs(_samples.Policy.SampleCycleSeconds - cycle) > 1e-9)
+            {
+                _samples.Policy.SampleCycleSeconds = cycle;
+            }
+        }
+
+        /// <summary>选中一台网卡：切换设备时立即作废旧设备的样本（不允许旧值冒充新设备）。</summary>
+        private void SelectDevice(IHardware hw)
+        {
+            if (hw == null) return;
+            if (string.Equals(_selectedDeviceName, hw.Name, StringComparison.Ordinal)) return;
+
+            if (!string.IsNullOrEmpty(_selectedDeviceName))
+            {
+                _samples.InvalidateDevice(_selectedDeviceName);
+                if (_cachedNetHw != null) _netStates.Remove(_cachedNetHw);
+            }
+            _selectedDeviceName = hw.Name;
+            _cachedNetHw = hw;
+            Interlocked.Increment(ref _deviceGeneration);
+        }
+
+        /// <summary>设备消失：立即作废该设备的样本与差分基线。</summary>
+        private void OnDeviceLost(string deviceName)
+        {
+            if (string.IsNullOrEmpty(deviceName)) return;
+
+            // 旧值不得继续冒充当前读数：即使这台设备已经不是当前选择，也要作废它的样本。
+            _samples.InvalidateDevice(deviceName);
+
+            bool changed = false;
+            if (_cachedNetHw != null && string.Equals(_cachedNetHw.Name, deviceName, StringComparison.Ordinal))
+            {
+                _netStates.Remove(_cachedNetHw);
+                _cachedNetHw = null;
+                changed = true;
+            }
+            if (string.Equals(_selectedDeviceName, deviceName, StringComparison.Ordinal))
+            {
+                _selectedDeviceName = "";
+                changed = true;
+            }
+            // 设备代次只在**真的发生变化**时推进（避免每次读取都 +1）
+            if (changed) Interlocked.Increment(ref _deviceGeneration);
         }
 
         // ===========================================================
@@ -197,6 +308,10 @@ namespace LiteMonitor.src.SystemServices
                 // ★★★ [真实计数] 目标网卡真的执行了 Update 才计数 ★★★
                 RecordDeviceUpdate(hw, "Network");
                 AccumulateTraffic(hw, cfg, timeDelta);
+                // ★ [F03] 目标网卡真的被更新过了 -> 新的网络样本轮次。
+                //   样本寿命**只**在这里刷新：UI 读 / 快照读 / fallback 读都不刷新，
+                //   否则停更的网卡会把同一个旧值反复当成"新样本"发布（#96 的冻结机制）。
+                _samples.AdvanceSampleEpoch();
             }
             else if (isStartupPhase || IsVirtualNetwork(hw.Name))
             {
@@ -229,12 +344,19 @@ namespace LiteMonitor.src.SystemServices
             _hasNetScan = true;
         }
 
-        /// <summary>距上次网络全盘扫描是否还在 3 秒缓存期内（单调时钟判断）。</summary>
+        /// <summary>距上次网络全盘扫描是否还在重选窗口内（单调时钟判断）。</summary>
         private bool IsNetScanFresh()
         {
             if (!_hasNetScan) return false;
-            return _time.GetElapsedTime(_lastNetScan, _time.GetTimestamp()).TotalSeconds < 3;
+            return _time.GetElapsedTime(_lastNetScan, _time.GetTimestamp()).TotalSeconds < ReselectIntervalSeconds;
         }
+
+        /// <summary>
+        /// 是否到了允许"有限重选"的时间点（单调时钟）。
+        /// <para>★ [F03] 读取失败后的重选是**有界**的：最快每 <see cref="ReselectIntervalSeconds"/> 秒一次，
+        /// 不会因为传感器持续失败而形成忙循环。</para>
+        /// </summary>
+        private bool IsReselectDue() => !IsNetScanFresh();
 
         /// <summary>记录一次 IP 检查时刻（单调时钟，实例级）。</summary>
         private void MarkIPChecked()
@@ -382,25 +504,67 @@ namespace LiteMonitor.src.SystemServices
         // ===========================================================
         // 获取最佳网络数值 (已简化：Preferred 逻辑已移至 ValueProvider 静态缓存)
         // ===========================================================
-        public float? GetBestValue(string key, Computer computer, Settings cfg, Dictionary<string, float> lastValidMap, object syncLock)
+
+        /// <summary>
+        /// 取当前最佳网络样本（值 + 质量）。
+        /// <para>★ [F03] 与旧实现的差别：
+        ///  - 旧实现回退到**永不失效**的 lastValidMap，传感器停更时旧值被无限期重发布（#96）；
+        ///  - 现在回退只允许使用"保留期内"的样本（Stale），到期后一律 Missing（显示缺失）；
+        ///  - 自动模式按"存活 + 采样成功 + 有效流量"重新评分，**读取失败**才触发有限重选；
+        ///    空闲（0 流量）不算坏网卡，不会因此反复换卡；
+        ///  - 手动模式设备消失时**保留选择**并显示不可用，不静默改成自动选卡。</para>
+        /// </summary>
+        public NetworkSample GetBestSample(string key, Computer computer, Settings cfg, Dictionary<string, float> lastValidMap, object syncLock)
         {
-            // 2. 自动选优 (带缓存) - 原 GetBestNetworkValue
-            // A. 尝试运行时缓存
+            if (computer == null) return NetworkSample.Missing;
+            EnsureSampleCycle(cfg);
+
+            bool manual = !string.IsNullOrEmpty(cfg.PreferredNetwork);
+            string preferredName = cfg.PreferredNetwork;
+
+            // ============ 手动模式：设备消失时保留选择并显示不可用 ============
+            if (manual)
+            {
+                var preferred = computer.Hardware.FirstOrDefault(h =>
+                    h.HardwareType == HardwareType.Network &&
+                    string.Equals(h.Name, preferredName, StringComparison.OrdinalIgnoreCase));
+
+                if (preferred == null)
+                {
+                    // ★ 设备已消失：立即作废它的样本（不允许旧值继续冒充当前读数）
+                    OnDeviceLost(preferredName);
+                    return GetRetainedSample(key, lastValidMap, syncLock);
+                }
+
+                SelectDevice(preferred);
+                return ReadNetworkSensor(preferred, key, lastValidMap, syncLock);
+            }
+
+            // ============ 自动模式 ============
+            // A. 运行时缓存的网卡
             if (_cachedNetHw != null)
             {
                 // ★★★ 【修复 1】存活检查：如果缓存的硬件对象已经不在当前的硬件列表中（已失效），强制丢弃 ★★★
                 if (!computer.Hardware.Contains(_cachedNetHw))
                 {
-                    _cachedNetHw = null;
+                    // ★ 设备删除：立即失效该设备的样本缓存与速率差分基线
+                    OnDeviceLost(_cachedNetHw.Name);
                 }
                 else
                 {
-                    float? cachedVal = ReadNetworkSensor(_cachedNetHw, key, lastValidMap, syncLock);
-                    // 逻辑优化：如果有流量，直接用；如果没流量但距离上次全盘扫描 < 3秒，也直接用。
-                    // （3 秒窗口用单调时钟判断：墙上时间回拨不会让窗口永远不过期）
-                    if ((cachedVal.HasValue && cachedVal.Value > 0.1f) || IsNetScanFresh())
+                    NetworkSample sample = ReadNetworkSensor(_cachedNetHw, key, lastValidMap, syncLock);
+                    if (sample.Quality == NetworkSampleQuality.Fresh)
                     {
-                        return cachedVal;
+                        // ★ 采样成功（0 也是有效值）：直接用，不触发重选。
+                        //   只有"读取失败"才需要重选 —— 空闲不等于坏网卡。
+                        //   （保留旧逻辑的节流形状：有流量直接用；空闲时允许重新评分，
+                        //     但分数相同会保持当前选择，不会来回换卡。）
+                        if (sample.Value > 0.1f || !IsReselectDue()) return sample;
+                    }
+                    else
+                    {
+                        // 读取失败：有限重选（受重选窗口约束）；窗口内不重选，直接给保留期内的旧样本
+                        if (!IsReselectDue()) return sample;
                     }
                 }
             }
@@ -409,47 +573,26 @@ namespace LiteMonitor.src.SystemServices
             if (_cachedNetHw == null && !string.IsNullOrEmpty(cfg.LastAutoNetwork))
             {
                 // 尝试直接找上次记住的网卡
-                var savedHw = computer.Hardware.FirstOrDefault(h => h.Name == cfg.LastAutoNetwork);
+                var savedHw = computer.Hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Network && h.Name == cfg.LastAutoNetwork);
                 if (savedHw != null)
                 {
                     // 找到了！直接设为缓存，跳过全盘扫描
-                    _cachedNetHw = savedHw;
+                    SelectDevice(savedHw);
                     MarkNetScanned();
-                    return ReadNetworkSensor(savedHw, key, lastValidMap, syncLock);
+                    NetworkSample sample = ReadNetworkSensor(savedHw, key, lastValidMap, syncLock);
+                    if (sample.Quality == NetworkSampleQuality.Fresh) return sample;
                 }
             }
 
-            // C. 全盘扫描
-            IHardware? bestHw = null;
-            double bestScore = double.MinValue;
-            ISensor? bestTarget = null;
-
-            foreach (var hw in computer.Hardware.Where(h => h.HardwareType == HardwareType.Network))
-            {
-                double penalty = IsVirtualNetwork(hw.Name) ? -1e9 : 0;
-                ISensor? up = null, down = null;
-                foreach (var s in hw.Sensors)
-                {
-                    if (s.SensorType != SensorType.Throughput) continue;
-                    if (_upKW.Any(k => SensorMap.Has(s.Name, k))) up ??= s;
-                    if (_downKW.Any(k => SensorMap.Has(s.Name, k))) down ??= s;
-                }
-                if (up == null && down == null) continue;
-                double score = (up?.Value ?? 0) + (down?.Value ?? 0) + penalty;
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    bestHw = hw;
-                    bestTarget = (key == "NET.Up") ? up : down;
-                }
-            }
+            // C. 全盘扫描（自动选优）
+            IHardware? bestHw = ScanBestAdapter(computer, key, out ISensor? bestTarget);
 
             // D. 更新缓存
             if (bestHw != null)
             {
-                _cachedNetHw = bestHw;
+                SelectDevice(bestHw);
                 MarkNetScanned();
-                
+
                 // ★★★ [漏掉的部分] 记住这次的选择 ★★★
                 if (cfg.LastAutoNetwork != bestHw.Name)
                 {
@@ -458,32 +601,119 @@ namespace LiteMonitor.src.SystemServices
             }
 
             // E. 返回
-            if (bestTarget?.Value is float v && !float.IsNaN(v))
+            if (bestHw != null && bestTarget?.Value is float v && !float.IsNaN(v))
             {
-                lock (syncLock) lastValidMap[key] = v;
-                return v;
+                // ★ 成功采样：登记值与成功时间（读缓存不会刷新寿命）
+                return _samples.MarkSampled(key, v, bestHw.Name, DeviceGeneration);
             }
-            lock (syncLock) { if (lastValidMap.TryGetValue(key, out var last)) return last; }
-            return null;
+
+            // 扫描也没拿到有效样本：只允许回退到保留期内的旧样本
+            return GetRetainedSample(key, lastValidMap, syncLock);
         }
 
-        private float? ReadNetworkSensor(IHardware hw, string key, Dictionary<string, float> lastValidMap, object syncLock)
+        /// <summary>兼容入口：只要数值（不含质量）。</summary>
+        public float? GetBestValue(string key, Computer computer, Settings cfg, Dictionary<string, float> lastValidMap, object syncLock)
         {
-            ISensor? target = null;
+            NetworkSample sample = GetBestSample(key, computer, cfg, lastValidMap, syncLock);
+            return sample.HasValue ? sample.Value : (float?)null;
+        }
+
+        /// <summary>
+        /// 全盘扫描并选出最佳网卡。
+        /// <para>★ [F03] 评分顺序：**先"采样成功"，再"有效流量"**。
+        /// 空闲（0 流量）但采样成功的网卡，永远优于采样失败的网卡；
+        /// 分数相同则保持当前选择，避免在两块都空闲的网卡之间来回跳。</para>
+        /// </summary>
+        private IHardware? ScanBestAdapter(Computer computer, string key, out ISensor? bestTarget)
+        {
+            IHardware? bestHw = null;
+            double bestScore = double.MinValue;
+            double currentScore = double.MinValue;
+            bestTarget = null;
+
+            foreach (var hw in computer.Hardware.Where(h => h.HardwareType == HardwareType.Network))
+            {
+                ISensor? up = null, down = null;
+                foreach (var s in hw.Sensors)
+                {
+                    if (s.SensorType != SensorType.Throughput) continue;
+                    if (_upKW.Any(k => SensorMap.Has(s.Name, k))) up ??= s;
+                    if (_downKW.Any(k => SensorMap.Has(s.Name, k))) down ??= s;
+                }
+                if (up == null && down == null) continue;
+
+                ISensor? target = key == "NET.Up" ? up : down;
+                // ★ 没有对应方向的传感器 -> 不参与本次选优（否则选中的网卡根本给不出这个值）
+                if (target == null) continue;
+
+                float? upValue = up?.Value;
+                float? downValue = down?.Value;
+                bool upOk = upValue.HasValue && !float.IsNaN(upValue.Value);
+                bool downOk = downValue.HasValue && !float.IsNaN(downValue.Value);
+                float? targetValue = target?.Value;
+                bool keyOk = targetValue.HasValue && !float.IsNaN(targetValue.Value);
+
+                double traffic = (upOk ? upValue!.Value : 0) + (downOk ? downValue!.Value : 0);
+                double score = (keyOk ? SampleSuccessBonus : 0)
+                             + traffic
+                             + (IsVirtualNetwork(hw.Name) ? VirtualAdapterPenalty : 0);
+
+                if (hw == _cachedNetHw) currentScore = score;
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestHw = hw;
+                    bestTarget = target;
+                }
+            }
+
+            // 分数相同（或当前网卡更好）时保持当前选择：不要因为"另一张卡刚好更忙"来回换卡。
+            if (_cachedNetHw != null && bestHw != null && bestScore <= currentScore)
+            {
+                bestHw = _cachedNetHw;
+                bestTarget = FindThroughputSensor(_cachedNetHw, key);
+            }
+
+            return bestHw;
+        }
+
+        /// <summary>按 Key 找到对应的 Throughput 传感器。</summary>
+        private ISensor? FindThroughputSensor(IHardware hw, string key)
+        {
             foreach (var s in hw.Sensors)
             {
                 if (s.SensorType != SensorType.Throughput) continue;
-                if (key == "NET.Up" && _upKW.Any(k => SensorMap.Has(s.Name, k))) { target = s; break; } 
-                if (key == "NET.Down" && _downKW.Any(k => SensorMap.Has(s.Name, k))) { target = s; break; }
+                if (key == "NET.Up" && _upKW.Any(k => SensorMap.Has(s.Name, k))) return s;
+                if (key == "NET.Down" && _downKW.Any(k => SensorMap.Has(s.Name, k))) return s;
             }
+            return null;
+        }
+
+        /// <summary>
+        /// 取保留期内的旧样本。
+        /// <para>★ [F03] 旧实现这里是"永不失效"的 lastValidMap 冻结回退（#96 的根因）；
+        /// 现在只允许使用仍在保留期内的样本；从未登记过的旧值只会被**一次性采纳**（寿命有界）。</para>
+        /// </summary>
+        private NetworkSample GetRetainedSample(string key, Dictionary<string, float> lastValidMap, object syncLock)
+        {
+            float? legacy = null;
+            lock (syncLock) { if (lastValidMap.TryGetValue(key, out float lv)) legacy = lv; }
+            return _samples.GetOrAdopt(key, legacy, _selectedDeviceName, DeviceGeneration);
+        }
+
+        private NetworkSample ReadNetworkSensor(IHardware hw, string key, Dictionary<string, float> lastValidMap, object syncLock)
+        {
+            ISensor? target = FindThroughputSensor(hw, key);
 
             if (target?.Value is float v && !float.IsNaN(v))
             {
-                lock (syncLock) lastValidMap[key] = v;
-                return v;
+                // ★ 成功采样：登记值与成功时间。
+                //   读缓存**不会**刷新寿命：登记处的"样本轮次"没变时只更新值。
+                return _samples.MarkSampled(key, v, hw.Name, DeviceGeneration);
             }
-            lock (syncLock) { if (lastValidMap.TryGetValue(key, out var last)) return last; }
-            return null;
+
+            // ★ 读取失败：不再回退到"永不失效"的旧值，只回退保留期内的样本。
+            return GetRetainedSample(key, lastValidMap, syncLock);
         }
 
         // ===========================================================

@@ -37,6 +37,9 @@ namespace LiteMonitor.src.UI.SettingsPage
         //   抑制之后, 夹紧后的值由 RefreshGpuCountOptions 显式回写, 不走事件。
         private bool _suppressGpuCountEvent = false;
 
+        // ★ [F08a] 磁盘探测策略的状态行（当前模式 / 迁移提示 / 降级原因）。
+        private Label? _diskProbeStatusLabel;
+
         public SystemHardwarPage()
         {
             this.BackColor = UIColors.MainBg;
@@ -51,9 +54,107 @@ namespace LiteMonitor.src.UI.SettingsPage
         private void InitializeUI()
         {
             CreateSourceCard();
+            CreateDiskProbeCard();
             CreateIpExclusionCard();
             CreateCalibrationCard();
             CreateSystemCard();
+        }
+
+        // ===========================================================
+        // ★ [F08a] 磁盘探测策略（#466 / #601 / #245 止血）
+        // ===========================================================
+
+        /// <summary>
+        /// 磁盘探测策略卡片。
+        /// <para>★ 本页**不触发**任何存储设备探测：仅计数器模式下硬件树里根本没有存储设备，
+        /// 磁盘下拉框会只显示"自动"（原值会被保留成一条只读提示项，**不会被清空**）。</para>
+        /// </summary>
+        private void CreateDiskProbeCard()
+        {
+            var group = new LiteSettingsGroup(LanguageManager.T("Menu.DiskProbeStrategy"));
+
+            group.AddComboIndex(this, "Menu.DiskProbeMode",
+                new[] {
+                    LanguageManager.T("Menu.DiskProbeModeCountersOnly"),
+                    LanguageManager.T("Menu.DiskProbeModeSmartAllowed")
+                },
+                () => (Config?.DiskProbeMode ?? DiskProbePolicy.UnconfiguredModeValue) == (int)DiskProbeMode.SmartAllowed ? 1 : 0,
+                idx => { if (Config != null) Config.DiskProbeMode = idx == 1 ? (int)DiskProbeMode.SmartAllowed : (int)DiskProbeMode.CountersOnly; }
+            );
+
+            _diskProbeStatusLabel = new Label
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                Font = UIFonts.Regular(8F),
+                ForeColor = UIColors.TextSub,
+                Padding = new Padding(0, 4, 0, 4),
+            };
+            group.AddFullItem(_diskProbeStatusLabel);
+
+            group.AddHint(LanguageManager.T("Menu.DiskProbeHint"));
+
+            RegisterRefresh(() => RefreshDiskProbeStatus());
+
+            AddGroupToPage(group);
+        }
+
+        /// <summary>刷新磁盘探测策略状态行（当前模式 + 迁移提示 + 降级原因）。</summary>
+        private void RefreshDiskProbeStatus()
+        {
+            if (_diskProbeStatusLabel == null) return;
+
+            DiskProbePolicy? policy = HardwareMonitor.Instance?.DiskProbePolicy;
+            string stateKey = policy == null ? "Menu.DiskProbeStateCountersOnly" : policy.State switch
+            {
+                DiskProbeState.SmartAllowed => "Menu.DiskProbeStateSmartAllowed",
+                DiskProbeState.Transitioning => "Menu.DiskProbeStateTransitioning",
+                DiskProbeState.Degraded => "Menu.DiskProbeStateDegraded",
+                _ => "Menu.DiskProbeStateCountersOnly"
+            };
+
+            string text = LanguageManager.T("Menu.DiskProbeStatus") + ": " + LanguageManager.T(stateKey);
+            if (!string.IsNullOrEmpty(policy?.LastError)) text += " (" + policy.LastError + ")";
+
+            // ★ 迁移状态：配置里没有该字段（-1）⇒ 明确提示"当前按仅计数器运行"。
+            //   用户的磁盘偏好与监控项**不受影响**（迁移不清空、不改绑）。
+            bool unconfigured = (Config?.DiskProbeMode ?? DiskProbePolicy.UnconfiguredModeValue) == DiskProbePolicy.UnconfiguredModeValue;
+            if (unconfigured)
+            {
+                text += Environment.NewLine + LanguageManager.T("Menu.DiskProbeMigrationNotice");
+                _diskProbeStatusLabel.ForeColor = UIColors.TextWarn;
+            }
+            else
+            {
+                _diskProbeStatusLabel.ForeColor = UIColors.TextSub;
+            }
+
+            _diskProbeStatusLabel.Text = text;
+        }
+
+        /// <summary>
+        /// ★ [F08a] 把草稿里的磁盘探测模式提交给运行时。
+        /// <para>★ UI 线程只投递请求：真正的切换（停采样 → 释放旧对象 → 重建代次 → 恢复）
+        /// 在后台线程执行，避免界面卡住。</para>
+        /// </summary>
+        private void ApplyDiskProbeModeToRuntime()
+        {
+            HardwareMonitor? monitor = HardwareMonitor.Instance;
+            if (monitor == null || Config == null) return;
+
+            DiskProbeMode target = Config.DiskProbeMode == (int)DiskProbeMode.SmartAllowed
+                ? DiskProbeMode.SmartAllowed
+                : DiskProbeMode.CountersOnly;
+
+            if (target == monitor.DiskProbePolicy.Mode) return;
+
+            Task.Run(() => monitor.ApplyDiskProbeMode(target));
+        }
+
+        public override void Save()
+        {
+            base.Save();
+            ApplyDiskProbeModeToRuntime();
         }
 
         // ===========================================================

@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    LiteMonitor++ LHM Intel 显卡报告导出器（P-F15 / 上游 issue #592 取证工具）。
+
+    ★ 目的：把上游验证报告里点名要的那份东西导出来 ——
+      LHM 的 `IHardware.GetReport()`（含 "Intel GCL Initialized: True/False" 一类信息），
+      以及显卡全部传感器的**名称 + 值**，用来分辨"键不存在"与"键存在但值恒 null"。
+
+    ★ 零新增依赖：只引用仓库已有的 LibreHardwareMonitorLib 0.9.6（主工程同一个版本）。
+
+    ★ 本工具**不下结论**：它导出 LHM 看到的原始数据 + 是否出现 GCL 字样，
+      "GCL 是否初始化成功 / #592 是否成立"由人判读。
+
+    ★ 不进 sln、不进主工程：主工程 csproj 已有 <Compile Remove="tools\**" />。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>LhmIntelReport</AssemblyName>
+    <RootNamespace>LhmIntelReport</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NoWarn>$(NoWarn);CS8600;CS8602;CS8603;CS8604;CS8618;CS8619;CS8625</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+  </ItemGroup>
+
+</Project>

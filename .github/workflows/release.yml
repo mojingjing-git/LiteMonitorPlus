@@ -63,8 +63,13 @@ jobs:
       #      = StatusBuilder 10 + 原因码 8 + 主题路线 helper 9 + LiveGlass 迁移 3；
       #    → 1876（+14 = 主题市场契约 7 + 主题市场策略 7，均夹具驱动常跑不跳过；
       #      Debug 实测 1784 通过、0 失败、1 指定 E2E 跳过）。
+      #    → 2028（+152 = W1 批次八包新增用例：F01 WS 升级解析 46 + F03 网络值时效 27
+      #      + F04 任务栏宿主生命周期 12 + F08a 磁盘 CountersOnly 23 + F12 字体测量安全 25
+      #      + F13 插件兜底恢复 19；F09a/F15 为研究/工具包，不加用例数；
+      #      Debug 实测主工程 1936（1935 通过 + 1 指定 E2E 跳过）+ Updater 73 + GPU 19
+      #      = 2028 总计、0 失败）。
       #      ★ 本行与 ci.yml 同名阈值逐字一致（LM-056 教训）。
-      MIN_TEST_TOTAL: 1876
+      MIN_TEST_TOTAL: 2028
       EXPECTED_TEST_ASSEMBLIES: 'LiteMonitor.Tests, LiteMonitor.Updater.Tests, LiteMonitor.GpuNonperformance.Tests'
       # ★ 跳过用例数上限（与 ci.yml 一致）：只允许联网 E2E 被跳过。
       MAX_SKIPPED_TESTS: 1

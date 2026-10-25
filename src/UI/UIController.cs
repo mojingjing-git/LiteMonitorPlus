@@ -34,6 +34,10 @@ namespace LiteMonitor
         private List<Column> _hxColsHorizontal = new();
         private List<Column> _hxColsTaskbar = new();
         private HorizontalLayout? _hxLayout;
+        // ★【F12】横排布局的字体度量缓存：受控布局阶段的**唯一**测量入口。
+        //   主题代次由 ApplyTheme 推进 ⇒ 换肤 / 重缩放后旧度量立即失效，
+        //   绝不会拿"上一代主题"的行高去裁切新主题的文字。
+        private readonly FontMetricsCache _fontMetrics = new FontMetricsCache();
         private Dictionary<string, DateTime> _overheatStartTimes = new Dictionary<string, DateTime>();
 
         // ===== 外观运行时（A13 接线）=====
@@ -226,6 +230,11 @@ namespace LiteMonitor
 
             _layout = new UILayout(t);
             _hxLayout = null;
+
+            // ★【F12】主题代次推进 ⇒ 字体度量缓存整体失效。
+            //   换肤 / 重缩放后旧字体的行高必须重新测量，
+            //   否则会把"上一代主题"的度量套到新主题上（换肤后行高跳变 / 文字裁切）。
+            _fontMetrics.AdvanceThemeGeneration();
 
             if (!retainData)
             {
@@ -731,6 +740,29 @@ namespace LiteMonitor
                 out _);
         }
 
+        /// <summary>
+        /// ★【F12】横排布局的**唯一**构造入口。
+        /// <para>★ 过去有两处 <c>new HorizontalLayout(...)</c>（legacy 绘制路径与 GPU 场景路径），
+        ///   参数不一致：legacy 侧不传 <c>Settings</c>（于是布局去读磁盘上的 settings.json）
+        ///   也不传测量控件（于是按 96 DPI 基线算行高）；GPU 侧两者都传。
+        ///   由于两处都用 <c>??=</c>，**谁先跑到谁说了算** ⇒ 同一套主题下
+        ///   行高 / 列间距会随"GPU 路线还是 legacy 路线"而变，且 legacy 路线在
+        ///   150%/200% DPI 下按 96 DPI 算行高 ⇒ 文字被裁切。</para>
+        /// <para>★ 现在统一走这里：同一份 <c>_cfg</c>、同一个测量控件、同一份度量缓存
+        ///   ⇒ 行高只取决于"有效字体 + 设备 DPI + 主题代次"，与代码路径无关。</para>
+        /// </summary>
+        private HorizontalLayout CreateHorizontalLayout(Theme theme)
+        {
+            return new HorizontalLayout(
+                theme,
+                _form.Width,
+                LayoutMode.Horizontal,
+                _cfg,
+                _form,
+                new ControlDisplayDpiSource(_form),
+                _fontMetrics);
+        }
+
         public void Render(Graphics g)
         {
             if (IsGpuPresentationActive)
@@ -751,7 +783,7 @@ namespace LiteMonitor
             // === 横屏模式 ===
             if (_cfg.HorizontalMode)
             {
-                _hxLayout ??= new HorizontalLayout(t, _form.Width, LayoutMode.Horizontal);
+                _hxLayout ??= CreateHorizontalLayout(t);
 
                 // [通用方案] 动态检测是否需要重新计算布局
                 // 移至 Tick() 中低频检查，避免 Render 高频调用
@@ -1903,10 +1935,7 @@ namespace LiteMonitor
                 SceneSnapshot scene;
                 if (_cfg.HorizontalMode)
                 {
-                    _hxLayout ??= new HorizontalLayout(
-                        CurrentRenderTheme,
-                        _form.Width,
-                        LayoutMode.Horizontal, _cfg, measurementControl: _form);
+                    _hxLayout ??= CreateHorizontalLayout(CurrentRenderTheme);
                     int height = _hxLayout.Build(_hxColsHorizontal);
                     Size target = new(
                         _hxLayout.PanelWidth,

@@ -51,11 +51,13 @@ namespace LiteMonitor.Tests
                 Clock = new FakeTimeProvider(),
             };
 
+            // ★ [F03] NetworkManager 必须与 Provider 用**同一个假时钟**：
+            //   网络样本的保留期是按单调时钟算的，两边时钟不一致会让 TTL 断言失真。
             fixture.Provider = new HardwareValueProvider(
                 new Computer(),
                 fixture.Cfg,
                 fixture.Map,
-                new NetworkManager(),
+                new NetworkManager(new PerformanceCounterManager(), fixture.Clock),
                 new DiskManager(),
                 null,                       // 不需要 FPS（FPS 有自己的外部服务）
                 new PerformanceCounterManager(),
@@ -390,6 +392,63 @@ namespace LiteMonitor.Tests
             Assert.Equal(5, cache.Generation);
             Assert.True(cache.TryGetValue("CPU.Load", out float? value));
             Assert.Equal(12f, value.Value);
+        }
+
+        // =========================================================
+        // ★ [F03] 网络值的时效：旧值不能被无限期重发布为新样本（#96）
+        // =========================================================
+
+        [Fact]
+        public void 网络旧值在保留期内仍然是有效读数()
+        {
+            var f = NewFixture();
+            f.LastValid["NET.Up"] = 0f;
+
+            f.Provider.OnCollectionStarted(1);
+
+            // 0 是有效读数：不能被当成缺失
+            float? value = f.Provider.GetValue("NET.Up");
+            Assert.NotNull(value);
+            Assert.Equal(0f, value.Value);
+        }
+
+        [Fact]
+        public void 网络旧值超过保留期后不再被发布()
+        {
+            var f = NewFixture();
+            f.LastValid["NET.Up"] = 0f;
+
+            f.Provider.OnCollectionStarted(1);
+            Assert.Equal(0f, f.Provider.GetValue("NET.Up"));
+
+            // 采集层不再推进采样轮次（网卡停更）-> 超过保留期必须变成缺失，
+            // 而不是把旧值一直冻在面板上（#96 的冻结回退）。
+            f.Clock.Advance(TimeSpan.FromSeconds(4));
+            f.Provider.OnCollectionStarted(2);
+
+            Assert.Null(f.Provider.GetValue("NET.Up"));
+        }
+
+        [Fact]
+        public void 反复读取网络值不会刷新样本寿命()
+        {
+            var f = NewFixture();
+            f.LastValid["NET.Up"] = 0f;
+
+            f.Provider.OnCollectionStarted(1);
+            f.Provider.GetValue("NET.Up");
+
+            // UI / Web 高频读取：读缓存不得延长数据寿命
+            for (int i = 0; i < 10000; i++)
+            {
+                f.Provider.OnCollectionStarted(2 + i);
+                f.Provider.GetValue("NET.Up");
+            }
+
+            f.Clock.Advance(TimeSpan.FromSeconds(4));
+            f.Provider.OnCollectionStarted(20000);
+
+            Assert.Null(f.Provider.GetValue("NET.Up"));
         }
     }
 }

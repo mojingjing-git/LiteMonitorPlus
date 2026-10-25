@@ -40,6 +40,10 @@ namespace LiteMonitor.src.SystemServices
         private readonly NetworkManager _networkManager;
         private readonly DiskManager _diskManager;
 
+        // ★ [F08a] 磁盘探测策略（仅计数器 ⇒ 第一次 Open 前就不构造存储设备）。
+        private readonly DiskProbePolicy _diskProbePolicy;
+        private readonly DiskProbeGate _diskProbeGate;
+
         // ★ [#610] IP 流量排除后端（按需创建：功能关闭时不创建任何会话/后台线程）。
         private NetworkTrafficExclusionService? _trafficExclusion;
         private readonly FpsCounter _fpsCounter;
@@ -129,6 +133,9 @@ namespace LiteMonitor.src.SystemServices
         /// 转发自 <see cref="FpsCounter.HasFpsData"/>。
         /// </summary>
         public bool HasFpsData => _fpsCounter?.HasFpsData ?? false;
+
+        /// <summary>★ [F08a] 当前磁盘探测策略（设置页显示状态 / 提交模式切换用）。</summary>
+        public DiskProbePolicy DiskProbePolicy => _diskProbePolicy;
         #endregion
 
         #region Constructor
@@ -136,6 +143,10 @@ namespace LiteMonitor.src.SystemServices
         {
             _cfg = cfg;
             Instance = this;
+
+            // ★ [F08a] 策略必须先于 Computer 构造（它决定 IsStorageEnabled）。
+            _diskProbePolicy = DiskProbePolicy.FromSettings(cfg);
+            _diskProbeGate = new DiskProbeGate(_diskProbePolicy);
 
             // 1. 初始化 Computer
             _computer = new Computer()
@@ -150,7 +161,7 @@ namespace LiteMonitor.src.SystemServices
                 IsGpuEnabled = true,
                 IsMemoryEnabled = true,
                 IsNetworkEnabled = true,
-                IsStorageEnabled = true,
+                IsStorageEnabled = _diskProbePolicy.StorageProbeEnabled,
                 IsMotherboardEnabled = true,
                 
                 // ★★★ 优化 T0：动态开启控制器扫描 ★★★
@@ -173,7 +184,7 @@ namespace LiteMonitor.src.SystemServices
             // 2. 初始化服务
             _sensorMap = new SensorMap();
             _networkManager = new NetworkManager(_perfCounterManager);
-            _diskManager = new DiskManager();
+            _diskManager = new DiskManager(policy: _diskProbePolicy, counters: new PerfCounterDiskSource(_perfCounterManager));
             _driverInstaller = new DriverInstaller(cfg, ReloadComputerSafe, ReleaseComputerForDriverInstall);
             _fpsCounter = new FpsCounter(_driverInstaller); // <--- 新增
 
@@ -287,6 +298,14 @@ namespace LiteMonitor.src.SystemServices
                 // 所以这里会独占 _lock 几秒钟，期间 UI 不会卡死（只会显示空数据）。
                 ReloadComputerSafe();
             });
+        }
+
+        /// <summary>★ [F08a] 切换磁盘探测模式（停采样 → 释放旧对象 → 重建代次 → 恢复）；失败保持计数器数据并进入降级状态。</summary>
+        public bool ApplyDiskProbeMode(DiskProbeMode mode)
+        {
+            return _diskProbePolicy.ApplyMode(mode,
+                m => { _computer.IsStorageEnabled = m == DiskProbeMode.SmartAllowed; ReloadComputerSafe(); },
+                m => LastHardwareError == null && (m != DiskProbeMode.CountersOnly || !_computer.Hardware.Any(h => h.HardwareType == HardwareType.Storage)));
         }
 
         /// <summary>
@@ -914,7 +933,8 @@ namespace LiteMonitor.src.SystemServices
                     {
                         // LHM 打开双 Nvidia 显卡时可能很慢。启动阶段 Get() 已改走性能计数器兜底，
                         // 这里继续加锁只会让设置页等硬件树稳定，不会拖住 CPU/MEM/DISK 首屏数据。
-                        _computer.Open();
+                        // ★ [F08a] 打开硬件树**之前**先落磁盘探测策略（仅计数器 ⇒ 不构造存储设备）。
+                        _diskProbeGate.Open(new LhmHardwareTree(_computer!));
                         WarmUpMotherboardSensors();
                         WarmUpBatterySensors();
                         WarmUpGpuSensors();          // ★★★ [新增] Intel 核显负载传感器懒激活预热
@@ -1183,7 +1203,8 @@ namespace LiteMonitor.src.SystemServices
                     // 4. 重新打开硬件（失败不再静默，而是记录原因并保留旧映射表）
                     try
                     {
-                        _computer.Open();
+                        // ★ [F08a] 重开硬件树前同样先落策略（否则模式切换后存储设备会被重新构造）。
+                        _diskProbeGate.Open(new LhmHardwareTree(_computer!));
                         opened = true;
                     }
                     catch (Exception ex)
