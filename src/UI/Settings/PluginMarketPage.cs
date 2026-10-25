@@ -22,17 +22,7 @@ namespace LiteMonitor.src.UI.SettingsPage
     /// </summary>
     public class PluginMarketPage : SettingsPageBase
     {
-        /// <summary>插件在市场页上的安装状态</summary>
-        private enum InstallState
-        {
-            NotInstalled,  // 未安装
-            NeedReinstall, // 记录还在但文件没了（用户手动删了）→ 需重装
-            Updatable,     // 已安装且索引里的 sha256 变了 → 可更新
-            Installed      // 已安装且是最新版
-        }
-
         /// <summary>市场页分类（M4）：同一份索引的插件段 / themes 附加段（D1=A/D3）</summary>
-        private enum MarketCategory { Plugins, Themes }
 
         private Panel _container;
         private MarketIndex? _index;
@@ -41,13 +31,30 @@ namespace LiteMonitor.src.UI.SettingsPage
         private bool _busy;
         private MarketCategory _category = MarketCategory.Plugins;
 
+        /// <summary>
+        /// 测试接缝：安装状态解析器（id, 是否主题）→ 安装状态。
+        /// <para>默认走产品实现（查市场安装记录 + 目标文件是否存在）；测试用它避免动
+        /// settings.json 全局单例。<b>被测的是界面刷新逻辑，不是状态解析逻辑。</b></para>
+        /// </summary>
+        internal Func<string, bool, MarketInstallState>? InstallStateResolverOverride { get; set; }
+
+        /// <summary>索引来源（默认走网络；测试可注入固定索引）。</summary>
+        private readonly IMarketIndexProvider _indexProvider;
+
         // ---- 主题市场：单活跃实时预览窗格（D5：同一时刻全市场只有一个 GPU 呈现表面）----
         private Panel? _previewHost;
         private ThemePreviewControl? _livePreview;
         private string? _selectedThemeId;
 
-        public PluginMarketPage()
+        public PluginMarketPage() : this(new NetworkMarketIndexProvider())
         {
+        }
+
+        /// <summary>测试接缝：注入固定索引来源（避免验收用例依赖网络）。</summary>
+        internal PluginMarketPage(IMarketIndexProvider indexProvider)
+        {
+            _indexProvider = indexProvider ?? throw new ArgumentNullException(nameof(indexProvider));
+
             this.BackColor = UIColors.MainBg;
             this.Dock = DockStyle.Fill;
             this.Padding = new Padding(0);
@@ -229,29 +236,49 @@ namespace LiteMonitor.src.UI.SettingsPage
         }
 
         /// <summary>判定某插件在市场页上的安装状态</summary>
-        private static InstallState GetState(MarketPluginEntry entry, out MarketPluginRecord? record)
+        private static MarketInstallState GetState(MarketPluginEntry entry, out MarketPluginRecord? record)
         {
             record = PluginMarketState.Find(entry.Id);
 
             string path = Path.Combine(PluginMarket.PluginsDir, PluginMarket.GetInstallFileName(entry.Id));
             bool fileExists = File.Exists(path);
 
-            if (record == null) return InstallState.NotInstalled;
+            if (record == null) return MarketInstallState.NotInstalled;
 
             // 记录在但文件没了 → 用户手动删了
-            if (!fileExists) return InstallState.NeedReinstall;
+            if (!fileExists) return MarketInstallState.NeedReinstall;
 
             // 索引里的 sha256 变了 → 可更新（老索引没有 sha256 时退化为"已安装"）
             if (!string.IsNullOrEmpty(entry.Sha256) &&
                 !string.Equals(record.Sha256, entry.Sha256, StringComparison.OrdinalIgnoreCase))
-                return InstallState.Updatable;
+                return MarketInstallState.Updatable;
 
-            return InstallState.Installed;
+            return MarketInstallState.Installed;
+        }
+
+        /// <summary>解析插件的安装状态（测试接缝可替换数据来源）。</summary>
+        private MarketInstallState ResolvePluginState(MarketPluginEntry entry)
+        {
+            if (InstallStateResolverOverride != null)
+            {
+                return InstallStateResolverOverride(entry.Id, false);
+            }
+            return GetState(entry, out _);
+        }
+
+        /// <summary>解析主题的安装状态（测试接缝可替换数据来源）。</summary>
+        private MarketInstallState ResolveThemeState(MarketThemeEntry entry)
+        {
+            if (InstallStateResolverOverride != null)
+            {
+                return InstallStateResolverOverride(entry.Id, true);
+            }
+            return GetThemeState(entry, out _);
         }
 
         private void AddPluginGroup(MarketPluginEntry entry)
         {
-            var state = GetState(entry, out var record);
+            var state = ResolvePluginState(entry);
 
             string displayName = PluginI18n.Pick(entry.Name, entry.NameEn);
             var group = new LiteSettingsGroup($"{displayName}   v{entry.Version}   (ID: {entry.Id})");
@@ -261,15 +288,15 @@ namespace LiteMonitor.src.UI.SettingsPage
             Color btnColor;
             switch (state)
             {
-                case InstallState.Installed:
+                case MarketInstallState.Installed:
                     btnText = LanguageManager.T("Menu.PluginMarketUninstall");
                     btnColor = Color.IndianRed;
                     break;
-                case InstallState.Updatable:
+                case MarketInstallState.Updatable:
                     btnText = LanguageManager.T("Menu.PluginMarketUpdate");
                     btnColor = UIColors.Primary;
                     break;
-                case InstallState.NeedReinstall:
+                case MarketInstallState.NeedReinstall:
                     btnText = LanguageManager.T("Menu.PluginMarketReinstallAction");
                     btnColor = UIColors.Primary;
                     break;
@@ -283,7 +310,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             btn.SetColor(btnColor);
             btn.Click += async (s, e) =>
             {
-                if (state == InstallState.Installed) await UninstallAsync(entry);
+                if (state == MarketInstallState.Installed) await UninstallAsync(entry);
                 else await InstallAsync(entry);
             };
             group.AddHeaderAction(btn);
@@ -356,13 +383,13 @@ namespace LiteMonitor.src.UI.SettingsPage
             _container.Controls.SetChildIndex(group, 0);
         }
 
-        private static string GetStateLabel(InstallState state)
+        private static string GetStateLabel(MarketInstallState state)
         {
             switch (state)
             {
-                case InstallState.Installed: return LanguageManager.T("Menu.PluginMarketInstalled");
-                case InstallState.Updatable: return LanguageManager.T("Menu.PluginMarketUpdatable");
-                case InstallState.NeedReinstall: return LanguageManager.T("Menu.PluginMarketReinstall");
+                case MarketInstallState.Installed: return LanguageManager.T("Menu.PluginMarketInstalled");
+                case MarketInstallState.Updatable: return LanguageManager.T("Menu.PluginMarketUpdatable");
+                case MarketInstallState.NeedReinstall: return LanguageManager.T("Menu.PluginMarketReinstall");
                 default: return "";
             }
         }
@@ -371,7 +398,8 @@ namespace LiteMonitor.src.UI.SettingsPage
         // 主题市场（M4/D5）
         // ================================================================
 
-        private void SwitchCategory(MarketCategory category)
+        /// <summary>测试接缝：切到指定页签（等价于点击分类按钮）。</summary>
+        internal void SwitchCategory(MarketCategory category)
         {
             if (_category == category) return;
             _category = category;
@@ -386,19 +414,19 @@ namespace LiteMonitor.src.UI.SettingsPage
         }
 
         /// <summary>判定某主题在市场页上的安装状态（口径与插件一致；主题目录 = ThemesDir）</summary>
-        private static InstallState GetThemeState(MarketThemeEntry entry, out MarketPluginRecord? record)
+        private static MarketInstallState GetThemeState(MarketThemeEntry entry, out MarketPluginRecord? record)
         {
             record = ThemeMarketState.Find(entry.Id);
 
             string path = Path.Combine(ThemeMarket.ThemesDir, entry.Id + ".json");
             bool fileExists = File.Exists(path);
 
-            if (record == null) return InstallState.NotInstalled;
-            if (!fileExists) return InstallState.NeedReinstall;
+            if (record == null) return MarketInstallState.NotInstalled;
+            if (!fileExists) return MarketInstallState.NeedReinstall;
             if (!string.IsNullOrEmpty(entry.Sha256) &&
                 !string.Equals(record.Sha256, entry.Sha256, StringComparison.OrdinalIgnoreCase))
-                return InstallState.Updatable;
-            return InstallState.Installed;
+                return MarketInstallState.Updatable;
+            return MarketInstallState.Installed;
         }
 
         private void BuildThemeSection()
@@ -443,7 +471,7 @@ namespace LiteMonitor.src.UI.SettingsPage
 
         private void AddThemeGroup(MarketThemeEntry entry)
         {
-            var state = GetThemeState(entry, out _);
+            var state = ResolveThemeState(entry);
 
             string displayName = PluginI18n.Pick(entry.Name, entry.NameEn);
             bool isGpu = string.Equals(entry.Route, ThemeRenderingConfig.GpuBackend, StringComparison.OrdinalIgnoreCase);
@@ -459,15 +487,15 @@ namespace LiteMonitor.src.UI.SettingsPage
             Color btnColor;
             switch (state)
             {
-                case InstallState.Installed:
+                case MarketInstallState.Installed:
                     btnText = LanguageManager.T("Menu.PluginMarketUninstall");
                     btnColor = Color.IndianRed;
                     break;
-                case InstallState.Updatable:
+                case MarketInstallState.Updatable:
                     btnText = LanguageManager.T("Menu.PluginMarketUpdate");
                     btnColor = UIColors.Primary;
                     break;
-                case InstallState.NeedReinstall:
+                case MarketInstallState.NeedReinstall:
                     btnText = LanguageManager.T("Menu.PluginMarketReinstallAction");
                     btnColor = UIColors.Primary;
                     break;
@@ -480,7 +508,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             btn.SetColor(btnColor);
             btn.Click += async (s, e) =>
             {
-                if (state == InstallState.Installed) UninstallThemeAsync(entry);
+                if (state == MarketInstallState.Installed) UninstallThemeAsync(entry);
                 else await InstallThemeAsync(entry);
             };
             group.AddHeaderAction(btn);
@@ -622,7 +650,7 @@ namespace LiteMonitor.src.UI.SettingsPage
         /// 内部按用户的 GPU 开关自动内嵌 GPU 实时预览或走 legacy 管线
         /// （F14：市场主题不能替用户打开 GPU/WDA 开关）。
         /// </summary>
-        private void SelectThemeForPreview(MarketThemeEntry entry)
+        internal void SelectThemeForPreview(MarketThemeEntry entry)
         {
             _selectedThemeId = entry.Id;
             BuildPreviewPane();
@@ -720,7 +748,8 @@ namespace LiteMonitor.src.UI.SettingsPage
 
             try
             {
-                var index = await PluginMarket.FetchIndexAsync(PluginMarket.DefaultIndexUrl);
+                var index = await _indexProvider.FetchAsync();
+                if (index == null) throw new InvalidOperationException("插件市场索引为空");
                 _index = index;
                 _statusText = LanguageManager.T("Menu.PluginMarketLoaded") + $"（{index.Plugins.Count}）";
                 _statusIsError = false;
