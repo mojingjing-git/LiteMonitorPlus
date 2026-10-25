@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- B1/C1 契约工程：net8.0、无 WinForms/LHM/Vortice 依赖（Plan B §3、Plan A §4）。
+       主 WinExe 必须以 Compile Remove 排除本目录源码，经 ProjectReference 引用，
+       避免同一类型编译进两个程序集。 -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>LiteMonitor.Contracts</RootNamespace>
+    <AssemblyName>LiteMonitor.Contracts</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+</Project>

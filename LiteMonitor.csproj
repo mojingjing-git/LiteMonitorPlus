@@ -55,6 +55,15 @@
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
   </ItemGroup>
 
+  <!-- B1/C1：契约工程源码不得再被主工程递归 Compile 通配收编（同类型双编译），
+       只经下方 ProjectReference 引用（Plan B §3、派发单 P-B1B2）。 -->
+  <ItemGroup>
+    <Compile Remove="src\Contracts\**\*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="src\Contracts\LiteMonitor.Contracts.csproj" />
+  </ItemGroup>
+
     <!-- 自动复制 themes 与 lang 目录下的所有文件 -->
     <ItemGroup>
         <Content Include="resources\themes\*.json">

@@ -15,6 +15,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.Updater.Tests",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.GpuNonperformance.Tests", "tests\LiteMonitor.GpuNonperformance.Tests\LiteMonitor.GpuNonperformance.Tests.csproj", "{2143EAB6-AABB-44DB-9371-418C7222C748}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{2FB2DF84-0DB5-41BA-AB25-D099A7F43538}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.Contracts", "src\Contracts\LiteMonitor.Contracts.csproj", "{E33912F3-A06A-471A-8B3D-1A101B7FEE0B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -41,6 +45,10 @@ Global
 		{2143EAB6-AABB-44DB-9371-418C7222C748}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2143EAB6-AABB-44DB-9371-418C7222C748}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2143EAB6-AABB-44DB-9371-418C7222C748}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E33912F3-A06A-471A-8B3D-1A101B7FEE0B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E33912F3-A06A-471A-8B3D-1A101B7FEE0B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E33912F3-A06A-471A-8B3D-1A101B7FEE0B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E33912F3-A06A-471A-8B3D-1A101B7FEE0B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -52,5 +60,6 @@ Global
 		{5ADC3C09-06CE-4BDB-A7AA-B1DC5042A1B9} = {90DB0C1B-D047-48A1-876E-ACCE695ADE5D}
 		{B529FF0A-790F-4135-85A2-D50D1C1B5F0E} = {90DB0C1B-D047-48A1-876E-ACCE695ADE5D}
 		{2143EAB6-AABB-44DB-9371-418C7222C748} = {90DB0C1B-D047-48A1-876E-ACCE695ADE5D}
+		{E33912F3-A06A-471A-8B3D-1A101B7FEE0B} = {2FB2DF84-0DB5-41BA-AB25-D099A7F43538}
 	EndGlobalSection
 EndGlobal
