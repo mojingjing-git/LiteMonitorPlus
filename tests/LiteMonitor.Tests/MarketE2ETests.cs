@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using LiteMonitor.src.Core;
 using LiteMonitor.src.Plugins;
 using Xunit;
 
@@ -116,6 +117,43 @@ namespace LiteMonitor.Tests
             Assert.Equal(MarketErrorReason.HashMismatch, ex3.Reason);
             Assert.False(File.Exists(Path.Combine(pluginsDir, "tampered_plugin.json")), "哈希不匹配却落盘了！");
             Console.WriteLine($"[11] 篡改 sha256 被拒绝且未落盘：{ex3.Reason}");
+
+            // 13. 主题市场扩展流（M6，D1=A：同一份索引的 themes 附加段）。
+            //     注：应用主题本身需要 MainForm 上下文（AppActions.ApplyThemeAndLayout），
+            //     测试宿主里以 ThemeManager 的发现性检查替代"应用"断言
+            //     （IsGpuTheme 读盘判别路线声明，无全局副作用）。
+            var themeIndex = await ThemeMarket.FetchIndexAsync();
+            if (themeIndex.Themes.Count > 0)
+            {
+                var themeEntry = themeIndex.Themes[0];
+                Console.WriteLine($"[13] 目标主题：{themeEntry.Id} v{themeEntry.Version} route={themeEntry.Route}");
+                string themeFile = Path.Combine(ThemeMarket.ThemesDir, themeEntry.Id + ".json");
+                if (File.Exists(themeFile)) File.Delete(themeFile);
+
+                await ThemeMarket.InstallAsync(themeEntry);
+                Assert.True(File.Exists(themeFile), "主题安装后未落盘");
+                Assert.NotNull(ThemeMarketState.Find(themeEntry.Id));
+                Assert.Equal(
+                    string.Equals(themeEntry.Route, "gpu", StringComparison.OrdinalIgnoreCase),
+                    ThemeManager.IsGpuTheme(themeEntry.Id));
+                Console.WriteLine("[13] 主题安装成功且被 ThemeManager 发现（路线判别一致）");
+
+                // 卸载（守卫：恰为当前主题时先切出厂默认再删）
+                var cfg = Settings.Load();
+                bool themeOk = ThemeMarket.TryUninstall(themeEntry, () =>
+                {
+                    cfg.Skin = "DarkFlat_Classic";
+                    cfg.Save();
+                }, out var themeReason);
+                Assert.True(themeOk, "主题卸载失败: " + themeReason);
+                Assert.False(File.Exists(themeFile), "主题卸载后文件仍在");
+                Assert.Null(ThemeMarketState.Find(themeEntry.Id));
+                Console.WriteLine("[13] 主题卸载成功：文件已删除、安装记录已清除");
+            }
+            else
+            {
+                Console.WriteLine("[13] 仓库尚未提供 themes 附加段（计划 §6 仓库侧工作未上线）——跳过主题流断言");
+            }
 
             // 清理
             if (File.Exists(installed)) File.Delete(installed);

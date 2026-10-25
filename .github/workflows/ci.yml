@@ -85,7 +85,9 @@ jobs:
       #      另有方案 A 改写 1 条守卫（LayeredWindowNeverRequestsWdaExclusion →
       #      LayeredWindowStillRequestsLiveBackgroundWithDiagnostic + NonLayered 新增 1 条），
       #      Debug 实测 1769 通过、0 失败、1 指定 E2E 跳过，原 1831 身份保留）。
-      MIN_TEST_TOTAL: 1862
+      #    → 1876（+14 = 主题市场契约 7 + 主题市场策略 7，均夹具驱动常跑不跳过；
+      #      Debug 实测 1784 通过、0 失败、1 指定 E2E 跳过）。
+      MIN_TEST_TOTAL: 1876
 
       # ★ 必须出现的测试程序集。少任何一个都会让断言失败
       #   （防止某个测试工程悄悄没被测到）。
@@ -104,7 +106,9 @@ jobs:
       # ★ 必须真正执行的测试类（C-1 / 评审阻断 1）：
       #   ReviewMarketPersistenceRegressionTests 是持久化事务护栏，其历史间歇失败
       #   曾被误归因为"环境抖动"——钉进来后任何静默跳过/漏跑都会让门禁直接红。
-      MUST_EXECUTE_TEST_CLASS: 'MarketIndexContractTests, ReviewMarketPersistenceRegressionTests'
+      # ★ 主题市场（M6）：ThemeMarketContractTests / ThemeMarketPolicyTests 均为
+      #   夹具驱动常跑（不依赖环境变量门控），各 7 条 ≥ 6 ✓——钉进硬门禁防静默漏跑。
+      MUST_EXECUTE_TEST_CLASS: 'MarketIndexContractTests, ReviewMarketPersistenceRegressionTests, ThemeMarketContractTests, ThemeMarketPolicyTests'
       MUST_EXECUTE_TEST_CLASS_MIN_COUNT: 6
 
       # ★ 插件市场契约夹具路径（S4.1 引入，仓库内固定路径）。
@@ -114,6 +118,12 @@ jobs:
       #    保证 index.json 里记录的 sha256 / size 与 plugin.json 的原始字节
       #    在 Windows runner 上完全一致（否则字节口径对不上，契约必然失败）。
       LITEMONITOR_PLUGIN_REPO: ${{ github.workspace }}/tests/fixtures/plugin-repo
+
+      # ★ 主题市场契约夹具路径（M6，镜像插件口径）。
+      #    ThemeMarketContractTests 主体跑在程序内夹具上；该变量供"真实仓库副本"
+      #    叠加断言使用（仓库侧 themes/ 段上线前该叠加验证自动降级为跳过断言体，
+      #    用例本身仍执行——MUST_EXECUTE 不受影响）。
+      LITEMONITOR_THEME_REPO: ${{ github.workspace }}/tests/fixtures/theme-repo
 
       # ★ 故意**不**设置 LITEMONITOR_E2E=1：联网 E2E 单独跑，不进 PR 门禁。
       DOTNET_NOLOGO: 'true'

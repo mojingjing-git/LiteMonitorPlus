@@ -44,6 +44,10 @@
 #   声明一次，避免读者误以为根规则的 *.json 会覆盖它。
 tests/fixtures/plugin-repo/** text eol=lf
 
+#   主题市场夹具同理（M5）：theme-repo/index.json 记录了各主题 JSON 的 sha256
+#   与 size，ThemeMarketContractTests 对工作区原始字节求哈希，必须逐字节可复现。
+tests/fixtures/theme-repo/** text eol=lf
+
 # ---- 二进制：禁止任何换行转换 ----
 *.cso       binary
 *.exe       binary
