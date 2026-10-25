@@ -22,11 +22,20 @@ namespace LiteMonitor.src.SystemServices
                 Accumulator = new TrafficAccumulator(time);
             }
 
-            public NetworkInterface? NativeAdapter;
+            public INetworkAdapterSnapshot? NativeAdapter;
             /// <summary>上次尝试匹配原生网卡的单调时间戳（0 = 从未尝试）。</summary>
             public long LastMatchAttempt;
             public bool HasMatchAttempt;
-            
+            /// <summary>
+            /// ★ [F03b] 有失效信号（网卡消失 / 地址变化 / 计数失配）：
+            /// 允许**立即**重新匹配，不等重匹配节流。
+            /// </summary>
+            public bool ForceRematch;
+            /// <summary>连续匹配失败次数（重匹配退避阶梯用）。</summary>
+            public int ConsecutiveMatchFailures;
+            /// <summary>本状态已处理到的"网络变更代次"（用于判定是否需要作废已锁定的网卡）。</summary>
+            public long AppliedInvalidationGeneration;
+
             // 缓存 LHM 传感器
             public ISensor? CachedUpSensor;
             public ISensor? CachedDownSensor;
@@ -43,13 +52,17 @@ namespace LiteMonitor.src.SystemServices
         private bool _hasNetScan;
         // 启动时刻（单调时间戳）
         private readonly long _startTimestamp;
-        // [修改] IP 值静态缓存：切换主题/重启服务时不丢失，解决闪烁问题
-        //      （只缓存"值"；"多久之内可以复用"的时间窗是**实例级**的，避免全局静态时间戳互相污染）
-        private static string _staticIPCache = "";
-        // 上次检查IP的时间（单调时间戳，实例级）
-        private long _lastIPCheckTimestamp;
-        private bool _hasIPCheck;
-        private volatile bool _shouldResetAdapters = false; // [Fix #287] 网络变更标记
+        // ★ [F03b] IP 地址缓存：**值 + 网络环境代次**（进程级共享，切换主题/重启服务不丢失）。
+        //   网络变更事件到达时代次推进 → 旧值立即作废 → 下一次读取立刻重新取值。
+        private readonly NetworkAddressCache _addressCache;
+        // ★ [F03b] IP 地址刷新闸门：事件驱动优先 + 时间窗兜底 + 有界。
+        private readonly NetworkRefreshGate _refreshGate;
+        // ★ [F03b] 网卡枚举源（生产 = 真实网卡；测试 = 假网卡）。
+        private readonly INetworkAdapterSource _adapters;
+        // ★ [F03b] 网络变更事件源（生产 = NetworkChange；测试 = 假事件源）。
+        private readonly INetworkChangeSource _changeSource;
+        // ★ [F03b] 网络变更代次（单调）：事件到达时 +1，用来作废已锁定的原生网卡实例。
+        private long _adapterInvalidationGeneration;
 
         // ★ [#96 / F03] 网络样本登记处：值 + 成功采样时间 + 设备身份 + 设备代次。
         //   旧实现把"最后有效值"放在永不失效的 lastValidMap 里，传感器停更时旧值会被
@@ -100,22 +113,70 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         public HardwareSamplingStatistics? SamplingStatistics { get; set; }
 
-        public NetworkManager(PerformanceCounterManager perfManager = null, TimeProvider? timeProvider = null, NetworkSampleFreshnessPolicy? freshnessPolicy = null)
+        /// <summary>
+        /// [F03b] 重匹配的最短重试间隔（秒）：匹配失败后的**快速重试**间隔。
+        /// <para>这是退避阶梯的第一级 —— 单次失效信号触发的重试是"有界且快速"的，
+        /// 不需要等满 10 秒才有机会恢复（网卡可能几秒后才被系统重新枚举到）。</para>
+        /// </summary>
+        private const double RematchRetryIntervalSeconds = 1.0;
+
+        /// <summary>
+        /// [F03b] 重匹配的退避阶梯上限（次）：连续失败超过该次数后，
+        /// 退回到长节流（见 <see cref="RematchThrottleSeconds"/>），避免无失效信号时反复空转。
+        /// </summary>
+        private const int MaxImmediateRematchAttempts = 3;
+
+        /// <summary>
+        /// [F03b] 重匹配的长节流（秒）：**没有**失效信号时的重试间隔。
+        /// <para>★ 节流只约束"无失效信号时不要反复空转"；一旦出现失效信号
+        /// （网卡消失 / 地址变化 / 计数失配），重匹配会**立即**放行。</para>
+        /// </summary>
+        private const double RematchThrottleSeconds = 10.0;
+
+        public NetworkManager(
+            PerformanceCounterManager perfManager = null,
+            TimeProvider? timeProvider = null,
+            NetworkSampleFreshnessPolicy? freshnessPolicy = null,
+            INetworkAdapterSource? adapterSource = null,
+            INetworkChangeSource? changeSource = null,
+            NetworkAddressCache? addressCache = null)
         {
             // 允许为空 (为了兼容性)，如果为空则内部功能自动禁用
-            _perfManager = perfManager ?? new PerformanceCounterManager(); 
+            _perfManager = perfManager ?? new PerformanceCounterManager();
             _time = timeProvider ?? TimeProvider.System;
             _startTimestamp = _time.GetTimestamp();   // 启动时间（单调时钟）
 
             // ★ [#96 / F03] 样本时效策略与登记处：时钟必须与本类一致，测试可注入假时钟。
             _samples = new NetworkSampleRegistry(freshnessPolicy ?? new NetworkSampleFreshnessPolicy(_time));
-            
-            // [Fix #287] 监听网络地址变更事件，强制刷新 IP 和 网卡缓存
+
+            // ★ [F03b] 地址缓存与刷新闸门：事件驱动优先 + 时间窗兜底 + 有界。
+            _addressCache = addressCache ?? NetworkAddressCache.Shared;
+            _refreshGate = new NetworkRefreshGate(_time);
+
+            // ★ [F03b] 网卡枚举源 / 网络变更事件源（测试可注入假实现）。
+            _adapters = adapterSource ?? SystemNetworkAdapterSource.Instance;
+            _changeSource = changeSource ?? SystemNetworkChangeSource.Instance;
+
+            // [Fix #287] 监听网络变更事件，强制刷新 IP 和 网卡缓存
             // 当用户切换 WIFI 或插拔网线时，IP地址和网卡实例都会失效，必须重置
-            NetworkChange.NetworkAddressChanged += (s, e) => {
-                _staticIPCache = null; 
-                _shouldResetAdapters = true;
-            };
+            // ★ [F03b] 现在同时监听**可用性**变更（Wi-Fi ↔ 有线切换时地址未必变化），
+            //   并且是"立即失效"而不是"等 30 秒缓存窗过期"。
+            _changeSource.Changed += OnNetworkChanged;
+        }
+
+        /// <summary>
+        /// 网络变更事件（地址变更 / 可用性变更）到达。
+        /// <para>★ [F03b] **事件驱动**：立刻作废 IP 缓存（推进共享代次），
+        /// 下一次读取就会重新取值，不再受 30 秒缓存窗拖累；
+        /// 同时作废已锁定的原生网卡实例，让重匹配**立即**放行。</para>
+        /// </summary>
+        private void OnNetworkChanged(object? sender, NetworkChangeKind kind)
+        {
+            // 旧 IP 立即作废（值本身保留在缓存里，但不再"有效"）。
+            _addressCache.AdvanceGeneration();
+
+            // 已锁定的原生网卡实例可能已失效 → 作废并允许立即重新匹配。
+            Interlocked.Increment(ref _adapterInvalidationGeneration);
         }
 
         public void ClearCache()
@@ -222,7 +283,7 @@ namespace LiteMonitor.src.SystemServices
         /// <para>★ C1：ETW 载荷里没有网卡 ID，只能靠本地地址映射；目标网卡上的本地地址如果
         /// 同时出现在别的网卡上（归属歧义），必须**拒绝**，绝不能猜。</para>
         /// </summary>
-        private void UpdateExclusionTarget(NetworkInterface nic)
+        private void UpdateExclusionTarget(INetworkAdapterSnapshot nic)
         {
             var service = _exclusion;
             if (service == null) { return; }
@@ -251,14 +312,10 @@ namespace LiteMonitor.src.SystemServices
         }
 
         /// <summary>取网卡的接口索引；IPv6-only 网卡没有 IPv4 属性，退回按描述名匹配。</summary>
-        private int? ResolveIfIndex(NetworkInterface nic)
+        private int? ResolveIfIndex(INetworkAdapterSnapshot nic)
         {
-            try
-            {
-                int index = nic.GetIPProperties().GetIPv4Properties().Index;
-                if (index > 0) { return index; }
-            }
-            catch { /* IPv6-only 网卡 */ }
+            int? index = nic.IfIndex;
+            if (index.HasValue && index.Value > 0) { return index; }
 
             NetworkAdapterResolver? resolver = _adapterResolver;
             if (resolver == null) { return null; }
@@ -358,70 +415,114 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         private bool IsReselectDue() => !IsNetScanFresh();
 
-        /// <summary>记录一次 IP 检查时刻（单调时钟，实例级）。</summary>
-        private void MarkIPChecked()
+        /// <summary>
+        /// ★ [F03b] 网络变更后作废已锁定的原生网卡实例。
+        /// <para>网卡消失 / 地址变化 / 设备代次变化时，已缓存的 <see cref="NetworkInterface"/>
+        /// 实例可能已经失效，必须作废并**允许立即重新匹配**（不等 10 秒节流）。</para>
+        /// </summary>
+        private void ApplyAdapterInvalidation(NetworkState state)
         {
-            _lastIPCheckTimestamp = _time.GetTimestamp();
-            _hasIPCheck = true;
+            long generation = Interlocked.Read(ref _adapterInvalidationGeneration);
+            if (state.AppliedInvalidationGeneration == generation) return;
+
+            state.AppliedInvalidationGeneration = generation;
+            state.NativeAdapter = null;
+            state.ForceRematch = true;              // 立即允许重新匹配
+            state.ConsecutiveMatchFailures = 0;
         }
 
-        /// <summary>距上次 IP 检查是否还在 30 秒缓存期内（单调时钟判断）。</summary>
-        private bool IsIPCheckFresh()
-        {
-            if (!_hasIPCheck) return false;
-            return _time.GetElapsedTime(_lastIPCheckTimestamp, _time.GetTimestamp()).TotalSeconds < 30;
-        }
-
-        // [新增] 获取当前 IP (带 10秒 缓存)
+        /// <summary>
+        /// 获取当前 IP（**事件驱动优先 + 时间窗兜底**）。
+        /// <para>★ [F03b] 语义：
+        ///  - 网络变更事件到达 → 缓存值立即作废 → 下一次调用**立刻**重新取值（不等 30 秒）；
+        ///  - 事件丢失 → 距上次成功取值超过 30 秒 → 时间窗兜底重新取值；
+        ///  - 两者都**有界**：单轮最多 3 次真正取值，事件风暴不会拉爆网卡枚举频率。</para>
+        /// </summary>
         public string GetCurrentIP()
         {
-            // [Fix #287] 如果网络发生了变更，强制重置所有网卡状态
-            // 这会迫使 MatchNativeNetworkAdapter 重新寻找最新的 NetworkInterface 实例 (获取正确的新IP)
-            if (_shouldResetAdapters)
+            NetworkAddressResult result = GetCurrentIPResult();
+            // ★ 兼容既有契约：没有地址时返回 null（上层统一用 IsNullOrEmpty 判空）。
+            //   绝**不**返回 "0.0.0.0" 之类的占位地址 —— 那是"冒充有效数据"。
+            return result.HasAddress ? result.Address : null!;
+        }
+
+        /// <summary>
+        /// 获取当前 IP 的**完整结果**（值 + 状态）。
+        /// <para>★ "缺失"（网卡在但没有 IPv4）与"读取失败"（枚举出错）是**不同状态**，
+        /// 绝不用 "0.0.0.0" 之类的占位地址冒充。</para>
+        /// </summary>
+        public NetworkAddressResult GetCurrentIPResult()
+        {
+            // 1. 缓存命中？—— 值未被网络变更作废，且时间窗未到期
+            string cached = _addressCache.GetValidValue();
+            bool cacheValid = cached.Length > 0;
+            if (cacheValid && !_refreshGate.IsWindowExpired)
             {
-                try
-                {
-                    foreach (var state in _netStates.Values)
-                    {
-                        state.NativeAdapter = null;
-                        state.HasMatchAttempt = false; // 允许立即重新匹配
-                    }
-                    _shouldResetAdapters = false;
-                }
-                catch 
-                { 
-                    // 忽略并发修改异常，保留标志位下次重试
-                }
+                return NetworkAddressResult.Ok(cached);
             }
 
-            // 1. 缓存保护：只有当缓存了【有效IP】且距离上次检查不到 30 秒时，才直接返回
-            // 关键修改：如果 _staticIPCache 是空的，忽略时间限制，强制重试
-            // 时间窗用单调时钟判断（墙上时间回拨不会让缓存窗口永远不过期）
-            if (!string.IsNullOrEmpty(_staticIPCache) && IsIPCheckFresh())
+            // 2. 该不该真的去读一次网卡？—— 事件驱动优先 / 时间窗兜底 / 有界
+            if (!_refreshGate.ShouldRefresh(cacheValid, _addressCache.Generation))
             {
-                return _staticIPCache;
+                // 预算用尽：缓存还有效时保留"上次已知值"（过渡展示）；
+                // 缓存已被事件作废时**不返回旧网卡的 IP**。
+                return cacheValid
+                    ? new NetworkAddressResult(cached, NetworkAddressStatus.Ok, isRetained: true)
+                    : NetworkAddressResult.Missing;
             }
 
-            string foundIP = null;
+            // 3. 真的去读一次网卡
+            NetworkAddressResult result = ResolveCurrentIP();
+            if (result.Status == NetworkAddressStatus.Ok)
+            {
+                _addressCache.Store(result.Address);
+                _refreshGate.MarkRefreshSucceeded();
+                return result;
+            }
 
-            // 2. 策略A：直接从当前锁定的硬件中获取 (这是最直接的方式)
-            try 
+            // 4. 没读到：兜底路径保留"上次已知值"；事件路径不返回旧网卡的 IP
+            if (cacheValid)
+            {
+                return new NetworkAddressResult(cached, result.Status, isRetained: true);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 真正去网卡上读一次 IP。
+        /// <para>★ "缺失"与"失败"分开：网卡在但没有 IPv4 = <see cref="NetworkAddressStatus.Missing"/>；
+        /// 枚举网卡抛异常 = <see cref="NetworkAddressStatus.Failed"/>。</para>
+        /// </summary>
+        private NetworkAddressResult ResolveCurrentIP()
+        {
+            string? foundIP = null;
+            bool enumerationFailed = false;
+
+            // 策略A：直接从当前锁定的硬件中获取 (这是最直接的方式)
+            try
             {
                 // ★★★ 核心修复：即使 _cachedNetHw 为空（还没锁定网卡），也要尝试从 _netStates 中寻找已匹配 NativeAdapter 的网卡 ★★★
                 // 之前的 bug 是：网速跳动说明 MatchNativeNetworkAdapter 成功了，_netStates 里有 NativeAdapter，
                 // 但 _cachedNetHw 还没来得及更新，导致这里直接跳过。
-                
+
                 // 如果已锁定，优先用锁定的
-                if (_cachedNetHw != null && _netStates.TryGetValue(_cachedNetHw, out var state) && state.NativeAdapter != null)
+                if (_cachedNetHw != null && _netStates.TryGetValue(_cachedNetHw, out var state))
                 {
-                     foundIP = GetIPv4FromAdapter(state.NativeAdapter);
+                    // ★ [F03b] 网络变更后已锁定的网卡实例已作废（避免读到旧网卡的 IP）。
+                    ApplyAdapterInvalidation(state);
+                    if (state.NativeAdapter != null)
+                    {
+                        foundIP = GetIPv4FromAdapter(state.NativeAdapter);
+                    }
                 }
-                
+
                 // 如果没锁定（或锁定的没取到），遍历所有已知状态的网卡 (这些网卡都是有流量活动的)
                 if (string.IsNullOrEmpty(foundIP))
                 {
                     foreach (var kv in _netStates)
                     {
+                        // ★ [F03b] 网络变更后已锁定的网卡实例已作废（避免读到旧网卡的 IP）。
+                        ApplyAdapterInvalidation(kv.Value);
                         if (kv.Value.NativeAdapter != null)
                         {
                             string ip = GetIPv4FromAdapter(kv.Value.NativeAdapter);
@@ -441,58 +542,60 @@ namespace LiteMonitor.src.SystemServices
             {
                 try
                 {
-                    var nics = NetworkInterface.GetAllNetworkInterfaces();
+                    IReadOnlyList<INetworkAdapterSnapshot> nics = _adapters.GetAdapters();
                     foreach (var nic in nics)
                     {
-                        if (nic.OperationalStatus != OperationalStatus.Up) continue;
-                        if (nic.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                        if (!nic.IsOperationalUp) continue;
+                        if (nic.IsLoopback) continue;
                         if (IsVirtualNetwork(nic.Description) || IsVirtualNetwork(nic.Name)) continue; // 仅兜底物理网卡
 
                         foundIP = GetIPv4FromAdapter(nic);
                         if (!string.IsNullOrEmpty(foundIP)) break;
                     }
                 }
-                catch { }
+                catch
+                {
+                    // ★ 枚举网卡本身失败 = **读取失败**（与"没有 IPv4 地址"不同）
+                    enumerationFailed = true;
+                }
             }
 
             if (!string.IsNullOrEmpty(foundIP))
             {
-                _staticIPCache = foundIP;
-                MarkIPChecked();
-                return foundIP;
+                return NetworkAddressResult.Ok(foundIP);
             }
-            
-            return _staticIPCache; 
+
+            // ★ 网卡在但没有 IPv4 地址 = **缺失**（有效事实）；枚举失败 = **故障**。
+            return enumerationFailed ? NetworkAddressResult.Failed : NetworkAddressResult.Missing;
         }
 
-        private string GetIPv4FromAdapter(NetworkInterface nic)
+        /// <summary>
+        /// 取网卡的"最佳"IPv4 地址（没有则 null）。
+        /// <para>保留既有语义：[Fix #287] 忽略 APIPA（169.254.x.x）；
+        /// [Fix #206] 优先 192.168.x.x 内网地址。</para>
+        /// </summary>
+        private string GetIPv4FromAdapter(INetworkAdapterSnapshot nic)
         {
             try
             {
-                var props = nic.GetIPProperties();
-                string bestIP = null;
+                string? bestIP = null;
 
-                foreach (var ip in props.UnicastAddresses)
+                foreach (string ipStr in nic.GetIPv4Addresses())
                 {
-                    if (ip.Address.AddressFamily == AddressFamily.InterNetwork)
+                    // [Fix #287] 忽略 APIPA (169.254.x.x) 地址
+                    // 这些地址通常是 DHCP 失败时的临时地址，会导致网页版服务绑定错误
+                    if (ipStr.StartsWith("169.254.")) continue;
+
+                    // [Fix #206] 优先返回 192.168.x.x 类型的内网 IP
+                    if (ipStr.StartsWith("192.168."))
                     {
-                        string ipStr = ip.Address.ToString();
-                        
-                        // [Fix #287] 忽略 APIPA (169.254.x.x) 地址
-                        // 这些地址通常是 DHCP 失败时的临时地址，会导致网页版服务绑定错误
-                        if (ipStr.StartsWith("169.254.")) continue;
+                        return ipStr;
+                    }
 
-                        // [Fix #206] 优先返回 192.168.x.x 类型的内网 IP
-                        if (ipStr.StartsWith("192.168."))
-                        {
-                            return ipStr;
-                        }
-
-                        // 如果还没找到最佳 IP，暂时存第一个找到的 IPv4 作为兜底
-                        if (bestIP == null)
-                        {
-                            bestIP = ipStr;
-                        }
+                    // 如果还没找到最佳 IP，暂时存第一个找到的 IPv4 作为兜底
+                    if (bestIP == null)
+                    {
+                        bestIP = ipStr;
                     }
                 }
                 return bestIP;
@@ -748,17 +851,25 @@ namespace LiteMonitor.src.SystemServices
             long? nativeDown = null;
             if (state.NativeAdapter != null)
             {
-                try
+                if (state.NativeAdapter.TryGetTrafficBytes(out long sent, out long received))
                 {
-                    var stats = state.NativeAdapter.GetIPStatistics();
-                    nativeUp = stats.BytesSent;
-                    nativeDown = stats.BytesReceived;
+                    nativeUp = sent;
+                    nativeDown = received;
                 }
-                catch { state.NativeAdapter = null; }
+                else
+                {
+                    // ★ [F03b] 读计数失败 = 网卡实例已失效 → 立即允许重新匹配（不等 10 秒节流）。
+                    state.NativeAdapter = null;
+                    state.ForceRematch = true;
+                    state.ConsecutiveMatchFailures = 0;
+                }
 
                 // ★ [#610] 把选中的网卡告诉排除后端（归属靠本地地址映射）。
                 //   注意：这**不改写**累计口径，累计仍然走原有的原生字节 + SMB 估算路径。
-                UpdateExclusionTarget(state.NativeAdapter);
+                if (state.NativeAdapter != null)
+                {
+                    UpdateExclusionTarget(state.NativeAdapter);
+                }
             }
 
             // C. 累计：真实采样间隔 + 原生字节计数优先 + SMB 扣除 + 安全阀
@@ -781,8 +892,10 @@ namespace LiteMonitor.src.SystemServices
 
             if (result.NativeMismatch)
             {
-                // 匹配错误：丢弃当前适配器，下次重新匹配
+                // 匹配错误：丢弃当前适配器，下次**立即**重新匹配（不等 10 秒节流）
                 state.NativeAdapter = null;
+                state.ForceRematch = true;
+                state.ConsecutiveMatchFailures = 0;
             }
 
             // D. 存入数据
@@ -794,21 +907,45 @@ namespace LiteMonitor.src.SystemServices
             }
         }
 
+        /// <summary>
+        /// 匹配 LHM 网卡与原生 <see cref="System.Net.NetworkInformation.NetworkInterface"/>。
+        /// <para>★ [F03b] 节流语义从"固定 10 秒"改为
+        /// <b>事件驱动优先 + 时间窗兜底</b>：
+        ///  - 有失效信号（网络变更事件 / 计数读取失败 / 匹配失配）→ <b>立即</b>允许重匹配；
+        ///  - 连续失败但仍在快速重试预算内 → 每 <see cref="RematchRetryIntervalSeconds"/> 秒重试一次；
+        ///  - 预算用尽且没有新失效信号 → 退避到 <see cref="RematchThrottleSeconds"/> 秒，
+        ///    避免"无失效信号时反复空转"。</para>
+        /// </summary>
         private void MatchNativeNetworkAdapter(string lhmName, NetworkState state)
         {
+            // ★ [F03b] 网络变更事件 → 立即作废已锁定的原生网卡实例（并允许立即重匹配）。
+            ApplyAdapterInvalidation(state);
+
             if (state.NativeAdapter != null) return;
 
-            // 重新匹配的最短间隔（10 秒），用单调时钟判断
             long now = _time.GetTimestamp();
-            if (state.HasMatchAttempt &&
-                _time.GetElapsedTime(state.LastMatchAttempt, now).TotalSeconds < 10) return;
+            bool hasAttempt = state.HasMatchAttempt;
+            double elapsed = hasAttempt
+                ? _time.GetElapsedTime(state.LastMatchAttempt, now).TotalSeconds
+                : double.MaxValue;
+
+            // 退避阶梯：有失效信号 → 立即；快速重试预算内 → 1 秒；预算用尽 → 10 秒。
+            double required = state.ForceRematch ? 0.0
+                           : (state.ConsecutiveMatchFailures < MaxImmediateRematchAttempts
+                               ? RematchRetryIntervalSeconds
+                               : RematchThrottleSeconds);
+
+            if (hasAttempt && elapsed < required) return;
+
             state.LastMatchAttempt = now;
             state.HasMatchAttempt = true;
+            state.ForceRematch = false;   // 本次尝试已消耗"立即重试"资格
 
+            bool matched = false;
             try
             {
-                var nics = NetworkInterface.GetAllNetworkInterfaces();
-                
+                IReadOnlyList<INetworkAdapterSnapshot> nics = _adapters.GetAdapters();
+
                 // 预先分配令牌列表容量
                 var lhmTokens = new List<string>(capacity: 10);
                 SplitTokens(lhmName, lhmTokens);
@@ -816,15 +953,15 @@ namespace LiteMonitor.src.SystemServices
                 foreach (var nic in nics)
                 {
                     // 1. 匹配连接名称
-                    if (nic.Name.Equals(lhmName, StringComparison.OrdinalIgnoreCase)) { SetNativeAdapter(nic, state); return; }
+                    if (nic.Name.Equals(lhmName, StringComparison.OrdinalIgnoreCase)) { SetNativeAdapter(nic, state); matched = state.NativeAdapter != null; break; }
                     // 2. 匹配硬件描述
-                    if (nic.Description.Equals(lhmName, StringComparison.OrdinalIgnoreCase)) { SetNativeAdapter(nic, state); return; }
+                    if (nic.Description.Equals(lhmName, StringComparison.OrdinalIgnoreCase)) { SetNativeAdapter(nic, state); matched = state.NativeAdapter != null; break; }
                     // 3. 模糊匹配
-                    if (lhmTokens.Count > 0 && lhmName.Length > 5) 
+                    if (lhmTokens.Count > 0 && lhmName.Length > 5)
                     {
                         var nicTokens = new List<string>(capacity: 10);
                         SplitTokens(nic.Description, nicTokens);
-                        
+
                         // 优化匹配算法，减少内存分配
                         int matchCount = 0;
                         foreach (var token in lhmTokens)
@@ -835,16 +972,23 @@ namespace LiteMonitor.src.SystemServices
                                 if (matchCount > 2) break; // 提前退出，满足条件即可
                             }
                         }
-                        
+
                         if (matchCount > 2 && (double)matchCount / lhmTokens.Count > 0.6)
                         {
-                            SetNativeAdapter(nic, state); 
-                            return;
+                            SetNativeAdapter(nic, state);
+                            matched = state.NativeAdapter != null;
+                            break;
                         }
                     }
                 }
             }
-            catch { state.NativeAdapter = null; }
+            catch
+            {
+                state.NativeAdapter = null;
+                matched = false;
+            }
+
+            state.ConsecutiveMatchFailures = matched ? 0 : state.ConsecutiveMatchFailures + 1;
         }
         private static readonly char[] _tokenSeparators = { ' ', '(', ')', '[', ']', '-', '_', '#' };
         // 优化的SplitTokens方法，使用预分配的列表减少内存分配
@@ -881,16 +1025,16 @@ namespace LiteMonitor.src.SystemServices
             return result;
         }
 
-        private void SetNativeAdapter(NetworkInterface nic, NetworkState state)
+        private void SetNativeAdapter(INetworkAdapterSnapshot nic, NetworkState state)
         {
             state.NativeAdapter = nic;
-            try
+            if (!nic.TryGetTrafficBytes(out long sent, out long received))
             {
-                var stats = nic.GetIPStatistics();
-                // ★★★ [网卡切换] 重新建立原生字节计数基线：切换后的第一次采样不产生增量 ★★★
-                state.Accumulator.ResetBaseline(stats.BytesSent, stats.BytesReceived);
+                state.NativeAdapter = null;
+                return;
             }
-            catch { state.NativeAdapter = null; }
+            // ★★★ [网卡切换] 重新建立原生字节计数基线：切换后的第一次采样不产生增量 ★★★
+            state.Accumulator.ResetBaseline(sent, received);
         }
 
         private bool IsVirtualNetwork(string name)
