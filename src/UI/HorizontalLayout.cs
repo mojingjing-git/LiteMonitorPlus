@@ -1,6 +1,7 @@
 using LiteMonitor.src.Core;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -25,12 +26,24 @@ namespace LiteMonitor
         private float _dpiScale = 1f;
         private readonly Control? _measurementControl;
 
+        // ★【F12】受控字体度量：DPI 来源 + 度量缓存。
+        //   绘制帧只消费这里算好的结果，不再自己调 Font.GetHeight(Graphics)。
+        private readonly IDisplayDpiSource? _dpiSource;
+        private readonly FontMetricsCache _metrics;
+
         public int PanelWidth { get; private set; }
 
-        /// <summary>当前行高（物理像素）。</summary>
+        /// <summary>
+        /// 当前行高（物理像素）。
+        /// <para>★【F12】句柄不存在 / 正在销毁时**推迟测量**，此时行高可能仍为 0
+        ///   （由 <see cref="MinPanelHeight"/> 兜底保留最小布局）。</para>
+        /// </summary>
         internal int RowHeight => _rowH;
 
-        /// <summary>当前 DPI 缩放系数（设备 DPI / 96）。</summary>
+        /// <summary>
+        /// 当前 DPI 缩放系数（设备 DPI / 96）。
+        /// <para>★【F12】句柄不可用、测量被推迟时保持上一次的有效值（初始 1.0）。</para>
+        /// </summary>
         internal float DpiScale => _dpiScale;
 
         /// <summary>
@@ -50,7 +63,10 @@ namespace LiteMonitor
         }
 
         /// <summary>
-        /// 受控布局阶段用的构造重载：显式注入 DPI 来源与度量缓存。
+        /// ★【F12】受控布局阶段用的构造重载：显式注入 DPI 来源与度量缓存。
+        /// <para>★ DPI 来源为 <c>null</c> ⇒ 没有任何显示上下文 ⇒ 用基线 DPI（96）做一次
+        ///   **确定性**测量；DPI 来源存在但**当前不可用**（句柄不存在 / 正在销毁）
+        ///   ⇒ <b>推迟测量</b>，保留最小布局（见 <see cref="EnsureRowHeight"/>）。</para>
         /// </summary>
         internal HorizontalLayout(
             Theme t,
@@ -65,20 +81,15 @@ namespace LiteMonitor
             _mode = mode;
             _settings = settings ?? Settings.Load();
             _measurementControl = measurementControl;
-            _ = dpiSource;
-            _ = metrics;
-            using var measurementGraphics = measurementControl?.CreateGraphics() ?? Graphics.FromHwnd(IntPtr.Zero);
-            _dpiScale = measurementControl is not null ? measurementControl.DeviceDpi / 96f : measurementGraphics.DpiX / 96f;
+            _metrics = metrics ?? new FontMetricsCache();
+            _dpiSource = dpiSource
+                ?? (measurementControl is not null ? new ControlDisplayDpiSource(measurementControl) : null);
 
             _padding = t.Layout.Padding;
 
             if (mode == LayoutMode.Horizontal)
             {
-                _rowH = Math.Max(t.FontItem.Height, t.FontValue.Height);
-                if (measurementControl is not null)
-                {
-                    _rowH = (int)Math.Ceiling(Math.Max(t.FontItem.GetHeight(measurementGraphics), t.FontValue.GetHeight(measurementGraphics)));
-                }
+                EnsureRowHeight();
             }
             else
                 _rowH = 0; // 任务栏模式稍后根据 taskbarHeight 决定
@@ -87,10 +98,105 @@ namespace LiteMonitor
         }
 
         /// <summary>
+        /// ★【F12】受控布局阶段的字体度量：在**有效字体 + 稳定 DPI** 下算出行高并缓存。
+        /// <para>★ 这里**不再**调用 <c>Font.GetHeight(Graphics)</c>：
+        ///   该重载把 Graphics 交给 GDI+，Graphics 已释放时抛 <c>ArgumentException</c>；
+        ///   而 <c>Font.Height</c> / <c>Font.GetHeight(float)</c> 在**字体已释放**时抛
+        ///   <c>ArgumentException("Parameter is not valid.")</c> —— 这正是 #574 的崩溃形态。
+        ///   现在统一走 <see cref="FontMetricsCache"/>（<c>Font.GetHeight(float dpi)</c>，
+        ///   Graphics 无关，且同 DPI 下与 <c>GetHeight(Graphics)</c> 逐位等价）。</para>
+        /// <para>★ DPI 必须是**设备 DPI**：主题字体是 Point 单位，GDI+/GDI 都按设备 DPI 放大；
+        ///   用 96 DPI 的 <c>Font.Height</c> 会在 150%/200% 下把行高算小 ⇒ 文字被裁切。</para>
+        /// <para>★ 句柄不存在 / 正在销毁 ⇒ <b>推迟测量</b>：行高保持不变，
+        ///   由 <see cref="MinPanelHeight"/> 兜底保留最小布局。</para>
+        /// </summary>
+        private void EnsureRowHeight()
+        {
+            if (_mode != LayoutMode.Horizontal) return;
+
+            int dpi;
+            if (_dpiSource is null)
+            {
+                // 没有任何显示上下文 ⇒ 基线 DPI 的确定性测量（不需要 Graphics）。
+                dpi = FontMetricsCache.BaselineDpi;
+            }
+            else if (!_dpiSource.TryGetDpi(out dpi) || dpi <= 0)
+            {
+                // ★ 句柄不存在 / 正在销毁 ⇒ 推迟测量（不新建 HWND、不碰已释放对象）。
+                return;
+            }
+
+            int rowH = _metrics.Measure(_t.FontItem, _t.FontValue, dpi).RowHeight;
+            if (rowH <= 0)
+            {
+                // 字体不可用（多半已被释放）⇒ 推迟测量，保留最小布局。
+                // 诊断已由 FontMetricsCache 记录（应用层只补诊断，不冒充原生边界修复）。
+                return;
+            }
+
+            _rowH = rowH;
+            _dpiScale = dpi / 96f;
+        }
+
+        /// <summary>
+        /// ★【F12】取一个用于**文本宽度测量**的 Graphics。
+        /// <para>★ 句柄不存在 / 正在销毁 ⇒ <b>不</b>调用 <c>CreateGraphics()</c>
+        ///   （它会强制创建 HWND），退回桌面 DC —— 桌面 DC 始终有效，
+        ///   测量因此不会碰到"已释放 Graphics"。</para>
+        /// </summary>
+        private Graphics CreateMeasurementGraphics()
+        {
+            Control? control = _measurementControl;
+            if (control is not null)
+            {
+                try
+                {
+                    if (!control.IsDisposed && control.IsHandleCreated)
+                    {
+                        Graphics? g = control.CreateGraphics();
+                        if (g is not null) return g;
+                    }
+                }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
+                catch (Win32Exception) { }
+            }
+
+            return Graphics.FromHwnd(IntPtr.Zero);
+        }
+
+        /// <summary>
+        /// ★【F12】取一个**可测量**的字体：主题字体已被释放时退回系统字体并记录诊断。
+        /// <para>已释放的字体读度量会抛 <c>ArgumentException("Parameter is not valid.")</c>，
+        ///   绝不能让它冒到绘制路径上。</para>
+        /// </summary>
+        private Font ResolveFont(Font? themeFont)
+        {
+            // ★ 兜底用**系统**字体（DefaultFont 是系统字体 ⇒ 任何释放流程都不会碰它）。
+            if (themeFont is null) return SystemFonts.DefaultFont;
+
+            try
+            {
+                // 已释放的字体在这里抛 ArgumentException（Font.Height 会检查 disposed）。
+                _ = themeFont.Height;
+                return themeFont;
+            }
+            catch (ArgumentException ex)
+            {
+                _metrics.RecordDiagnostic("HorizontalLayout.ResolveFont: 主题字体已释放", ex);
+                return SystemFonts.DefaultFont;
+            }
+        }
+
+        /// <summary>
         /// Build：横屏/任务栏共用布局
         /// </summary>
         public int Build(List<Column> cols, int taskbarHeight = 32)
         {
+            // ★【F12】受控布局阶段：行高在"有效字体 + 稳定 DPI"下测量并缓存；
+            //   绘制帧只消费缓存结果（缓存命中即零成本，DPI/主题代次变化时才重算）。
+            EnsureRowHeight();
+
             // ★ D10：列集合为空（全部可见项关闭）时**不能返回 0** ——
             //   调用方会把客户区高度写成 0，面板直接消失，用户无从判断原因。
             //   改为返回最小高度，配合 UI 层的空态提示说明"没有可见项"。
@@ -111,7 +217,7 @@ namespace LiteMonitor
             int totalWidth = pad * 2;
             float dpi = _dpiScale;
 
-            using (var g = _measurementControl?.CreateGraphics() ?? Graphics.FromHwnd(IntPtr.Zero))
+            using (var g = CreateMeasurementGraphics())
             {
                 foreach (var col in cols)
                 {
@@ -219,7 +325,8 @@ namespace LiteMonitor
                 }
                 else
                 {
-                    valFont = _t.FontItem;
+                    // ★【F12】主题字体可能已被释放 ⇒ 走可测量字体（必要时退回系统字体）。
+                    valFont = ResolveFont(_t.FontItem);
                 }
 
                 try
@@ -253,8 +360,9 @@ namespace LiteMonitor
                 }
                 else
                 {
-                    labelFont = _t.FontItem;
-                    valueFont = _t.FontValue;
+                    // ★【F12】主题字体可能已被释放 ⇒ 走可测量字体（必要时退回系统字体）。
+                    labelFont = ResolveFont(_t.FontItem);
+                    valueFont = ResolveFont(_t.FontValue);
                 }
 
                 try
