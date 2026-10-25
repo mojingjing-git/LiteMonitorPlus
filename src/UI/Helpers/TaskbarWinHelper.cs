@@ -28,8 +28,12 @@ namespace LiteMonitor.src.UI.Helpers
 
         /// <summary>
         /// 设置位置和大小
+        /// <para>★ 坐标契约（P-F05）：<paramref name="left"/> / <paramref name="top"/> 一律为
+        /// <b>物理屏幕像素</b>；策略内部负责把它<b>显式转换</b>到父窗口客户区坐标。
+        /// 策略自带内部布局（Win10 挤占）时，传入的坐标会被忽略，由策略自行计算。</para>
         /// </summary>
-        void SetPosition(IntPtr taskbarHandle, int left, int top, int w, int h, int manualOffset, bool alignLeft);
+        /// <param name="direction">停靠方向（显式枚举，替代宽高比猜测）。</param>
+        void SetPosition(IntPtr taskbarHandle, int left, int top, int w, int h, int manualOffset, bool alignLeft, TaskbarDockDirection direction);
 
         /// <summary>
         /// 恢复任务栏原始布局（如果做过修改）
@@ -40,6 +44,12 @@ namespace LiteMonitor.src.UI.Helpers
         /// 获取期望的父窗口句柄（用于检测是否脱离）
         /// </summary>
         IntPtr GetExpectedParent(IntPtr taskbarHandle);
+
+        /// <summary>
+        /// 策略内部的"子宿主"句柄（Win10 = ReBarWindow32；Win11 = 任务栏根窗口本身）。
+        /// <para>★ 该句柄参与<b>几何缓存键</b>：Explorer 重建子层时句柄必变 ⇒ 缓存整体失效。</para>
+        /// </summary>
+        IntPtr GetInnerHostHandle();
 
         /// <summary>
         /// 是否拥有内部布局逻辑（如 Win10 挤占模式）
@@ -102,17 +112,20 @@ namespace LiteMonitor.src.UI.Helpers
         private readonly ITaskbarStrategy _strategy;
 
         // ★★★ 性能优化缓存 ★★★
-        private Rectangle _lastWindowRect = Rectangle.Empty;
-        private Rectangle _cachedResult = Rectangle.Empty;
+        // ★ P-F05：缓存单位从"一个矩形"升级为"一份几何快照"，
+        //   缓存键覆盖：根/子 HWND 代次、目标显示器、屏幕/工作区矩形、DPI、方向、
+        //   面板尺寸、相关任务栏设置 —— 任一变化**整体失效**（#539）。
+        private TaskbarGeometryKey _lastGeometryKey;
+        private TaskbarGeometry _cachedGeometry;
         private bool _isCacheValid = false;
 
-        // ★ 缓存键的其余分量（P-F04 / #539）：任务栏 HWND 可能在显示器、工作区、DPI 变化后
-        //   **继续有效**，旧缓存只比较物理矩形 ⇒ 会一直复用过期坐标直到整个程序重启。
-        private IntPtr _lastTaskbarHandle = IntPtr.Zero;
-        private string _lastTargetDevice = string.Empty;
-        private Rectangle _lastScreenBounds = Rectangle.Empty;
-        private Rectangle _lastWorkingArea = Rectangle.Empty;
-        private uint _lastTaskbarDpi = 96;
+        // ★ 定位上下文缓存键里的"面板尺寸 / 任务栏设置"分量。
+        //   每次 SetPosition 更新；GetTaskbarRect 作为兼容入口复用同一份上下文，
+        //   避免两个入口互相把对方的缓存条目顶掉。
+        private int _ctxPanelWidth;
+        private int _ctxPanelHeight;
+        private int _ctxManualOffset;
+        private bool _ctxAlignLeft = true;
 
         // ★ 显示器拓扑来源（可注入 ⇒ 多屏/副屏缺失的判定可被真实调用验证）。
         private readonly ITaskbarScreenProvider _screens;
@@ -141,7 +154,10 @@ namespace LiteMonitor.src.UI.Helpers
             }
             else
             {
-                _strategy = new TaskbarStrategyWin10(form);
+                // ★ 策略需要按类名查找内部子窗口（ReBarWindow32 / MSTaskSwWClass），
+                //   走可注入来源 ⇒ 测试可在**真实测试 HWND** 上驱动它，
+                //   且绝不触碰真实的 Shell_TrayWnd。
+                _strategy = new TaskbarStrategyWin10(form, _windows);
             }
         }
 
@@ -232,7 +248,25 @@ namespace LiteMonitor.src.UI.Helpers
             _isCacheValid = false;
         }
 
-        public void SetPosition(IntPtr taskbarHandle, int left, int top, int w, int h, int manualOffset = 0, bool alignLeft = true)
+        /// <summary>
+        /// 设置"定位上下文"（面板尺寸 / 有效对齐 / 手动偏移）—— 参与几何缓存键。
+        /// <para>★ 由 <see cref="TaskbarBizHelper"/> 统一维护：几何解析与最终定位
+        /// 必须使用**同一份**上下文，否则两个入口会互相把对方的缓存条目顶掉。</para>
+        /// </summary>
+        public void SetPlacementContext(int panelWidth, int panelHeight, bool alignLeft, int manualOffset)
+        {
+            _ctxPanelWidth = panelWidth;
+            _ctxPanelHeight = panelHeight;
+            _ctxAlignLeft = alignLeft;
+            _ctxManualOffset = manualOffset;
+        }
+
+        /// <summary>
+        /// 定位面板。
+        /// <para>★ 坐标契约（P-F05）：<paramref name="left"/> / <paramref name="top"/> 为
+        /// <b>物理屏幕像素</b>；策略负责显式转换成父窗口客户区坐标。</para>
+        /// </summary>
+        public void SetPosition(IntPtr taskbarHandle, int left, int top, int w, int h, int manualOffset = 0, bool alignLeft = true, TaskbarDockDirection direction = TaskbarDockDirection.Unknown)
         {
             // 检查父窗口是否正确，防止脱离
             IntPtr currentParent = GetParent(_form.Handle);
@@ -243,7 +277,7 @@ namespace LiteMonitor.src.UI.Helpers
                 AttachToTaskbar(taskbarHandle);
             }
 
-            _strategy.SetPosition(taskbarHandle, left, top, w, h, manualOffset, alignLeft);
+            _strategy.SetPosition(taskbarHandle, left, top, w, h, manualOffset, alignLeft, direction);
         }
 
         public void RestoreTaskbar()
@@ -330,12 +364,38 @@ namespace LiteMonitor.src.UI.Helpers
             return IntPtr.Zero;
         }
 
+        /// <summary>
+        /// 任务栏矩形（<b>物理屏幕像素</b>）—— 兼容入口。
+        /// <para>★ 复用"最近一次的定位上下文"参与缓存键，因此与
+        /// <see cref="GetGeometry"/> 共享同一份缓存，不会互相顶掉。</para>
+        /// </summary>
         public Rectangle GetTaskbarRect(IntPtr hTaskbar, string? targetDevice)
         {
-            if (hTaskbar == IntPtr.Zero) return Rectangle.Empty;
+            return GetGeometry(
+                hTaskbar,
+                targetDevice,
+                _ctxPanelWidth,
+                _ctxPanelHeight,
+                _ctxAlignLeft,
+                _ctxManualOffset).TaskbarRect;
+        }
+
+        /// <summary>
+        /// 解析任务栏几何快照（★ P-F05：方向 + 矩形 + 完整缓存键）。
+        /// <para>★ 坐标空间：本方法内所有矩形均为<b>物理屏幕像素</b>。</para>
+        /// </summary>
+        /// <param name="hTaskbar">任务栏根窗口句柄。</param>
+        /// <param name="targetDevice">目标显示器设备名（空 = 自动 / 主屏）。</param>
+        /// <param name="panelWidth">面板宽度（物理像素）—— 参与缓存键。</param>
+        /// <param name="panelHeight">面板高度（物理像素）—— 参与缓存键。</param>
+        /// <param name="alignLeft">有效对齐（靠左）—— 参与缓存键。</param>
+        /// <param name="manualOffset">手动偏移（物理像素）—— 参与缓存键。</param>
+        public TaskbarGeometry GetGeometry(IntPtr hTaskbar, string? targetDevice, int panelWidth, int panelHeight, bool alignLeft, int manualOffset)
+        {
+            if (hTaskbar == IntPtr.Zero) return TaskbarGeometry.Empty;
 
             // 1. 获取物理矩形
-            if (!GetWindowRect(hTaskbar, out RECT r)) return Rectangle.Empty;
+            if (!GetWindowRect(hTaskbar, out RECT r)) return TaskbarGeometry.Empty;
             var rectPhys = Rectangle.FromLTRB(r.left, r.top, r.right, r.bottom);
 
             // 2. 缓存键的其余分量（#539）：任务栏 HWND 可能在显示器、工作区、DPI 变化后继续有效，
@@ -361,71 +421,95 @@ namespace LiteMonitor.src.UI.Helpers
             }
             catch { }
 
-            if (_isCacheValid &&
-                hTaskbar == _lastTaskbarHandle &&
-                string.Equals(targetDevice ?? string.Empty, _lastTargetDevice, StringComparison.Ordinal) &&
-                rectPhys == _lastWindowRect &&
-                screenBounds == _lastScreenBounds &&
-                workingArea == _lastWorkingArea &&
-                taskbarDpi == _lastTaskbarDpi)
-            {
-                return _cachedResult;
-            }
-
-            Rectangle finalRect = rectPhys;
-
-            // =========================================================================
-            // [SIMPLIFIED FIX] 极简稳定方案：基于 WorkingArea 和 强制高度修正 (DPI适配版)
-            // =========================================================================
-            try
-            {
-                if (screen.HasValue)
-                {
-                    int reservedBottom = screenBounds.Bottom - workingArea.Bottom;
-
-                    // 场景 A: 锚定模式
-                    if (reservedBottom > 2)
-                    {
-                        finalRect = new Rectangle(rectPhys.Left, workingArea.Bottom, rectPhys.Width, reservedBottom);
-                    }
-                    // 场景 B: 悬浮模式
-                    else
-                    {
-                        if (_isWin11)
-                        {
-                            // [Fix] 增加对垂直任务栏的判断，防止误判
-                            // StartAllBack 等软件可能启用垂直任务栏，此时不应应用底部水平任务栏的高度修正
-                            bool isVertical = rectPhys.Height > rectPhys.Width;
-
-                            if (!isVertical)
-                            {
-                                int standardHeight = (int)Math.Round(48.0 * taskbarDpi / 96.0);
-
-                                if (rectPhys.Height > (standardHeight * 0.8))
-                                {
-                                    finalRect = new Rectangle(
-                                        rectPhys.Left,
-                                        rectPhys.Bottom - standardHeight,
-                                        rectPhys.Width,
-                                        standardHeight);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // 3. ★ 停靠方向：用任务栏**相对所属显示器**的物理矩形解析（不用宽高比猜）。
+            //    所属显示器 = 真正"拥有"这块任务栏的那块屏（而不是用户指定的那块）。
+            TaskbarMonitorInfo? owner = null;
+            try { owner = _screens.GetMonitorForHandle(hTaskbar); }
             catch { }
+            Rectangle ownerBounds = owner?.Bounds ?? screenBounds;
+            Rectangle ownerWork = owner?.WorkingArea ?? workingArea;
+            TaskbarDockDirection direction = TaskbarDockResolver.Resolve(rectPhys, ownerBounds, ownerWork);
 
-            _lastWindowRect = rectPhys;
-            _cachedResult = finalRect;
-            _lastTaskbarHandle = hTaskbar;
-            _lastTargetDevice = targetDevice ?? string.Empty;
-            _lastScreenBounds = screenBounds;
-            _lastWorkingArea = workingArea;
-            _lastTaskbarDpi = taskbarDpi;
+            // 4. 任务栏设置（参与缓存键）
+            bool centerAligned = IsCenterAligned();
+            int widgetsWidth = GetWidgetsWidth();
+
+            var key = new TaskbarGeometryKey(
+                hTaskbar,
+                _strategy.GetInnerHostHandle(),
+                targetDevice ?? string.Empty,
+                screenBounds,
+                workingArea,
+                taskbarDpi,
+                direction,
+                panelWidth,
+                panelHeight,
+                alignLeft,
+                manualOffset,
+                centerAligned,
+                widgetsWidth);
+
+            if (_isCacheValid && key == _lastGeometryKey) return _cachedGeometry;
+
+            Rectangle finalRect = ComputeTaskbarRect(rectPhys, screenBounds, workingArea, direction);
+
+            // =========================================================================
+            // 生效的任务栏矩形（锚定方向 ⇒ 用工作区预留的条带；否则用物理矩形）
+            // =========================================================================
+            var geometry = new TaskbarGeometry(
+                finalRect,
+                direction,
+                screenBounds,
+                workingArea,
+                taskbarDpi,
+                owner?.DeviceName ?? targetDevice ?? string.Empty,
+                panelWidth,
+                panelHeight,
+                alignLeft,
+                manualOffset,
+                centerAligned,
+                widgetsWidth,
+                TaskbarDockResolver.ResolveCompatibility(direction));
+
+            _lastGeometryKey = key;
+            _cachedGeometry = geometry;
             _isCacheValid = true;
 
-            return _cachedResult;
+            return geometry;
+        }
+
+        /// <summary>
+        /// 由任务栏的物理矩形 + 显示器信息算出"生效的任务栏矩形"。
+        /// <para>★ 不使用任何"高度启发式"（母计划 F05 第 2 步：未经本仓验证的
+        /// 20～100px 阈值不得直接采用）⇒ 多行任务栏 / 高 DPI 不会被误裁。</para>
+        /// </summary>
+        private static Rectangle ComputeTaskbarRect(Rectangle phys, Rectangle screenBounds, Rectangle workingArea, TaskbarDockDirection direction)
+        {
+            if (screenBounds.Width <= 0 || screenBounds.Height <= 0) return phys;
+
+            int reservedTop = workingArea.Top - screenBounds.Top;
+            int reservedBottom = screenBounds.Bottom - workingArea.Bottom;
+            int reservedLeft = workingArea.Left - screenBounds.Left;
+            int reservedRight = screenBounds.Right - workingArea.Right;
+
+            switch (direction)
+            {
+                case TaskbarDockDirection.Bottom:
+                    if (reservedBottom > 2) return new Rectangle(phys.Left, workingArea.Bottom, phys.Width, reservedBottom);
+                    break;
+                case TaskbarDockDirection.Top:
+                    if (reservedTop > 2) return new Rectangle(phys.Left, screenBounds.Top, phys.Width, reservedTop);
+                    break;
+                case TaskbarDockDirection.Left:
+                    if (reservedLeft > 2) return new Rectangle(screenBounds.Left, phys.Top, reservedLeft, phys.Height);
+                    break;
+                case TaskbarDockDirection.Right:
+                    if (reservedRight > 2) return new Rectangle(workingArea.Right, phys.Top, reservedRight, phys.Height);
+                    break;
+            }
+
+            // 未锚定（自动隐藏 / 悬浮 / 方向未知）⇒ 直接采用物理矩形。
+            return phys;
         }
 
         public bool GetWindowRectWrapper(IntPtr hWnd, out Rectangle rect)
@@ -492,6 +576,45 @@ namespace LiteMonitor.src.UI.Helpers
             style &= (int)~0x80000000; 
             style |= WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS;
             SetWindowLong(hWnd, GWL_STYLE, style);
+        }
+
+        // =================================================================
+        // 坐标空间转换（P-F05：屏幕物理像素 ⇄ 父窗口客户区坐标）
+        // =================================================================
+
+        /// <summary>
+        /// 把一个<b>物理屏幕坐标</b>显式转换成父窗口的<b>客户区坐标</b>。
+        /// <para>★ 这是"坐标契约"的唯一入口：所有最终定位都必须经过它，
+        /// 不得再出现"拿屏幕坐标当客户区坐标用"的混算。</para>
+        /// </summary>
+        /// <returns>false 表示转换失败（此时输出退化为输入值）。</returns>
+        public static bool TryScreenToClient(IntPtr parent, int screenX, int screenY, out int clientX, out int clientY)
+        {
+            clientX = screenX;
+            clientY = screenY;
+            if (parent == IntPtr.Zero) return false;
+
+            POINT pt = new POINT { X = screenX, Y = screenY };
+            if (!ScreenToClient(parent, ref pt)) return false;
+
+            clientX = pt.X;
+            clientY = pt.Y;
+            return true;
+        }
+
+        /// <summary>
+        /// 把一个<b>物理屏幕矩形</b>显式转换成父窗口的<b>客户区矩形</b>
+        /// （尺寸不变，只平移原点）。
+        /// </summary>
+        public static bool TryScreenRectToClient(IntPtr parent, Rectangle screenRect, out Rectangle clientRect)
+        {
+            if (!TryScreenToClient(parent, screenRect.Left, screenRect.Top, out int x, out int y))
+            {
+                clientRect = Rectangle.Empty;
+                return false;
+            }
+            clientRect = new Rectangle(x, y, screenRect.Width, screenRect.Height);
+            return true;
         }
     }
 }
