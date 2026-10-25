@@ -13,6 +13,22 @@
 
 ---
 
+## 0. 勘误（2026-10-25 晚，补于修复阶段）
+
+**#574 的异常来源归因被实测推翻并修正。**
+
+| 项 | 原表述（出自 `2026-10-25-TASK-3-crash-hardware.md`，本文 §2 沿用） | 实测结论（P-F12 用探针逐条验证） |
+|---|---|---|
+| `ArgumentException("Parameter is not valid.")` 的抛出者 | 已释放的 **Graphics**（`Font.GetHeight(已释放 Graphics)`） | 已释放的 **Font**（`Font.Height` / `Font.GetHeight` 在字体已释放时抛此异常）；`GetHeight(已释放 Graphics)` 抛的是**另一条** `ArgumentException`，消息为 `graphics` |
+| 旧路径的 DPI 语义 | 暗示 `GetHeight(Graphics)` 与 `Font.Height` 语义相近 | `Font.Height` **恒为 96 DPI 基线**；`GetHeight(float dpi)` 与 `GetHeight(Graphics)` 在同 DPI 下**逐位相等** ⇒ 旧路径在 150%/200% 下**必然裁切行高** |
+
+⇒ 结论不变（#574 的 fork 侧结构风险确认成立，修复由 P-F12 落地），但**触发条件从「Graphics 释放」改为「字体释放（切主题 / 换字体 / 字体资源被重建时）」**，因此关闭 #574 所需的日志证据也应指向字体生命周期而非 Graphics。
+
+**基线 flaky 用例已定位**：`tests/LiteMonitor.Tests/ReviewMarketPersistenceRegressionTests.cs`（主题市场域，与本轮修复无关）。F15 与 F12 两个包独立撞上同一处偶发失败；该文件源码注释自陈「单跑全绿、全量间歇挂」。⇒ **门禁跑全量时若见此失败，属基线既有，不得归因于本轮任何包。**
+
+
+---
+
 ## 1. 判定口径
 
 | 标记 | 含义 |
