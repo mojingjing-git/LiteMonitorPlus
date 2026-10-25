@@ -71,9 +71,7 @@ internal static class Program
         if (options.SelftestRounds is int rounds)
             return RunSelftest(options, rounds);
 
-        // 管道模式在 P-I2 步骤 3（HostPipeSession）接入；当前构建步骤只交付采样器与自测。
-        Console.Error.WriteLine("pipe mode is not wired in this build step");
-        return 65;
+        return HostPipeSession.RunAsync(options).GetAwaiter().GetResult();
     }
 
     /// <summary>自测模式：跑 N 轮真实采样，stdout 输出 JSON 摘要后退出（供测试与实机核查）。</summary>

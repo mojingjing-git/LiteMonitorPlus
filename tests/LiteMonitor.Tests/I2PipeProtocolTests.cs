@@ -1,12 +1,15 @@
 using System;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.IO;
+using System.IO.Pipes;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using LiteMonitor.Contracts;
+using LiteMonitor.SystemServices.Pipe;
 using Xunit;
 
 namespace LiteMonitor.Tests;
@@ -230,5 +233,226 @@ internal static class IpcTestEncode
         BinaryPrimitives.WriteInt32LittleEndian(frame, json.Length);
         json.CopyTo(frame, 4);
         return frame;
+    }
+}
+
+/// <summary>
+/// P-I2 步骤 3 端点级集成：管道服务端握手核验（PID/会话/版本）、伪造连接有界拒绝、
+/// 与真实 Host 进程的完整会话（握手 → 快照 → 命令应答 → 受控关闭）。
+/// </summary>
+public sealed class I2PipeEndpointTests
+{
+    private static IpcEnvelope HelloEnvelope(string session, int major = 1) => new(
+        new IpcHeader(major, 0, IpcProtocol.TypeHello, session, 0, 1),
+        new IpcHelloMessage(Environment.ProcessId, Environment.TickCount64, "test"));
+
+    private static async Task<IpcWelcomeMessage> ConnectAndSpeakAsync(
+        PipeServerEndpoint endpoint, Func<NamedPipeClientStream, Task> speak, TimeSpan readTimeout)
+    {
+        using var client = new NamedPipeClientStream(".", endpoint.PipeName, PipeDirection.InOut);
+        await client.ConnectAsync(2000);
+        await speak(client);
+        using var cts = new CancellationTokenSource(readTimeout);
+        IpcEnvelope? welcome = await new IpcFrameReader(client).ReadAsync(cts.Token);
+        Assert.NotNull(welcome);
+        return welcome!.PayloadAs<IpcWelcomeMessage>();
+    }
+
+    [Fact]
+    public async Task 伪造连接_会话令牌不匹配被拒并继续有界等待()
+    {
+        using var endpoint = PipeServerEndpoint.Create();
+        var wait = endpoint.WaitForHostAsync(expectedProcessId: Environment.ProcessId, TimeSpan.FromSeconds(2));
+
+        IpcWelcomeMessage welcome = await ConnectAndSpeakAsync(endpoint,
+            client => new IpcFrameWriter(client).WriteAsync(HelloEnvelope(endpoint.SessionToken + "-forged"), CancellationToken.None),
+            TimeSpan.FromSeconds(2));
+
+        Assert.False(welcome.Accepted);
+        Assert.Contains("session-mismatch", welcome.Reason);
+        Assert.Null(await wait); // 期限内无合格 Host ⇒ null（不抛、不挂死）
+    }
+
+    [Fact]
+    public async Task 伪造连接_错误PID被拒_端点继续有界等待()
+    {
+        using var endpoint = PipeServerEndpoint.Create();
+        var wait = endpoint.WaitForHostAsync(expectedProcessId: Environment.ProcessId + 40_000, TimeSpan.FromSeconds(2));
+
+        // PID 核验发生在读取 hello 之前：伪造端可能收到拒绝 welcome，也可能因服务端
+        // 立即断开而遇到 broken pipe——两者都证明"连接被拒"；关键断言是端点不挂死、
+        // 期限内返回 null。
+        try
+        {
+            using var client = new NamedPipeClientStream(".", endpoint.PipeName, PipeDirection.InOut);
+            await client.ConnectAsync(2000);
+            var writer = new IpcFrameWriter(client);
+            await writer.WriteAsync(HelloEnvelope(endpoint.SessionToken), CancellationToken.None);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            IpcEnvelope? welcome = await new IpcFrameReader(client).ReadAsync(cts.Token);
+            if (welcome is not null)
+            {
+                IpcWelcomeMessage verdict = welcome.PayloadAs<IpcWelcomeMessage>();
+                Assert.False(verdict.Accepted);
+                Assert.Contains("pid-mismatch", verdict.Reason);
+            }
+        }
+        catch (IOException)
+        {
+            // broken pipe：连接级拒绝的另一种可观察面
+        }
+
+        Assert.Null(await wait);
+    }
+
+    [Fact]
+    public async Task 错误版本_有解释拒绝不误判会话()
+    {
+        using var endpoint = PipeServerEndpoint.Create();
+        var wait = endpoint.WaitForHostAsync(expectedProcessId: Environment.ProcessId, TimeSpan.FromSeconds(2));
+
+        IpcWelcomeMessage welcome = await ConnectAndSpeakAsync(endpoint,
+            client => new IpcFrameWriter(client).WriteAsync(HelloEnvelope(endpoint.SessionToken, major: 99), CancellationToken.None),
+            TimeSpan.FromSeconds(2));
+
+        Assert.False(welcome.Accepted);
+        Assert.Contains("version-mismatch", welcome.Reason);
+        Assert.Null(await wait);
+    }
+
+    [Fact]
+    public async Task 握手阶段非法JSON_有界拒绝后继续等待()
+    {
+        using var endpoint = PipeServerEndpoint.Create();
+        var wait = endpoint.WaitForHostAsync(expectedProcessId: Environment.ProcessId, TimeSpan.FromSeconds(2));
+
+        IpcWelcomeMessage welcome = await ConnectAndSpeakAsync(endpoint, async client =>
+        {
+            byte[] garbage = Encoding.UTF8.GetBytes("not-json-at-all{{{");
+            var frame = new byte[4 + garbage.Length];
+            BinaryPrimitives.WriteInt32LittleEndian(frame, garbage.Length);
+            garbage.CopyTo(frame, 4);
+            await client.WriteAsync(frame);
+            await client.FlushAsync();
+        }, TimeSpan.FromSeconds(2));
+
+        Assert.False(welcome.Accepted);
+        Assert.Contains("invalid-hello", welcome.Reason);
+        Assert.Null(await wait);
+    }
+
+    private static Process StartHost(params string[] args)
+    {
+        var psi = new ProcessStartInfo(I2HostBinaries.ExePath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (string arg in args) psi.ArgumentList.Add(arg);
+        return Process.Start(psi)!;
+    }
+
+    [Fact]
+    public async Task 握手超时_delay连接的Host等不到_有界返回null()
+    {
+        using var endpoint = PipeServerEndpoint.Create();
+        // 真实 Host 8 秒后才连接；端点 1.5 秒期限先到。
+        using var host = StartHost("--pipe", endpoint.PipeName, "--session", endpoint.SessionToken, "--fault", "delay-handshake");
+        try
+        {
+            long t0 = Environment.TickCount64;
+            ConnectedHost? connected = await endpoint.WaitForHostAsync(host.Id, TimeSpan.FromMilliseconds(1500));
+            long elapsed = Environment.TickCount64 - t0;
+            Assert.Null(connected);
+            Assert.InRange(elapsed, 1000, 4000); // 到期返回，不无限等待
+        }
+        finally
+        {
+            if (!host.HasExited) host.Kill(entireProcessTree: true);
+            host.WaitForExit(10000);
+        }
+    }
+
+    [Fact]
+    public async Task 真实Host_完整会话_握手快照命令与受控关闭()
+    {
+        using var endpoint = PipeServerEndpoint.Create();
+        using var host = StartHost(
+            "--pipe", endpoint.PipeName,
+            "--session", endpoint.SessionToken,
+            "--parent-pid", Environment.ProcessId.ToString(),
+            "--refresh-ms", "100",
+            "--test-pattern");
+        try
+        {
+            using ConnectedHost? connected = await endpoint.WaitForHostAsync(host.Id, TimeSpan.FromSeconds(5));
+            Assert.NotNull(connected);
+            Assert.Equal(host.Id, connected!.PeerProcessId);
+            Assert.Equal(1, connected.PeerMajorVersion);
+
+            // 读取真实快照（合成样本模式：12 个样本）。
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            IpcEnvelope? first = null;
+            while (first is null || first.Header.Type != IpcProtocol.TypeSnapshot)
+            {
+                IpcEnvelope? envelope = await connected.ReadAsync(cts.Token);
+                Assert.NotNull(envelope);
+                first = envelope;
+            }
+            IpcSnapshotMessage snapshot = first!.PayloadAs<IpcSnapshotMessage>();
+            Assert.Equal(12, snapshot.Snapshot.Samples.Count);
+            Assert.True(snapshot.Snapshot.BatchId > 0);
+
+            // 命令 → 应答（请求 ID 对得上）。
+            await connected.SendAsync(new IpcEnvelope(
+                new IpcHeader(1, 0, IpcProtocol.TypeCommand, endpoint.SessionToken, 77, 1),
+                new IpcCommandMessage(IpcProtocol.OpRescan, null)), cts.Token);
+            bool sawResponse = false;
+            while (!sawResponse)
+            {
+                IpcEnvelope? envelope = await connected.ReadAsync(cts.Token);
+                Assert.NotNull(envelope);
+                if (envelope!.Header.Type == IpcProtocol.TypeResponse)
+                {
+                    Assert.Equal(77, envelope.Header.RequestId);
+                    Assert.True(envelope.PayloadAs<IpcResponseMessage>().Ok);
+                    sawResponse = true;
+                }
+            }
+
+            // 受控关闭：shutdown → 应答 + goodbye → Host 退出码 0。
+            await connected.SendAsync(new IpcEnvelope(
+                new IpcHeader(1, 0, IpcProtocol.TypeCommand, endpoint.SessionToken, 78, 2),
+                new IpcCommandMessage(IpcProtocol.OpShutdown, null)), cts.Token);
+            bool sawGoodbye = false;
+            while (!sawGoodbye)
+            {
+                IpcEnvelope? envelope = await connected.ReadAsync(cts.Token);
+                if (envelope is null) break;
+                if (envelope.Header.Type == IpcProtocol.TypeGoodbye) sawGoodbye = true;
+            }
+            Assert.True(sawGoodbye);
+            Assert.True(host.WaitForExit(8000));
+            Assert.Equal(0, host.ExitCode);
+        }
+        finally
+        {
+            if (!host.HasExited) host.Kill(entireProcessTree: true);
+            host.WaitForExit(10000);
+        }
+    }
+
+    [Fact]
+    public async Task Host故障注入_badSession与badVersion_握手被拒后自退()
+    {
+        foreach (string fault in new[] { "bad-session", "bad-version" })
+        {
+            using var endpoint = PipeServerEndpoint.Create();
+            using var host = StartHost("--pipe", endpoint.PipeName, "--session", endpoint.SessionToken, "--fault", fault);
+            ConnectedHost? connected = await endpoint.WaitForHostAsync(host.Id, TimeSpan.FromSeconds(3));
+            Assert.Null(connected); // 拒绝后继续等待 → 期限到 null
+            Assert.True(host.WaitForExit(8000), $"{fault}: Host 应在握手被拒后自行退出");
+            Assert.Equal(13, host.ExitCode); // 13 = 服务端拒绝
+        }
     }
 }
