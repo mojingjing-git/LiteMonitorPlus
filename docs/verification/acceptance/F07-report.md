@@ -351,6 +351,18 @@ $ dotnet test tests/LiteMonitor.Updater.Tests/... -c Debug --no-build --nologo
 |---|---|
 | `f776435` | `fix(F07): 稳定设备身份目录 + 槽位绑定 + 兼容迁移（#290/#538，#577 基础）` |
 | `dc3b273` | `test(F07): 双同型号设备/枚举互换/设备消失/驱动更新的身份与迁移用例` |
-| （本文件） | `docs(F07): 验收记录（最小设计 + 迁移 fixture 先行）` |
+| `32f18fd` | `docs(F07): 验收记录（最小设计 + 迁移 fixture 先行）` |
+| `fda5bfa` | `docs(F07): 验收记录补记基线已知 flaky 的复现结论` |
 
 分支 `fix/F07-stable-device-identity`，**未推送远端、未动 master**；CI 阈值文件未改。
+
+### 11.1 集成提示（给协调者）
+
+- 基线：`2300af6`（`integration/w1` 合并点）。**master 已前移到 `dd04fdd`**（含 F08a 收尾：
+  `DiskProbeMode` 改 nullable + CI 阈值 2028→2029）。
+- 合并可行性已用 `git merge-tree --write-tree master HEAD` 验证：**退出码 0，无冲突**。
+  唯一"两边都改过"的文件是 `src/UI/Settings/SystemHardwarPage.cs`（F08a 改了 `RefreshDiskProbeStatus` 的注释，
+  本包改了磁盘下拉），两者 hunk 不重叠。
+- **门禁阈值建议**：master 现为 `MIN_TEST_TOTAL: 2029`；本包 +33 条 ⇒ 合并后应为 **2062**。
+  （`MAX_SKIPPED_TESTS` 不得放宽；注意本机实跑跳过数是 7，其中 6 条 Market 索引 + 1 条联网 E2E 属环境性跳过。）
+- 本包**未改** `src/System/HardwareMonitor.cs`、`src/Core/Settings.cs`、CI 文件、任务栏/网络路径 ⇒ 与 F03/F08a 无同文件冲突。
