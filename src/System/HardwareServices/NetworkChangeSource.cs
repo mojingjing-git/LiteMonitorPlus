@@ -27,8 +27,12 @@ namespace LiteMonitor.src.SystemServices
     /// <summary>
     /// 生产实现：转发 <see cref="NetworkChange.NetworkAddressChanged"/> 与
     /// <see cref="NetworkChange.NetworkAvailabilityChanged"/>。
-    /// <para>★ 只在**进程内订阅一次**（静态单例）—— 避免每创建一个
-    /// <see cref="NetworkManager"/> 就往静态事件上挂一个永不解绑的处理器。</para>
+    /// <para>★ 系统事件**只在进程内订阅一次**（静态单例）—— 避免每创建一个
+    /// <c>NetworkManager</c> 就往**系统**静态事件上再挂一个处理器。</para>
+    /// <para>★ 但注意：每个 <c>NetworkManager</c> 实例仍会向**本单例**挂一个
+    /// <c>Changed</c> 处理器，且**没有解绑路径**（生产里 <c>NetworkManager</c>
+    /// 只创建一次，见 <c>HardwareMonitor</c>；实例不会被反复创建）。
+    /// ⇒ **测试必须注入假事件源**，否则会跨用例串台、并让旧实例被单例强引用住。</para>
     /// </summary>
     public sealed class SystemNetworkChangeSource : INetworkChangeSource
     {
