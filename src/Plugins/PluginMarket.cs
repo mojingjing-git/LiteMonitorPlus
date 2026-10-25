@@ -482,7 +482,7 @@ namespace LiteMonitor.src.Plugins
             string pluginId,
             Func<string, MarketPluginRecord?> findRecord,
             out string reason)
-            => IsTargetAvailable(pluginId, findRecord, FileContentIdMatches, out reason);
+            => IsTargetAvailable(pluginId, PluginsDir, findRecord, FileContentIdMatches, out reason);
 
         /// <summary>
         /// 目标文件是否允许被市场写入（LM-008 加固；M1 资产类型泛化）。
@@ -495,18 +495,19 @@ namespace LiteMonitor.src.Plugins
         /// 用户自己放的、没记录的文件（内置插件、手动安装、旧版残留）一律拒绝。
         /// </summary>
         internal static bool IsTargetAvailable(
-            string pluginId,
+            string assetId,
+            string targetDirectory,
             Func<string, MarketPluginRecord?> findRecord,
             Func<string, string, bool> contentIdentityMatches,
             out string reason)
         {
-            string fileName = GetInstallFileName(pluginId);
-            string path = Path.Combine(PluginsDir, fileName);
+            string fileName = GetInstallFileName(assetId);
+            string path = Path.Combine(targetDirectory, fileName);
             if (!File.Exists(path)) { reason = ""; return true; }
 
             // 文件在，且确认是本市场装的这个 id → 允许（这是"更新"）
-            var record = findRecord(pluginId);
-            if (record != null && contentIdentityMatches(path, pluginId))
+            var record = findRecord(assetId);
+            if (record != null && contentIdentityMatches(path, assetId))
             {
                 if (!string.Equals(record.File, fileName, StringComparison.OrdinalIgnoreCase))
                 {

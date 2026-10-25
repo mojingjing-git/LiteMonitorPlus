@@ -163,11 +163,13 @@ namespace LiteMonitor.src.UI.SettingsPage
             {
                 return null;
             }
-            if (theme?.Rendering == null) return null;
+            if (theme == null) return null;
 
-            // GPU 判据与渲染器同源（F16）：backend == gpu 且 Validate 全绿才走 GPU 快照
-            var errors = theme.Rendering.Validate();
-            bool isGpu = string.Equals(theme.Rendering.Backend, ThemeRenderingConfig.GpuBackend, StringComparison.OrdinalIgnoreCase)
+            // GPU 判据与渲染器同源（F16）：rendering.backend == gpu 且 Validate 全绿才走 GPU 快照；
+            // 缺 rendering 块 = 纯 legacy 主题（12 个内置 legacy 主题均如此），直接走 legacy 快照
+            var errors = theme.Rendering?.Validate() ?? (IReadOnlyList<string>)Array.Empty<string>();
+            bool isGpu = theme.Rendering != null
+                         && string.Equals(theme.Rendering.Backend, ThemeRenderingConfig.GpuBackend, StringComparison.OrdinalIgnoreCase)
                          && errors.Count == 0;
 
             if (isGpu && !Program.SafeMode && TryRenderGpuSnapshot(theme, pngPath))

@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "updated_at": "2026-10-25T00:00:00Z",
+  "repo": "mojingjing-git/awesome-litemonitor-plugins",
+  "total": 0,
+  "plugins": [],
+  "themes_total": 2,
+  "themes": [
+    {
+      "id": "market-aurora-gpu",
+      "name": "Market Aurora GPU",
+      "name_en": "Market Aurora GPU",
+      "description": "GPU 主题夹具",
+      "description_en": "GPU theme fixture",
+      "author": "fixture",
+      "version": "1.0.0",
+      "file": "market-aurora-gpu.json",
+      "download_url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/themes/market-aurora-gpu.json",
+      "page_url": "https://github.com/mojingjing-git/awesome-litemonitor-plugins/tree/main/themes/market-aurora-gpu",
+      "sha256": "d136a135019a97617c6bf4db9981f9ac52b6263988225d5be1a95b7232f580cd",
+      "size": 2050,
+      "route": "gpu",
+      "material": "liquid_glass",
+      "status": "ok",
+      "verified": true
+    },
+    {
+      "id": "market-paper-legacy",
+      "name": "Market Paper Legacy",
+      "name_en": "Market Paper Legacy",
+      "description": "legacy 主题夹具(无 rendering 块)",
+      "description_en": "legacy theme fixture (no rendering block)",
+      "author": "fixture",
+      "version": "1.0.0",
+      "file": "market-paper-legacy.json",
+      "download_url": "https://raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins/main/themes/market-paper-legacy.json",
+      "page_url": "https://github.com/mojingjing-git/awesome-litemonitor-plugins/tree/main/themes/market-paper-legacy",
+      "sha256": "030a5583e01d7d141a2d54fd1bc536f4494b0e66d906e9cd011825d9d631ceab",
+      "size": 822,
+      "route": "legacy",
+      "material": "legacy",
+      "status": "ok",
+      "verified": true
+    }
+  ]
+}
