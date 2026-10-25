@@ -95,7 +95,7 @@ jobs:
       #    → 2029（+1 = F08a 收尾把磁盘探测策略迁移用例补到 24 条；
       #      Debug 实测主工程 1937（1936 通过 + 1 指定 E2E 跳过）+ Updater 73 + GPU 19
       #      = 2029 总计、0 失败）。
-      MIN_TEST_TOTAL: 2029
+      MIN_TEST_TOTAL: 2139
 
       # ★ 必须出现的测试程序集。少任何一个都会让断言失败
       #   （防止某个测试工程悄悄没被测到）。
@@ -116,7 +116,7 @@ jobs:
       #   曾被误归因为"环境抖动"——钉进来后任何静默跳过/漏跑都会让门禁直接红。
       # ★ 主题市场（M6）：ThemeMarketContractTests / ThemeMarketPolicyTests 均为
       #   夹具驱动常跑（不依赖环境变量门控），各 7 条 ≥ 6 ✓——钉进硬门禁防静默漏跑。
-      MUST_EXECUTE_TEST_CLASS: 'MarketIndexContractTests, ReviewMarketPersistenceRegressionTests, ThemeMarketContractTests, ThemeMarketPolicyTests'
+      MUST_EXECUTE_TEST_CLASS: 'MarketIndexContractTests, ReviewMarketPersistenceRegressionTests, ReviewMarketInstallRaceRegressionTests, ThemeMarketContractTests, ThemeMarketPolicyTests'
       MUST_EXECUTE_TEST_CLASS_MIN_COUNT: 6
 
       # ★ 插件市场契约夹具路径（S4.1 引入，仓库内固定路径）。
