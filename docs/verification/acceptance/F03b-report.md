@@ -13,6 +13,8 @@
     （`tests/LiteMonitor.Tests/NetworkCacheWindowTests.cs` 新建，18 条用例）
   - `0f4a9b2` `docs(F03b): 验收记录 —— 网络地址缓存窗与重匹配节流收口（#96 关闭条件补齐）`
     （`docs/verification/acceptance/F03b-report.md` 新建）
+  - `def716b` `docs(F03b): 验收记录补齐提交 SHA 列表与改动文件清单`（仅补本文件）
+  - `e7f9b49` `docs(F03b): 验收记录补齐最终验收轮数据、已知 flaky 说明与精确行号锚点`（仅补本文件）
 - 完成日期：2026-10-25
 - 执行者：P-F03b 外派执行会话（worktree：`G:\TOOL\LiteMonitor-fork\.worktrees\f03b`）
 
@@ -246,6 +248,8 @@ Set-Location 'G:\TOOL\LiteMonitor-fork\.worktrees\f03b'
 b911315 fix(F03b): IP 地址缓存窗与重匹配节流改为事件驱动优先 + 时间窗兜底
 b8d2b21 test(F03b): 热插拔立即刷新、事件丢失时间窗兜底、事件风暴有界、双网卡不串
 0f4a9b2 docs(F03b): 验收记录 —— 网络地址缓存窗与重匹配节流收口（#96 关闭条件补齐）
+def716b docs(F03b): 验收记录补齐提交 SHA 列表与改动文件清单
+e7f9b49 docs(F03b): 验收记录补齐最终验收轮数据、已知 flaky 说明与精确行号锚点
 ```
 
 改动文件（`git diff --name-status bbbfdaf..HEAD`）：
