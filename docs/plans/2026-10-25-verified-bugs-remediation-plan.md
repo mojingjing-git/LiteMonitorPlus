@@ -404,7 +404,7 @@ Release同样执行；TRX交给仓库现有门禁脚本核对发现数/跳过数
 
 ## 7. 38个issue + 1个新发现的交付映射
 
-| Issue | 任务 | 本轮关闭或保留条件 | 状态（W1 批次后，2026-10-25） |
+| Issue | 任务 | 本轮关闭或保留条件 | 状态（截至 2026-10-26） |
 |---|---|---|---|
 | #35 | F00/F16回归 | 保持现有修复；不因内存波动重开代码任务 | 已验证（不生效·可关闭） |
 | #78 | F15 | 72h私有字节及定位证据不足则保留调查 | 仍需调查（F15 取证脚本就绪，待 72h 私有字节实测） |
@@ -416,7 +416,7 @@ Release同样执行；TRX交给仓库现有门禁脚本核对发现数/跳过数
 | #290 | F07/F09/F10 | 身份稳定、原生句柄修复和显卡切换场景共同通过 | 代码完成（部分，F07 身份目录已落地；**现场闪退关闭仍需 F09b 的 NVML 句柄 + F10 映射自愈**） |
 | #416 | F15 | 有内核栈归因后实施对应优化；未归因不宣称根因解决 | 仍需调查（F15 WPA 采集脚本就绪，待火焰图归因） |
 | #434 | F10 | 缺失Key运行时恢复；区分无值遥测 | 未开始 |
-| #437 | F14-A/F14-B | 卡顿与暗色两个子项分别验收 | 未开始 |
+| #437 | F14-A/F14-B | 卡顿与暗色两个子项分别验收 | 卡顿半项**代码完成**（F14a：重复打开 p95 8566ms → 1.58ms）；暗色半项未开始（F14b） |
 | #450 | F10/F07 | 无需手动切卡恢复，自动选卡语义保持 | 未开始 |
 | #466 | F08/F09 | 构造前排除与USB盘安全移除实测通过 | 已缓解（F08a CountersOnly 止血；F08b 精细策略未做） |
 | #497 | F09/F16回归 | 保持已有AMD匹配能力，驱动问题不冒充软件修复 | 已验证（不生效·可关闭） |
@@ -425,9 +425,9 @@ Release同样执行；TRX交给仓库现有门禁脚本核对发现数/跳过数
 | #514 | F11 | 无传感器/失败与真实0在各界面可区分 | 未开始 |
 | #521 | F10/F16回归 | 建图期核显预热保持 | 已验证（不生效·可关闭） |
 | #538 | F07 | 同型号盘可分别选择，迁移不误绑定 | 代码完成（F07 磁盘改 Label+Value + 身份优先读回；待实机：真机同型号两块盘） |
-| #539 | F04/F05 | 纯任务栏分辨率/DPI变化后位置与占位恢复 | 代码完成（F04 已扩展几何缓存键；F05 未做） |
+| #539 | F04/F05 | 纯任务栏分辨率/DPI变化后位置与占位恢复 | 代码完成（F04 扩展缓存键 + F05 扩到 13 个分量；**遗留 `TaskbarForm.OnDpiChanged` 缺失**，需 F06 或后续包认领） |
 | #553 | F04 | 锁屏/恢复与父子句柄重建实机验收 | 代码完成（待实机：锁屏/睡眠/Explorer 重启/RDP） |
-| #568 | F05 | Win10方向变化和重复占位无漂移 | 未开始 |
+| #568 | F05 | Win10方向变化和重复占位无漂移 | 代码完成（F05 显式四方向 + 占位幂等，1200→640/600→900 已锁死；待实机：Win10 真机方向切换） |
 | #569 | F07/F10/F16回归 | 核显+独显同显保持 | 已验证（不生效·可关闭） |
 | #573 | F04/F05 | 冷启动副屏迟到后正确挂载 | 代码完成（待实机：冷启动竞态 ≥5 次） |
 | #574 | F12/F15 | 已知字体风险修复；原崩溃需日志对应 | 代码完成（字体生命周期已修；原崩溃仍需转储/日志） |
@@ -444,7 +444,7 @@ Release同样执行；TRX交给仓库现有门禁脚本核对发现数/跳过数
 | #603 | F10/F11/F16回归 | 预热路径保持；不以真实0触发无效重建 | 已验证（不生效·可关闭） |
 | #611 | F13 | 主源失败→本地兜底→主源恢复全链路 | 代码完成（`continue_on_error` 与 `native://newyear` 已恢复） |
 | #612 | F06 | 主窗置顶与纯任务栏Z序分别验收 | 未开始 |
-| MARKET-RACE | F17 | 修复后安装事务在并发读取下不再抛 `ERROR_ACCESS_DENIED`；**全量测试 5 次连跑全绿**；安装与恢复并发后不出现"文件已换但记录没换" | 未开始（2026-10-25 新发现，无对应上游 issue） |
+| MARKET-RACE | F17 | 修复后安装事务在并发读取下不再抛 `ERROR_ACCESS_DENIED`；**全量测试 5 次连跑全绿**；安装与恢复并发后不出现"文件已换但记录没换" | **代码完成（F17）** —— 读取侧共享读 + 替换侧有界重试 + 可识别异常兜底；新增 5 条确定性用例；门禁全量连跑收口中 |
 | WEB-OWS | F01 | 合法SP/HTAB请求进入握手，不再静默200 | 已验证（探针实测 C5/C6 由 200 翻 101） |
 
 ### 7.1 W1 批次集成记录（2026-10-25）
@@ -464,13 +464,16 @@ Release同样执行；TRX交给仓库现有门禁脚本核对发现数/跳过数
 
 ### 7.2 W2 批次集成记录（2026-10-26 起）
 
-**集成方式**：同一 integration worktree 继续逐分支 `git merge --no-ff`。已合入 **F03b / F02 / F07** 三包，与 W1 各包**文件集零重叠 ⇒ 自动合并成功**。
+**集成方式**：同一 integration worktree 继续逐分支 `git merge --no-ff`。已合入 **F03b / F02 / F07 / F05 / F14a / F17** 六包，与 W1 各包**文件集零重叠 ⇒ 自动合并成功**。
 
 | 包 | 分支 | 主要产物 | 新增用例 |
 |---|---|---|---|
 | F03b | `fix/F03b-network-cache-window` | `NetworkAddressCache.cs` / `NetworkChangeSource.cs` / `NetworkAdapterSource.cs`（3 个新接缝）+ `NetworkManager.cs` 两处固定秒数窗改为**事件驱动优先 + 时间窗兜底 + 有界** | 18 |
 | F02 | `fix/F02-reverse-proxy-policy` | `WebServerAccessPolicy.cs`（新，469 行）、`WebServerAllowedHosts` / `WebServerTrustedProxies` 两个新字段、**`WebServerTrustProxyHeaders` 死设置真正生效** | 21 |
 | F07 | `fix/F07-stable-device-identity` | `DeviceIdentity.cs` / `DeviceSlotResolver.cs` / `DeviceMigration.cs` / `DeviceBindingStore.cs`（4 个新文件）+ `HardwareScanner` 按身份去重 + `SensorMap` 槽位绑定 | 33 |
+| F05 | `fix/F05-taskbar-geometry` | `TaskbarGeometry.cs` / `TaskbarReservationModel.cs`（2 个新文件）+ 显式四方向 + 坐标契约 + 占位幂等；几何缓存键扩到 **13 个分量** | 23 |
+| F14a | `fix/F14a-market-page-cache` | `MarketPageCache.cs`（新）+ `PluginMarketPage.cs` 按内容签名差量刷新（不再每次进入全量重建 UI） | 10 |
+| F17 | `fix/F17-market-install-race` | `MarketFileIo.cs`（新）+ 读取侧共享读（6 处）+ 替换侧有界重试（6 处）+ `MarketFileReplaceBlockedException` | 5 |
 
 **F02（#580）核心成果**
 
@@ -486,6 +489,53 @@ WebProbe **C7（`Host`=隧道域名）由 `403 Forbidden` 翻为 `101 Switching 
 
 **三个包的待实机清单（摘）**：F03b —— 真实 USB 网卡热插拔 / Wi-Fi↔有线的真实 `NetworkAvailabilityChanged` 时序；F02 —— **真实 Cloudflare Tunnel 全链路**（本机无 cloudflared，**未用等价请求冒充**）；F07 —— 同型号 SSD 真机分别可选、真机重启后仍绑定同一块盘、双 3080/3080Ti 枚举顺序互换后 `GPU.0` 仍是原卡。
 
+**F14a 核心成果（#437 卡顿半项）**
+
+同机（AMD 5800X / Win11）、同一 100 项固定夹具、40 次切页采样、同一命令：
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| 重复打开 **p95** | **8566.04 ms**（超标约 85 倍） | **1.58 ms**（min 0.63 / median 1.14 / max 10.90）⇒ 目标 ≤100ms **余量 63 倍** |
+| 首次打开 | 1701.62 ms | 2320.57 ms |
+| 100 次切页用例耗时 | 52 s | 0.25 s |
+
+缓存签名**八个维度**：资产类型（插件/主题两页签分别计算、互不串台）、索引版本摘要、安装状态摘要、选中项、语言、DPI、设置配色（UIColors 12 项指纹）、请求代次。代次守卫经「临时禁用 → 单跑 → 失败 → 还原」验证**可证伪**。
+
+遗留与相邻问题：`SettingsForm.SwitchPage` 仍用 `Controls.Clear()+Add` 切页 ⇒ 建议给 `ISettingsPage` 加 `OnHide()` 显式通知（归 F14b / 设置页重构）；`ThemePreviewService` 快照队列是进程级静态，离页后仍会渲染**一次性**快照（非持续跑）⇒ 同一归属。
+
+**F05 核心成果与偏离（协调者已裁定）**
+
+#568 **代码层满足**：显式 Top/Bottom/Left/Right（按任务栏相对所属显示器的**物理矩形**解析，删掉两处宽高比猜测）；占位改为「基线 + 本次占位量」，系统改动任务列表时先扣除占位量再施加。**1200→640 / 600→900 场景已锁死**：图标停在 900（不再右移 600px）、列表 940（不再被压到 640）、面板停在 600（不再跳到 900）。#539 **代码层满足**：几何缓存键扩到 13 个分量，任一变化整体失效。
+
+偏离：① 新建 2 个生产文件（总则允许「清单内文件 + 新建文件」）⇒ 接受；② 对 F04 的 `TaskbarWin32TestHost.cs` **仅追加**一个方法 `CreateSlotChild`（+23 行，纯增量）⇒ 接受；③ **删除 Win11 的 48px 任务栏高度启发式**（母计划本就要求不采用未验证的高度启发式）⇒ 合规；④ Win10 居左时面板位置从「任务栏最左端 +6」改为「任务列表自然左边界」并参与挤占 ⇒ **行为变化，记入 F16 发布说明 + 待实机观感确认**。
+
+遗留（不在本包可改范围）：**`TaskbarForm.OnDpiChanged` 缺失** ⇒ 任务栏面板 DPI 变化时不重算字体/尺寸（`TaskbarForm.cs` 归 F04 已合并区域，F05 禁改）⇒ **需 F06 或后续包认领**。
+
+**F17 核心成果（MARKET-RACE —— flaky 收口）**
+
+Windows 文件替换语义（**实测**，非推测）：
+
+| 场景 | 结果 | Win32 错误 | .NET 异常 |
+|---|---|---|---|
+| 源、目标都不被占用 | **成功** | — | — |
+| **目标**被任意共享模式占用（**含 `FileShare.ReadWrite\|Delete`**） | **失败** | `ERROR_ACCESS_DENIED` (0x80070005) | `UnauthorizedAccessException` |
+| **源**被占用（任意共享模式） | **失败** | `ERROR_SHARING_VIOLATION` (0x80070070) | `IOException` |
+
+⇒ **replace-existing 要求目标无任何打开的句柄**；**rename-away（目标不存在）只要求源允许 delete 共享**。
+⇒ 读取侧共享 `FileShare.Delete` **修复不了 replace**（它只对 rename-away 有效）；replace 的唯一出路是**有界重试**。
+
+修法（**根因 + 兜底都改**，用户裁定）：
+
+- **根因层**：读取侧 6 处改 `FileShare.ReadWrite | FileShare.Delete`（`PluginMarket.cs:522/545/1117/1542/1613/1652`）⇒ 读者不再挡住写侧改名/删除。
+- **主修**：替换侧 6 处（`PluginMarket.cs:1038/1219/1243/1258/1627` + `PluginMarketUninstallCore.cs:86`）统一收敛到 `MarketFileIo.MoveAtomic` ⇒ 在 `UnauthorizedAccessException` / `IOException` 上做**有界重试**（次数上限 4 + **单调时钟**预算上限 300ms，退避 25→50→100ms 且被剩余预算截断）。
+- **兜底**：预算耗尽抛**可识别的** `MarketFileReplaceBlockedException` ⇒ 由既有回滚路径清理，**不吞掉、不伪装成成功、不留半成品**。
+
+验证：新增 **5 条确定性用例**（显式文件句柄 + 显式重试闸门 + 手动单调时钟 ⇒ 无真实等待、无运气）；`ReviewMarketPersistenceRegressionTests` 与新增类连跑 **10 轮全绿**（38 条/轮）。修复前整类连跑约 **2/3** 概率失败（**纯净基线 `d52c0ab` 同样复现** ⇒ 非 W1/W2 引入），master 最新实测 **1/3**。
+
+**协调者补充订正（3 处）**：① 执行体初稿把"读侧共享 Delete"写成"并发替换的根因修复点" ⇒ 经上表实测证明**不成立**，已订正代码注释与用例注释，明确区分 replace-existing 与 rename-away；② 执行体的临时诊断插桩 `MarketFileIoDiag.cs`（自带"不提交"标注、会向 `%TEMP%` 写盘）**已移除**，`MarketFileIo` 中对它的调用同步删除（已核对无残留引用）；③ 执行体新建的 3 个 `.cs` 文件工作区为**纯 LF**，与 `.gitattributes` 的"工作区 CRLF"不符 ⇒ 已在集成期统一为 CRLF（入库仍为 LF），避免 `git status` 假改动。
+
+**集成期附带修正**：W2 三包新增测试文件（`MarketPageCacheTests.cs` / `TaskbarGeometryTests.cs` / `DeviceIdentityTests.cs`）使用可空标注，但工程为 `<Nullable>disable</Nullable>` 且这些文件无 `#nullable` 上下文 ⇒ 每次编译报 CS8632（W2 五包合并态实测 **+9 个唯一警告**）⇒ 按包分三个提交（`fix(F05)` / `fix(F07)` / `fix(F14a)`）去掉标注，零行为影响；**基线历史文件的同款写法不在本次范围内，不动**。
+
 **相邻问题（各包主动上报，协调者已登记）**
 
 | 问题 | 归属 |
@@ -495,17 +545,18 @@ WebProbe **C7（`Host`=隧道域名）由 `403 Forbidden` 翻为 `101 Switching 
 | `InfoService.cs:32` 的 `DEFAULT_IP = "0.0.0.0"` —— 用 `0.0.0.0` 冒充有效地址 | UI/信息层（与"0 是有效数据"约束相悖） |
 | F03b 订阅面：多个既有测试用 `new NetworkManager()` 不注入事件源 ⇒ 会挂到静态单例且不解绑（旧实现同样只订阅不解绑，**非回归**；新写法更优） | 已更正 `NetworkChangeSource.cs` 的注释；后续测试一律注入假事件源 |
 
-**门禁实测**
+**门禁实测（W2 六包 + F17 合并态，2026-10-26）**
 
 | 项 | 实测 |
 |---|---|
-| `dotnet build LiteMonitor.sln -c Debug` | 0 错误 / 529 警告（与基线同量级） |
-| `dotnet build LiteMonitor.sln -c Release` | 0 错误 / 529 警告 |
-| `LiteMonitor.Tests` | **1937 总数**（flaky 不命中时 1936 通过 + 1 指定 E2E 跳过） |
+| `dotnet build LiteMonitor.sln -c Debug --no-incremental` | 0 错误 / **530 警告**（**同口径** master `dd04fdd` W1 基线也是 530 ⇒ **本次新增代码零警告增量**）。W2 五包合并态一度为 547，来源全部是**新增测试文件**的 CS8632（本工程 `<Nullable>disable</Nullable>` 且无 `#nullable` 上下文）⇒ 已按包分 8 个提交清理干净；**基线历史文件**的同款写法不在本次范围内，不动 |
+| `dotnet build LiteMonitor.sln -c Release --no-incremental` | 0 错误 / **530 警告** |
+| `LiteMonitor.Tests` | **2047 总数**（2046 通过 + 1 指定 E2E 跳过）⇒ **全量连跑 5 轮全部 0 失败**（F17 收口前同口径约 **1/3** 轮命中 flaky） |
 | `LiteMonitor.Updater.Tests` | 73 |
 | `LiteMonitor.GpuNonperformance.Tests` | 19 |
-| 合计 | **2029** ⇒ `MIN_TEST_TOTAL` 由 1876 上调至 **2029**（`ci.yml` / `release.yml` **逐字一致**；`MAX_SKIPPED_TESTS: 1` **未放宽**） |
-| `pwsh scripts/run-probes.ps1 -Groups web` | **PASS**：C5/C6 由 `200 + 登录页 HTML` 翻为 **101**（WEB-OWS 红灯翻绿）；C1–C4=101、C7=403、C8=403、C9/C10=400、C11=401、C12=101 全部保持 |
+| 合计 | **2139** ⇒ `MIN_TEST_TOTAL` 由 2029 上调至 **2139**（`ci.yml` / `release.yml` **逐字一致**；`MAX_SKIPPED_TESTS: 1` **未放宽**） |
+| `MUST_EXECUTE_TEST_CLASS` | 新增 `ReviewMarketInstallRaceRegressionTests`（执行体交付 5 条 < 门槛 6 ⇒ 集成期补足第 6 条后入选）⇒ 该类**一条都不许被跳过**，被删减到 6 条以下即 CI 红；两 workflow **逐字一致** |
+| `pwsh scripts/run-probes.ps1 -Groups web` | **PASS**：C5/C6 = 101；**C7 由 403 翻 101**（#580）；**C13 = 403**（未授权外部域名）、**C14 = 101**（转发头指向未授权域名但信任开关关 ⇒ 证明转发头未被采信）；C1–C6 / C8 / C9 / C10 / C11 / C12 全部保持 |
 
 **⚠️ 门禁上暴露的既有缺陷（**非 W1 引入**，归属主题市场工作线）**
 
@@ -539,7 +590,9 @@ System.UnauthorizedAccessException: Access to the path is denied.
 
 **根因（协调者核实，落在产品侧）**
 
-Windows 上 `MoveFileEx(..., MOVEFILE_REPLACE_EXISTING)` 要求对**目标文件**具备 DELETE 访问权；而读取侧 `PluginMarketState.FindPersisted` → `ComputeFileSha` → **`File.ReadAllBytes(path)`**（`src/Plugins/PluginMarket.cs:522` 与 `:1652`）以 `FileShare.Read` 打开，**不共享 Delete** ⇒ **并发读取者存在时，原子替换直接返回 Win32 `ERROR_ACCESS_DENIED`**，.NET 抛 `UnauthorizedAccessException`（而不是可识别的"文件被占用"异常）。
+Windows 上 `MoveFileEx(..., MOVEFILE_REPLACE_EXISTING)` 要求**目标文件当前没有任何打开的句柄**。而读取侧 `PluginMarketState.FindPersisted` → `ComputeFileSha` → **`File.ReadAllBytes(path)`**（`src/Plugins/PluginMarket.cs:522` 与 `:1652`）以 `FileShare.Read` 打开 ⇒ **并发读取者存在时，原子替换直接返回 Win32 `ERROR_ACCESS_DENIED`**，.NET 抛 `UnauthorizedAccessException`（而不是可识别的"文件被占用"异常）。
+
+> ⚠️ **2026-10-26 实测订正（本段初判不准确，勿再沿用）**：replace-existing 要求的是"目标**无任何打开的句柄**"，**对方即使共享 `FileShare.Delete` 也照样失败** ⇒ 读取侧改共享 Delete **不能**修复 replace 冲突，它只对 **rename-away**（改名挪走、目标不存在）有效。replace 的唯一出路是**等占用解除后重试**。实测矩阵见 `docs/verification/acceptance/F17-report.md` §3.1。
 
 `CommitAndRecovery_UseOneTransactionGate` 这条用例**故意**让恢复线程与提交线程并发 ⇒ 正好撞上这个窗口；窗口窄 ⇒ 表现为**间歇失败**、**受害用例随机轮换**（任何走 `CommitInstall` 的用例都可能中招），单条单跑则全绿。
 
@@ -553,7 +606,9 @@ Windows 上 `MoveFileEx(..., MOVEFILE_REPLACE_EXISTING)` 要求对**目标文件
 
 **真实用户影响**：`CommitInstall` 先写写前日志（`:1028`）再原子替换（`:1038`）；若**恢复线程**在这两步之间读到该日志并读取目标文件，就会与自己的替换相撞 ⇒ 安装**静默失败并留下事务日志**，下次启动被回滚 ⇒ **用户的安装丢失且没有明确报错**。触发窗口窄，但在"启动即恢复"与"用户正在安装"重叠时会真实发生。
 
-**建议修法（两条都不在 W1 的授权文件清单内，故本轮未改）**：① `CommitInstall` 的原子替换对 `UnauthorizedAccessException` / `IOException` 做**有界重试**（配合既有写前日志 + 恢复机制，符合「恢复有界」）；或 ② 读取侧（`ComputeFileSha` / `FindPersisted`）改用 `FileShare.ReadWrite | FileShare.Delete` 打开。
+**建议修法（两条都不在 W1 的授权文件清单内，故本轮未改）**：① `CommitInstall` 的原子替换对 `UnauthorizedAccessException` / `IOException` 做**有界重试**（配合既有写前日志 + 恢复机制，符合「恢复有界」）；② 读取侧（`ComputeFileSha` / `FindPersisted`）改用 `FileShare.ReadWrite | FileShare.Delete` 打开。
+
+> **2026-10-26 实施结果**：F17 **两条都做了**，但分工与初判不同 —— ② 只解决 rename-away 类操作，**对 replace 无效**；**真正解决 replace 的是 ①**。详见 `docs/verification/acceptance/F17-report.md` §3。
 
 ⚠️ **CI 的 `MUST_EXECUTE_TEST_CLASS` 钉死了该类 ⇒ 一旦命中即流水线红**（最新 master 实测 **1/3 轮命中**；F08a 收尾把 `DiskProbeMode` 改成 `int?`+`WhenWritingNull`（旧配置不再被写盘）后症状从约 2/3 降到 1/3，**但根因未修**），须尽快收口。
 

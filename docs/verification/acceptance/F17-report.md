@@ -110,7 +110,7 @@ exclusiveOpen=FAILED IOException: … because it is being used by another proces
 | `src/Plugins/MarketFileIo.cs` | **新增** | 共享读 + 有界重试的 IO 边界 + 可识别异常 |
 | `src/Plugins/PluginMarket.cs` | 修改 | 6 处读取 + 5 处替换改走 `MarketFileIo` |
 | `src/Plugins/PluginMarketUninstallCore.cs` | 修改 | 1 处替换改走 `MarketFileIo` |
-| `tests/LiteMonitor.Tests/ReviewMarketInstallRaceRegressionTests.cs` | **新增** | 5 条确定性回归用例 |
+| `tests/LiteMonitor.Tests/ReviewMarketInstallRaceRegressionTests.cs` | **新增** | **6 条**确定性回归用例（执行体交付 5 条，集成期补第 6 条：源缺失不得消耗重试预算） |
 | `src/Plugins/MarketFileIoDiag.cs` | 临时插桩 | **已删除，不入库**（见 §8） |
 
 授权边界核对：仅触碰派发单授权的 `src/Plugins/PluginMarket.cs`、`PluginMarketUninstallCore.cs` + 新建文件；
@@ -120,7 +120,7 @@ exclusiveOpen=FAILED IOException: … because it is being used by another proces
 
 ## 6. 测试证据
 
-### 6.1 新增确定性用例（5 条，全部**不依赖运气**）
+### 6.1 新增确定性用例（6 条，全部**不依赖运气**）
 
 | 用例 | 锚点 | 断的是什么 |
 |---|---|---|
@@ -129,9 +129,11 @@ exclusiveOpen=FAILED IOException: … because it is being used by another proces
 | `AtomicReplace_TimeBudgetExhausted_StopsRetryingAndRollsBackCleanly` | `:114` | 时间预算耗尽 ⇒ 立刻收手（`Attempts < MaxAttempts`）+ 回滚干净 |
 | `InstallAndRecovery_RacingReplace_LeavesConsistentFinalState` | `:140` | 安装 × 恢复并发 ⇒ 最终状态必一致（不允许"文件换了记录没换"或反之） |
 | `SharedRead_DoesNotBlockAWriterFromRenamingTheTargetAway` | `:209` | 读侧共享 Delete ⇒ 写侧可 **rename-away**；不共享 ⇒ 抛 `IOException` |
+| `MoveAtomic_MissingSource_FailsImmediatelyWithoutBurningTheRetryBudget` | `:238` | 源缺失**不是**"瞬时占用" ⇒ 一次都不重试（不烧预算），且原始异常**不得**被包装成"文件被占用" |
 
 > 前 4 条用「显式文件句柄 + 显式重试闸门」制造交错，手动单调时钟推进预算 ⇒ **确定性**，不靠真实等待、不靠运气。
 > 第 5 条按 §3.2 的语义边界锁定 **rename-away**（目标不存在），**不是** replace-existing。
+> 第 6 条锁定 `IsTransient` 的排除分支：`FileNotFoundException` 不属瞬时占用 ⇒ 立即失败、零重试。
 
 ### 6.2 复测结果
 
@@ -173,6 +175,13 @@ exclusiveOpen=FAILED IOException: … because it is being used by another proces
    `MarketFileIo.MoveAtomic` 中对它的调用同步删除（已核对无残留引用）。
 3. **行尾**：执行体新建的 3 个 `.cs` 文件工作区为**纯 LF**，与 `.gitattributes` 的"工作区 CRLF"不符
    ⇒ 已在集成期统一为 CRLF（入库仍为 LF），避免 `git status` 假改动。
+4. **XML 文档注释结构修正**：首轮注释订正在 `MarketFileIo.cs` 的注释块中间留下了**真空行**（会截断 XML 注释块，
+   后续段落脱离 `<summary>`，产生 CS1570 一类警告），且测试类注释的"两类语义"说明因锚点缩进不匹配**未真正写入**
+   ⇒ 已在集成期修正（真空行改 `///`、补齐 4 行说明），并经干净重建复核。
+5. **回归用例纳入 CI 强制执行**：CI 的 `MUST_EXECUTE_TEST_CLASS` 原列表不含本类。
+   由于 `MUST_EXECUTE_TEST_CLASS_MIN_COUNT = 6`，执行体交付的 5 条**不足以入选** ⇒ 集成期补第 6 条
+   （`MoveAtomic_MissingSource_…`）后，将 `ReviewMarketInstallRaceRegressionTests` 加入 `ci.yml` / `release.yml` 的
+   `MUST_EXECUTE_TEST_CLASS`（两文件逐字一致）⇒ 该类此后**一条都不许被跳过**，被删减到 6 条以下即 CI 红。
 
 ---
 
