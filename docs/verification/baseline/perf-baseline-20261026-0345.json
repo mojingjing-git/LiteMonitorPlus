@@ -1,0 +1,1083 @@
+{
+  "kind": "perf_baseline",
+  "createdAt": "2026-10-26T04:00:15.4184664+08:00",
+  "script": "scripts/perf-baseline.ps1",
+  "meta": {
+    "timestamp": "2026-10-26T03:45:53.3759213+08:00",
+    "machine": "QINGLING",
+    "model": "MS-7C35",
+    "manufacturer": "Micro-Star International Co., Ltd.",
+    "cpu": "AMD Ryzen 7 5800X 8-Core Processor             ",
+    "cores_physical": 8,
+    "cores_logical": 16,
+    "ram_GB": 63.9,
+    "gpus": [
+      {
+        "name": "GameViewer Virtual Display Adapter",
+        "driverVersion": "15.6.5.199",
+        "adapterRAM_MB": null
+      },
+      {
+        "name": "Meta Virtual Monitor",
+        "driverVersion": "5.3.57.114",
+        "adapterRAM_MB": null
+      },
+      {
+        "name": "MuMu Virtual Display Adapter",
+        "driverVersion": "20.36.41.498",
+        "adapterRAM_MB": null
+      },
+      {
+        "name": "Todesk Virtual Display Adapter",
+        "driverVersion": "16.44.2.509",
+        "adapterRAM_MB": null
+      },
+      {
+        "name": "NVIDIA GeForce RTX 3080",
+        "driverVersion": "32.0.16.1088",
+        "adapterRAM_MB": 4095.0
+      },
+      {
+        "name": "NVIDIA GeForce RTX 3080 Ti",
+        "driverVersion": "32.0.16.1088",
+        "adapterRAM_MB": 4095.0
+      }
+    ],
+    "os": "Microsoft Windows 11 专业版 (build 26300)",
+    "os_version": "10.0.26300",
+    "dotnet_sdk": "8.0.426",
+    "pwsh": "7.6.6",
+    "shell_elevated": true,
+    "git_head": "67afb8ae56891bed7e1f59440e9442a358de3ff6",
+    "git_branch": "pkg/B0-fixture-perf",
+    "git_dirty_files": 4,
+    "configuration": "Release"
+  },
+  "appVersion": "1.0.0+67afb8ae56891bed7e1f59440e9442a358de3ff6",
+  "windowSeconds": 60,
+  "gui": {
+    "skipped": false,
+    "reason": null,
+    "launches": [
+      {
+        "launch": 1,
+        "note": "第 1 轮（含驱动准备，偏慢）",
+        "startupMs": 353,
+        "stats": {
+          "windowActualSeconds": 60.0,
+          "cpuSecondsDelta": 9.656,
+          "cpuPercentAllCores": 1.005,
+          "privateBytesMin": 12906496.0,
+          "privateBytesAvg": 79469568.0,
+          "privateBytesMax": 100368384.0,
+          "privateBytesSteadyAvg": 80778184.0,
+          "threadsFirst": 9,
+          "threadsLast": 28,
+          "handlesFirst": 248,
+          "handlesLast": 830,
+          "sampleCount": 60
+        },
+        "samples": [
+          {
+            "t": 0.0,
+            "cpuSeconds": 0.375,
+            "privateBytes": 12906496,
+            "workingSetBytes": 52510720,
+            "threads": 9,
+            "handles": 248
+          },
+          {
+            "t": 1.0,
+            "cpuSeconds": 1.438,
+            "privateBytes": 50810880,
+            "workingSetBytes": 117735424,
+            "threads": 32,
+            "handles": 799
+          },
+          {
+            "t": 2.0,
+            "cpuSeconds": 2.578,
+            "privateBytes": 65986560,
+            "workingSetBytes": 140021760,
+            "threads": 34,
+            "handles": 892
+          },
+          {
+            "t": 3.0,
+            "cpuSeconds": 3.938,
+            "privateBytes": 100368384,
+            "workingSetBytes": 180924416,
+            "threads": 35,
+            "handles": 910
+          },
+          {
+            "t": 4.0,
+            "cpuSeconds": 5.094,
+            "privateBytes": 95301632,
+            "workingSetBytes": 180047872,
+            "threads": 34,
+            "handles": 899
+          },
+          {
+            "t": 5.0,
+            "cpuSeconds": 5.953,
+            "privateBytes": 87232512,
+            "workingSetBytes": 171671552,
+            "threads": 30,
+            "handles": 818
+          },
+          {
+            "t": 6.0,
+            "cpuSeconds": 7.062,
+            "privateBytes": 97861632,
+            "workingSetBytes": 6791168,
+            "threads": 35,
+            "handles": 911
+          },
+          {
+            "t": 7.0,
+            "cpuSeconds": 7.281,
+            "privateBytes": 80953344,
+            "workingSetBytes": 35872768,
+            "threads": 32,
+            "handles": 837
+          },
+          {
+            "t": 8.0,
+            "cpuSeconds": 7.359,
+            "privateBytes": 81567744,
+            "workingSetBytes": 43798528,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 9.0,
+            "cpuSeconds": 7.375,
+            "privateBytes": 81567744,
+            "workingSetBytes": 44711936,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 10.0,
+            "cpuSeconds": 7.453,
+            "privateBytes": 81600512,
+            "workingSetBytes": 45944832,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 11.0,
+            "cpuSeconds": 7.547,
+            "privateBytes": 82055168,
+            "workingSetBytes": 48189440,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 12.0,
+            "cpuSeconds": 7.688,
+            "privateBytes": 81719296,
+            "workingSetBytes": 48607232,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 13.0,
+            "cpuSeconds": 7.734,
+            "privateBytes": 78938112,
+            "workingSetBytes": 49020928,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 14.0,
+            "cpuSeconds": 7.797,
+            "privateBytes": 78938112,
+            "workingSetBytes": 49373184,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 15.0,
+            "cpuSeconds": 7.875,
+            "privateBytes": 78938112,
+            "workingSetBytes": 49639424,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 16.0,
+            "cpuSeconds": 7.906,
+            "privateBytes": 79020032,
+            "workingSetBytes": 51421184,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 17.0,
+            "cpuSeconds": 7.984,
+            "privateBytes": 78811136,
+            "workingSetBytes": 51593216,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 18.0,
+            "cpuSeconds": 8.047,
+            "privateBytes": 78872576,
+            "workingSetBytes": 52035584,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 19.0,
+            "cpuSeconds": 8.078,
+            "privateBytes": 78946304,
+            "workingSetBytes": 52465664,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 20.0,
+            "cpuSeconds": 8.141,
+            "privateBytes": 78946304,
+            "workingSetBytes": 52699136,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 21.0,
+            "cpuSeconds": 8.188,
+            "privateBytes": 79040512,
+            "workingSetBytes": 52903936,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 22.0,
+            "cpuSeconds": 8.234,
+            "privateBytes": 79155200,
+            "workingSetBytes": 53714944,
+            "threads": 30,
+            "handles": 835
+          },
+          {
+            "t": 23.0,
+            "cpuSeconds": 8.266,
+            "privateBytes": 79208448,
+            "workingSetBytes": 54059008,
+            "threads": 30,
+            "handles": 835
+          },
+          {
+            "t": 24.0,
+            "cpuSeconds": 8.297,
+            "privateBytes": 79212544,
+            "workingSetBytes": 54222848,
+            "threads": 30,
+            "handles": 835
+          },
+          {
+            "t": 25.0,
+            "cpuSeconds": 8.328,
+            "privateBytes": 79212544,
+            "workingSetBytes": 54538240,
+            "threads": 30,
+            "handles": 835
+          },
+          {
+            "t": 26.0,
+            "cpuSeconds": 8.359,
+            "privateBytes": 79097856,
+            "workingSetBytes": 54808576,
+            "threads": 28,
+            "handles": 828
+          },
+          {
+            "t": 27.0,
+            "cpuSeconds": 8.438,
+            "privateBytes": 79097856,
+            "workingSetBytes": 55009280,
+            "threads": 28,
+            "handles": 828
+          },
+          {
+            "t": 28.0,
+            "cpuSeconds": 8.516,
+            "privateBytes": 79093760,
+            "workingSetBytes": 55234560,
+            "threads": 28,
+            "handles": 828
+          },
+          {
+            "t": 29.0,
+            "cpuSeconds": 8.547,
+            "privateBytes": 78409728,
+            "workingSetBytes": 54816768,
+            "threads": 28,
+            "handles": 828
+          },
+          {
+            "t": 30.0,
+            "cpuSeconds": 8.594,
+            "privateBytes": 78409728,
+            "workingSetBytes": 55062528,
+            "threads": 28,
+            "handles": 828
+          },
+          {
+            "t": 31.0,
+            "cpuSeconds": 8.656,
+            "privateBytes": 78401536,
+            "workingSetBytes": 56180736,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 32.0,
+            "cpuSeconds": 8.719,
+            "privateBytes": 80711680,
+            "workingSetBytes": 58814464,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 33.0,
+            "cpuSeconds": 8.766,
+            "privateBytes": 80961536,
+            "workingSetBytes": 59305984,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 34.0,
+            "cpuSeconds": 8.797,
+            "privateBytes": 80642048,
+            "workingSetBytes": 59142144,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 35.0,
+            "cpuSeconds": 8.844,
+            "privateBytes": 80904192,
+            "workingSetBytes": 59559936,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 36.0,
+            "cpuSeconds": 8.922,
+            "privateBytes": 81489920,
+            "workingSetBytes": 60194816,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 37.0,
+            "cpuSeconds": 8.938,
+            "privateBytes": 81489920,
+            "workingSetBytes": 60211200,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 38.0,
+            "cpuSeconds": 8.969,
+            "privateBytes": 81219584,
+            "workingSetBytes": 60608512,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 39.0,
+            "cpuSeconds": 9.031,
+            "privateBytes": 81477632,
+            "workingSetBytes": 61157376,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 40.0,
+            "cpuSeconds": 9.109,
+            "privateBytes": 81604608,
+            "workingSetBytes": 61366272,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 41.0,
+            "cpuSeconds": 9.156,
+            "privateBytes": 80056320,
+            "workingSetBytes": 60243968,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 42.0,
+            "cpuSeconds": 9.219,
+            "privateBytes": 80203776,
+            "workingSetBytes": 60362752,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 43.0,
+            "cpuSeconds": 9.25,
+            "privateBytes": 80400384,
+            "workingSetBytes": 60596224,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 44.0,
+            "cpuSeconds": 9.328,
+            "privateBytes": 80531456,
+            "workingSetBytes": 60739584,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 45.0,
+            "cpuSeconds": 9.375,
+            "privateBytes": 79769600,
+            "workingSetBytes": 59998208,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 46.0,
+            "cpuSeconds": 9.422,
+            "privateBytes": 79970304,
+            "workingSetBytes": 12308480,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 47.0,
+            "cpuSeconds": 9.484,
+            "privateBytes": 80166912,
+            "workingSetBytes": 17047552,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 48.0,
+            "cpuSeconds": 9.516,
+            "privateBytes": 80297984,
+            "workingSetBytes": 17334272,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 49.0,
+            "cpuSeconds": 9.562,
+            "privateBytes": 80306176,
+            "workingSetBytes": 18460672,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 50.0,
+            "cpuSeconds": 9.609,
+            "privateBytes": 80650240,
+            "workingSetBytes": 18857984,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 51.0,
+            "cpuSeconds": 9.656,
+            "privateBytes": 80695296,
+            "workingSetBytes": 20865024,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 52.0,
+            "cpuSeconds": 9.719,
+            "privateBytes": 80826368,
+            "workingSetBytes": 21630976,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 53.0,
+            "cpuSeconds": 9.812,
+            "privateBytes": 81506304,
+            "workingSetBytes": 26243072,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 54.0,
+            "cpuSeconds": 9.859,
+            "privateBytes": 81678336,
+            "workingSetBytes": 27312128,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 55.0,
+            "cpuSeconds": 9.891,
+            "privateBytes": 81862656,
+            "workingSetBytes": 27500544,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 56.0,
+            "cpuSeconds": 9.922,
+            "privateBytes": 81973248,
+            "workingSetBytes": 29167616,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 57.0,
+            "cpuSeconds": 9.969,
+            "privateBytes": 82120704,
+            "workingSetBytes": 29732864,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 58.0,
+            "cpuSeconds": 10.0,
+            "privateBytes": 82411520,
+            "workingSetBytes": 30330880,
+            "threads": 28,
+            "handles": 830
+          },
+          {
+            "t": 59.0,
+            "cpuSeconds": 10.031,
+            "privateBytes": 82563072,
+            "workingSetBytes": 30482432,
+            "threads": 28,
+            "handles": 830
+          }
+        ]
+      },
+      {
+        "launch": 2,
+        "note": "第 2 轮（稳态轮）",
+        "startupMs": 332,
+        "stats": {
+          "windowActualSeconds": 60.0,
+          "cpuSecondsDelta": 8.515,
+          "cpuPercentAllCores": 0.886,
+          "privateBytesMin": 12537856.0,
+          "privateBytesAvg": 79561933.0,
+          "privateBytesMax": 98922496.0,
+          "privateBytesSteadyAvg": 80194243.0,
+          "threadsFirst": 9,
+          "threadsLast": 28,
+          "handlesFirst": 239,
+          "handlesLast": 831,
+          "sampleCount": 60
+        },
+        "samples": [
+          {
+            "t": 0.0,
+            "cpuSeconds": 0.344,
+            "privateBytes": 12537856,
+            "workingSetBytes": 51007488,
+            "threads": 9,
+            "handles": 239
+          },
+          {
+            "t": 1.0,
+            "cpuSeconds": 1.984,
+            "privateBytes": 71438336,
+            "workingSetBytes": 144056320,
+            "threads": 33,
+            "handles": 848
+          },
+          {
+            "t": 2.0,
+            "cpuSeconds": 3.125,
+            "privateBytes": 98922496,
+            "workingSetBytes": 178405376,
+            "threads": 35,
+            "handles": 909
+          },
+          {
+            "t": 3.0,
+            "cpuSeconds": 4.203,
+            "privateBytes": 94208000,
+            "workingSetBytes": 176832512,
+            "threads": 35,
+            "handles": 910
+          },
+          {
+            "t": 4.0,
+            "cpuSeconds": 5.141,
+            "privateBytes": 85925888,
+            "workingSetBytes": 168603648,
+            "threads": 30,
+            "handles": 818
+          },
+          {
+            "t": 5.0,
+            "cpuSeconds": 6.094,
+            "privateBytes": 80891904,
+            "workingSetBytes": 20594688,
+            "threads": 32,
+            "handles": 837
+          },
+          {
+            "t": 6.0,
+            "cpuSeconds": 6.188,
+            "privateBytes": 80920576,
+            "workingSetBytes": 37273600,
+            "threads": 32,
+            "handles": 837
+          },
+          {
+            "t": 7.0,
+            "cpuSeconds": 6.297,
+            "privateBytes": 81530880,
+            "workingSetBytes": 46649344,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 8.0,
+            "cpuSeconds": 6.312,
+            "privateBytes": 81424384,
+            "workingSetBytes": 46895104,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 9.0,
+            "cpuSeconds": 6.359,
+            "privateBytes": 81485824,
+            "workingSetBytes": 47689728,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 10.0,
+            "cpuSeconds": 6.422,
+            "privateBytes": 81629184,
+            "workingSetBytes": 48513024,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 11.0,
+            "cpuSeconds": 6.516,
+            "privateBytes": 81571840,
+            "workingSetBytes": 49672192,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 12.0,
+            "cpuSeconds": 6.547,
+            "privateBytes": 81571840,
+            "workingSetBytes": 50135040,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 13.0,
+            "cpuSeconds": 6.578,
+            "privateBytes": 78643200,
+            "workingSetBytes": 49090560,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 14.0,
+            "cpuSeconds": 6.609,
+            "privateBytes": 78643200,
+            "workingSetBytes": 49381376,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 15.0,
+            "cpuSeconds": 6.688,
+            "privateBytes": 78643200,
+            "workingSetBytes": 49672192,
+            "threads": 32,
+            "handles": 839
+          },
+          {
+            "t": 16.0,
+            "cpuSeconds": 6.766,
+            "privateBytes": 78708736,
+            "workingSetBytes": 50958336,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 17.0,
+            "cpuSeconds": 6.906,
+            "privateBytes": 78512128,
+            "workingSetBytes": 51437568,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 18.0,
+            "cpuSeconds": 6.953,
+            "privateBytes": 78680064,
+            "workingSetBytes": 51732480,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 19.0,
+            "cpuSeconds": 7.0,
+            "privateBytes": 78807040,
+            "workingSetBytes": 51949568,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 20.0,
+            "cpuSeconds": 7.047,
+            "privateBytes": 78647296,
+            "workingSetBytes": 52228096,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 21.0,
+            "cpuSeconds": 7.078,
+            "privateBytes": 78647296,
+            "workingSetBytes": 52645888,
+            "threads": 32,
+            "handles": 841
+          },
+          {
+            "t": 22.0,
+            "cpuSeconds": 7.172,
+            "privateBytes": 78532608,
+            "workingSetBytes": 53387264,
+            "threads": 30,
+            "handles": 835
+          },
+          {
+            "t": 23.0,
+            "cpuSeconds": 7.172,
+            "privateBytes": 78532608,
+            "workingSetBytes": 53415936,
+            "threads": 30,
+            "handles": 835
+          },
+          {
+            "t": 24.0,
+            "cpuSeconds": 7.219,
+            "privateBytes": 78684160,
+            "workingSetBytes": 53727232,
+            "threads": 30,
+            "handles": 835
+          },
+          {
+            "t": 25.0,
+            "cpuSeconds": 7.266,
+            "privateBytes": 78667776,
+            "workingSetBytes": 54059008,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 26.0,
+            "cpuSeconds": 7.312,
+            "privateBytes": 78667776,
+            "workingSetBytes": 54222848,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 27.0,
+            "cpuSeconds": 7.375,
+            "privateBytes": 78667776,
+            "workingSetBytes": 54398976,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 28.0,
+            "cpuSeconds": 7.422,
+            "privateBytes": 78667776,
+            "workingSetBytes": 54636544,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 29.0,
+            "cpuSeconds": 7.453,
+            "privateBytes": 77565952,
+            "workingSetBytes": 53723136,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 30.0,
+            "cpuSeconds": 7.5,
+            "privateBytes": 77606912,
+            "workingSetBytes": 54145024,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 31.0,
+            "cpuSeconds": 7.531,
+            "privateBytes": 81158144,
+            "workingSetBytes": 57896960,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 32.0,
+            "cpuSeconds": 7.609,
+            "privateBytes": 80629760,
+            "workingSetBytes": 58331136,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 33.0,
+            "cpuSeconds": 7.641,
+            "privateBytes": 80777216,
+            "workingSetBytes": 58503168,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 34.0,
+            "cpuSeconds": 7.672,
+            "privateBytes": 80908288,
+            "workingSetBytes": 58843136,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 35.0,
+            "cpuSeconds": 7.75,
+            "privateBytes": 81076224,
+            "workingSetBytes": 59207680,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 36.0,
+            "cpuSeconds": 7.828,
+            "privateBytes": 81272832,
+            "workingSetBytes": 59416576,
+            "threads": 29,
+            "handles": 832
+          },
+          {
+            "t": 37.0,
+            "cpuSeconds": 7.922,
+            "privateBytes": 81006592,
+            "workingSetBytes": 59453440,
+            "threads": 28,
+            "handles": 827
+          },
+          {
+            "t": 38.0,
+            "cpuSeconds": 8.016,
+            "privateBytes": 81235968,
+            "workingSetBytes": 59990016,
+            "threads": 28,
+            "handles": 827
+          },
+          {
+            "t": 39.0,
+            "cpuSeconds": 8.078,
+            "privateBytes": 81305600,
+            "workingSetBytes": 60174336,
+            "threads": 28,
+            "handles": 827
+          },
+          {
+            "t": 40.0,
+            "cpuSeconds": 8.109,
+            "privateBytes": 81412096,
+            "workingSetBytes": 60325888,
+            "threads": 28,
+            "handles": 827
+          },
+          {
+            "t": 41.0,
+            "cpuSeconds": 8.156,
+            "privateBytes": 80236544,
+            "workingSetBytes": 59142144,
+            "threads": 28,
+            "handles": 827
+          },
+          {
+            "t": 42.0,
+            "cpuSeconds": 8.203,
+            "privateBytes": 80367616,
+            "workingSetBytes": 59289600,
+            "threads": 28,
+            "handles": 827
+          },
+          {
+            "t": 43.0,
+            "cpuSeconds": 8.25,
+            "privateBytes": 80474112,
+            "workingSetBytes": 59428864,
+            "threads": 28,
+            "handles": 827
+          },
+          {
+            "t": 44.0,
+            "cpuSeconds": 8.25,
+            "privateBytes": 80830464,
+            "workingSetBytes": 59727872,
+            "threads": 28,
+            "handles": 829
+          },
+          {
+            "t": 45.0,
+            "cpuSeconds": 8.281,
+            "privateBytes": 79646720,
+            "workingSetBytes": 58556416,
+            "threads": 28,
+            "handles": 829
+          },
+          {
+            "t": 46.0,
+            "cpuSeconds": 8.344,
+            "privateBytes": 79777792,
+            "workingSetBytes": 11870208,
+            "threads": 28,
+            "handles": 829
+          },
+          {
+            "t": 47.0,
+            "cpuSeconds": 8.344,
+            "privateBytes": 79777792,
+            "workingSetBytes": 12410880,
+            "threads": 28,
+            "handles": 829
+          },
+          {
+            "t": 48.0,
+            "cpuSeconds": 8.391,
+            "privateBytes": 80289792,
+            "workingSetBytes": 17383424,
+            "threads": 28,
+            "handles": 831
+          },
+          {
+            "t": 49.0,
+            "cpuSeconds": 8.453,
+            "privateBytes": 80515072,
+            "workingSetBytes": 17870848,
+            "threads": 28,
+            "handles": 831
+          },
+          {
+            "t": 50.0,
+            "cpuSeconds": 8.5,
+            "privateBytes": 80474112,
+            "workingSetBytes": 18018304,
+            "threads": 28,
+            "handles": 831
+          },
+          {
+            "t": 51.0,
+            "cpuSeconds": 8.547,
+            "privateBytes": 80576512,
+            "workingSetBytes": 18518016,
+            "threads": 28,
+            "handles": 831
+          },
+          {
+            "t": 52.0,
+            "cpuSeconds": 8.578,
+            "privateBytes": 80838656,
+            "workingSetBytes": 19456000,
+            "threads": 28,
+            "handles": 831
+          },
+          {
+            "t": 53.0,
+            "cpuSeconds": 8.609,
+            "privateBytes": 81100800,
+            "workingSetBytes": 20676608,
+            "threads": 28,
+            "handles": 831
+          },
+          {
+            "t": 54.0,
+            "cpuSeconds": 8.641,
+            "privateBytes": 81203200,
+            "workingSetBytes": 20824064,
+            "threads": 28,
+            "handles": 831
+          },
+          {
+            "t": 55.0,
+            "cpuSeconds": 8.672,
+            "privateBytes": 81334272,
+            "workingSetBytes": 21295104,
+            "threads": 28,
+            "handles": 831
+          },
+          {
+            "t": 56.0,
+            "cpuSeconds": 8.734,
+            "privateBytes": 81625088,
+            "workingSetBytes": 21684224,
+            "threads": 28,
+            "handles": 831
+          },
+          {
+            "t": 57.0,
+            "cpuSeconds": 8.766,
+            "privateBytes": 81784832,
+            "workingSetBytes": 21868544,
+            "threads": 28,
+            "handles": 831
+          },
+          {
+            "t": 58.0,
+            "cpuSeconds": 8.812,
+            "privateBytes": 82411520,
+            "workingSetBytes": 22978560,
+            "threads": 28,
+            "handles": 831
+          },
+          {
+            "t": 59.0,
+            "cpuSeconds": 8.859,
+            "privateBytes": 82083840,
+            "workingSetBytes": 22917120,
+            "threads": 28,
+            "handles": 831
+          }
+        ]
+      }
+    ]
+  },
+  "probe": {
+    "skipped": false,
+    "args": "--out G:\\TOOL\\LiteMonitor-fork\\.worktrees\\b0-tail\\docs\\verification\\baseline\\perf-probe-20261026-0345",
+    "exitCode": 0,
+    "outDir": "G:\\TOOL\\LiteMonitor-fork\\.worktrees\\b0-tail\\docs\\verification\\baseline\\perf-probe-20261026-0345",
+    "resultsJson": "G:\\TOOL\\LiteMonitor-fork\\.worktrees\\b0-tail\\docs\\verification\\baseline\\perf-probe-20261026-0345\\probe-results.json",
+    "flags": [
+      "结果解析失败: 在此对象上找不到属性“skippedReason”。请验证该属性是否存在。"
+    ],
+    "groups": []
+  },
+  "notAutomatable": [
+    "UI 刷新延迟（帧节奏/单帧绘制耗时）：产品无内部计时发布点；无侵入外部测量需高速抓屏+图像差分，误差不可控，不纳入自动基线。",
+    "设备目录查询延迟（目录重扫/热插拔识别时长）：无生产侧计时点，只能靠专用探针场景（DeviceCatalog 契约化后补）。",
+    "GPU 宿主渲染路径：属 tools/GpuHostLifecycleProbe 独立口径，不在本脚本范围。",
+    "多展示端一致性耗时（GDI+/GPU/横排/任务栏/Web 各端格式化差异）：仅兼容缓冲绘制被 renderBench 部分覆盖，完整多端计时无发布点。"
+  ]
+}
