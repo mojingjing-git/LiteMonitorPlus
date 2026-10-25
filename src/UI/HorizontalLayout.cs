@@ -31,6 +31,10 @@ namespace LiteMonitor
         private readonly IDisplayDpiSource? _dpiSource;
         private readonly FontMetricsCache _metrics;
 
+        // ★【F12】已知被释放的主题字体（只记负向判定）。
+        //   高频布局测量不该反复去撞同一个已释放字体的异常。
+        private Font? _knownDisposedFont;
+
         public int PanelWidth { get; private set; }
 
         /// <summary>
@@ -169,11 +173,16 @@ namespace LiteMonitor
         /// ★【F12】取一个**可测量**的字体：主题字体已被释放时退回系统字体并记录诊断。
         /// <para>已释放的字体读度量会抛 <c>ArgumentException("Parameter is not valid.")</c>，
         ///   绝不能让它冒到绘制路径上。</para>
+        /// <para>★ 已知被释放的字体只判一次（<see cref="_knownDisposedFont"/>）：
+        ///   布局测量在高频路径上重复调用，不能每次都去撞一次异常。</para>
         /// </summary>
         private Font ResolveFont(Font? themeFont)
         {
             // ★ 兜底用**系统**字体（DefaultFont 是系统字体 ⇒ 任何释放流程都不会碰它）。
             if (themeFont is null) return SystemFonts.DefaultFont;
+
+            // 已知被释放 ⇒ 直接退回，不再重复撞异常（只记负向判定，不缓存"可用"结论）。
+            if (ReferenceEquals(themeFont, _knownDisposedFont)) return SystemFonts.DefaultFont;
 
             try
             {
@@ -183,6 +192,7 @@ namespace LiteMonitor
             }
             catch (ArgumentException ex)
             {
+                _knownDisposedFont = themeFont;
                 _metrics.RecordDiagnostic("HorizontalLayout.ResolveFont: 主题字体已释放", ex);
                 return SystemFonts.DefaultFont;
             }
