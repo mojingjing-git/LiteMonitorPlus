@@ -379,6 +379,16 @@ namespace LiteMonitor
         public Dictionary<string, string> GroupAliases { get; set; } = new Dictionary<string, string>();
         public List<MonitorItemConfig> MonitorItems { get; set; } = new List<MonitorItemConfig>();
 
+        /// <summary>
+        /// B3：克隆一份用于差异比对的快照（JSON 往返；运行时 [JsonIgnore] 字段不参与——
+        /// 它们在 ComputeDiff 的黑名单里本就不算差异）。只读用途，不得当 Live 用。
+        /// </summary>
+        public Settings CloneForDiff()
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(this);
+            return System.Text.Json.JsonSerializer.Deserialize<Settings>(json) ?? new Settings();
+        }
+
         // ★★★ [多显卡] 各显卡各自的峰值记录 (key = 完整 Key, 如 "GPU.1.Power"), 供进度条按卡自适应 ★★★
         public Dictionary<string, float> RecordedMaxGpuDynamic { get; set; } = new Dictionary<string, float>();
 

@@ -22,8 +22,8 @@
 - 构建 0 错误；全量 **2362 执行 / 0 失败**（发现 2369）；`architecture-assert` 12/12 全绿（基线带史下调 A-2=6）。
 - 行为等价面：网关转发全部一一对应原 Instance 调用（含 Web 需求写入的"未注册返回 false 重试"语义、WriteSnapshotJson 空对象兜底）。
 
-## 4. 遗留（B3 收尾步，下一步）
+## 4. 遗留与收尾记录
 
-1. **dispatcher 接线进 ApplyAllSettings**：差异分派器已就绪但 ApplyAllSettings 仍无条件全量 Apply——"只重配受影响模块"验收行需把分派器接入设置保存路径（需 Draft/Live 双侧上下文，涉及设置窗体保存链，单独小步实施+回归）。
-2. 模块服务四件委托壳的组合根接线（与 1 同批）。
-3. 实机目视：设置保存/取消、测速窗口、清理内存、驱动检查（本包改动的消费面）。
+1. ~~dispatcher 接线进 ApplyAllSettings~~ → **已落地（安全子集形态）**：`SettingsForm` 保存路径改为 `AppActions.ApplySettingsSelectively`（合并前 `CloneForDiff` 快照 → `ComputeDiff` → `ResolveApplyPlan` 纯函数划分）：**空差异零扰动**；**纯 Web/纯插件变更只应用对应模块、不重建界面**；其余（含主题扇出面与采样/布局联动）走与 `ApplyAllSettings` 同序的界面重建组——零回归面。`ApplyPlan`/`ResolveApplyPlan` 为 internal（IVT 供测试），11 个计划用例 + 端到端克隆比对用例全绿。`SettingsApplyDispatcher`+`SamplingConfigApplier` 保持"已就绪已测、未接进保存路径"状态（保存路径的采样重配仍由 `ApplyMonitorLayout` 内既有 `RefreshHardwareConfig` 承担），是否切换到契约式 ApplyConfig 随 B4/B5 消费面扩大再定。
+2. 模块服务四件委托壳的组合根接线：与 1 的取舍合并——保存路径直接调用 AppActions 既有方法（同序），委托壳保留给后续真正的跨模块编排场景。
+3. 实机目视（待用户）：设置保存/取消（含"不动任何东西直接保存"应零扰动、只改 Web 开关应不闪界面）、测速窗口、清理内存、驱动检查。

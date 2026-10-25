@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using LiteMonitor.src.Core;
+using LiteMonitor.SystemServices; // B3:HardwareGateway
 using LiteMonitor.src.Core.Actions;
 using LiteMonitor.src.UI.Controls;
 using LiteMonitor.src.UI.SettingsPage;
@@ -299,13 +300,16 @@ namespace LiteMonitor.src.UI
             }
 
             // 2. 合并变更到 Live Settings
+            //    B3：合并前克隆 live 快照，保存后按 live/合并前差异选择性应用副作用
+            //    （空差异零扰动；纯 Web/插件变更不重建界面——Plan B §4.2"只重配受影响模块"）。
+            Settings before = _cfg.CloneForDiff();
             SettingsChanger.Merge(_cfg, _draftCfg);
             bool autoStartChanged = oldAutoStart != _cfg.AutoStart;
 
             // 2.5 ★★★ [多显卡] 落盘前先同步显卡监控项 ★★★
             //     必须在 _cfg.Save() 之前 —— ApplyAllSettings 里那一次 Ensure
             //     发生在保存之后, 磁盘上的 MonitorItems 会比内存晚一轮。
-            int detectedGpuCount = LiteMonitor.src.SystemServices.HardwareMonitor.TryGetDetectedGpuCount();
+            int detectedGpuCount = HardwareGateway.DetectedGpuCount;
             int gpuCap = detectedGpuCount > 0
                 ? detectedGpuCount
                 : Math.Max(1, _cfg.MonitoredGpuCount);
@@ -313,9 +317,9 @@ namespace LiteMonitor.src.UI
 
             // 3. 持久化保存
             _cfg.Save();
-            
+
             // 4. 应用副作用 (刷新界面)
-            // GPU 开关自 MainPanelPage 迁入「渲染路线」页 ⇒ 重试申请从新页读取（R3 §4.1）。
+            // GPU 开关自 MainPanelPage 迁入「渲染路线」页 ⇒ 重试申请从新页读取，R3 §4.1）。
             if (_pages.TryGetValue("Rendering", out SettingsPageBase? routePage) &&
                 routePage is RenderingRoutePage renderingPage &&
                 renderingPage.GpuStartupRetryRequested)
@@ -323,7 +327,7 @@ namespace LiteMonitor.src.UI
                 _ui.AllowGpuStartupRetryAfterExplicitSettingsApply();
                 renderingPage.AcknowledgeGpuStartupRetryRequest();
             }
-            AppActions.ApplyAllSettings(_cfg, _mainForm, _ui, autoStartChanged);
+            AppActions.ApplySettingsSelectively(before, _cfg, _mainForm, _ui, autoStartChanged);
 
             // 5. [Fix] Rebase Draft to match Live
             // 将 Live 环境中由插件生成的最新监控项同步回 Draft，并保留动态显示属性

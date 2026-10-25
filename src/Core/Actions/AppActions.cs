@@ -20,6 +20,60 @@ namespace LiteMonitor.src.Core.Actions
     public static class AppActions
     {
 
+        // ★★★ B3：选择性应用计划（纯函数，可测）★★★
+        /// <summary>
+        /// 差异 → 应用计划。UiGroup=界面重建组（含主题扇出面：Appearance/Sampling/Taskbar/Other
+        /// 任一变化都整组重应用，保持 ApplyAllSettings 的既有顺序约束）；WebServer/Plugins
+        /// 与界面无交叉依赖，可独立应用。空差异 → 三项全 false（保存零扰动）。
+        /// </summary>
+        internal readonly record struct ApplyPlan(bool UiGroup, bool WebServer, bool Plugins)
+        {
+            public bool Any => UiGroup || WebServer || Plugins;
+        }
+
+        internal static ApplyPlan ResolveApplyPlan(System.Collections.Generic.IEnumerable<LiteMonitor.Core.Actions.Services.SettingsFieldDiff> diffs)
+        {
+            bool ui = false, web = false, plugins = false;
+            foreach (var d in diffs)
+            {
+                switch (d.Module)
+                {
+                    case LiteMonitor.Core.Actions.Services.SettingsModule.WebServer: web = true; break;
+                    case LiteMonitor.Core.Actions.Services.SettingsModule.Plugins: plugins = true; break;
+                    default: ui = true; break;
+                }
+            }
+            return new ApplyPlan(ui, web, plugins);
+        }
+
+        /// <summary>
+        /// B3：按 live/draft 差异选择性应用设置副作用。
+        /// 空差异不应用；纯 Web/插件变更只动对应模块（不重建界面）；其余走与
+        /// <see cref="ApplyAllSettings"/> 同序的界面重建组。返回应用摘要（诊断/日志用）。
+        /// </summary>
+        public static string ApplySettingsSelectively(Settings before, Settings cfg, MainForm mainForm, UIController ui, bool applyAutoStart)
+        {
+            var diffs = LiteMonitor.src.Core.Actions.SettingsChanger.ComputeDiff(before, cfg);
+            var plan = ResolveApplyPlan(diffs);
+            if (!plan.Any) return "no-change";
+
+            if (plan.UiGroup)
+            {
+                bool wasHorizontal = ui.IsLayoutHorizontal;
+                ApplyLanguage(cfg, null, mainForm);
+                if (applyAutoStart) ApplyAutoStart(cfg);
+                ApplyWindowAttributes(cfg, mainForm);
+                ApplyThemeAndLayout(cfg, ui, mainForm, wasHorizontal);
+                ApplyMonitorLayout(cfg, ui, mainForm);
+                ApplyTaskbarStyle(cfg, ui);
+                ApplyVisibility(cfg, mainForm);
+            }
+            if (plan.WebServer) ApplyWebServer(cfg);
+            if (plan.Plugins) PluginManager.Instance.Reload(cfg);
+
+            return (plan.UiGroup ? "ui" : "") + (plan.WebServer ? "+web" : "") + (plan.Plugins ? "+plugins" : "");
+        }
+
         // ★★★ 新增：全局应用入口 ★★★
         public static void ApplyAllSettings(Settings cfg, MainForm mainForm, UIController ui, bool applyAutoStart = false)
         {

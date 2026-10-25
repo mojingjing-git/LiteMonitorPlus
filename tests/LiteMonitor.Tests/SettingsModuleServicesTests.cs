@@ -131,5 +131,52 @@ namespace LiteMonitor.Tests
             var notWired = Assert.Single(results, r => r.Module == nameof(SettingsModule.Appearance));
             Assert.Equal("not-wired(阶段三接线)", notWired.EffectiveState);
         }
+
+        // ── B3 收尾步：选择性应用计划（AppActions.ResolveApplyPlan 纯函数） ──
+
+        public static TheoryData<string[], bool, bool, bool> PlanCases => new()
+        {
+            { new[] { "WebServerPort" }, false, true, false },        // 纯 Web：不重建界面
+            { new[] { "WebServerEnabled", "WebServerPort" }, false, true, false },
+            { new[] { "PluginInstances" }, false, false, true },      // 纯插件：不重建界面
+            { new[] { "WebServerPort", "MarketPlugins" }, false, true, true }, // Web+插件：都不碰 UI
+            { new[] { "Skin" }, true, false, false },                 // 主题扇出 → 界面重建组
+            { new[] { "RefreshMs" }, true, false, false },            // 采样（监控项/布局联动）
+            { new[] { "TaskbarWidth" }, true, false, false },
+            { new[] { "SomethingNew" }, true, false, false },         // Other 兜底进 UI 组（安全侧）
+            { new[] { "Skin", "WebServerPort" }, true, true, false }, // 混合：整组 + Web
+        };
+
+        [Theory]
+        [MemberData(nameof(PlanCases))]
+        public void 应用计划_按模块归属划分(string[] fields, bool ui, bool web, bool plugins)
+        {
+            var diffs = fields.Select(f => new SettingsFieldDiff(f, SettingsChanger.Classify(f))).ToList();
+            var plan = AppActions.ResolveApplyPlan(diffs);
+
+            Assert.Equal(ui, plan.UiGroup);
+            Assert.Equal(web, plan.WebServer);
+            Assert.Equal(plugins, plan.Plugins);
+        }
+
+        [Fact]
+        public void 应用计划_空差异_零扰动()
+        {
+            var plan = AppActions.ResolveApplyPlan(new SettingsFieldDiff[0]);
+            Assert.False(plan.Any);
+        }
+
+        [Fact]
+        public void 克隆快照_差异比对端到端()
+        {
+            var live = new Settings();
+            var snapshot = live.CloneForDiff();
+            live.Skin = "Changed";
+
+            var plan = AppActions.ResolveApplyPlan(SettingsChanger.ComputeDiff(snapshot, live));
+
+            Assert.True(plan.UiGroup);
+            Assert.False(plan.WebServer);
+        }
     }
 }
