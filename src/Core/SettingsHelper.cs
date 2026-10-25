@@ -291,21 +291,55 @@ namespace LiteMonitor
             }
         }
 
+        // ── 市场安装记录的读写核心（M1/M3 资产类型泛化）─────────────────────
+        // 插件（Settings.MarketPlugins）与主题（Settings.Themes）共用同一套
+        // 严格写入器 / 独立持久化读取 / 单记录内存对账，只差"操作哪个列表"。
+
+        private readonly struct RecordListAccessor
+        {
+            internal RecordListAccessor(
+                Func<Settings, List<MarketPluginRecord>?> get,
+                Action<Settings, List<MarketPluginRecord>?> set)
+            {
+                Get = get;
+                Set = set;
+            }
+
+            internal Func<Settings, List<MarketPluginRecord>?> Get { get; }
+            internal Action<Settings, List<MarketPluginRecord>?> Set { get; }
+
+            internal static readonly RecordListAccessor PluginList =
+                new(s => s.MarketPlugins, (s, v) => s.MarketPlugins = v!);
+
+            internal static readonly RecordListAccessor ThemeList =
+                new(s => s.Themes, (s, v) => s.Themes = v!);
+        }
+
         // Lock order: market transaction gate -> _ioLock. No installer, scheduler,
         // or UI callback may run here; only the affected record is restored on failure.
         internal static bool TryChangeMarketRecord(string id, MarketPluginRecord? replacement)
+            => TryChangeRecordInList(RecordListAccessor.PluginList, id, replacement);
+
+        /// <summary>主题市场安装记录写入（镜像 TryChangeMarketRecord 语义，F5/F16）。</summary>
+        internal static bool TryChangeThemeRecord(string id, MarketPluginRecord? replacement)
+            => TryChangeRecordInList(RecordListAccessor.ThemeList, id, replacement);
+
+        private static bool TryChangeRecordInList(
+            RecordListAccessor accessor,
+            string id,
+            MarketPluginRecord? replacement)
         {
             lock (_ioLock)
             {
                 Settings settings = Settings.Load();
-                var originalList = settings.MarketPlugins;
+                var originalList = accessor.Get(settings);
                 var list = originalList ?? new List<MarketPluginRecord>();
                 var previous = list.Select((record, index) => (record, index))
                     .Where(pair => SameMarketId(pair.record, id)).ToList();
 
                 try
                 {
-                    settings.MarketPlugins = list;
+                    accessor.Set(settings, list);
                     if (replacement == null)
                         list.RemoveAll(record => SameMarketId(record, id));
                     else if (previous.Count > 0)
@@ -324,16 +358,23 @@ namespace LiteMonitor
                 list.RemoveAll(record => SameMarketId(record, id));
                 foreach (var pair in previous)
                     list.Insert(Math.Min(pair.index, list.Count), pair.record);
-                if (originalList == null && list.Count == 0) settings.MarketPlugins = null!;
+                if (originalList == null && list.Count == 0) accessor.Set(settings, null);
                 return false;
             }
         }
 
         internal static MarketPluginRecord? FindMarketRecord(string id)
+            => FindRecordInList(RecordListAccessor.PluginList, id);
+
+        /// <summary>主题市场安装记录查找（镜像 FindMarketRecord 语义）。</summary>
+        internal static MarketPluginRecord? FindThemeRecord(string id)
+            => FindRecordInList(RecordListAccessor.ThemeList, id);
+
+        private static MarketPluginRecord? FindRecordInList(RecordListAccessor accessor, string id)
         {
             lock (_ioLock)
             {
-                MarketPluginRecord? record = Settings.Load().MarketPlugins?
+                MarketPluginRecord? record = accessor.Get(Settings.Load())?
                     .FirstOrDefault(record => SameMarketId(record, id));
                 return record == null ? null : CopyMarketRecord(record);
             }
@@ -343,6 +384,16 @@ namespace LiteMonitor
         // singleton or a default/backup after a read failure, neither proves commit.
         internal static bool TryReadPersistedMarketRecord(
             string id, out MarketPluginRecord? record, bool synchronizeMemory = false)
+            => TryReadPersistedRecord(RecordListAccessor.PluginList, id, out record, synchronizeMemory);
+
+        /// <summary>主题市场安装记录的独立持久化读取（恢复路径专用，镜像插件口径）。</summary>
+        internal static bool TryReadPersistedThemeRecord(
+            string id, out MarketPluginRecord? record, bool synchronizeMemory = false)
+            => TryReadPersistedRecord(RecordListAccessor.ThemeList, id, out record, synchronizeMemory);
+
+        private static bool TryReadPersistedRecord(
+            RecordListAccessor accessor,
+            string id, out MarketPluginRecord? record, bool synchronizeMemory)
         {
             lock (_ioLock)
             {
@@ -358,7 +409,7 @@ namespace LiteMonitor
                         try { File.GetAttributes(BackupPath); }
                         catch (Exception absent) when (absent is FileNotFoundException or DirectoryNotFoundException)
                         {
-                            if (synchronizeMemory) SynchronizeMarketRecord(id, null);
+                            if (synchronizeMemory) SynchronizeRecord(accessor, id, null);
                             return true;
                         }
                         return false;
@@ -367,9 +418,9 @@ namespace LiteMonitor
                     var persisted = JsonSerializer.Deserialize<Settings>(json,
                         new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                     if (persisted == null) return false;
-                    record = persisted.MarketPlugins?.FirstOrDefault(item => SameMarketId(item, id));
+                    record = accessor.Get(persisted)?.FirstOrDefault(item => SameMarketId(item, id));
                     if (record != null) record = CopyMarketRecord(record);
-                    if (synchronizeMemory) SynchronizeMarketRecord(id, record);
+                    if (synchronizeMemory) SynchronizeRecord(accessor, id, record);
                     return true;
                 }
                 catch { return false; }
@@ -379,12 +430,17 @@ namespace LiteMonitor
         private static bool SameMarketId(MarketPluginRecord? record, string id)
             => record != null && string.Equals(record.Id, id, StringComparison.OrdinalIgnoreCase);
 
-        private static void SynchronizeMarketRecord(string id, MarketPluginRecord? record)
+        private static void SynchronizeRecord(RecordListAccessor accessor, string id, MarketPluginRecord? record)
         {
             // Called only under _ioLock, after a successful independent read.
             // Reconcile just this record without saving or replacing Settings.
             Settings settings = Settings.Load();
-            var list = settings.MarketPlugins ??= new List<MarketPluginRecord>();
+            var list = accessor.Get(settings);
+            if (list == null)
+            {
+                list = new List<MarketPluginRecord>();
+                accessor.Set(settings, list);
+            }
             int position = list.FindIndex(item => SameMarketId(item, id));
             list.RemoveAll(item => SameMarketId(item, id));
             if (record != null)

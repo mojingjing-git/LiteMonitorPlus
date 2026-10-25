@@ -31,7 +31,8 @@ namespace LiteMonitor.src.Plugins
         RecordCorrupted, // 安装记录异常（文件名与 id 不匹配）
         SchemaMismatch,  // 索引格式不兼容
         BadContent,      // 下载内容不是合法 JSON
-        MissingHash      // 索引条目没有提供可用的 SHA-256 摘要（LM-008：缺摘要 ≠ 不需要校验）
+        MissingHash,     // 索引条目没有提供可用的 SHA-256 摘要（LM-008：缺摘要 ≠ 不需要校验）
+        ThemeContentRejected // 主题内容未通过主题特有校验（互验/Validate/远程引用契约，主题市场）
     }
 
     /// <summary>
@@ -100,6 +101,12 @@ namespace LiteMonitor.src.Plugins
         [JsonPropertyName("repo")] public string Repo { get; set; } = "";
         [JsonPropertyName("total")] public int Total { get; set; }
         [JsonPropertyName("plugins")] public List<MarketPluginEntry> Plugins { get; set; } = new List<MarketPluginEntry>();
+
+        /// <summary>主题附加段条数（D1=A/D3：schema 1 的加法扩展；老客户端忽略本段）。</summary>
+        [JsonPropertyName("themes_total")] public int ThemesTotal { get; set; }
+
+        /// <summary>主题附加段（主题市场条目；老客户端反序列化时忽略未知字段）。</summary>
+        [JsonPropertyName("themes")] public List<MarketThemeEntry> Themes { get; set; } = new List<MarketThemeEntry>();
     }
 
     /// <summary>
@@ -408,6 +415,8 @@ namespace LiteMonitor.src.Plugins
                 throw new InvalidDataException("索引文件解析失败");
             if (index.Plugins == null)
                 index.Plugins = new List<MarketPluginEntry>();
+            if (index.Themes == null)
+                index.Themes = new List<MarketThemeEntry>();
 
             if (index.Schema != SupportedIndexSchema)
             {
@@ -457,6 +466,13 @@ namespace LiteMonitor.src.Plugins
             }
             return true;
         }
+
+        /// <summary>
+        /// 主题 id 能否被主题市场安装。主题没有内置常量表（D6/REV1-P2-5）：
+        /// "内置 = ThemeDir 既有文件"，由 IsTargetAvailable 的目标存在性检查覆盖。
+        /// </summary>
+        public static bool CanInstallTheme(string themeId, out string reason)
+            => TryValidatePluginId(themeId, out reason);
 
         public static bool IsTargetAvailable(string pluginId, out string reason)
             => IsTargetAvailable(pluginId, PluginMarketState.Find, out reason);
@@ -814,14 +830,22 @@ namespace LiteMonitor.src.Plugins
         /// </para>
         /// </summary>
         internal static void RecoverInterruptedInstallsIn(string pluginsDir)
+            => RecoverInterruptedInstallsIn(pluginsDir, PluginMarketState.FindPersistedForRecovery);
+
+        /// <summary>
+        /// 对账指定目录里的未完成安装事务（M1 资产类型泛化）：
+        /// <paramref name="findRecord"/> 由资产类型决定（插件 = PluginMarketState，主题 = ThemeMarketState）。
+        /// </summary>
+        internal static void RecoverInterruptedInstallsIn(string pluginsDir, Func<string, MarketPluginRecord?> findRecord)
         {
             if (string.IsNullOrWhiteSpace(pluginsDir)) return;
-            EnsureRecovered(pluginsDir, force: true);
+            EnsureRecovered(pluginsDir, force: true, findRecord);
         }
 
         /// <summary>确保指定目录里的未完成安装事务已经被对账过（每个目录只做一次）。</summary>
-        private static void EnsureRecovered(string pluginsDir, bool force = false)
+        private static void EnsureRecovered(string pluginsDir, bool force = false, Func<string, MarketPluginRecord?>? findRecord = null)
         {
+            findRecord ??= PluginMarketState.FindPersistedForRecovery;
             lock (_recoveryLock)
             {
                 if (!force && _recoveredDirs.Contains(pluginsDir) &&
@@ -829,7 +853,7 @@ namespace LiteMonitor.src.Plugins
 
                 try
                 {
-                    PluginMarketInstallCore.RecoverInterruptedInstalls(pluginsDir, PluginMarketState.FindPersistedForRecovery);
+                    PluginMarketInstallCore.RecoverInterruptedInstalls(pluginsDir, findRecord);
                     if (!File.Exists(Path.Combine(pluginsDir, PluginMarketInstallCore.TransactionLogFileName)))
                         _recoveredDirs.Add(pluginsDir);
                 }

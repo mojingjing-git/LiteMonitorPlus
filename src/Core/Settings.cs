@@ -295,6 +295,11 @@ namespace LiteMonitor
         // 旧版 settings.json 没有这个字段，反序列化为 null，由 Load() 兜底成空列表
         public List<MarketPluginRecord> MarketPlugins { get; set; } = new List<MarketPluginRecord>();
 
+        // ★★★ 主题市场：市场安装的主题记录（镜像 MarketPlugins；F16：主题身份 = 文件名 + sha256，
+        // 记录形状与插件一致故复用 MarketPluginRecord，settings.json 里互不影响）★★★
+        // 旧版 settings.json 没有这个字段，反序列化为 null，由 Load() 兜底成空列表
+        public List<MarketPluginRecord> Themes { get; set; } = new List<MarketPluginRecord>();
+
         // ★★★ [新增] 极简样式封装（复制到 Settings 类里） ★★★
         public struct TBStyle { 
             public string Font; public float Size; public bool Bold; 
@@ -331,6 +336,12 @@ namespace LiteMonitor
             if (_instance.MarketPlugins == null)
             {
                 _instance.MarketPlugins = new List<MarketPluginRecord>();
+            }
+
+            // 兼容旧配置：如果 Themes（主题市场安装记录）为 null，初始化为空列表
+            if (_instance.Themes == null)
+            {
+                _instance.Themes = new List<MarketPluginRecord>();
             }
 
             // ★ W12：解析监听范围（存量配置保持旧行为，新装默认仅环回）
