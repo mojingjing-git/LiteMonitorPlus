@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Buffers;
 using System.Diagnostics;
@@ -384,6 +383,8 @@ namespace LiteMonitor.src.WebServer
     /// <remarks>
     /// ★ 头名统一小写；同名头**保留全部取值**（重复头要能被识别出来并拒绝，
     ///   而不是"取第一个"—— 那正是请求走私 / 参数污染的温床）。
+    /// ★ HTTP 路由与 WebSocket 握手**共用这一份解析结果**：判定升级与否不再二次扫描原文，
+    ///   两边的口径不可能再分叉。
     /// </remarks>
     internal sealed class HttpRequestInfo
     {
@@ -399,6 +400,18 @@ namespace LiteMonitor.src.WebServer
         /// <summary>查询串（不含 '?'）。</summary>
         public string Query = "";
 
+        /// <summary>请求行里的 HTTP 版本（"HTTP/1.1"）。</summary>
+        public string Version = "";
+
+        /// <summary>请求行是否合法（方法 / 目标 / 版本三段齐全且没有多余空白）。</summary>
+        public bool RequestLineValid;
+
+        /// <summary>头块是否以空行**正常结束**（false = 被 8 KB 上限截断，头内容不可信）。</summary>
+        public bool HeaderBlockComplete;
+
+        /// <summary>头块里的非法 / 歧义形态说明（空 = 没有发现问题）。</summary>
+        public string HeaderProblem = "";
+
         /// <summary>头集合：头名（小写）→ 全部取值。</summary>
         public readonly Dictionary<string, List<string>> Headers = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
@@ -412,6 +425,20 @@ namespace LiteMonitor.src.WebServer
 
         /// <summary>取某个头的第一个取值（仅用于"存在性"判断，不用于鉴权取值）。</summary>
         public bool HasHeader(string name) => Headers.ContainsKey(name);
+
+        /// <summary>
+        /// 取某个头的**全部**取值。
+        /// </summary>
+        /// <remarks>
+        /// ★ 只给**列表头**用（<c>Connection</c> / <c>Upgrade</c>）：它们允许出现多次，
+        ///   语义是"把各行的令牌合并起来看"。单值头（<c>Host</c> / <c>Sec-WebSocket-Key</c> …）
+        ///   必须走 <see cref="GetSingleHeader"/> —— 重复即非法，不合并、不取第一个。
+        /// </remarks>
+        public IReadOnlyList<string> GetHeaderValues(string name)
+        {
+            if (Headers.TryGetValue(name, out var list)) return list;
+            return Array.Empty<string>();
+        }
     }
 
     public class WebSessionManager
@@ -774,9 +801,13 @@ namespace LiteMonitor.src.WebServer
                     : Array.Empty<byte>();
 
                 // 2. 协议分流
-                if (IsWebSocketUpgrade(requestStr))
+                // ★ HTTP 路由与 WS 握手**共用同一份结构化解析结果**（不再二次扫描原文）。
+                HttpRequestInfo info = ParseRequest(requestStr);
+                UpgradeDecision decision = ClassifyUpgrade(info, out int upgradeStatus, out string upgradeReason);
+
+                if (decision == UpgradeDecision.Handshake)
                 {
-                    if (Handshake(stream, requestStr, out string wsSessionId))
+                    if (Handshake(stream, info, out string wsSessionId))
                     {
                         // 握手成功 = 已鉴权，登记为有效 Web 需求
                         // ★ 同时把**所属主会话**一起记下来：会话失效时才能反查并断开这条连接。
@@ -798,10 +829,19 @@ namespace LiteMonitor.src.WebServer
                         catch (Exception ex) { Debug.WriteLine("关闭被拒绝的 WebSocket 连接失败: " + ex.Message); }
                     }
                 }
+                else if (decision == UpgradeDecision.Reject)
+                {
+                    // ★ 确实是升级请求但不合法 ⇒ 明确的 4xx。
+                    //   旧实现在这里静默落进 HTTP 路由，客户端收到的是 **200 + 登录页 HTML** ——
+                    //   对 WebSocket 客户端来说，"收到 200"等于"连上了"，于是永远停在错误状态。
+                    SendErrorResponse(stream, upgradeStatus, upgradeReason, info, BuildAccessPolicy());
+                    try { client.Close(); }
+                    catch (Exception ex) { Debug.WriteLine("关闭被拒绝的升级请求失败: " + ex.Message); }
+                }
                 else
                 {
                     // ★ HTTP 路径改成可等待：鉴权 → 授予租期 → 共享采样 → 序列化 → 响应
-                    await HandleHttpRequestAsync(stream, requestStr, leftoverBody, connectionGeneration, lifetimeToken).ConfigureAwait(false);
+                    await HandleHttpRequestAsync(stream, info, leftoverBody, connectionGeneration, lifetimeToken).ConfigureAwait(false);
                     client.Close(); // HTTP 是短连接
                 }
             }
@@ -1320,10 +1360,162 @@ namespace LiteMonitor.src.WebServer
             return -1;
         }
 
-        private bool IsWebSocketUpgrade(string req)
+        /// <summary>升级请求的分类结果。</summary>
+        internal enum UpgradeDecision
         {
-            return Regex.IsMatch(req, "GET", RegexOptions.IgnoreCase) && 
-                   Regex.IsMatch(req, "Upgrade: websocket", RegexOptions.IgnoreCase);
+            /// <summary>不是升级请求（普通 HTTP 请求）。</summary>
+            NotUpgrade,
+
+            /// <summary>合法的 WebSocket 升级请求 → 进握手。</summary>
+            Handshake,
+
+            /// <summary>确实是升级请求，但不合法 → 明确的 4xx（不再静默 200 登录页）。</summary>
+            Reject,
+        }
+
+        /// <summary>
+        /// 判定一个请求是不是 WebSocket 升级请求（**结构化判定**）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 旧实现是两句整段正则：<c>Regex.IsMatch(req, "GET", IgnoreCase)</c> 与
+        ///   <c>Regex.IsMatch(req, "Upgrade: websocket", IgnoreCase)</c>。它有五个说不通的地方：
+        ///   <list type="number">
+        ///   <item>
+        ///   <b>只看字面量。</b><c>Upgrade: websocket</c> 必须**恰好**是一个空格 ——
+        ///   而 RFC 7230 §3.2.4 允许冒号后 0..N 个 SP/HTAB。合法请求反而被降级成 200 登录页
+        ///   （WEB-OWS：浏览器侧表现为"网页端连不上 / 灰屏"）。
+        ///   </item>
+        ///   <item>
+        ///   <b>扫的是整段报文。</b>请求**正文**里出现 "Upgrade: websocket" 也会命中；
+        ///   伪造的 <c>X-Upgrade: websocket</c> 同样命中（子串）。
+        ///   </item>
+        ///   <item>
+        ///   <b>"GET" 也是子串匹配。</b>方法不是 GET 的请求（甚至 <c>GET</c> 出现在某个头值里）也会进握手。
+        ///   </item>
+        ///   <item>
+        ///   <b>不区分协议令牌。</b><c>Upgrade: notwebsocket</c> 会被当成 WebSocket。
+        ///   </item>
+        ///   <item>
+        ///   <b>不校验 <c>Connection</c>。</b>RFC 6455 要求 <c>Connection</c> 里带 <c>upgrade</c> 令牌。
+        ///   </item>
+        ///   </list>
+        /// ★ 现在改成：<b>先结构化解析</b>，再按固定优先级逐条判定。
+        ///   优先级（先到先判，写进测试）：
+        ///   <list type="number">
+        ///   <item>① 有没有升级意图（<c>Upgrade</c> 头存在，或 <c>Connection</c> 里带 <c>upgrade</c> 令牌）——没有 ⇒ 普通 HTTP；</item>
+        ///   <item>② 头块是否完整（8 KB 上限截断 ⇒ 431，不进握手）；</item>
+        ///   <item>③ 头字段形态是否合法（折行 / 冒号前空白 / 非法字段名 ⇒ 400）；</item>
+        ///   <item>④ 请求行（方法必须是 GET，否则 405；版本必须是 HTTP/1.1，否则 400）；</item>
+        ///   <item>⑤ <c>Upgrade</c> / <c>Connection</c> 是否齐备且协议令牌精确等于 <c>websocket</c>（否则 400）；</item>
+        ///   <item>⑥ 歧义的长度头（<c>Transfer-Encoding</c> / 重复的 <c>Content-Length</c> ⇒ 400）。</item>
+        ///   </list>
+        /// </remarks>
+        private static UpgradeDecision ClassifyUpgrade(HttpRequestInfo info, out int status, out string reason)
+        {
+            status = 400;
+            reason = "";
+
+            // ① 升级意图
+            bool hasUpgradeHeader = info.HasHeader("upgrade");
+            bool connectionWantsUpgrade = HeaderHasToken(info, "connection", "upgrade");
+            if (!hasUpgradeHeader && !connectionWantsUpgrade) return UpgradeDecision.NotUpgrade;
+
+            // ② 头块没读完（8 KB 上限截断）⇒ 头内容不可信 ⇒ 431
+            if (!info.HeaderBlockComplete)
+            {
+                status = 431;
+                reason = "请求头块过大或不完整。";
+                return UpgradeDecision.Reject;
+            }
+
+            // ③ 头字段形态非法
+            if (info.HeaderProblem.Length > 0)
+            {
+                status = 400;
+                reason = info.HeaderProblem;
+                return UpgradeDecision.Reject;
+            }
+
+            // ④ 请求行：方法 / 目标 / 版本
+            if (!info.RequestLineValid)
+            {
+                status = 400;
+                reason = "请求行不合法（必须是「方法 目标 HTTP/1.1」三段）。";
+                return UpgradeDecision.Reject;
+            }
+            if (!string.Equals(info.Method, "GET", StringComparison.Ordinal))
+            {
+                status = 405;
+                reason = "WebSocket 升级只接受 GET 方法。";
+                return UpgradeDecision.Reject;
+            }
+            if (!info.Target.StartsWith("/", StringComparison.Ordinal))
+            {
+                status = 400;
+                reason = "请求目标必须是绝对路径。";
+                return UpgradeDecision.Reject;
+            }
+            if (!string.Equals(info.Version, "HTTP/1.1", StringComparison.Ordinal))
+            {
+                status = 400;
+                reason = "WebSocket 升级要求 HTTP/1.1。";
+                return UpgradeDecision.Reject;
+            }
+
+            // ⑤ Upgrade / Connection
+            if (!hasUpgradeHeader)
+            {
+                status = 400;
+                reason = "缺少 Upgrade 头。";
+                return UpgradeDecision.Reject;
+            }
+            if (!connectionWantsUpgrade)
+            {
+                status = 400;
+                reason = "Connection 头必须包含 upgrade 令牌。";
+                return UpgradeDecision.Reject;
+            }
+            if (!HeaderHasToken(info, "upgrade", "websocket"))
+            {
+                status = 400;
+                reason = "Upgrade 头必须精确包含 websocket 协议令牌。";
+                return UpgradeDecision.Reject;
+            }
+
+            // ⑥ 歧义的长度头（与请求走私同型：不能有两种解释）
+            if (info.HasHeader("transfer-encoding"))
+            {
+                status = 400;
+                reason = "WebSocket 升级请求不接受 Transfer-Encoding。";
+                return UpgradeDecision.Reject;
+            }
+            if (info.GetHeaderValues("content-length").Count > 1)
+            {
+                status = 400;
+                reason = "Content-Length 重复（解析歧义）。";
+                return UpgradeDecision.Reject;
+            }
+
+            return UpgradeDecision.Handshake;
+        }
+
+        /// <summary>
+        /// 列表头里是否含指定令牌（按逗号拆成令牌，逐个**精确**比较；大小写不敏感）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 令牌是**精确**比较，不是子串：<c>Upgrade: notwebsocket</c> 不含 <c>websocket</c> 令牌。
+        /// ★ 多个 <c>Connection</c> / <c>Upgrade</c> 头行按 RFC 7230 §7 合并（各行令牌并集）。
+        /// </remarks>
+        private static bool HeaderHasToken(HttpRequestInfo info, string headerName, string token)
+        {
+            foreach (string value in info.GetHeaderValues(headerName))
+            {
+                foreach (string part in value.Split(','))
+                {
+                    if (string.Equals(TrimOws(part), token, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+            }
+            return false;
         }
 
         // ==================================================================
@@ -1336,11 +1528,11 @@ namespace LiteMonitor.src.WebServer
         /// <remarks>
         /// ★ 处理顺序（契约 W8）：<b>先读完请求头 → 校验 Host/Origin → 完成鉴权 → 才决定要不要读请求体</b>。
         ///   未鉴权的请求**绝不**触发请求体读取（否则可被当作带宽 / 内存消耗放大器）。
+        /// ★ <paramref name="info"/> 是与 WS 握手**共用**的那份结构化解析结果（不二次解析）。
         /// </remarks>
-        private async Task HandleHttpRequestAsync(NetworkStream stream, string request, byte[] leftoverBody,
+        private async Task HandleHttpRequestAsync(NetworkStream stream, HttpRequestInfo info, byte[] leftoverBody,
             int connectionGeneration, CancellationToken cancellationToken)
         {
-            HttpRequestInfo info = ParseRequest(request);
             if (string.IsNullOrEmpty(info.Method)) return;
 
             WebAccessPolicy policy = BuildAccessPolicy();
@@ -1636,8 +1828,21 @@ namespace LiteMonitor.src.WebServer
         // ==================================================================
 
         /// <summary>
-        /// 解析请求行与请求头。
+        /// 解析请求行与请求头（**结构化解析**：HTTP 路由与 WS 握手共用这一份结果）。
         /// </summary>
+        /// <remarks>
+        /// ★ 旧实现在这里对头名做 <c>.Trim()</c>、对取值做 <c>.Trim()</c>，
+        ///   等于默许「<c>Upgrade : websocket</c>」这种 RFC 7230 明令禁止的写法，
+        ///   还会把 NBSP 之类的非 OWS 空白一起吃掉。本实现按 RFC 收敛：
+        ///   <list type="bullet">
+        ///   <item><b>字段名</b>必须是纯 token（不允许空白、不允许分隔符）；冒号前有空白 ⇒ 该行不合法。</item>
+        ///   <item><b>折行</b>（obs-fold，行首 SP/HTAB）一律拒绝，不合并、不猜。</item>
+        ///   <item><b>取值</b>只清理合法的首尾 SP/HTAB（OWS），其它空白字符原样保留。</item>
+        ///   <item>头块必须以空行正常结束；被 8 KB 上限截断 ⇒ <see cref="HttpRequestInfo.HeaderBlockComplete"/> 为 false。</item>
+        ///   </list>
+        /// ★ 发现的问题**记录**在 <see cref="HttpRequestInfo.HeaderProblem"/> 里而不是直接丢弃：
+        ///   普通网页 GET 仍按原样放行，但升级路径会据此明确回 4xx（不静默 200 登录页）。
+        /// </remarks>
         private static HttpRequestInfo ParseRequest(string raw)
         {
             var info = new HttpRequestInfo();
@@ -1652,6 +1857,12 @@ namespace LiteMonitor.src.WebServer
                 info.Method = parts[0];
                 info.Target = parts[1];
             }
+            if (parts.Length >= 3) info.Version = parts[2];
+
+            // ★ 请求行合法性：必须是「方法 目标 版本」三段，且段内不含额外空白。
+            //   方法大小写敏感（HTTP 方法名区分大小写），版本必须是 HTTP/1.1。
+            info.RequestLineValid = parts.Length == 3
+                && parts[0].Length > 0 && parts[1].Length > 0 && parts[2].Length > 0;
 
             int q = info.Target.IndexOf('?');
             if (q >= 0)
@@ -1667,13 +1878,37 @@ namespace LiteMonitor.src.WebServer
             for (int i = 1; i < lines.Length; i++)
             {
                 string line = lines[i].TrimEnd('\r');
-                if (line.Length == 0) break;          // 空行 = 头块结束
-                int colon = line.IndexOf(':');
-                if (colon <= 0) continue;             // 畸形行：忽略（不猜）
+                if (line.Length == 0)
+                {
+                    info.HeaderBlockComplete = true;   // 空行 = 头块结束
+                    break;
+                }
 
-                string name = lines[i].Substring(0, colon).Trim().ToLowerInvariant();
-                string value = lines[i].Substring(colon + 1).Trim();
-                if (name.Length == 0) continue;
+                // ★ 折行（obs-fold）：以 SP/HTAB 开头的续行一律拒绝（不合并、不猜）。
+                if (line[0] == ' ' || line[0] == '\t')
+                {
+                    if (info.HeaderProblem.Length == 0) info.HeaderProblem = "头字段折行（obs-fold）不被接受。";
+                    continue;
+                }
+
+                int colon = line.IndexOf(':');
+                if (colon <= 0)
+                {
+                    if (info.HeaderProblem.Length == 0) info.HeaderProblem = "头字段行缺少冒号。";
+                    continue;                          // 畸形行：不猜
+                }
+
+                // ★ 字段名必须是纯 token —— 冒号前有空白（"Upgrade : websocket"）按非法处理。
+                string rawName = line.Substring(0, colon);
+                if (!IsValidFieldName(rawName))
+                {
+                    if (info.HeaderProblem.Length == 0) info.HeaderProblem = "头字段名非法（不允许空白或分隔符）。";
+                    continue;
+                }
+
+                string name = rawName.ToLowerInvariant();
+                // ★ 取值只清理合法的首尾 SP/HTAB（OWS）；其它空白（NBSP 等）不是 OWS，原样保留。
+                string value = TrimOws(line.Substring(colon + 1));
 
                 if (!info.Headers.TryGetValue(name, out var list))
                 {
@@ -1684,6 +1919,47 @@ namespace LiteMonitor.src.WebServer
             }
 
             return info;
+        }
+
+        /// <summary>
+        /// 字段名是否为合法的 RFC 7230 token（只允许 tchar）。
+        /// </summary>
+        /// <remarks>
+        /// ★ 目的只有一个：把「字段名与冒号之间有空白」这类写法**挡在门外**。
+        ///   旧实现对字段名做 <c>.Trim()</c>，等于替客户端"修正"了非法请求 ——
+        ///   代理与后端对同一行的理解不一致时，就是请求走私的起点。
+        /// </remarks>
+        private static bool IsValidFieldName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            foreach (char c in name)
+            {
+                if (c >= 'a' && c <= 'z') continue;
+                if (c >= 'A' && c <= 'Z') continue;
+                if (c >= '0' && c <= '9') continue;
+                switch (c)
+                {
+                    case '!': case '#': case '$': case '%': case '&': case '\'':
+                    case '*': case '+': case '-': case '.': case '^': case '_':
+                    case '`': case '|': case '~':
+                        continue;
+                    default:
+                        return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>只裁掉首尾的 SP / HTAB（OWS）；其它空白字符**不动**。</summary>
+        private static string TrimOws(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+
+            int start = 0;
+            int end = value.Length;
+            while (start < end && (value[start] == ' ' || value[start] == '\t')) start++;
+            while (end > start && (value[end - 1] == ' ' || value[end - 1] == '\t')) end--;
+            return value.Substring(start, end - start);
         }
 
         /// <summary>查询串里是否还带着旧协议的 pwd 参数（已移除 ⇒ 一律拒绝）。</summary>
@@ -2170,6 +2446,7 @@ namespace LiteMonitor.src.WebServer
                 case 404: return "Not Found";
                 case 405: return "Method Not Allowed";
                 case 408: return "Request Timeout";
+                case 431: return "Request Header Fields Too Large";
                 case 500: return "Internal Server Error";
                 default: return "OK";
             }
@@ -2523,13 +2800,16 @@ namespace LiteMonitor.src.WebServer
         /// ★ 凭据 = <b>一次性票据</b>（<c>?ticket=</c>），不再接受 <c>?pwd=</c>：
         ///   浏览器 WebSocket API 无法自定义 Authorization 头，票据短 TTL + 一次性 + 仅限 WS 三者叠加。
         /// ★ Host / Origin 校验与 HTTP 完全一致（同一套判定口径）。
+        /// ★ <paramref name="info"/> 是分流时那份**结构化解析结果** —— 握手不再二次扫描原文，
+        ///   与 HTTP 路由看到的头字段完全是同一份。
+        /// ★ 错误优先级（固定，写进测试）：
+        ///   403（Host/Origin）→ 401（旧 ?pwd=）→ 401（票据）→ 400（Key）→ 400（版本）。
         /// </remarks>
-        private bool Handshake(NetworkStream stream, string request, out string sessionId)
+        private bool Handshake(NetworkStream stream, HttpRequestInfo info, out string sessionId)
         {
             sessionId = "";
             try
             {
-                HttpRequestInfo info = ParseRequest(request);
                 WebAccessPolicy policy = BuildAccessPolicy();
 
                 // ① Host / Origin（防 DNS Rebinding / 跨源建连）
@@ -2557,10 +2837,18 @@ namespace LiteMonitor.src.WebServer
                     return false;
                 }
 
-                // 1. 提取 Sec-WebSocket-Key 并做 RFC 6455 形态校验
-                if (!TryGetWebSocketKey(request, out string key))
+                // 1. 提取 Sec-WebSocket-Key 并做 RFC 6455 形态校验（结构化取值：唯一 + 大小写不敏感）
+                if (!TryGetWebSocketKey(info, out string key))
                 {
                     SendErrorResponse(stream, 400, "Sec-WebSocket-Key 缺失 / 重复 / 形态非法。", info, policy);
+                    return false;
+                }
+
+                // 1b. Sec-WebSocket-Version：重复 ⇒ 歧义；出现且不是 13 ⇒ 不支持。
+                //   ★ 头**缺失**不拒（历史客户端不发它 —— 既有兼容面不该被这次修复掐断）。
+                if (!IsWebSocketVersionAcceptable(info, out string versionError))
+                {
+                    SendErrorResponse(stream, 400, versionError, info, policy);
                     return false;
                 }
 
@@ -2585,11 +2873,16 @@ namespace LiteMonitor.src.WebServer
                 stream.Write(respBytes, 0, respBytes.Length);
                 return true;
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                // ★ 只补诊断，不在这里"代替"协议层修问题（异常路径一律握手失败）。
+                Debug.WriteLine("WebSocket 握手异常: " + ex.Message);
+                return false;
+            }
         }
 
         /// <summary>
-        /// 从请求头块里取出 <c>Sec-WebSocket-Key</c>，并做 RFC 6455 要求的形态校验。
+        /// 从**结构化解析结果**里取出 <c>Sec-WebSocket-Key</c>，并做 RFC 6455 要求的形态校验。
         /// </summary>
         /// <returns>头缺失、重复、或取值不是「16 字节随机数的 Base64」时返回 <c>false</c>。</returns>
         /// <remarks>
@@ -2612,53 +2905,45 @@ namespace LiteMonitor.src.WebServer
         ///   还会让它占用一个已登记的有效连接名额。
         ///   </item>
         ///   </list>
+        /// ★ 现在改成从解析结果里按**不区分大小写**的头名取**唯一**取值：
+        ///   头名大小写不敏感（#589 的修复必须保持），重复即拒绝（不取第一个）。
         /// </remarks>
-        private static bool TryGetWebSocketKey(string request, out string key)
+        private static bool TryGetWebSocketKey(HttpRequestInfo info, out string key)
         {
             key = "";
-            bool found = false;
+            if (!info.Headers.TryGetValue("sec-websocket-key", out var list)) return false;
+            if (list.Count != 1) return false;              // 重复键：拒绝（不猜）
 
-            // 只扫请求行 + 头行，遇空行即止（真正的头块边界，比"扫全文"严格）
-            int lineStart = 0;
-            bool isRequestLine = true;
-            while (lineStart < request.Length)
+            string value = list[0];
+            if (!IsWebSocketKeyShapeValid(value)) return false;
+
+            key = value;
+            return true;
+        }
+
+        /// <summary>
+        /// 校验 <c>Sec-WebSocket-Version</c>：重复 ⇒ 非法；出现且不是 13 ⇒ 不支持。
+        /// </summary>
+        /// <remarks>
+        /// ★ 头**缺失**不算错：RFC 6455 要求客户端带上它，但历史客户端确实不发 ——
+        ///   这次修复的职责是"把升级识别做对"，不是"顺手掐掉旧客户端"。
+        ///   一旦客户端**自称**了版本，就必须是对的（否则回 101 只会把错误推迟到帧解析阶段）。
+        /// </remarks>
+        private static bool IsWebSocketVersionAcceptable(HttpRequestInfo info, out string error)
+        {
+            error = "";
+            if (!info.Headers.TryGetValue("sec-websocket-version", out var list)) return true;   // 缺失：兼容
+            if (list.Count != 1)
             {
-                int lineEnd = request.IndexOf('\n', lineStart);
-                if (lineEnd < 0) lineEnd = request.Length;
-
-                string line = request.Substring(lineStart, lineEnd - lineStart).TrimEnd('\r');
-
-                if (isRequestLine)
-                {
-                    isRequestLine = false;      // 请求行没有头名，跳过
-                }
-                else if (line.Length == 0)
-                {
-                    break;                      // 空行 = 头块结束
-                }
-                else
-                {
-                    int colon = line.IndexOf(':');
-                    if (colon > 0)
-                    {
-                        string name = line.Substring(0, colon).Trim();
-                        if (string.Equals(name, "Sec-WebSocket-Key", StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (found) return false;        // 重复键：拒绝
-
-                            string value = line.Substring(colon + 1).Trim();
-                            if (!IsWebSocketKeyShapeValid(value)) return false;
-
-                            key = value;
-                            found = true;
-                        }
-                    }
-                }
-
-                lineStart = lineEnd + 1;
+                error = "Sec-WebSocket-Version 重复（解析歧义）。";
+                return false;
             }
-
-            return found;
+            if (!string.Equals(list[0].Trim(), "13", StringComparison.Ordinal))
+            {
+                error = "不支持的 Sec-WebSocket-Version（只支持 13）。";
+                return false;
+            }
+            return true;
         }
 
         /// <summary>
