@@ -35,6 +35,30 @@ namespace LiteMonitor
         public int PanelWidth { get; set; } = 240;
         public double UIScale { get; set; } = 1.0;
 
+        // ====== 设置窗体的明暗模式（F14b / issue #437 暗色半项）======
+        // ★ 刻意新增一个字段，而不是复用 Settings.Skin：
+        //   Skin 是**悬浮窗皮肤**（磁盘上的 resources/themes/*.json，由 ThemeManager 加载，
+        //   还决定 GPU 材质渲染路线）；本属性只管**设置窗体自身的界面底色**，
+        //   两套体系互不相干 —— 详见 src/Core/SettingThemeMode.cs 的说明。
+        //
+        // ★ 迁移：默认值 0 = System。旧版 settings.json 没有此字段时反序列化得到 default，
+        //   即 System ⇒ 跟随系统；界面观感与修复前一致（修复前写死的是一套浅色）。
+        //
+        // ★ 为什么用手写 getter/setter 而不是自动属性：
+        //   settings.json 是**用户可编辑**的文本文件，一个手写的 "SettingThemeMode": 7
+        //   会被 System.Text.Json 原样塞进枚举的 int 位（枚举不做范围校验）。
+        //   若放任不管，后续 UI 的 switch 会落到 default 分支 —— 行为其实和 System 一样，
+        //   但那份非法值会被**原样写回磁盘**并一直带着（掩盖问题、也让诊断困难）。
+        //   因此在 set 处统一夹回合法值：既不整份配置加载失败（那会连用户的其它设置一起丢），
+        //   也不把非法值静默当成某个别的意思 —— 一律落到 System（"跟随系统"）。
+        private LiteMonitor.src.Core.SettingThemeMode _settingThemeMode = LiteMonitor.src.Core.SettingThemeMode.System;
+
+        public LiteMonitor.src.Core.SettingThemeMode SettingThemeMode
+        {
+            get => LiteMonitor.src.Core.SettingThemeModes.Coerce(_settingThemeMode);
+            set => _settingThemeMode = LiteMonitor.src.Core.SettingThemeModes.Coerce(value);
+        }
+
         // ====== 实时玻璃（M2 / A16）======
         // ★ 实时玻璃**默认关闭**（M2 合同 §8.1）：开启需要用户显式操作，
         //   并且首次开启时必须提示"捕获瞬间面板可能从录屏/截图中短暂消失或闪动"。
