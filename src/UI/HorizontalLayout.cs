@@ -22,10 +22,16 @@ namespace LiteMonitor
         private int _rowH;
 
         // DPI
-        private readonly float _dpiScale;
+        private float _dpiScale = 1f;
         private readonly Control? _measurementControl;
 
         public int PanelWidth { get; private set; }
+
+        /// <summary>当前行高（物理像素）。</summary>
+        internal int RowHeight => _rowH;
+
+        /// <summary>当前 DPI 缩放系数（设备 DPI / 96）。</summary>
+        internal float DpiScale => _dpiScale;
 
         /// <summary>
         /// 空态下的**最小面板高度**（物理像素）。
@@ -39,11 +45,28 @@ namespace LiteMonitor
         public int MinPanelHeight => Math.Max(_rowH + _padding, 24);
 
         public HorizontalLayout(Theme t, int initialWidth, LayoutMode mode, Settings? settings = null, Control? measurementControl = null)
+            : this(t, initialWidth, mode, settings, measurementControl, null, null)
+        {
+        }
+
+        /// <summary>
+        /// 受控布局阶段用的构造重载：显式注入 DPI 来源与度量缓存。
+        /// </summary>
+        internal HorizontalLayout(
+            Theme t,
+            int initialWidth,
+            LayoutMode mode,
+            Settings? settings,
+            Control? measurementControl,
+            IDisplayDpiSource? dpiSource,
+            FontMetricsCache? metrics)
         {
             _t = t;
             _mode = mode;
             _settings = settings ?? Settings.Load();
             _measurementControl = measurementControl;
+            _ = dpiSource;
+            _ = metrics;
             using var measurementGraphics = measurementControl?.CreateGraphics() ?? Graphics.FromHwnd(IntPtr.Zero);
             _dpiScale = measurementControl is not null ? measurementControl.DeviceDpi / 96f : measurementGraphics.DpiX / 96f;
 
