@@ -93,9 +93,10 @@ namespace LiteMonitor.src.Core.Actions
             // 鼠标穿透
             form.SetClickThrough(cfg.ClickThrough);
             
-            // 自动隐藏 (需要启动或停止 Timer)
-            if (cfg.AutoHide) form.InitAutoHideTimer();
-            else form.StopAutoHideTimer();
+            // 自动隐藏（R2）：tick 常驻（看门狗/泊出恢复常活）；关闭时恢复泊出态。
+            // 旧实现 StopAutoHideTimer 会停掉整个 250ms tick ⇒ 泊出恢复与看门狗成死代码（评审 P1）。
+            form.InitAutoHideTimer();
+            if (!cfg.AutoHide) form.DisableAutoHide();
 
             // 透明度
             if (Math.Abs(form.Opacity - cfg.Opacity) > 0.01)

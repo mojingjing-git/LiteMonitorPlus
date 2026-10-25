@@ -86,7 +86,8 @@ namespace LiteMonitor
         // ========== 代理方法 (保持兼容性) ==========
         public void SetClickThrough(bool enable) => _winHelper.SetClickThrough(enable);
         public void InitAutoHideTimer() => _bizHelper.StartTimer();
-        public void StopAutoHideTimer() => _bizHelper.StopTimer();
+        /// <summary>【R2】关闭自动隐藏：恢复泊出态；tick 常驻（看门狗继续值守）。</summary>
+        public void DisableAutoHide() => _bizHelper.DisableAutoHide();
         public void HideTrayIcon() => _bizHelper.SetTrayVisible(false);
         public void ShowTrayIcon() => _bizHelper.SetTrayVisible(true);
         public void RebuildMenus() => _bizHelper.RebuildMenus();

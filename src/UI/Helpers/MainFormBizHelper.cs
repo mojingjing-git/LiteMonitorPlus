@@ -27,10 +27,16 @@ namespace LiteMonitor.src.UI.Helpers
         private System.Windows.Forms.Timer? _autoHideTimer;
         private System.Windows.Forms.Timer? _topMostTimer;
         private bool _isHidden = false;
-        private readonly int _hideWidth = 4;
-        private readonly int _hideThreshold = 10;
-        private enum DockEdge { None, Left, Right, Top, Bottom }
-        private DockEdge _dock = DockEdge.None;
+        // 【R2】泊出屏记忆与治理（评审 P1/P2）：
+        //   泊出后窗口中心落在所有屏之外 ⇒ 旧实现每周期 Screen.FromPoint(center) 取屏
+        //   可能取错，弹出带坐标错位 ⇒ 面板永久只剩 4px 条（"双屏皆无、进程正常"故障）。
+        private Rectangle? _parkedArea;          // 泊出所在屏的 WorkingArea（弹出判定唯一依据）
+        private string? _parkedScreenDevice;     // 泊出屏设备名（SavePos 泊出态落盘用）
+        private Point _preParkLocation;          // 泊出前位置（SavePos/ForceShow/恢复用）
+        private int _zeroIntersectTicks;         // 看门狗：连续零交集 tick 计数
+        private bool _watchdogNotified;          // 看门狗气泡只弹一次
+        // 【R2】DockEdge 统一使用 AutoHideLogic.DockEdge（原私有枚举删除——Bottom 从未实现）。
+        private AutoHideLogic.DockEdge _dock = AutoHideLogic.DockEdge.None;
         private DateTime _keepVisibleUntil = DateTime.MinValue;
 
         public bool IsHidden => _isHidden;
@@ -59,7 +65,9 @@ namespace LiteMonitor.src.UI.Helpers
         public void Initialize()
         {
             InitTray();
-            if (_cfg.AutoHide) StartTimer();
+            // 【R2 / 评审 P1】timer **无条件**启动：AutoHide 关闭时泊出恢复与看门狗仍须运行。
+            //   旧实现 `if (_cfg.AutoHide) StartTimer()` ⇒ 关闭链路 StopTimer 后恢复逻辑成死代码。
+            StartTimer();
             StartTopMostTimer();
         }
 
@@ -74,7 +82,7 @@ namespace LiteMonitor.src.UI.Helpers
             _autoHideTimer.Start();
         }
 
-        public void StopTimer() => _autoHideTimer?.Stop();
+        // 【R2】StopTimer 已移除：250ms tick 常驻（看门狗/泊出恢复常活），关闭走 DisableAutoHide。
 
         public void KeepVisible(double seconds) => _keepVisibleUntil = DateTime.Now.AddSeconds(seconds);
 
@@ -83,13 +91,51 @@ namespace LiteMonitor.src.UI.Helpers
             if (_isHidden)
             {
                 _isHidden = false;
-                _dock = DockEdge.None;
-                ClampToScreen(force: true); // 强制拉回
+                _dock = AutoHideLogic.DockEdge.None;
+                // 【R2 / 评审 P2】优先回泊出前位置：多屏对角布局下"最近屏"≠泊出屏，
+                // 用 ClampToScreen(force) 会弹到错误的屏。
+                if (_parkedArea.HasValue)
+                {
+                    _form.Location = AutoHideLogic.ClampToArea(_preParkLocation, _form.Size, _parkedArea.Value);
+                    _parkedArea = null;
+                    _parkedScreenDevice = null;
+                }
+                else
+                {
+                    ClampToScreen(force: true); // 强制拉回
+                }
             }
             KeepVisible(3.0);
         }
 
-        private void AutoHideTick(object? sender, EventArgs e) => CheckAutoHide();
+        private void AutoHideTick(object? sender, EventArgs e)
+        {
+            // 【R2 / E】看门狗先于自动隐藏 gate 运行：AutoHide 关闭时它仍须值守。
+            RunWatchdogTick();
+            CheckAutoHide();
+        }
+
+        /// <summary>
+        /// 【R2 / 评审 P1】关闭自动隐藏：恢复泊出态；250ms tick **保持运行**
+        /// （看门狗与"重新开启"路径都依赖它）。由 <c>AppActions.ApplyWindowAttributes</c>
+        /// 的关闭分支调用（替代旧的 <c>StopAutoHideTimer</c>——那会让恢复逻辑成死代码）。
+        /// </summary>
+        public void DisableAutoHide() => RestoreFromParkIfParked();
+
+        /// <summary>【R2 / 评审 P1】若处于泊出态则立即恢复到泊出前位置。</summary>
+        public void RestoreFromParkIfParked()
+        {
+            if (!_isHidden) return;
+            if (_parkedArea.HasValue)
+            {
+                _form.Location = AutoHideLogic.ClampToArea(_preParkLocation, _form.Size, _parkedArea.Value);
+            }
+            _isHidden = false;
+            _dock = AutoHideLogic.DockEdge.None;
+            _parkedArea = null;
+            _parkedScreenDevice = null;
+            KeepVisible(1.0);
+        }
 
         private void StartTopMostTimer()
         {
@@ -118,48 +164,131 @@ namespace LiteMonitor.src.UI.Helpers
 
         private void CheckAutoHide()
         {
-            if (!_cfg.AutoHide) return;
+            // 【R2 / 评审 P1】AutoHide 关闭 ⇒ 恢复泊出态后返回；看门狗已在 tick 里独立运行。
+            if (!_cfg.AutoHide)
+            {
+                RestoreFromParkIfParked();
+                return;
+            }
             if (!_form.Visible) return;
             if (IsDragging || _form.ContextMenuStrip?.Visible == true) return;
             if (DateTime.Now < _keepVisibleUntil) return;
 
-            var center = new Point(_form.Left + _form.Width / 2, _form.Top + _form.Height / 2);
-            var screen = Screen.FromPoint(center);
-            var area = screen.WorkingArea;
+            var (hideWidthPx, thresholdPx) = AutoHideLogic.MetricsForDpi(_form.DeviceDpi);
             var cursor = Cursor.Position;
 
-            bool nearLeft = _form.Left <= area.Left + _hideThreshold;
-            bool nearRight = area.Right - _form.Right <= _hideThreshold;
-            bool nearTop = _form.Top <= area.Top + _hideThreshold;
-
-            bool shouldHide = nearLeft || nearRight || nearTop;
-
-            // 靠边 -> 隐藏
-            if (!_isHidden && shouldHide && !_form.Bounds.Contains(cursor))
+            if (_parkedArea.HasValue)
             {
-                if (nearRight) { _form.Left = area.Right - _hideWidth; _dock = DockEdge.Right; }
-                else if (nearLeft) { _form.Left = area.Left - (_form.Width - _hideWidth); _dock = DockEdge.Left; }
-                else if (nearTop) { _form.Top = area.Top - (_form.Height - _hideWidth); _dock = DockEdge.Top; }
-                _isHidden = true;
+                // ---- 泊出态：弹出判定**只**用泊出屏（评审 B）。
+                // 旧实现用 Screen.FromPoint(center)，而泊出后中心在所有屏之外，
+                // 取屏结果随布局翻转 ⇒ 弹出带坐标错位。
+                var decision = AutoHideLogic.Decide(
+                    _form.Bounds, _parkedArea, _dock, default, cursor,
+                    containsCursor: _form.Bounds.Contains(cursor),
+                    inKeepVisible: false,
+                    hideWidthPx, thresholdPx, AutoHideLogic.HoverBandPx);
+                ApplyDecision(decision, screenArea: null, screenDevice: null);
                 return;
             }
 
-            // 鼠标靠近 -> 弹出
-            if (_isHidden)
+            // ---- 泊出判定：中心此刻必在屏内 ⇒ FromPoint 取屏可靠（逐字保持旧口径）。
+            var center = new Point(_form.Left + _form.Width / 2, _form.Top + _form.Height / 2);
+            var screen = Screen.FromPoint(center);
+            var parkDecision = AutoHideLogic.Decide(
+                _form.Bounds, null, AutoHideLogic.DockEdge.None, screen.WorkingArea, cursor,
+                containsCursor: _form.Bounds.Contains(cursor),
+                inKeepVisible: false,
+                hideWidthPx, thresholdPx, AutoHideLogic.HoverBandPx);
+            ApplyDecision(parkDecision, screen.WorkingArea, screen.DeviceName);
+        }
+
+        /// <summary>应用核心决策：泊出（先记账再挪窗）/ 弹出（清泊出态 + 防抖保护）。</summary>
+        private void ApplyDecision(AutoHideLogic.Decision d, Rectangle? screenArea, string? screenDevice)
+        {
+            switch (d.Kind)
             {
-                const int hoverBand = 30;
-                bool isMouseOnHiddenPanel = false;
+                case AutoHideLogic.DecisionKind.Park:
+                    // ★ 先记泊出前位置/所在屏，再挪窗——泊出坐标永不覆盖原始位置。
+                    _preParkLocation = _form.Location;
+                    _parkedArea = screenArea;
+                    _parkedScreenDevice = screenDevice;
+                    _dock = d.Edge;
+                    _isHidden = true;
+                    _form.Location = d.NewLocation;
+                    break;
 
-                if (_dock == DockEdge.Right) isMouseOnHiddenPanel = cursor.X >= area.Right - _hideWidth && cursor.Y >= _form.Top && cursor.Y <= _form.Top + _form.Height;
-                else if (_dock == DockEdge.Left) isMouseOnHiddenPanel = cursor.X <= area.Left + _hideWidth && cursor.Y >= _form.Top && cursor.Y <= _form.Top + _form.Height;
-                else if (_dock == DockEdge.Top) isMouseOnHiddenPanel = cursor.Y <= area.Top + _hideWidth && cursor.X >= _form.Left && cursor.X <= _form.Left + _form.Width;
+                case AutoHideLogic.DecisionKind.Show:
+                    _form.Location = d.NewLocation;
+                    _isHidden = false;
+                    _dock = AutoHideLogic.DockEdge.None;
+                    _parkedArea = null;
+                    _parkedScreenDevice = null;
+                    KeepVisible(1.0); // 【R2/D】防 250ms 内回泊抖动
+                    break;
+            }
+        }
 
-                if (isMouseOnHiddenPanel)
+        // =================================================================
+        // 【R2 / E】窗口零交集看门狗：双屏皆无但进程正常的最终兜底。
+        //   泊出态恒有 hideWidth(≥6px) 交集 ⇒ 不触发；完全失去定位持续 ≈5s ⇒ 拉回。
+        // ================================================================
+
+        private void RunWatchdogTick()
+        {
+            if (!_form.Visible || IsDragging)
+            {
+                _zeroIntersectTicks = 0;
+                return;
+            }
+
+            var bounds = _form.Bounds;
+            bool intersectsAny = false;
+            foreach (var s in Screen.AllScreens)
+            {
+                if (s.WorkingArea.IntersectsWith(bounds))
                 {
-                    if (_dock == DockEdge.Right && cursor.X >= area.Right - hoverBand) { _form.Left = area.Right - _form.Width; _isHidden = false; _dock = DockEdge.None; }
-                    else if (_dock == DockEdge.Left && cursor.X <= area.Left + hoverBand) { _form.Left = area.Left; _isHidden = false; _dock = DockEdge.None; }
-                    else if (_dock == DockEdge.Top && cursor.Y <= area.Top + hoverBand) { _form.Top = area.Top; _isHidden = false; _dock = DockEdge.None; }
+                    intersectsAny = true;
+                    break;
                 }
+            }
+
+            if (intersectsAny)
+            {
+                _zeroIntersectTicks = 0;
+                return;
+            }
+
+            _zeroIntersectTicks++;
+            if (_zeroIntersectTicks < 20) return; // ≈5s（防抖：拓扑变化由 ReconcileDisplayChange 先行自愈）
+            _zeroIntersectTicks = 0;
+
+            try
+            {
+                ClampToScreen(force: true);
+                KeepVisible(3.0);
+                try
+                {
+                    File.AppendAllText(
+                        Path.Combine(AppContext.BaseDirectory, "window-watchdog.log"),
+                        $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] bounds={bounds} screens={Screen.AllScreens.Length} → 拉回 {Screen.FromControl(_form).DeviceName}\n");
+                }
+                catch { // Program Files 可能无写权限：自愈照常，日志缺席
+                }
+
+                if (!_watchdogNotified)
+                {
+                    _watchdogNotified = true;
+                    bool zh = (_cfg.Language ?? string.Empty).StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+                    ShowNotification("LiteMonitor++",
+                        zh
+                            ? "检测到主面板失去所有屏幕定位，已自动恢复显示。"
+                            : "The panel lost its position on all screens and was restored automatically.",
+                        ToolTipIcon.Warning);
+                }
+            }
+            catch
+            {
+                // 自愈失败不致命：下一个周期重试。
             }
         }
 
@@ -263,7 +392,7 @@ namespace LiteMonitor.src.UI.Helpers
                 // [Fix #288] 恢复位置后，重置隐藏状态，并让 Timer 重新接管
                 // 防止之前是 Hidden 状态，恢复后 Location 变了但 _isHidden 仍为 true，导致自动隐藏逻辑失效
                 _isHidden = false;
-                _dock = DockEdge.None;
+                _dock = AutoHideLogic.DockEdge.None;
                 KeepVisible(0.5); // 短暂保持可见，让用户确认位置，随后由 Timer 自动隐藏
             }
             else
