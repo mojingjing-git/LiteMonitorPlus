@@ -341,7 +341,9 @@ namespace LiteMonitor.src.UI.SettingsPage
                 string strAuto = LanguageManager.T("Menu.Auto");
 
                 // 1. 并行等待所有数据返回 (使用 HardwareScanner)
-                var taskDisks = Task.Run(() => HardwareScanner.ListAllDisks(HardwareMonitor.Instance.ComputerInstance));
+                // ★ [F07] 磁盘改成 **Label + Value**（值 = 稳定设备身份）——
+                //   同型号的两块盘必须能分别选择，旧实现按显示名去重只剩一块（#538）。
+                var taskDisks = Task.Run(() => HardwareScanner.ListAllDiskOptions(HardwareMonitor.Instance.ComputerInstance));
                 var taskNets  = Task.Run(() => HardwareScanner.ListAllNetworks(HardwareMonitor.Instance.ComputerInstance));
                 var taskGpus  = Task.Run(() => HardwareMonitor.ListAllGpuOptions());
                 var taskFans  = Task.Run(() => HardwareScanner.ListAllFans(HardwareMonitor.Instance.ComputerInstance, HardwareMonitor.Instance.SyncLock));
@@ -395,6 +397,53 @@ namespace LiteMonitor.src.UI.SettingsPage
                         combo.Inner.EndUpdate(); // 解锁 ComboBox
 
                         if (!string.IsNullOrEmpty(currentVal)) combo.SelectValue(currentVal);
+                        else combo.SelectedIndex = 0;
+                    }
+                }
+
+                /// <summary>
+                /// ★ [F07] 磁盘下拉：**Label + Value** 成对。
+                ///   标签是"型号 (+ #序号)"，值是**稳定设备身份** ⇒ 同型号多盘可以分别选择；
+                ///   原值不可用时保留原值 + 只读提示项（绝不落到"自动"把配置冲成空串）。
+                /// </summary>
+                void FillDiskSync(LiteComboBox combo, List<DeviceOption> data, string currentVal)
+                {
+                    if (combo == null || combo.Inner.Items.Count > 2) return;
+
+                    using (BeginSuppressWriteBack())
+                    {
+                        combo.Inner.BeginUpdate();
+                        combo.Inner.Items.Clear();
+                        combo.AddItem(strAuto, "");
+
+                        foreach (var item in data)
+                        {
+                            if (item == null) continue;
+                            combo.AddItem(item.Label, item.Value);
+                        }
+
+                        // 原值可能是旧显示名（旧配置）⇒ 唯一命中时按名字回填新值。
+                        var selected = data.FirstOrDefault(x =>
+                            !string.IsNullOrEmpty(x.Value) &&
+                            string.Equals(x.Value, currentVal, StringComparison.OrdinalIgnoreCase));
+
+                        if (selected == null && !string.IsNullOrWhiteSpace(currentVal))
+                        {
+                            var byName = data.Where(x =>
+                                string.Equals(x.Name, currentVal, StringComparison.OrdinalIgnoreCase)).ToList();
+                            // ★ 同名多盘 ⇒ 不猜（保留原值 + 提示，等用户明确选择）。
+                            selected = byName.Count == 1 ? byName[0] : null;
+                        }
+
+                        if (selected == null && !string.IsNullOrWhiteSpace(currentVal))
+                        {
+                            combo.AddItem(string.Format(LanguageManager.T("Menu.PreferenceUnavailable"), currentVal), currentVal);
+                        }
+
+                        combo.Inner.EndUpdate();
+
+                        if (selected != null) combo.SelectValue(selected.Value);
+                        else if (!string.IsNullOrEmpty(currentVal)) combo.SelectValue(currentVal);
                         else combo.SelectedIndex = 0;
                     }
                 }
@@ -476,7 +525,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                 }
 
                 // 3. 瞬间填入所有数据 (因为布局被挂起，用户看不见中间过程)
-                FillSync(_cbDisk, taskDisks.Result, Config.PreferredDisk);
+                FillDiskSync(_cbDisk, taskDisks.Result, Config.PreferredDisk);
                 FillSync(_cbNet, taskNets.Result, Config.PreferredNetwork);
                 FillGpuSync(_cbGpu, taskGpus.Result, Config.PreferredGpu);
                 FillSync(_cbMobo, taskMobo.Result, Config.PreferredMoboTemp);

@@ -117,32 +117,189 @@ namespace LiteMonitor.src.SystemServices
         }
 
         /// <summary>
+        /// [F07] 槽位解析器 —— 把"展示槽位"绑到"稳定设备身份"。
+        /// <para>★ 可注入：测试要能模拟"枚举顺序互换""设备消失""驱动更新导致标识变化"。</para>
+        /// </summary>
+        private readonly DeviceSlotResolver _slotResolver;
+
+        /// <summary>
+        /// [F07] 最近一次显卡槽位解析结论（公开给 UI / 下游包）。
+        /// <para>★ 手动首选卡消失时，这里会给出 <see cref="DeviceSlotState.Offline"/>，
+        /// 调用方据此显示"设备离线"，**不得**改绑到别的卡。</para>
+        /// </summary>
+        private IReadOnlyList<DeviceSlotResolution> _gpuSlotResolutions = Array.Empty<DeviceSlotResolution>();
+
+        /// <summary>
+        /// 构造传感器映射服务。
+        /// </summary>
+        /// <param name="slotResolver">槽位解析器（null = 默认实例）。</param>
+        public SensorMap(DeviceSlotResolver? slotResolver = null)
+        {
+            _slotResolver = slotResolver ?? new DeviceSlotResolver();
+        }
+
+        /// <summary>
+        /// [F07] 最近一次显卡槽位解析结论。
+        /// </summary>
+        public IReadOnlyList<DeviceSlotResolution> GpuSlotResolutions => _gpuSlotResolutions;
+
+        /// <summary>
+        /// [F07] 手动首选的显卡当前是否离线（首选卡消失 ⇒ 保持绑定、显示离线）。
+        /// </summary>
+        public bool IsPreferredGpuOffline => _gpuSlotResolutions.Any(r =>
+            r.SlotKey == DeviceBindingStore.PreferredSlot && r.State == DeviceSlotState.Offline);
+
+        /// <summary>
         /// 选出被监控的显卡集合。
         /// 规则:
-        ///   - MonitoredGpuCount == 1 : 沿用旧逻辑, 优先用 PreferredGpu 指定的卡, 否则取优先级最高的一张
-        ///   - MonitoredGpuCount >= 2 : 按优先级取前 N 张
-        /// 顺序与 Rebuild 中的遍历顺序一致, 保证 Key 中的序号稳定。
+        ///   - MonitoredGpuCount == 1 :
+        ///       · 指定了 PreferredGpu ⇒ 按**稳定身份**定位；设备不在场时**保持绑定、显示离线**，
+        ///         绝不改绑到别的卡（[F07] 修 #290 的"选择被静默改写"）；
+        ///       · 没指定 ⇒ 按优先级选一张，并把选择**公开**（写入绑定仓库）。
+        ///   - MonitoredGpuCount >= 2 : 按**槽位绑定**解析（槽位 → 稳定设备 ID），
+        ///       空槽位按优先级补齐；公开 Key 仍是 "GPU.{index}.*"（格式不变）。
         /// </summary>
-        private static List<IHardware> SelectMonitoredGpus(Computer computer, Settings cfg)
+        private List<IHardware> SelectMonitoredGpus(IReadOnlyList<IHardware> hardware, Settings cfg)
         {
-            var all = computer.Hardware
+            var all = hardware
                 .Where(HardwareScanner.IsGpuHardware)
                 .OrderBy(h => HardwareRules.GetHwPriority(h))
                 .ToList();
 
-            if (all.Count == 0) return new List<IHardware>();
+            if (all.Count == 0)
+            {
+                _gpuSlotResolutions = Array.Empty<DeviceSlotResolution>();
+                return new List<IHardware>();
+            }
 
             int want = cfg.MonitoredGpuCount;
             if (want < 1) want = 1;
 
-            if (want == 1)
+            var resolutions = new List<DeviceSlotResolution>();
+            var monitored = new List<IHardware>();
+            var used = new HashSet<IHardware>(ReferenceEqualityComparer.Instance);
+
+            // ── 单卡 + 用户手动指定 ──
+            if (want == 1 && !string.IsNullOrEmpty(cfg.PreferredGpu))
             {
-                var selected = HardwareScanner.FindGpuByConfig(computer, cfg.PreferredGpu ?? "");
-                if (selected != null) return new List<IHardware> { selected };
-                return new List<IHardware> { all[0] };
+                DeviceSlotResolution preferred = _slotResolver.ResolvePreferred(DeviceKind.Gpu, cfg.PreferredGpu, all);
+                resolutions.Add(preferred);
+
+                if (preferred.Hardware != null)
+                {
+                    monitored.Add(preferred.Hardware);
+                    used.Add(preferred.Hardware);
+                    PersistPreferredGpu(preferred, cfg);
+                }
+                // ★ 首选卡不在场：保持绑定、显示离线（不改绑）。
+                _gpuSlotResolutions = resolutions;
+                return monitored;
             }
 
-            return all.Take(Math.Min(want, all.Count)).ToList();
+            // ── 槽位绑定（多卡 / 自动单卡共用）──
+            int slotCount = Math.Min(want, GpuKey.MaxGpuCount);
+            var slotHardware = new IHardware?[slotCount];
+
+            for (int slot = 0; slot < slotCount; slot++)
+            {
+                DeviceSlotResolution resolution = _slotResolver.ResolveSlot(DeviceKind.Gpu, slot, all);
+                IHardware? bound = (resolution.Hardware != null && !used.Contains(resolution.Hardware))
+                    ? resolution.Hardware
+                    : null;
+                if (bound != null)
+                {
+                    used.Add(bound);
+                    PersistSlot(resolution, manual: false);
+                }
+                slotHardware[slot] = bound;
+                resolutions.Add(resolution);
+            }
+
+            // 未绑定的槽位按优先级补齐（自动选择；**不改绑**，原绑定保持指向原设备）。
+            for (int slot = 0; slot < slotCount; slot++)
+            {
+                if (slotHardware[slot] != null) continue;
+                IHardware? filler = all.FirstOrDefault(hw => !used.Contains(hw));
+                if (filler == null) break;
+                slotHardware[slot] = filler;
+                used.Add(filler);
+
+                // ★ **新槽位**（此前根本没有绑定）⇒ 把这次自动选择固化成绑定并公开；
+                //   已有绑定但设备不在场的槽位**不**覆盖（原设备回来后自动回到原槽位）。
+                if (resolutions[slot].State == DeviceSlotState.NewSlot)
+                {
+                    var identity = _slotResolver.IdentityResolver.Resolve(filler, DeviceKind.Gpu);
+                    PersistSlot(new DeviceSlotResolution
+                    {
+                        Slot = slot,
+                        SlotKey = resolutions[slot].SlotKey,
+                        Hardware = filler,
+                        Identity = identity,
+                        State = DeviceSlotState.Bound,
+                        Reason = "首次分配的槽位",
+                    }, manual: false);
+                }
+            }
+
+            // 把"临时回退"的选择公开出来（自动模式可重选，但必须公开当前选择）。
+            for (int slot = 0; slot < slotCount; slot++)
+            {
+                IHardware? current = slotHardware[slot];
+                if (current == null) continue;
+                DeviceSlotResolution original = resolutions[slot];
+                if (original.Hardware != null && ReferenceEquals(original.Hardware, current)) continue;
+
+                resolutions[slot] = new DeviceSlotResolution
+                {
+                    Slot = original.Slot,
+                    SlotKey = original.SlotKey,
+                    Hardware = current,
+                    Identity = _slotResolver.IdentityResolver.Resolve(current, DeviceKind.Gpu),
+                    State = DeviceSlotState.AutoFallback,
+                    Reason = original.State == DeviceSlotState.Offline
+                        ? "原绑定设备当前不存在，已临时改用当前可用设备（原绑定保持不变）"
+                        : "原绑定无法证明是同一台设备，已临时改用当前可用设备（原绑定保持不变）",
+                    IsManual = original.IsManual,
+                };
+            }
+
+            for (int slot = 0; slot < slotCount; slot++)
+            {
+                if (slotHardware[slot] != null) monitored.Add(slotHardware[slot]!);
+            }
+
+            _gpuSlotResolutions = resolutions;
+            return monitored;
+        }
+
+        /// <summary>
+        /// 持久化"用户首选显卡"的绑定，并把**旧取值迁移**为稳定 ID（幂等）。
+        /// <para>★ 只有**唯一命中**时才会改写配置；歧义 / 找不到时原样保留（见 <see cref="DeviceSlotResolver"/>）。</para>
+        /// </summary>
+        private void PersistPreferredGpu(DeviceSlotResolution resolution, Settings cfg)
+        {
+            if (resolution.Identity == null) return;
+
+            // ★ 迁移：旧取值（显示名 / 旧 LHM Identifier）→ 稳定设备 ID。
+            //   已经是稳定 ID 时原样保留（幂等）；歧义 / 找不到时**根本不会走到这里**。
+            if (resolution.Identity.HasStableId &&
+                !string.IsNullOrEmpty(cfg.PreferredGpu) &&
+                !string.Equals(cfg.PreferredGpu, resolution.Identity.StableId, StringComparison.OrdinalIgnoreCase))
+            {
+                cfg.PreferredGpu = resolution.Identity.StableId;
+            }
+
+            bool changed = _slotResolver.PersistBinding(
+                DeviceKind.Gpu, DeviceBindingStore.PreferredSlot, resolution.Identity, manual: true);
+            if (changed) _slotResolver.Store.Save();
+        }
+
+        /// <summary>持久化槽位绑定（幂等；内容没变不写盘）。</summary>
+        private void PersistSlot(DeviceSlotResolution resolution, bool manual)
+        {
+            if (resolution.Identity == null) return;
+            bool changed = _slotResolver.PersistBinding(DeviceKind.Gpu, resolution.SlotKey, resolution.Identity, manual);
+            if (changed) _slotResolver.Store.Save();
         }
 
         /// <summary>
@@ -165,6 +322,16 @@ namespace LiteMonitor.src.SystemServices
 
         public void Rebuild(Computer computer, Settings cfg) // ★ 签名修改
         {
+            // ★ [F07] 产品路径：Computer 的硬件集合由 LHM 现场枚举。
+            Rebuild(computer.Hardware.ToList(), cfg);
+        }
+
+        /// <summary>
+        /// [F07] 重建映射（可注入的硬件集合版本 —— 测试接缝）。
+        /// <para>★ 产品路径仍然是 <see cref="Rebuild(Computer, Settings)"/>，签名与行为不变。</para>
+        /// </summary>
+        public void Rebuild(IReadOnlyList<IHardware> hardware, Settings cfg)
+        {
             // 1. 准备临时容器 (线程安全)
             var newMap = new Dictionary<string, ISensor>(StringComparer.OrdinalIgnoreCase); // 使用忽略大小写的比较器，减少字符串重复
             var newCpuCache = new List<CpuCoreSensors>();
@@ -180,7 +347,7 @@ namespace LiteMonitor.src.SystemServices
             var newCpuVoltageRefs = new List<CpuVoltageSensorRef>();
 
             // ★★★ [多显卡] 选出被监控的显卡集合 (序号即 Key 中的序号) ★★★
-            var monitoredGpus = SelectMonitoredGpus(computer, cfg);
+            var monitoredGpus = SelectMonitoredGpus(hardware, cfg);
 
             // ★★★ [多显卡] 显卡简称的本地缓冲区, 在原子交换点整体写入 GpuRegistry ★★★
             var gpuInfoBuffer = new GpuInfo[GpuKey.MaxGpuCount];
@@ -327,7 +494,7 @@ namespace LiteMonitor.src.SystemServices
             }
 
             // 按优先级排序并注册
-            var ordered = computer.Hardware.OrderBy(h => HardwareRules.GetHwPriority(h));
+            var ordered = hardware.OrderBy(h => HardwareRules.GetHwPriority(h));
             foreach (var hw in ordered)
             {
                 int gpuIndex = FindGpuIndex(monitoredGpus, hw);
@@ -394,7 +561,7 @@ namespace LiteMonitor.src.SystemServices
                 cfg.IsAnyEnabled("CPU.Pump") ||
                 cfg.IsAnyEnabled("CASE.Fan"))
             {
-                _fanMapper.ScanAndMapFans(computer, cfg, newMap);
+                _fanMapper.ScanAndMapFans(hardware, cfg, newMap);
             }
 
             // 2. 原子交换数据 (加锁)

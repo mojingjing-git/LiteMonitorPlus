@@ -53,6 +53,9 @@ namespace LiteMonitor.src.SystemServices
         // ★ [F08a] Windows 磁盘计数器来源（仅计数器模式下提供速度/活动率）。
         private readonly IDiskCounterSource? _counters;
 
+        // ★ [F07] 身份解析器（磁盘选择按**稳定身份**匹配，不再按显示名）。
+        private readonly DeviceIdentityResolver _identityResolver;
+
         /// <summary>
         /// 采集统计计数器。
         /// 由拥有 <see cref="HardwareSamplingStatistics"/> 的服务（HardwareMonitor）在构造后接线，
@@ -66,11 +69,19 @@ namespace LiteMonitor.src.SystemServices
         /// 产品路径必须显式传入 —— 否则"仅计数器"这条止血规则会静默失效。
         /// </param>
         /// <param name="counters">Windows 磁盘计数器来源（仅计数器模式下提供速度/活动率）。</param>
-        public DiskManager(TimeProvider? timeProvider = null, DiskProbePolicy? policy = null, IDiskCounterSource? counters = null)
+        /// <param name="identityResolver">
+        /// [F07] 身份解析器（null = 默认）。可注入，便于测试模拟"同型号双盘 / 设备消失"。
+        /// </param>
+        public DiskManager(
+            TimeProvider? timeProvider = null,
+            DiskProbePolicy? policy = null,
+            IDiskCounterSource? counters = null,
+            DeviceIdentityResolver? identityResolver = null)
         {
             _time = timeProvider ?? TimeProvider.System;
             _policy = policy;
             _counters = counters;
+            _identityResolver = identityResolver ?? new DeviceIdentityResolver();
         }
 
         public void ClearCache()
@@ -104,8 +115,10 @@ namespace LiteMonitor.src.SystemServices
             if (_policy != null && !_policy.AllowsSmart) return;
 
             // 1. 严格遵守首选磁盘锁定（手动指定设备的语义保持不变）
-            if (!string.IsNullOrEmpty(cfg.PreferredDisk) && 
-                !hw.Name.Equals(cfg.PreferredDisk, StringComparison.OrdinalIgnoreCase))
+            // ★ [F07] 口径从"显示名"改成"设备身份"：同型号的两块盘可以**分别**选中（#538）。
+            //   旧配置里存的是显示名，这里仍然兼容（名称唯一命中即可）。
+            if (!string.IsNullOrEmpty(cfg.PreferredDisk) &&
+                !DeviceIdentityMatcher.Matches(hw, cfg.PreferredDisk, DeviceKind.Storage, _identityResolver))
             {
                 return;
             }
@@ -117,7 +130,8 @@ namespace LiteMonitor.src.SystemServices
             // 判断是否是当前 UI 上显示的那个盘
             bool isTarget = (_cachedDiskHw != null && hw == _cachedDiskHw) ||
                             (hw.Name == cfg.LastAutoDisk) ||
-                            (hw.Name == cfg.PreferredDisk);
+                            (!string.IsNullOrEmpty(cfg.PreferredDisk) &&
+                             DeviceIdentityMatcher.Matches(hw, cfg.PreferredDisk, DeviceKind.Storage, _identityResolver));
             
             bool shouldUpdate = false;
             // 空闲时长：从「首次被观测」或「最后一次检测到流量」算起（单调时钟）
@@ -293,7 +307,7 @@ namespace LiteMonitor.src.SystemServices
             // ★★★ [新增] B. 尝试启动时缓存 (Settings 记忆) ★★★
             if (_cachedDiskHw == null && !string.IsNullOrEmpty(cfg.LastAutoDisk))
             {
-                var savedHw = computer.Hardware.FirstOrDefault(h => h.Name == cfg.LastAutoDisk);
+                var savedHw = FindDiskByConfig(computer, cfg.LastAutoDisk);
                 if (savedHw != null)
                 {
                     _cachedDiskHw = savedHw;
@@ -340,6 +354,9 @@ namespace LiteMonitor.src.SystemServices
                 MarkDiskScanned();
                 
                 // ★★★ [新增] 记住这次的选择 ★★★
+                // ★ [F07] 这里**保持既有语义**（存显示名）：LastAutoDisk 只是"自动模式下的热缓存线索"，
+                //   不是用户的选择（用户的选择在 PreferredDisk，按稳定身份匹配）。
+                //   读回时走 FindDiskByConfig：优先身份，名称**唯一命中**才认 —— 同型号多盘不会张冠李戴。
                 if (cfg.LastAutoDisk != bestHw.Name)
                 {
                     cfg.LastAutoDisk = bestHw.Name;
@@ -357,6 +374,31 @@ namespace LiteMonitor.src.SystemServices
 
             lock (syncLock) { if (lastValidMap.TryGetValue(key, out var last)) return last; }
             return null;
+        }
+
+        /// <summary>
+        /// [F07] 按配置里保存的取值找回磁盘。
+        /// <para>★ 口径：稳定身份 → 运行时标识 → 显示名（旧配置的遗留值）。</para>
+        /// <para>★ 同名多盘时，稳定身份/运行时标识能唯一定位；只剩显示名这一条路时**不猜**，
+        /// 返回 null（宁可没有缓存，也不把 A 盘的数据挂到 B 盘上）。</para>
+        /// </summary>
+        private IHardware? FindDiskByConfig(Computer computer, string configValue)
+        {
+            var disks = computer.Hardware.Where(h => h.HardwareType == HardwareType.Storage).ToList();
+
+            var byStable = disks.Where(d => string.Equals(
+                _identityResolver.Resolve(d, DeviceKind.Storage).StableId,
+                configValue, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (byStable.Count == 1) return byStable[0];
+
+            var byRuntime = disks.Where(d => string.Equals(
+                _identityResolver.Resolve(d, DeviceKind.Storage).RuntimeId,
+                configValue, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (byRuntime.Count == 1) return byRuntime[0];
+
+            var byName = disks.Where(d =>
+                string.Equals(d.Name, configValue, StringComparison.OrdinalIgnoreCase)).ToList();
+            return byName.Count == 1 ? byName[0] : null;
         }
 
         /// <summary>

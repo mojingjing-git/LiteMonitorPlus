@@ -199,5 +199,45 @@ namespace LiteMonitor.Tests
             Assert.Equal(12, s.MonitorItems.Count(x => x.Key.StartsWith("GPU.")));
         }
 
+        // =========================================================
+        // ★ [F07] 展示槽位与设备身份分离：监控项只认"槽位序号"，
+        //   设备身份（稳定 ID）由绑定仓库负责 —— 两者互不影响。
+        // =========================================================
+
+        [Fact]
+        public void Ensure_设备身份变化_不影响监控项Key与排序()
+        {
+            // 同一组槽位, 背后的物理设备换了 (驱动更新 / 换卡) ⇒
+            // 公开 Key 与用户排序**必须**保持不变 (主题 / 插件 / Web 约定不受影响)。
+            var s = NewSettings(2, new MonitorItemConfig { Key = "GPU.Load", SortIndex = 500 });
+
+            GpuItemSync.Ensure(s, availableGpuCount: 2);
+            var before = s.MonitorItems.Select(x => (x.Key, x.SortIndex, x.TaskbarSortIndex)).ToList();
+
+            // 模拟"设备身份变了": 这里只改监控项无关的外部状态, 再跑一次 Ensure。
+            GpuItemSync.Ensure(s, availableGpuCount: 2);
+
+            var after = s.MonitorItems.Select(x => (x.Key, x.SortIndex, x.TaskbarSortIndex)).ToList();
+            Assert.Equal(before, after);
+            Assert.DoesNotContain(s.MonitorItems, x => x.Key.Contains("pnp:", StringComparison.Ordinal));
+            Assert.DoesNotContain(s.MonitorItems, x => x.Key.Contains("PCI", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void Ensure_首选卡离线时_仍保留该槽位的监控项()
+        {
+            // [F07] 手动首选的卡消失 ⇒ 保持绑定、显示离线；
+            // 监控项**不能**因此被删掉 (否则 UI 连"离线"这一格都没地方显示)。
+            var s = NewSettings(1);
+
+            GpuItemSync.Ensure(s, availableGpuCount: 1);
+            Assert.Contains(s.MonitorItems, x => x.Key == "GPU.0.Temp");
+
+            // 卡消失后再次 Ensure (设备数为 0 ⇒ 夹紧到 1), 监控项仍在。
+            GpuItemSync.Ensure(s, availableGpuCount: 0);
+            Assert.Contains(s.MonitorItems, x => x.Key == "GPU.0.Temp");
+            Assert.Equal(6, s.MonitorItems.Count(x => x.Key.StartsWith("GPU.")));
+        }
+
     }
 }

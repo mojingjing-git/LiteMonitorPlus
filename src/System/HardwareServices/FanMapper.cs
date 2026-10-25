@@ -13,7 +13,7 @@ namespace LiteMonitor.src.SystemServices
     {
         // 将原 SensorMap 中的 ScanAndMapFans 及相关辅助方法移到这里
         
-        public void ScanAndMapFans(Computer computer, Settings cfg, Dictionary<string, ISensor> targetMap)
+        public void ScanAndMapFans(IEnumerable<IHardware> hardware, Settings cfg, Dictionary<string, ISensor> targetMap)
         {
             ISensor? cpuFan = null;
             ISensor? cpuPump = null; 
@@ -50,7 +50,7 @@ namespace LiteMonitor.src.SystemServices
                 }
                 foreach (var sub in hw.SubHardware) CollectFans(sub);
             }
-            foreach (var hw in computer.Hardware) CollectFans(hw);
+            foreach (var hw in hardware) CollectFans(hw);
 
             // 辅助函数：判断是否已被占用
             bool IsTaken(ISensor s) => s == cpuFan || s == cpuPump || s == caseFan;
