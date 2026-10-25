@@ -21,6 +21,7 @@
 | `LhmIntelReport/` | 上面那条命令背后的探针工程（只引用 LHM 0.9.6，零新增依赖） | **#592** |
 | `B580-CHECKLIST.md` | B580 真机的人工检查清单（驱动/GCL/LHM/应用侧对照） | **#592** |
 | `Common.psm1` | 公共助手：沙箱化、脱敏、原生进程、环境事实 | （全部） |
+| `selftest.ps1` | **一条命令**自检整个工具集（脱敏断言 + 各脚本干跑 + 产物断言） | （全部） |
 
 ---
 
@@ -226,11 +227,19 @@ pwsh tools/forensics/collect-crash-evidence.ps1 -DisableLocalDumps
 pwsh tools/forensics/lhm-intel-report.ps1 -DryRun
 
 # ② 在 B580 真机上以管理员身份运行
-pwsh tools/forensics/lhm-intel-report.ps1 -Verbose
+pwsh tools/forensics/lhm-intel-report.ps1 -ShowDetail
 ```
 
 产出 `lhm-report.txt` / `lhm-report.json` / `sensors.csv` / `manifest.json`。
 详见 [`B580-CHECKLIST.md`](B580-CHECKLIST.md)。
+
+> ★ **判据位置**：`Intel GCL Initialized: True/False` 这一行出现在
+> **整机报告**（`IComputer.GetReport()`）的 `Intel GPU Detection` 段里，
+> **不在**单个显卡的 `GetReport()` 里 —— 本机（AMD + 双 NVIDIA）实测确认。
+> 探针把整机报告与每个显卡的报告**都**导出，并把含 `GCL` 的行单独汇总。
+>
+> ★ LHM 0.9.6 的 `Computer` **未公开 `Groups`** ⇒ 分组级 `GetReport()` 取不到，
+> 探针改用整机报告作等价替代（它含全部分组的传感器树）。
 
 ---
 
@@ -253,18 +262,33 @@ pwsh tools/forensics/lhm-intel-report.ps1 -Verbose
 ## 6. 干跑记录（本机自检）
 
 本机：Windows 11（10.0.26300）· AMD Ryzen 7 5800X · 双 NVIDIA（RTX 3080 / 3080 Ti）·
-PowerShell 7.6.6 · `wpr.exe` 存在 · `xperf.exe` / `wpa.exe` **不存在** ·
-`poolmon.exe` **不存在**。
+PowerShell 7.6.6 · .NET SDK 8.0.426 · `wpr.exe` 存在 · `xperf.exe` / `wpa.exe` / `poolmon.exe` **不存在** ·
+**非管理员** · PawnIO **未注册**。
 
-| 工具 | 干跑命令 | 结果 |
+> **一条命令复现全部自检**：
+
+```powershell
+pwsh tools/forensics/selftest.ps1 -BuildProbe
+```
+
+> 实测结果：**通过 8 / 失败 0**（详见 `docs/verification/acceptance/F15-report.md` §3.1）。
+
+| 工具 | 干跑命令 | 实测结果 |
 |---|---|---|
-| `mem-timeline.ps1` | `-DryRun` | 见 `F15-report.md` §3 |
-| `wpa-capture.ps1` | `-ListScenarios` / `-DryRun` | 见 `F15-report.md` §3 |
-| `collect-crash-evidence.ps1` | `-DryRun` | 见 `F15-report.md` §3 |
-| `lhm-intel-report.ps1` | `-DryRun` + 实际构建 | 见 `F15-report.md` §3 |
-| `LhmIntelReport` 探针 | 本机实跑（AMD + 双 NVIDIA） | 能打开硬件树；**无 Intel 显卡** ⇒ `intelGpuPresent=false`（预期的降级路径） |
+| `selftest.ps1` | `-BuildProbe` | ✅ 8/8 通过 |
+| `mem-timeline.ps1` | `-DryRun` | ✅ `timeline.csv`/`summary.json`/`manifest.json` 齐备，主口径列齐全 |
+| `mem-timeline.ps1` | `-DryRun -LaunchSourceDir bin\Release\net8.0-windows` | ✅ 沙箱 `app/` 下 39 个文件 + 9 个语言包；用户 `settings.json` 未被触碰 |
+| `mem-timeline.ps1` | `-ProcessId <pid> -IntervalSeconds 2`（真实长跑进程） | ✅ 10 条样本，`private_bytes` / `working_set_bytes` / `handle_count` / `thread_count` / `gdi_objects` / `user_objects` 全部真实取值 |
+| `wpa-capture.ps1` | `-ListScenarios` | ✅ 12 个场景全部列出（含 `levers` / `nonLevers`） |
+| `wpa-capture.ps1` | `-Scenario smb-on -DryRun` | ✅ 沙箱 `settings.json` = `{"IgnoreSmbTraffic": false}` |
+| `wpa-capture.ps1` | `-Scenario app-closed -Minutes 1`（实跑） | ⚠ 非管理员 ⇒ `wpr -start` 返回 `0xc5585011` ⇒ 脚本**按预期报错并以非 0 退出**（权限失败，非脚本缺陷） |
+| `collect-crash-evidence.ps1` | `-DryRun` | ✅ 找到 `LiteMonitor++.exe`（1.0.0.0）；事件日志命中 18 条；**未改动注册表** |
+| `lhm-intel-report.ps1` | `-Build -ShowDetail` | ✅ 打开 LHM 硬件树；枚举 2 张 NVIDIA 卡（各 38 个传感器）；导出 `GetReport()` 全文（含 `Driver Version: 610.88`）+ `sensors.csv`；`intelGpuPresent=false`（本机无 Intel 显卡，属预期降级路径） |
 
 > 干跑**不采集**真实 72h 数据，也不产出任何 issue 判定。
+>
+> ⚠ **本机未启动真实产品实例**：PawnIO 未注册，启动会触发**驱动安装**（需明确授权）。
+> 沙箱的**结构与隔离**、采样**数据通路**已分别验证（见上表第 2、3 行）。
 
 ---
 
