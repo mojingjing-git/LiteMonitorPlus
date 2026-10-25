@@ -87,13 +87,13 @@ namespace LiteMonitor.Tests
             public IntPtr ReBar { get; set; }
             public IntPtr TaskList { get; set; }
 
-            public IntPtr FindWindow(string className, string? windowName)
+            public IntPtr FindWindow(string className, string windowName)
             {
                 if (className == "Shell_TrayWnd") return TaskbarRoot;
                 return IntPtr.Zero;
             }
 
-            public IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string? windowName)
+            public IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string windowName)
             {
                 if (className == "ReBarWindow32" && parent == TaskbarRoot) return ReBar;
                 if (className == "WorkerW" && parent == TaskbarRoot) return IntPtr.Zero;
@@ -685,7 +685,7 @@ namespace LiteMonitor.Tests
 
         private static void RunSta(Action action)
         {
-            Exception? captured = null;
+            Exception captured = null;
             Thread thread = new Thread(() =>
             {
                 try { action(); }
