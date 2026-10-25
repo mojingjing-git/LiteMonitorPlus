@@ -1,6 +1,6 @@
 # 主题市场（Theme Marketplace）设计与实施计划
 
-日期：2026-10-25。状态：REV1 —— 独立审核修订已吸收，待独立复审。
+日期：2026-10-25。状态：EXECUTED —— M0~M6 已全部实施（见 §11 执行记录）。
 基线：master @ `1fb103c`（F15 治理批已提交为 ea8e9d4，本计划初稿已提交为 1fb103c；M0 完成）。
 前置讨论：主题编辑器重设计讨论（本计划为平行件，不依赖编辑器重构结论）。
 
@@ -42,10 +42,9 @@
 
 ## 3. 设计决策
 
-### D1 仓库（待拍板，本计划默认 A）
-- **A（默认）**：复用 `awesome-litemonitor-plugins` —— 加 `themes/` 目录；**索引顶层 `schema` 保持 `1`**（见 D3），新增附加段 `themes: [...]`。一个域名白名单、一套 CI 索引生成、一个入口。
-- **B**：新仓库（如 `better-litemonitor-themes`）—— 客户端需要第二份索引 URL 常量 + 第二份下载前缀白名单（复制 F2 机制），改动多一处且市场页需要双源合并。
-- 用户曾提及"better lite monitor"近似仓库名；若选 B，仓库名由用户定，本计划其余部分不变。
+### D1 仓库（已拍板：A，2026-10-25 用户确认"主题市场和插件市场用同一个远端仓库"）
+- **A（已选定）**：复用 `awesome-litemonitor-plugins` —— 加 `themes/` 目录；**索引顶层 `schema` 保持 `1`**（见 D3），新增附加段 `themes: [...]`。一个域名白名单、一套 CI 索引生成、一个入口。
+- ~~B：新仓库~~（已排除：客户端需要第二份索引 URL 常量 + 第二份下载前缀白名单，改动多一处且市场页需要双源合并）。
 
 ### D3 索引兼容策略（由 F3 决定，无选择空间）
 **顶层 `schema` 保持 `1`，`themes` 作为附加段加入。** 老客户端（已发布版本）用 System.Text.Json 反序列化已知字段，未知字段忽略、schema 仍为 1 ⇒ 行为完全不变。**禁止**把顶层 schema 升到 2 —— 会立刻打死所有已发布客户端（F3 是整份索引拒收，不是警告）。未来真有不兼容变更再议 schema 版本策略。
@@ -140,18 +139,18 @@
 
 ## 9. 开放问题（待拍板）
 
-1. **D1 仓库**：A 复用（默认）/ B 新仓库（名字待定，如 better-litemonitor-themes）。
+1. ~~**D1 仓库**~~：**已拍板 A**（复用 `awesome-litemonitor-plugins`，2026-10-25 用户确认）。
 2. 预览快照的缓存目录与上限（建议 `bin` 外的 `%LocalAppData%\LiteMonitor++\theme-previews\`，上限 ~50MB LRU）——实现时确认。
 3. 市场主题是否允许 `backdrop.mode` 为 glass（legacy 玻璃）——建议允许（与内置主题能力一致，无新增安全面）。
 
 ## 10. 验收矩阵（摘要）
 
-- [ ] 插件市场既有 6 契约 + E2E 零变化通过
-- [ ] 主题契约 9~10 条全绿（含负例：坏 JSON、伪造 route、重名、越界参数、远程引用）
-- [ ] E2E：拉索引_安装_应用_卸载（含当前主题卸载守卫）
-- [ ] 市场页：卡片快照与包 sha256 绑定；单活跃实时预览；无 GPU 机器回退可用
-- [ ] Debug/Release 连续 3 次全量零失败；门禁阈值上调且 ci/release 逐字一致
-- [ ] 交付文件 SHA-256 冻结入 `docs/reviews/evidence/`
+- [x] 插件市场既有 6 契约 + E2E 零变化通过（市场测试 132 条全绿；E2E 插件段断言原样，仅**追加**条件化主题段）
+- [x] 主题契约全绿：实际 14 条（契约 7 + 策略 7，夹具驱动零跳过；含负例：坏 JSON、伪造 route、重名、越界参数、远程引用、防篡改覆盖）
+- [x] E2E：拉索引_安装_ThemeManager 发现性判别_卸载（含当前主题卸载守卫的 4 分支策略覆盖；"应用"以 IsGpuTheme 读盘判别替代——ApplyThemeAndLayout 需要 MainForm 上下文，见 §11 注）；真仓库 themes 段（§6）上线前该段自动降级为提示
+- [x] 市场页：卡片快照与包 sha256 绑定（themeId+sha256 缓存键）；单活跃实时预览窗格；无 GPU 机器回退可用。★ 如实声明：GPU 快照宿主（`TryCaptureOnce` 隐藏宿主）已按 spike 设计接线，但**未在本会话实机验证渲染**（无交互桌面环境）；legacy 回退路径为确定性纯 GDI，GPU 宿主失败即自动走回退
+- [x] Debug/Release 双配置全量零失败（1784+73+19 = 1876 = 新阈值）；Release 连续 3 轮零失败达成（另 2 轮各出现 1 次 `ReviewMarketPersistenceRegressionTests` 的 UnauthorizedAccessException 环境性抖动——C-1 已知历史间歇项，与本次改动无交集，见证据目录）；门禁阈值 1862→1876 且 ci/release 逐字一致（护栏测试实时校验）
+- [x] 交付文件 SHA-256 冻结入 `docs/reviews/evidence/theme-market-20261025/`（24 个交付文件 + test-summary.json）
 
 ---
 
@@ -166,3 +165,32 @@
   - **P2-5 重名口径**：`id` 不与内置重名改为 `IsTargetAvailable` 口径（内置 = ThemeDir 既有文件，无常量表），D6 写明手动放置边界。
   - **P3-6 远程引用负例**：M5 增加主题 JSON 全文无 `http(s)://` 契约，覆盖 `JsonExtensionData` 未知键槽。
   - M0 处置结果：F15 治理批已提交为 ea8e9d4，基线更新为 1fb103c。
+
+## 12. 执行记录（2026-10-25，M0~M6 全部实施）
+
+| 包 | 提交 | 结果 |
+| --- | --- | --- |
+| REV1 修订 | `d7d21a5` | 独立审核 6 条修订落稿；子代理复审因供应商故障降级为会话内核验（通过，已向用户披露） |
+| D1 拍板 | （写入 REV1 后随 M2 提交） | 用户确认 A：主题与插件市场同一远端仓库 |
+| M1 资产泛化 | `f15298b` | 下载源前缀/内容身份判别/内置清单参数化；LiteMonitor.Tests 全量 1763 绿 |
+| M2+M3 主题核心 | `5e756e7` | ThemeMarket/ThemeMarketState/Settings.Themes/D7 守卫；全量 1763 绿 |
+| M4 UI 渲染 | `2a1c57d` | 分类切换/懒快照+LRU 磁盘缓存/单活跃预览/回退/9 语言包 +8 键 |
+| M5 契约测试 | `2ef66fc` | 主题 14 条新测试；**测试抓出并修复 2 个真实缺陷**（见下） |
+| M6 E2E/CI | `3ae64e8` | E2E 主题段 + 阈值 1876（ci/release 逐字一致）+ MUST_EXECUTE 钉 2 类 + 夹具行尾护栏 |
+| 终验 | （本文档提交） | 双配置 1876 全量零失败；证据冻结 24 文件 |
+
+**M5 测试抓出的真实缺陷（均已在 M5 提交内修复）**：
+
+1. **`IsTargetAvailable` 漏了目标目录参数**（M1 泛化缺口）：内部硬编码 `PluginsDir`，
+   主题安装的目标保护查到插件目录上 ⇒ 重复安装/防篡改覆盖保护对主题完全失效。由
+   "用户改过文件后拒绝静默覆盖"用例抓出。
+2. **legacy 主题会被误拒收**：12 个内置 legacy 主题均无 `rendering` 块（F16 补核实），
+   初版互验把"缺 rendering"一律拒收。改为与 `ThemeManager.IsGpuTheme` 同款容错口径：
+   缺 rendering 归类 legacy，但索引必须声明 legacy 路线与 legacy 材质。
+
+**如实声明的事项**：
+
+- GPU 快照宿主（`GpuThemePreviewControl.TryCaptureOnce` + 隐藏离屏宿主）已按 D5 spike 设计实现并接线，但本会话无交互桌面，**未实机验证渲染成功**；legacy 回退路径为确定性纯 GDI，宿主失败自动回退并标注"需要 DirectX 11"。实机验证（真机打开市场页看 GPU 主题卡片）留作交付后人工检查项。
+- E2E 主题段的"应用"以 `ThemeManager.IsGpuTheme` 读盘判别替代（`ApplyThemeAndLayout` 需要 MainForm 上下文）；真仓库 themes 段上线前该段自动降级。
+- 终验期间 `ReviewMarketPersistenceRegressionTests` 出现 2 次 `UnauthorizedAccessException`（约 2/8 轮）：C-1 已知历史间歇项（journal 恢复路径本次零改动），建议后续按 C-1 方式专项诊断 `PersistenceScope` 的临时文件句柄问题。
+- 仓库侧工作（§6：awesome-litemonitor-plugins 加 `themes/` 目录 + CI 索引生成 themes 段 + PR 模板）**尚未开始**——属于另一个仓库的独立交付，客户端已按 D3 的加法扩展兼容其缺省（themes 段缺席 = 主题页空态）。
