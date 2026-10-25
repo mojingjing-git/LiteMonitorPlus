@@ -83,6 +83,14 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "PluginMarketTab": "Plugins",
+    "ThemeMarketTab": "Temas",
+    "PluginMarketCategory": "Categoría",
+    "ThemeMarketPreviewFixed": "La vista previa usa un fondo fijo y datos de demostración; el efecto real incluye refracción del escritorio en vivo",
+    "ThemeMarketNeedDx": "Este tema necesita DirectX 11 para su efecto completo",
+    "ThemeMarketThemeContentRejected": "El contenido del tema no pasó la validación de seguridad o parámetros y fue rechazado",
+    "ThemeMarketPreviewAction": "Vista previa",
+    "ThemeMarketEmpty": "Aún no hay temas en el mercado",
     "RenderingRoute": "Ruta de renderizado",
     "RouteSuffixGpu": " (material GPU)",
     "RouteSuffixGdi": " (GDI+)",

@@ -83,6 +83,14 @@
     "SYS.Power": "SPWR"
   },
   "Menu": {
+    "PluginMarketTab": "Plugins",
+    "ThemeMarketTab": "Themes",
+    "PluginMarketCategory": "Category",
+    "ThemeMarketPreviewFixed": "Preview uses a fixed background and demo data; the real effect includes live desktop refraction",
+    "ThemeMarketNeedDx": "This theme needs DirectX 11 for its full effect",
+    "ThemeMarketThemeContentRejected": "Theme content failed safety or parameter validation and was rejected",
+    "ThemeMarketPreviewAction": "Preview",
+    "ThemeMarketEmpty": "No themes in the market yet",
     "RenderingRoute": "Rendering route",
     "RouteSuffixGpu": " (GPU material)",
     "RouteSuffixGdi": " (GDI+)",

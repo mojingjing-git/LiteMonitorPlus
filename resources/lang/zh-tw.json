@@ -83,6 +83,14 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "PluginMarketTab": "外掛",
+    "ThemeMarketTab": "主題",
+    "PluginMarketCategory": "分類",
+    "ThemeMarketPreviewFixed": "預覽為固定背景與示範資料，實際效果含即時桌面折射",
+    "ThemeMarketNeedDx": "此主題需要 DirectX 11 才能呈現完整效果",
+    "ThemeMarketThemeContentRejected": "主題內容未通過安全或參數驗證，已拒收",
+    "ThemeMarketPreviewAction": "預覽",
+    "ThemeMarketEmpty": "主題市場暫無主題",
     "RenderingRoute": "渲染路線",
     "RouteSuffixGpu": "（GPU 材質）",
     "RouteSuffixGdi": "（GDI+）",

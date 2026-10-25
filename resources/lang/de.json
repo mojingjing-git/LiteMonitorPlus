@@ -83,6 +83,14 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "PluginMarketTab": "Plugins",
+    "ThemeMarketTab": "Themen",
+    "PluginMarketCategory": "Kategorie",
+    "ThemeMarketPreviewFixed": "Die Vorschau verwendet einen festen Hintergrund und Beispieldaten; der echte Effekt enthält Live-Desktop-Brechung",
+    "ThemeMarketNeedDx": "Dieses Thema benötigt DirectX 11 für die volle Wirkung",
+    "ThemeMarketThemeContentRejected": "Themeninhalt hat Sicherheits- oder Parameterprüfung nicht bestanden und wurde abgelehnt",
+    "ThemeMarketPreviewAction": "Vorschau",
+    "ThemeMarketEmpty": "Noch keine Themen im Markt",
     "RenderingRoute": "Render-Route",
     "RouteSuffixGpu": " (GPU-Material)",
     "RouteSuffixGdi": " (GDI+)",

@@ -84,6 +84,14 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "PluginMarketTab": "プラグイン",
+    "ThemeMarketTab": "テーマ",
+    "PluginMarketCategory": "分類",
+    "ThemeMarketPreviewFixed": "プレビューは固定背景とデモデータです。実際の効果にはデスクトップの屈折が含まれます",
+    "ThemeMarketNeedDx": "このテーマの完全な効果には DirectX 11 が必要です",
+    "ThemeMarketThemeContentRejected": "テーマの内容が安全またはパラメータ検証に失敗したため拒否しました",
+    "ThemeMarketPreviewAction": "プレビュー",
+    "ThemeMarketEmpty": "テーママーケットにはまだテーマがありません",
     "RenderingRoute": "描画ルート",
     "RouteSuffixGpu": "（GPUマテリアル）",
     "RouteSuffixGdi": "（GDI+）",

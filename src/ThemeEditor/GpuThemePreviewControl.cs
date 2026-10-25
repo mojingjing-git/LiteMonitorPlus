@@ -221,6 +221,34 @@ public sealed class GpuThemePreviewControl : Control
         }
     }
 
+    /// <summary>
+    /// 快照通道（主题市场卡片快照，M4/D5）：同步渲染一帧并从 GPU 帧缓冲回读 PNG。
+    /// 与实时预览共用同一渲染器与固定输入（仍不构造抓屏源），运动时间取零 ⇒ 静态帧。
+    /// 失败返回 false（调用方走 legacy 示意帧回退）。
+    /// </summary>
+    public bool TryCaptureOnce(string pngPath)
+    {
+        if (_disposed || _renderer is null || _error is not null || _scene is null)
+        {
+            return false;
+        }
+        try
+        {
+            _renderer.Render(
+                _scene,
+                _generations,
+                RectangleToScreen(ClientRectangle),
+                TimeSpan.Zero,
+                captureRequested: false);
+            _renderer.CaptureScenePng(pngPath);
+            return File.Exists(pngPath);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private void Fail(string message)
     {
         _error = message;

@@ -83,6 +83,14 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "PluginMarketTab": "플러그인",
+    "ThemeMarketTab": "테마",
+    "PluginMarketCategory": "분류",
+    "ThemeMarketPreviewFixed": "미리보기는 고정 배경과 데모 데이터를 사용하며, 실제 효과에는 실시간 데스크톱 굴절이 포함됩니다",
+    "ThemeMarketNeedDx": "이 테마의 전체 효과에는 DirectX 11이 필요합니다",
+    "ThemeMarketThemeContentRejected": "테마 콘텐츠가 안전 또는 매개변수 검증에 실패하여 거부되었습니다",
+    "ThemeMarketPreviewAction": "미리보기",
+    "ThemeMarketEmpty": "테마 마켓에 아직 테마가 없습니다",
     "RenderingRoute": "렌더링 경로",
     "RouteSuffixGpu": " (GPU 재질)",
     "RouteSuffixGdi": " (GDI+)",

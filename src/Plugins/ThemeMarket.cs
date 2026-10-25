@@ -105,9 +105,10 @@ namespace LiteMonitor.src.Plugins
                || text.IndexOf("https://", StringComparison.OrdinalIgnoreCase) >= 0;
 
         /// <summary>
-        /// 下载并安装市场主题。事务语义与插件安装完全一致（stage → journal → commit → 记录）。
+        /// 下载并校验主题载荷（卡片快照 / 实时预览 / 安装共用同一通道）：
+        /// 白名单（themes/ 变体）→ 摘要强制 → 下载 → SHA-256 → 主题内容校验。
         /// </summary>
-        public static async Task InstallAsync(MarketThemeEntry entry, CancellationToken ct = default)
+        public static async Task<byte[]> DownloadThemePayloadAsync(MarketThemeEntry entry, CancellationToken ct = default)
         {
             if (entry == null) throw new ArgumentNullException(nameof(entry));
             if (string.IsNullOrEmpty(entry.DownloadUrl))
@@ -120,17 +121,6 @@ namespace LiteMonitor.src.Plugins
                 throw new PluginMarketException(MarketErrorReason.BadSource,
                     "下载地址不在允许的主题源范围内：" + urlReason);
             }
-
-            // id 合法性（与插件同一字符集）。"与内置主题重名"没有常量表（D6）：
-            // 内置 = ThemeDir 既有文件，由下面的目标可用性检查覆盖 —— 有文件且无本市场记录即拒绝。
-            if (!PluginMarket.TryValidatePluginId(entry.Id, out string idReason))
-                throw new PluginMarketException(MarketErrorReason.InvalidId, idReason);
-
-            // 先把上次没干完的安装事务对账掉，再判断目标能不能写
-            PluginMarket.RecoverInterruptedInstallsIn(ThemesDir, ThemeMarketState.FindPersistedForRecovery);
-
-            if (!PluginMarket.IsTargetAvailable(entry.Id, ThemeMarketState.Find, ThemeContentIdentityMatches, out string targetReason))
-                throw new PluginMarketException(MarketErrorReason.TargetExists, targetReason);
 
             // ★ 摘要强制（LM-008 口径）：没有可用摘要就无法证明内容未被篡改，拒绝安装
             if (!PluginMarket.IsUsableSha256(entry.Sha256))
@@ -147,6 +137,29 @@ namespace LiteMonitor.src.Plugins
             // ★ 主题特有内容校验：合法 JSON / 无远程引用 / route⇔backend、material⇔material 互验 /
             //   ThemeRenderingConfig.Validate() 全规则集（F16/REV1-P2-4）
             ValidateThemeContent(raw, entry);
+            return raw;
+        }
+
+        /// <summary>
+        /// 下载并安装市场主题。事务语义与插件安装完全一致（stage → journal → commit → 记录）。
+        /// </summary>
+        public static async Task InstallAsync(MarketThemeEntry entry, CancellationToken ct = default)
+        {
+            if (entry == null) throw new ArgumentNullException(nameof(entry));
+
+            // id 合法性（与插件同一字符集）。"与内置主题重名"没有常量表（D6）：
+            // 内置 = ThemeDir 既有文件，由下面的目标可用性检查覆盖 —— 有文件且无本市场记录即拒绝。
+            if (!PluginMarket.TryValidatePluginId(entry.Id, out string idReason))
+                throw new PluginMarketException(MarketErrorReason.InvalidId, idReason);
+
+            // 先把上次没干完的安装事务对账掉，再判断目标能不能写
+            PluginMarket.RecoverInterruptedInstallsIn(ThemesDir, ThemeMarketState.FindPersistedForRecovery);
+
+            if (!PluginMarket.IsTargetAvailable(entry.Id, ThemeMarketState.Find, ThemeContentIdentityMatches, out string targetReason))
+                throw new PluginMarketException(MarketErrorReason.TargetExists, targetReason);
+
+            // ★ 下载 + 白名单 + 摘要 + 内容校验（与预览/快照共用同一载荷通道）
+            byte[] raw = await DownloadThemePayloadAsync(entry, ct).ConfigureAwait(false);
 
             // ★ 事务落盘（复用插件安装事务核心，F6）：stage → 原子替换 → 记录 → 清理
             PluginMarketInstallCore.CommitInstall(

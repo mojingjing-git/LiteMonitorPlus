@@ -83,6 +83,14 @@
     "DATA.DayDown": "↓↓"
   },
   "Menu": {
+    "PluginMarketTab": "Плагины",
+    "ThemeMarketTab": "Темы",
+    "PluginMarketCategory": "Категория",
+    "ThemeMarketPreviewFixed": "Предпросмотр использует фиксированный фон и демонстрационные данные; реальный эффект включает преломление живого рабочего стола",
+    "ThemeMarketNeedDx": "Для полной картины этой темы нужен DirectX 11",
+    "ThemeMarketThemeContentRejected": "Содержимое темы не прошло проверку безопасности или параметров и было отклонено",
+    "ThemeMarketPreviewAction": "Просмотр",
+    "ThemeMarketEmpty": "В магазине тем пока нет тем",
     "RenderingRoute": "Маршрут рендеринга",
     "RouteSuffixGpu": " (GPU-материал)",
     "RouteSuffixGdi": " (GDI+)",
