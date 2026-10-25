@@ -7,7 +7,9 @@
 - 提交 SHA 列表（`git log --oneline d52c0ab..HEAD`）：
   - `ae1a440` `fix(F08a): 磁盘探测 CountersOnly 止血模式（#466/#601/#245）`
   - `e173e78` `test(F08a): 磁盘探测策略护栏（假设备工厂/状态机/迁移/库前提）`
-  - `（docs）` `docs(F08a): 验收记录`
+  - `0dd7e8f` `docs(F08a): 验收记录（代码层验收通过 + 待实机清单 + 清单外建议）`
+  - `2bb2e25` `test(F08a): 迁移用例还原全局 Settings 单例（不污染同集合其它用例）`
+  - `86ba7e6` `fix(F08a): 策略字段改用 null+WhenWritingNull（旧配置一个字节都不改写）`
 - 基线 SHA（开工时 HEAD）：`d52c0ab`（master）
 - 完成日期：2026-10-25
 - 执行者：worker 子智能体（会话 `mvs_368012d2b2f9478cb6147c35e8f0f5b5`），父会话 `mvs_0ba82a4a7ca540c89f735ce982267f77`
