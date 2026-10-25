@@ -25,9 +25,17 @@ namespace LiteMonitor.Tests
     {
         private static readonly string MainPath = LiteMonitor.SettingsHelper.FilePath;
 
+        // ★ 本类会调 SettingsHelper.Load(forceReload:true) ⇒ 它会**替换全局 Settings 单例**。
+        //   用例结束后必须把单例还原成进来时的那个对象，否则会污染同集合里的其它用例
+        //   （与 ReviewMarketPersistenceRegressionTests.PersistenceScope 同一约定）。
+        private static readonly System.Reflection.FieldInfo InstanceField =
+            typeof(LiteMonitor.Settings).GetField("_instance",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
         private readonly string _sandbox;
         private readonly bool _mainExisted;
         private readonly string _savedMain;
+        private readonly object? _savedInstance;
 
         public DiskProbeSettingsMigrationTests()
         {
@@ -38,6 +46,8 @@ namespace LiteMonitor.Tests
             _savedMain = Path.Combine(_sandbox, "main.json");
             if (_mainExisted) File.Copy(MainPath, _savedMain, true);
 
+            _savedInstance = InstanceField?.GetValue(null);
+
             LiteMonitor.SettingsHelper.GlobalBlockSave = false;
         }
 
@@ -46,6 +56,9 @@ namespace LiteMonitor.Tests
             try
             {
                 LiteMonitor.SettingsHelper.GlobalBlockSave = false;
+
+                // 还原全局单例：进来时是什么，出去时还是什么。
+                InstanceField?.SetValue(null, _savedInstance);
 
                 if (_mainExisted) File.Copy(_savedMain, MainPath, true);
                 else if (File.Exists(MainPath)) File.Delete(MainPath);
