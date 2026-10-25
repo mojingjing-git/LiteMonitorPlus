@@ -24,6 +24,13 @@ static class Probe
     static string _label = "?";
     static int _caseNo;
 
+    // ★ [F02] 探针用的固定访问口令与外部 authority。
+    //   · 外部 authority 必须配置访问口令（反代从环回连进来也算对外暴露）⇒ 沙箱里要有口令；
+    //   · 口令只存在于沙箱 settings.json，打印时脱敏（不落口令原文）。
+    const string ProbePassword = "f02-webprobe-pass";
+    const string ProbeExternalHost = "tunnel.example.com";
+    const string ProbeExternalAuthority = "https://tunnel.example.com";
+
     static int Main(string[] args)
     {
         if (args.Length < 3)
@@ -79,7 +86,8 @@ static class Probe
         var json = BuildSettingsJson(settingsType);
         File.WriteAllText(Path.Combine(settingsDir, "settings.json"), json, new UTF8Encoding(false));
         File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "settings.json"), json, new UTF8Encoding(false));
-        Console.WriteLine($"settings.json : {json.Replace("\r\n", " ").Replace("\n", " ")}");
+        // ★ 打印时脱敏口令（探针输出也是日志 ⇒ 不落口令原文）
+        Console.WriteLine($"settings.json : {json.Replace(ProbePassword, "***").Replace("\r\n", " ").Replace("\n", " ")}");
 
         // ── 启动真实服务 ───────────────────────────────────────────────────
         object cfg = settingsType.GetMethod("Load", BindingFlags.Public | BindingFlags.Static)
@@ -144,8 +152,14 @@ static class Probe
         // 代理头是否被采信
         Emit("C12", "X-Forwarded-Host=隧道域名", Ws(HostHeader(), "Upgrade: websocket", "Sec-WebSocket-Key", StdKey(), null, false, true, true));
 
+        // ★ [F02] 白名单是**精确**匹配：未授权的外部域名必须被拒。
+        Emit("C13", "#580 Host=未授权外部域名", Ws("evil.example.com", "Upgrade: websocket", "Sec-WebSocket-Key", StdKey(), null, false, true));
+        // ★ [F02] 信任开关关闭 ⇒ 转发头**不参与**判定：
+        //   这里转发头指向未授权域名，若被采信就应当 403；实际 101 ⇒ 证明它被忽略了。
+        Emit("C14", "X-Forwarded-Host=未授权域名(信任开关关闭)", Ws(HostHeader(), "Upgrade: websocket", "Sec-WebSocket-Key", StdKey(), null, false, true, true, "evil.example.com"));
+
         // 附：登录链路可用性（fork 的票据来源）
-        var login = Http("POST", "/api/auth/login", HostHeader(), null, null, "{\"password\":\"\"}");
+        var login = Http("POST", "/api/auth/login", HostHeader(), null, null, LoginBody());
         Console.WriteLine($"LOGIN\t/api/auth/login\t{login.status}");
 
         // 附：Host 判定诊断（用普通 HTTP 路径，同一套 Host/Origin 校验）
@@ -191,7 +205,8 @@ static class Probe
     static string StdKey() => "dGhlIHNhbXBsZSBub25jZQ=="; // RFC 6455 示例：16 字节 Base64
 
     static string Ws(string host, string upgradeLine, string keyHeader, string keyValue,
-                     string origin, bool duplicateKey, bool withTicket, bool xfwd = false)
+                     string origin, bool duplicateKey, bool withTicket, bool xfwd = false,
+                     string xfwdHost = "tunnel.example.com")
     {
         string ticket = withTicket ? AcquireTicket() : "";
         var sb = new StringBuilder();
@@ -203,15 +218,17 @@ static class Probe
         if (duplicateKey) sb.Append($"{keyHeader}: {keyValue}\r\n");
         sb.Append("Sec-WebSocket-Version: 13\r\n");
         if (!string.IsNullOrEmpty(origin)) sb.Append($"Origin: {origin}\r\n");
-        if (xfwd) sb.Append("X-Forwarded-Host: tunnel.example.com\r\n");
+        if (xfwd) sb.Append($"X-Forwarded-Host: {xfwdHost}\r\n");
         sb.Append("\r\n");
         return sb.ToString();
     }
 
     // fork：登录 -> 取 CSRF -> 换一次性票据；上游没有这套，直接返回空。
+    static string LoginBody() => "{\"password\":\"" + ProbePassword + "\"}";
+
     static string AcquireTicket()
     {
-        var login = Http("POST", "/api/auth/login", HostHeader(), null, null, "{\"password\":\"\"}");
+        var login = Http("POST", "/api/auth/login", HostHeader(), null, null, LoginBody());
         if (login.status.Contains("200") == false) { Console.WriteLine($"  [ticket] login 非 200: {login.status}"); return ""; }
 
         string csrf = ExtractJson(login.body, "csrf");
@@ -351,7 +368,12 @@ static class Probe
         if (Has("WebServerPort")) parts.Add($"\"WebServerPort\": {_port}");
         // 只有 fork 有 BindMode；Loopback = 1（避免上游/存量语义落到 Lan）
         if (Has("WebServerBindMode")) parts.Add("\"WebServerBindMode\": 1");
-        if (Has("WebServerPassword")) parts.Add("\"WebServerPassword\": \"\"");
+        // ★ [F02] 沙箱里必须配置访问口令：配置了外部 authority 就等于对外暴露，
+        //   而对外暴露必须有口令（反代从环回连进来也不豁免）⇒ 否则服务拒绝启动。
+        if (Has("WebServerPassword")) parts.Add($"\"WebServerPassword\": \"{ProbePassword}\"");
+        // ★ [F02] 外部 authority 白名单：C7（Host=隧道域名）命中它才可能被放行。
+        //   协议固定为 https（隧道对外是 HTTPS，内部是明文 HTTP）。
+        if (Has("WebServerAllowedHosts")) parts.Add($"\"WebServerAllowedHosts\": \"{ProbeExternalAuthority}\"");
         return "{" + string.Join(",", parts) + "}";
     }
 

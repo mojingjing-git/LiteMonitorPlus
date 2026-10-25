@@ -262,11 +262,51 @@ namespace LiteMonitor
         public string WebServerAllowedOrigins { get; set; } = "";
 
         /// <summary>
-        /// 是否信任 <c>X-Forwarded-For</c> / <c>X-Real-IP</c> / <c>Forwarded</c>。
+        /// 外部 authority 白名单（反向代理场景；逗号 / 分号 / 换行分隔）。
+        /// </summary>
+        /// <remarks>
+        /// ★ [F02] **精确匹配，无通配符**。每条可以是：
+        ///   <list type="bullet">
+        ///   <item><c>tunnel.example.com</c> —— 主机名（端口按协议取默认值：https⇒443 / http⇒80）；</item>
+        ///   <item><c>tunnel.example.com:8443</c> —— 主机名 + 精确端口；</item>
+        ///   <item><c>https://tunnel.example.com</c> —— 固定协议（我的对外地址是 HTTPS）；</item>
+        ///   <item><c>https://tunnel.example.com:8443</c> —— 固定协议 + 精确端口；</item>
+        ///   <item><c>[2001:db8::1]:443</c> —— IPv6 必须带方括号。</item>
+        ///   </list>
+        /// ★ 语义：只有命中这份白名单的**外部** authority 才能访问本服务；
+        ///   内部的回环 / 局域网地址仍走既有的严格校验（端口必须与真实监听端口一致）。
+        /// ★ **默认空** = 不接受任何外部 authority（保持既有行为：外部反代一律 403）。
+        /// ★ 配置了外部 authority ⇒ **必须**同时配置访问口令（反代从环回连进来也算对外暴露）。
+        /// </remarks>
+        public string WebServerAllowedHosts { get; set; } = "";
+
+        /// <summary>
+        /// 可信反向代理的 **TCP 对端 IP**（逗号 / 分号 / 换行分隔）。
+        /// </summary>
+        /// <remarks>
+        /// ★ [F02] **精确 IP**，不接受 CIDR、不接受代理链（首版）。
+        ///   只有"对端 IP 命中这份列表"**且** <see cref="WebServerTrustProxyHeaders"/> 打开时，
+        ///   才会采用 <c>X-Forwarded-Host</c> / <c>X-Forwarded-Proto</c>。
+        /// ★ **默认空** = 不信任任何转发头（即使开关打开也不采信）。
+        /// </remarks>
+        public string WebServerTrustedProxies { get; set; } = "";
+
+        /// <summary>
+        /// 是否信任反向代理送来的转发头（<c>X-Forwarded-Host</c> / <c>X-Forwarded-Proto</c>）。
         /// </summary>
         /// <remarks>
         /// ★ **默认不信任**（这是降级开关：打开它等于信任任意来源伪造的转发头）。
         ///   只有用户明确知道自己前面有可信反向代理时才打开。
+        /// ★ [F02] 之前这个字段是**死设置**（全仓零消费点）：打开它不会有任何效果。
+        ///   现在它**真的生效**了，但必须**同时**满足两个条件才采信转发头：
+        ///   <list type="number">
+        ///   <item>本开关为 <c>true</c>；</item>
+        ///   <item>请求的**实际 TCP 对端 IP** 命中 <see cref="WebServerTrustedProxies"/>。</item>
+        ///   </list>
+        ///   两个条件缺一 ⇒ 转发头**完全不参与**判定（不能改变 Host / Origin / 客户端身份 / 任何安全属性）。
+        /// ★ 迁移：老配置里这个字段默认是 <c>false</c> ⇒ 行为不变；
+        ///   已经把它改成 <c>true</c> 的老用户，因为 <see cref="WebServerTrustedProxies"/> 为空
+        ///   ⇒ 转发头**仍然不被采信**（不会因为升级就突然开始信任伪造头）。
         /// </remarks>
         public bool WebServerTrustProxyHeaders { get; set; } = false;
 
