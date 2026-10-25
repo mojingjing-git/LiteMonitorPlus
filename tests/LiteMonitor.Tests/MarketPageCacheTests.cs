@@ -305,6 +305,36 @@ namespace LiteMonitor.Tests
         }
 
         // ================================================================
+        // ⑥ 代次守卫：旧页面代次的异步回调不得写入新页面代次
+        // ================================================================
+
+        [Fact]
+        public void 旧页面代次的预览载荷回调_不得写入新代次()
+        {
+            RunSta(() =>
+            {
+                var page = NewPage();
+                var host = new Panel();
+                host.Controls.Add(page);
+                page.OnShow();
+
+                page.SwitchCategory(MarketCategory.Themes);
+                page.SelectThemeForPreview(pageThemeEntry());
+
+                ThemePreviewControl preview = PreviewControls(page).Single();
+
+                int staleGeneration = page.CurrentPageGeneration - 1;
+                Assert.False(page.TryApplyPreviewPayload(staleGeneration, preview, new Theme()),
+                    "旧代次的回调被写进了新页面代次");
+                Assert.True(page.StaleCallbacksDropped > 0, "旧代次回调没有被记录为已丢弃");
+
+                // 当前代次 + 当前预览 ⇒ 允许写入
+                Assert.True(page.TryApplyPreviewPayload(page.CurrentPageGeneration, preview, new Theme()),
+                    "当前代次的回调被误丢弃");
+            });
+        }
+
+        // ================================================================
         // 夹具
         // ================================================================
 
