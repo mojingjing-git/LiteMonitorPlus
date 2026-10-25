@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -76,8 +76,6 @@ namespace LiteMonitor.src.Plugins
             internal PublicationContext(AsyncLocal<PluginPublicationLease> context) => _context = context;
             public void Dispose() => _context.Value = null;
         }
-
-        public event Action OnSchemaChanged;
 
         public PluginExecutor()
         {

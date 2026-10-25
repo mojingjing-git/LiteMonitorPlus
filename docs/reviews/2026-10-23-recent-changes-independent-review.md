@@ -48,7 +48,7 @@
 
 ### R01：普通启动会空引用，与是否启用 GPU 无关
 
-位置：[UIController.cs:1182](G:/TOOL/LiteMonitor-fork/src/UI/UIController.cs:1182)、[MainForm_Transparent.cs:89](G:/TOOL/LiteMonitor-fork/src/UI/MainForm_Transparent.cs:89)。
+位置：[UIController.cs:1182](../../src/UI/UIController.cs)、[MainForm_Transparent.cs:89](../../src/UI/MainForm_Transparent.cs)。
 
 调用顺序是 MainForm 构造函数第 220 行 `new UIController(...)` → UIController 构造函数第 150 行 `ApplyTheme` → 第 1182 行求值 `MainForm.IsWindowLayered()`。但 `_winHelper` 的唯一赋值在 MainForm 第 227 行，尚未执行，第 89 行直接解引用 null。
 
@@ -58,7 +58,7 @@
 
 ### R02：运行故障仍会在原 flip HWND 上尝试 GDI 回退
 
-位置：[UIController.cs:1575](G:/TOOL/LiteMonitor-fork/src/UI/UIController.cs:1575)、[GpuPresentationHostController.cs:678](G:/TOOL/LiteMonitor-fork/src/Rendering/Presentation/GpuPresentationHostController.cs:678)。
+位置：[UIController.cs:1575](../../src/UI/UIController.cs)、[GpuPresentationHostController.cs:678](../../src/Rendering/Presentation/GpuPresentationHostController.cs)。
 
 GPU 已成功呈现后发生故障，宿主 `OnRenderFailure` 只记录错误、设置恢复标志、`StopCore()`。UI Tick 尝试有限重启；启动失败或恢复耗尽时，`StartGpuPresentation` 仅标记耗尽、释放宿主并 Invalidate，没有调用 `RunGpuToLegacyTransition`，也没有按本代次呈现历史恢复 HWND。
 
@@ -70,7 +70,7 @@ GPU 已成功呈现后发生故障，宿主 `OnRenderFailure` 只记录错误、
 
 ### R03：清除口令后，运行中的 LAN 服务可接受无口令登录
 
-位置：[MainPanelPage.cs:418](G:/TOOL/LiteMonitor-fork/src/UI/Settings/MainPanelPage.cs:418)、[AppActions.cs:255](G:/TOOL/LiteMonitor-fork/src/Core/Actions/AppActions.cs:255)、[WebSessionManager.cs:1290](G:/TOOL/LiteMonitor-fork/src/System/WebServer/WebSessionManager.cs:1290)。
+位置：[MainPanelPage.cs:418](../../src/UI/Settings/MainPanelPage.cs)、[AppActions.cs:255](../../src/Core/Actions/AppActions.cs)、[WebSessionManager.cs:1290](../../src/System/WebServer/WebSessionManager.cs)。
 
 前提：从已经保存为哈希的配置启动 LAN 服务，此时明文 `WebServerPassword` 与服务器保存的 `CurrentPassword` 都为空。设置页清除口令会清空哈希、盐和明文。应用时只比较端口及明文，判断无需重启，LAN 监听继续存在。
 
@@ -80,7 +80,7 @@ GPU 已成功呈现后发生故障，宿主 `OnRenderFailure` 只记录错误、
 
 ### R04：插件恢复日志可驱动目录外文件删除和覆盖
 
-位置：[PluginMarket.cs:965](G:/TOOL/LiteMonitor-fork/src/Plugins/PluginMarket.cs:965)。
+位置：[PluginMarket.cs:965](../../src/Plugins/PluginMarket.cs)。
 
 恢复日志反序列化后的 `Target/Stage/Backup` 直接传给 `Path.Combine`，随后执行 Delete/Move，没有目录边界、插件 ID、事务文件命名或重解析点检查。例如 Stage 为 `..\..\settings.json` 且文件存在时，会进入第 978 行删除该文件；其他状态会按日志字段覆盖目标。
 
@@ -90,7 +90,7 @@ GPU 已成功呈现后发生故障，宿主 `OnRenderFailure` 只记录错误、
 
 ### R05：新更新器协议缺少旧客户端升级桥接
 
-位置：[Program.cs:128](G:/TOOL/LiteMonitor-fork/LiteMonitor.Updater/Program.cs:128)。
+位置：[Program.cs:128](../../LiteMonitor.Updater/Program.cs)。
 
 基线 UpdateDialog 会从新包预更新 updater，再仅传 ZIP 路径启动它。新 updater 明确拒绝单参数并返回错误码 6；旧主程序只看到进程启动成功，随后退出，不会等待更新器拒绝，也不会重启旧程序。再次尝试仍是同一路径。
 
@@ -102,7 +102,7 @@ GPU 已成功呈现后发生故障，宿主 `OnRenderFailure` 只记录错误、
 
 ### R06：原生旧主题被错误套用 GPU 回退配色
 
-位置：[UIController.cs:1397](G:/TOOL/LiteMonitor-fork/src/UI/UIController.cs:1397)。
+位置：[UIController.cs:1397](../../src/UI/UIController.cs)。
 
 GPU 运行后选择 `LiquidGlass.json` 等普通旧主题，仍进入 CompleteLegacyTransition，无条件 Resolve 目标主题的 fallback。旧主题没有 rendering，resolver 返回中性默认值，覆盖背景、分组、正文和标题等色槽。之后 RefreshLegacyFallbackTheme 继续重算覆盖，直到重新进入 GPU 或重启。
 
@@ -110,7 +110,7 @@ GPU 运行后选择 `LiquidGlass.json` 等普通旧主题，仍进入 CompleteLe
 
 ### R07：派生主题遗漏运行期字体，实际绘制使用系统默认字体
 
-位置：[RenderingTransitionCoordinator.cs:748](G:/TOOL/LiteMonitor-fork/src/UI/RenderingTransitionCoordinator.cs:748)。
+位置：[RenderingTransitionCoordinator.cs:748](../../src/UI/RenderingTransitionCoordinator.cs)。
 
 DeriveConfig 只复制 public 属性，但 Theme 的 FontTitle/FontGroup/FontItem/FontValue 是字段。新建派生 Theme 后这些字段保持 CaptionFont；没有重新 BuildFonts/Scale。UIRenderer 和 HorizontalRenderer 直接读取它们，导致字号、字体、粗体及高 DPI 缩放丢失，竖向布局还可能按原字体测量、按默认字体绘制。
 
@@ -118,7 +118,7 @@ DeriveConfig 只复制 public 属性，但 Theme 的 FontTitle/FontGroup/FontIte
 
 ### R08：受控重建永久停用配置仍开启的旧 M2
 
-位置：[UIController.cs:1353](G:/TOOL/LiteMonitor-fork/src/UI/UIController.cs:1353)、[LiveGlassController.cs:307](G:/TOOL/LiteMonitor-fork/src/UI/LiveGlassController.cs:307)。
+位置：[UIController.cs:1353](../../src/UI/UIController.cs)、[LiveGlassController.cs:307](../../src/UI/LiveGlassController.cs)。
 
 `LiveGlassEnabled=true` 时从 GPU 回到旧 M2 主题，重建触发 OnHandleDestroyed → StopLiveGlass → SetEnabled(false)，清空服务。HandleCreated 只 RefreshRequest，服务为 null 时立即返回；完成切换也没有按配置恢复。设置仍显示开启，但捕获只能手动重开。
 
@@ -126,7 +126,7 @@ DeriveConfig 只复制 public 属性，但 Theme 的 FontTitle/FontGroup/FontIte
 
 ### R09：TryReconfigure 取得 WDA 时绕过未完成清理检查
 
-位置：[GpuPresentationHostController.cs:522](G:/TOOL/LiteMonitor-fork/src/Rendering/Presentation/GpuPresentationHostController.cs:522)。
+位置：[GpuPresentationHostController.cs:522](../../src/Rendering/Presentation/GpuPresentationHostController.cs)。
 
 旧实时会话恢复失败并移交 ledger 后，同一 HWND 可先启动 fixed 宿主。清理尚未完成时开启 live，TryReconfigure 直接 SetCapturePolicy；只有 Start 查询 pending。新会话会把遗留 0x11 当成外部原值，随后旧 ledger 恢复原策略，可能撤掉正在使用的排除并产生自捕获。
 
@@ -134,7 +134,7 @@ DeriveConfig 只复制 public 属性，但 Theme 的 FontTitle/FontGroup/FontIte
 
 ### R10：恢复耗尽后仍允许在同一 HWND 取得新 WDA 所有权
 
-位置：[CapturePolicyCleanupLedger.cs:129](G:/TOOL/LiteMonitor-fork/src/UI/CapturePolicyCleanupLedger.cs:129)。
+位置：[CapturePolicyCleanupLedger.cs:129](../../src/UI/CapturePolicyCleanupLedger.cs)。
 
 重试耗尽将记录设为 Failed，IsTerminal 为 true，HasPendingForGeneration 随即返回 false。但原策略并未恢复。新 live 会话读到残留 0x11，将其当作原始外部状态，不承担恢复；旧记录又不再重试，之后关闭 live 仍可能保持截图排除，直到 HWND 销毁。
 
@@ -144,7 +144,7 @@ DeriveConfig 只复制 public 属性，但 Theme 的 FontTitle/FontGroup/FontIte
 
 ### R11：监听范围变更不生效，实际地址还显示草稿值
 
-位置：[AppActions.cs:255](G:/TOOL/LiteMonitor-fork/src/Core/Actions/AppActions.cs:255)、[MainPanelPage.cs:451](G:/TOOL/LiteMonitor-fork/src/UI/Settings/MainPanelPage.cs:451)。
+位置：[AppActions.cs:255](../../src/Core/Actions/AppActions.cs)、[MainPanelPage.cs:451](../../src/UI/Settings/MainPanelPage.cs)。
 
 只修改 Loopback/LAN 不触发服务器重启。Loopback → LAN 仍无法远程连接；LAN → Loopback 仍监听所有网卡。界面却用草稿 BindMode 拼“实际地址”。Host 白名单不能代替网络绑定，远端客户端可以自行填写 Host。
 
@@ -152,7 +152,7 @@ DeriveConfig 只复制 public 属性，但 Theme 的 FontTitle/FontGroup/FontIte
 
 ### R12：WS 建立后脱离会话，注销与过期不撤销已有访问
 
-位置：[WebSessionManager.cs:910](G:/TOOL/LiteMonitor-fork/src/System/WebServer/WebSessionManager.cs:910)、[WebSessionManager.cs:2231](G:/TOOL/LiteMonitor-fork/src/System/WebServer/WebSessionManager.cs:2231)。
+位置：[WebSessionManager.cs:910](../../src/System/WebServer/WebSessionManager.cs)、[WebSessionManager.cs:2231](../../src/System/WebServer/WebSessionManager.cs)。
 
 RevokeSession 只删除会话记录；WS 连接仅保存服务代次，广播不复核所属会话。先建立 WS 再通过另一 HTTP 连接注销，原连接继续收到数据；绝对期限同样不能终止它。持续观看也不维护 LastUsedTicks，超过空闲期限后断线重取票据会失败。
 
@@ -160,7 +160,7 @@ RevokeSession 只删除会话记录；WS 连接仅保存服务代次，广播不
 
 ### R13：口令迁移把吞异常的 Save 当作成功
 
-位置：[Settings.cs:546](G:/TOOL/LiteMonitor-fork/src/Core/Settings.cs:546)、[SettingsHelper.cs:181](G:/TOOL/LiteMonitor-fork/src/Core/SettingsHelper.cs:181)。
+位置：[Settings.cs:546](../../src/Core/Settings.cs)、[SettingsHelper.cs:181](../../src/Core/SettingsHelper.cs)。
 
 EnsureWebPasswordMigrated 调用 Save 后返回 true；Save 在禁止保存时直接返回，遇到 IO 错误则吞异常。旧明文配置可能仍在磁盘，登录也不会得到设计中的迁移失败响应。
 
@@ -170,7 +170,7 @@ EnsureWebPasswordMigrated 调用 Save 后返回 true；Save 在禁止保存时�
 
 ### R14：请求合并键遗漏允许目标策略
 
-位置：[PluginExecutor.cs:490](G:/TOOL/LiteMonitor-fork/src/Plugins/PluginExecutor.cs:490)。
+位置：[PluginExecutor.cs:490](../../src/Plugins/PluginExecutor.cs)。
 
 inflightKey 只有请求摘要，声明主机检查只在首个请求工厂执行。相同 A URL、相同请求头的两个调用者，甲允许 A/B、乙只允许 A；甲先请求且 A 跳 B 时，乙可直接复用 B 的响应，不执行自身的拒绝策略。
 
@@ -178,7 +178,7 @@ inflightKey 只有请求摘要，声明主机检查只在首个请求工厂执�
 
 ### R15：IPv6 StripPort 产生碰撞，台账“均为 fail-closed”不完整
 
-位置：[PluginExecutor.cs:847](G:/TOOL/LiteMonitor-fork/src/Plugins/PluginExecutor.cs:847)。
+位置：[PluginExecutor.cs:847](../../src/Plugins/PluginExecutor.cs)。
 
 Uri.Host 不含端口，StripPort 却按最后一个冒号删除尾部。`[fd00::1]` 与 `[fd00::2]` 都被化成 `[fd00:`。无凭据路径会把初始 URL 的完整 Host 纳入 hopAllowedHosts，因此不同 IPv6 地址之间重定向能被误判为同一允许主机。
 
@@ -186,7 +186,7 @@ Uri.Host 不含端口，StripPort 却按最后一个冒号删除尾部。`[fd00:
 
 ### R16：无路径 URL 的查询串被当作 authority
 
-位置：[PluginProcessor.cs:421](G:/TOOL/LiteMonitor-fork/src/Plugins/PluginProcessor.cs:421)。
+位置：[PluginProcessor.cs:421](../../src/Plugins/PluginProcessor.cs)。
 
 AddDeclaredHost 只按 `/` 截 authority，没有处理 `?`、`#`。例如 `https://api.example?symbol={{symbol}}` 会因查询占位符被判为动态主机；固定查询串也会进入主机名。合法的 Authorization/API Key 插件请求因此被拒绝。
 
@@ -194,7 +194,7 @@ AddDeclaredHost 只按 `/` 截 authority，没有处理 `?`、`#`。例如 `http
 
 ### R17：HEAD 经手动重定向后变成 GET
 
-位置：[PluginExecutor.cs:1006](G:/TOOL/LiteMonitor-fork/src/Plugins/PluginExecutor.cs:1006)。
+位置：[PluginExecutor.cs:1006](../../src/Plugins/PluginExecutor.cs)。
 
 301/302/303 路径按状态码无条件将方法设为 GET，丢掉 HEAD 语义。探测请求变为下载正文，可能触发超限或超时，目标只接受 HEAD 时也会失败；后续 HEAD 空正文返回分支失效。
 
@@ -202,11 +202,11 @@ AddDeclaredHost 只按 `/` 截 authority，没有处理 `?`、`#`。例如 `http
 
 ### R18：原生 Crypto 请求按实例而非执行合并，取消可相互影响
 
-位置：[CryptoNative.cs:124](G:/TOOL/LiteMonitor-fork/src/Plugins/Native/CryptoNative.cs:124)、[PluginExecutor.cs:479](G:/TOOL/LiteMonitor-fork/src/Plugins/PluginExecutor.cs:479)。
+位置：[CryptoNative.cs:124](../../src/Plugins/Native/CryptoNative.cs)、[PluginExecutor.cs:479](../../src/Plugins/PluginExecutor.cs)。
 
 所谓执行作用域键实际传入实例 ID。生产 RestartInstance/Reload 停旧后即启新，StopInstance 只 Cancel/Dispose，没有等待执行任务收尾；新计时器首次延迟为 50ms。如果同交易对没有新鲜缓存，且旧 Crypto 条目到新执行进入时尚未从静态合并表移除，新执行会复用绑定旧令牌的任务，收到旧代次的取消异常并被记为失败。
 
-这是有生产入口的跨代次竞态，不是正常周期调度必然并发，也不声称每次重启都会触发或已证明长期无法取消。调用顺序见 [PluginManager.cs:402](G:/TOOL/LiteMonitor-fork/src/Plugins/PluginManager.cs:402)、[PluginManager.cs:435](G:/TOOL/LiteMonitor-fork/src/Plugins/PluginManager.cs:435)。现有调度测试先等待旧执行结束再触发新计时器，没有覆盖该窗口。
+这是有生产入口的跨代次竞态，不是正常周期调度必然并发，也不声称每次重启都会触发或已证明长期无法取消。调用顺序见 [PluginManager.cs:402](../../src/Plugins/PluginManager.cs)、[PluginManager.cs:435](../../src/Plugins/PluginManager.cs)。现有调度测试先等待旧执行结束再触发新计时器，没有覆盖该窗口。
 
 **修复/验证：**使用每次执行唯一的作用域标识，或实现独立等待者取消与共享请求生命周期。补旧任务退出与新任务启动重叠场景，不只测单次执行超时。
 
@@ -214,7 +214,7 @@ AddDeclaredHost 只按 `/` 截 authority，没有处理 `?`、`#`。例如 `http
 
 ### R19：事务恢复晚于首次加载，回滚只修磁盘
 
-位置：[PluginMarket.cs:186](G:/TOOL/LiteMonitor-fork/src/Plugins/PluginMarket.cs:186)、[MainForm_Transparent.cs:213](G:/TOOL/LiteMonitor-fork/src/UI/MainForm_Transparent.cs:213)。
+位置：[PluginMarket.cs:186](../../src/Plugins/PluginMarket.cs)、[MainForm_Transparent.cs:213](../../src/UI/MainForm_Transparent.cs)。
 
 启动先 LoadPlugins、Start，后在 PluginSelfCheck 首次使用 PluginMarket 时恢复。若上次在替换插件文件后、写安装记录前崩溃，本次已把新模板载入并开始调度，随后磁盘才回滚旧文件，没有同步撤销内存新模板。
 
@@ -222,7 +222,7 @@ AddDeclaredHost 只按 `/` 截 authority，没有处理 `?`、`#`。例如 `http
 
 ### R20：市场流式下载缺少覆盖正文的超时
 
-位置：[PluginMarket.cs:607](G:/TOOL/LiteMonitor-fork/src/Plugins/PluginMarket.cs:607)、[PluginMarket.cs:698](G:/TOOL/LiteMonitor-fork/src/Plugins/PluginMarket.cs:698)。
+位置：[PluginMarket.cs:607](../../src/Plugins/PluginMarket.cs)、[PluginMarket.cs:698](../../src/Plugins/PluginMarket.cs)。
 
 改用 ResponseHeadersRead 后，HttpClient 的 30 秒超时只约束到响应头完成；后续读正文使用调用方 ct，而市场页面安装未传可取消令牌。返回响应头后不再发送正文的服务器可让安装和页面 busy 一直等待，字节上限不能约束“始终不返回下一字节”。
 
@@ -230,7 +230,7 @@ AddDeclaredHost 只按 `/` 截 authority，没有处理 `?`、`#`。例如 `http
 
 ### R21：新主配置加密，但旧插件明文进入备份
 
-位置：[Settings.cs:1088](G:/TOOL/LiteMonitor-fork/src/Core/Settings.cs:1088)、[SettingsHelper.cs:328](G:/TOOL/LiteMonitor-fork/src/Core/SettingsHelper.cs:328)。
+位置：[Settings.cs:1088](../../src/Core/Settings.cs)、[SettingsHelper.cs:328](../../src/Core/SettingsHelper.cs)。
 
 首次保存旧配置时，转换器加密新主文件里的 api_key/token；AtomicWrite 又把旧主文件原样复制为 settings.json.bak。备份清理只移除 WebServerPassword，不转换插件参数。成功保存后，插件密钥仍可从备份读取。
 
@@ -240,7 +240,7 @@ AddDeclaredHost 只按 `/` 截 authority，没有处理 `?`、`#`。例如 `http
 
 ### R22：T01 持续送帧任务跨线程失败，实验未报告
 
-位置：[RecreateHandleScenario.cs:394](G:/TOOL/LiteMonitor-fork/tools/GpuHostLifecycleProbe/RecreateHandleScenario.cs:394)。
+位置：[RecreateHandleScenario.cs:394](../../tools/GpuHostLifecycleProbe/RecreateHandleScenario.cs)。
 
 PumpScene 在 Task.Run 内调用要求 UI 创建线程的宿主 UpdateScene，触发 InvalidOperationException；catch 未覆盖且任务未等待。初始 UI 线程主动送的一帧仍可能成功，主实验仍可退出 0，但不能据此证明后台持续场景输入成功。
 
@@ -248,7 +248,7 @@ PumpScene 在 Task.Run 内调用要求 UI 创建线程的宿主 UpdateScene，�
 
 ### R23：真实 MainForm 隔离只检查构造完成时，不约束 OnShown
 
-位置：[RealMainFormScenario.cs:50](G:/TOOL/LiteMonitor-fork/tools/GpuHostLifecycleProbe/RealMainFormScenario.cs:50)。
+位置：[RealMainFormScenario.cs:50](../../tools/GpuHostLifecycleProbe/RealMainFormScenario.cs)。
 
 隐藏托盘且 WebServerEnabled=true 时，构造后服务尚未启动，隔离门通过；Application.Run 触发生产 OnShown 后会开启监听。最后的 TCP 快照又是在 WriteEvidence 之后追加，没有写入该份结果。
 
@@ -256,7 +256,7 @@ PumpScene 在 Task.Run 内调用要求 UI 创建线程的宿主 UpdateScene，�
 
 ### R24：无哈希守卫时仍声明未漂移
 
-位置：[RecreateHandleScenario.cs:715](G:/TOOL/LiteMonitor-fork/tools/GpuHostLifecycleProbe/RecreateHandleScenario.cs:715)、[CandidateHashGuard.cs:37](G:/TOOL/LiteMonitor-fork/tools/GpuHostLifecycleProbe/CandidateHashGuard.cs:37)。
+位置：[RecreateHandleScenario.cs:715](../../tools/GpuHostLifecycleProbe/RecreateHandleScenario.cs)、[CandidateHashGuard.cs:37](../../tools/GpuHostLifecycleProbe/CandidateHashGuard.cs)。
 
 探针从仓库外隔离目录运行时，向上找不到源码，guard 为 null。但 unchanged 初始为 true，结果仍可写 sourceHashChanged=false 和安全结论。没有测量与测量后未变化被混为一谈。
 
@@ -264,7 +264,7 @@ PumpScene 在 Task.Run 内调用要求 UI 创建线程的宿主 UpdateScene，�
 
 ### R25：Release 绕过新增依赖声明检查
 
-位置：[release.yml:86](G:/TOOL/LiteMonitor-fork/.github/workflows/release.yml:86)、[ci.yml:121](G:/TOOL/LiteMonitor-fork/.github/workflows/ci.yml:121)。
+位置：[release.yml:86](../../.github/workflows/release.yml)、[ci.yml:121](../../.github/workflows/ci.yml)。
 
 普通 CI 已调用 generate-dependency-manifest -Mode Check；人工 Release 没有同一步骤，也不依赖该 CI 成功。依赖变更遗漏 NOTICE 时，CI 可红，而 Release 仍构建、签名并上传草稿资产。
 

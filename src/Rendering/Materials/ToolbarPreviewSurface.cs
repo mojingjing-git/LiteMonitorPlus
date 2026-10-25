@@ -5,23 +5,23 @@ using System.Security.Cryptography;
 using LiteMonitor.Rendering.Contracts;
 namespace LiteMonitor.Rendering.Materials;
 
-public sealed record ToolbarPreviewFixture(int Width, int Height, byte[] Pixels)
+public sealed record ToolbarPreviewSurface(int Width, int Height, byte[] Pixels)
 {
-    public const int FixtureWidth = 1280;
-    public const int FixtureHeight = 900;
+    public const int SurfaceWidth = 1280;
+    public const int SurfaceHeight = 900;
 
-    private static readonly Lazy<ToolbarPreviewFixture> Cached = new(() => Build(FixtureWidth, FixtureHeight));
+    private static readonly Lazy<ToolbarPreviewSurface> Cached = new(() => Build(SurfaceWidth, SurfaceHeight));
 
     public string Sha256 => Convert.ToHexString(SHA256.HashData(Pixels));
 
-    public static ToolbarPreviewFixture Create() => Cached.Value;
+    public static ToolbarPreviewSurface Create() => Cached.Value;
 
     public static FixedBackgroundInput CreateInput(int width, int height)
     {
         if (width < 1 || height < 1 || width > FixedBackgroundInput.MaximumDimension || height > FixedBackgroundInput.MaximumDimension)
             throw new ArgumentOutOfRangeException(nameof(width));
-        var fixture = width == FixtureWidth && height == FixtureHeight ? Create() : Build(width, height);
-        if (!FixedBackgroundInput.TryCreate(fixture.Pixels, width, height, checked(width * 4), 96,
+        var surface = width == SurfaceWidth && height == SurfaceHeight ? Create() : Build(width, height);
+        if (!FixedBackgroundInput.TryCreate(surface.Pixels, width, height, checked(width * 4), 96,
             new PixelRectI(0, 0, width, height), "toolbar-v4-synthetic", out var input, out var code, out var message))
             throw new InvalidOperationException(code + ": " + message);
         return input!;
@@ -58,7 +58,7 @@ public sealed record ToolbarPreviewFixture(int Width, int Height, byte[] Pixels)
         bitmap.Save(path, ImageFormat.Png);
     }
 
-    private static ToolbarPreviewFixture Build(int width, int height)
+    private static ToolbarPreviewSurface Build(int width, int height)
     {
         byte[] pixels = new byte[width * height * 4];
 
@@ -137,7 +137,7 @@ public sealed record ToolbarPreviewFixture(int Width, int Height, byte[] Pixels)
             }
         }
 
-        return new ToolbarPreviewFixture(width, height, pixels);
+        return new ToolbarPreviewSurface(width, height, pixels);
     }
 
     private static void BlendField(

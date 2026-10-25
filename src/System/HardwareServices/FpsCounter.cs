@@ -802,9 +802,6 @@ namespace LiteMonitor.src.SystemServices
             try { SystemEvents.SessionEnding += (s, e) => _isSystemShuttingDown = true; } catch { }
         }
 
-        // ★★★ [新增] 引用 DriverInstaller ★★★
-        private readonly DriverInstaller _driverInstaller;
-
         // ★★★ [新增] 可注入的外部服务启动器与进程查询器（便于单元测试） ★★★
         private readonly IFpsServiceLauncher _launcher;
         private readonly IFpsProcessQuery _processQuery;
@@ -908,7 +905,6 @@ namespace LiteMonitor.src.SystemServices
         /// </param>
         public FpsCounter(DriverInstaller installer, IFpsServiceLauncher? launcher, IFpsProcessQuery? processQuery, Func<bool>? administratorProbe, Func<long>? clock)
         {
-            _driverInstaller = installer;
             _administratorProbe = administratorProbe ?? IsAdministrator;
             _clock = clock ?? (() => Environment.TickCount64);
             _launcher = launcher ?? new PresentMonServiceLauncher(installer, _administratorProbe);

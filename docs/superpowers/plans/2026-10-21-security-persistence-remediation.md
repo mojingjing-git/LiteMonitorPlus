@@ -1,6 +1,7 @@
 # 更新认证、配置持久化与已复现缺陷修复 — Implementation Plan
 
-> 状态：待实施（复审后修订版）。本次只编写计划，不代表补丁、签名体系、探针或实机验证已经完成。
+> 状态：**已实施**（发布签名校验见 `scripts/sign-release.ps1` 与 `.github/workflows/verify-release-signature.ps1`；配置与历史数据的原子写见 `src/Core/SettingsHelper.cs`、`src/Core/HardwareHistoryLogger.cs`）。
+> ⚠️ 下文正文中的"待实施 / 未改动源码 / 不代表已完成"等字样保留为**计划撰写当时**的原始表述；当前实际状态以本行为准。
 >
 > 日期：2026-10-21 初审；2026-10-21 修订（两名独立复审者意见 + 逐条回源核对）。
 >

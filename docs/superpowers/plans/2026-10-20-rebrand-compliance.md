@@ -337,7 +337,7 @@ Copyright (c) 2026 {{OWNER}}
 > [!NOTE]
 > **本项目基于 [LiteMonitor](https://github.com/Diorser/LiteMonitor)（原作者 Diorser，MIT 协议）派生修改。**
 > 上游项目主页：https://litemonitor.cn ｜ 本项目为非官方版本，与原作者无关联。
-> 完整许可证见 [LICENSE](./LICENSE)，变更与致谢见 [NOTICE](./NOTICE)。
+> 完整许可证见 [LICENSE](../../../LICENSE)，变更与致谢见 [NOTICE](../../../NOTICE)。
 ```
 
 `README.en.md` 插入等价英文版本（`[!NOTE]` 提示块，措辞对齐）。
@@ -358,8 +358,8 @@ Copyright (c) 2026 {{OWNER}}
 
 本项目基于 **MIT License** 发布，可自由使用、修改与分发。
 
-- 完整许可文本：[LICENSE](./LICENSE)
-- 上游项目与变更说明：[NOTICE](./NOTICE)
+- 完整许可文本：[LICENSE](../../../LICENSE)
+- 上游项目与变更说明：[NOTICE](../../../NOTICE)
 - 上游项目：https://github.com/Diorser/LiteMonitor （原作者 Diorser）
 ```
 
@@ -423,7 +423,7 @@ private static readonly string[] VersionJsonUrls =
 {
      // 国官网源
     "https://litemonitor.cn/update/version.json",     // ← :46  主源！
-    
+
      // Gitee RAW（自动 fallback 使用）
     "https://gitee.com/Diorser/LiteMonitor/raw/master/resources/version.json",   // :49
 
@@ -502,8 +502,8 @@ Description = $"更新日志：\n{changelog} \n更新日期：\n{releaseDate}\n\
 private readonly string[] _driverPackageUrls = new[]
 {
     "https://gitee.com/Diorser/LiteMonitor/raw/master/resources/assets/driver.zip",
-    "https://litemonitor.cn/update/driver.zip", 
-    "https://github.com/Diorser/LiteMonitor/raw/master/resources/assets/driver.zip" 
+    "https://litemonitor.cn/update/driver.zip",
+    "https://github.com/Diorser/LiteMonitor/raw/master/resources/assets/driver.zip"
 };
 ```
 
@@ -712,7 +712,7 @@ git commit -m "feat(rebrand): 解除对上游基础设施的运行时耦合
 `src/UI/AboutForm.cs:20-21` 现状：
 
 ```csharp
-string strDesc = isZh ? "一款开源的轻量级硬件监控软件。\n© 2025 Diorser / LiteMonitor Project" 
+string strDesc = isZh ? "一款开源的轻量级硬件监控软件。\n© 2025 Diorser / LiteMonitor Project"
                       : "A lightweight desktop hardware monitor.\n© 2025 Diorser / LiteMonitor Project";
 ```
 

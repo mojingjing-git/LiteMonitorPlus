@@ -475,36 +475,3 @@ public sealed record CaptureDiagnostic(
     string Message,
     double? LastFrameAgeMilliseconds,
     int RecoveryAttempt);
-
-public sealed record RenderDiagnostics(
-    RenderBackendKind RequestedBackend,
-    RenderBackendKind ActualBackend,
-    MaterialKind RequestedMaterial,
-    MaterialKind ActualMaterial,
-    RenderLifecycleState State,
-    CaptureLifecycleState CaptureState,
-    long AdapterLuid,
-    string AdapterName,
-    double? LastGpuPassMilliseconds,
-    double? LastPresentIntervalMilliseconds,
-    int RecoveryAttempt,
-    string? FailureCode);
-
-public sealed record RenderingConfig(
-    int SchemaVersion,
-    string Backend,
-    string Material,
-    IReadOnlyDictionary<string, JsonElement> Parameters,
-    IReadOnlyDictionary<string, JsonElement> Motion,
-    IReadOnlyDictionary<string, JsonElement> Fallback)
-{
-    public const int CurrentSchemaVersion = 1;
-
-    public static RenderingConfig Legacy { get; } = new(
-        CurrentSchemaVersion,
-        "legacy",
-        "legacy",
-        new Dictionary<string, JsonElement>(),
-        new Dictionary<string, JsonElement>(),
-        new Dictionary<string, JsonElement>());
-}

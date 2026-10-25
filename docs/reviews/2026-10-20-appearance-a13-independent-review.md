@@ -36,7 +36,7 @@
 
 ### R1 · P2：噪点缓存淘汰了刚创建的画刷，随后仍将其返回
 
-位置：[BackdropNoiseCache.cs:73](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/System/Backdrop/BackdropNoiseCache.cs:73)，调用方为 [BackdropRenderer.cs:216](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/System/Backdrop/BackdropRenderer.cs:216)。
+位置：[BackdropNoiseCache.cs:73](../../src/System/Backdrop/BackdropNoiseCache.cs)，调用方为 [BackdropRenderer.cs:216](../../src/System/Backdrop/BackdropRenderer.cs)。
 
 新 `Entry.LastUsed` 为 0，插入缓存后立即淘汰。已有四项被命中过时，新项反而最旧，因此第五项自己被释放，`GetBrush` 仍返回该画刷。
 
@@ -46,7 +46,7 @@
 
 ### R2 · P2：主题编辑器预览仍走旧入口，辉光和新进度条不生效
 
-位置：[ThemePreviewControl.cs:218](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/ThemeEditor/ThemePreviewControl.cs:218)、[ThemePreviewControl.cs:229](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/ThemeEditor/ThemePreviewControl.cs:229)。
+位置：[ThemePreviewControl.cs:218](../../src/ThemeEditor/ThemePreviewControl.cs)、[ThemePreviewControl.cs:229](../../src/ThemeEditor/ThemePreviewControl.cs)。
 
 预览继续使用 `DrawPreviewTexture` 假扫描线/网格、透明背景变体和三参数 `UIRenderer.Render`；没有传入 `AppearanceRuntime`。这正是 lead-review 的 E-1/E-3 要求 A13 收口的交接项。
 
@@ -61,7 +61,7 @@
 
 ### R3 · P2：两个新进度条样式会替换调用方裁剪
 
-位置：[BarRenderer.cs:243](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/UI/Decor/BarRenderer.cs:243)，同文件第 278 行亦然。
+位置：[BarRenderer.cs:243](../../src/UI/Decor/BarRenderer.cs)，同文件第 278 行亦然。
 
 `g.SetClip(shape)` 默认替换已有裁剪。即使最后恢复 Graphics 状态，也无法撤销已经画到原裁剪之外的像素。
 
@@ -71,7 +71,7 @@
 
 ### R4 · P2：窗口变高后，Region 沿用旧高度夹紧后的切角长度
 
-位置：[WindowAppearanceController.cs:321](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/UI/Helpers/WindowAppearanceController.cs:321)、[WindowAppearanceController.cs:356](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/UI/Helpers/WindowAppearanceController.cs:356)。Resize 由 [MainForm_Transparent.cs:230](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/UI/MainForm_Transparent.cs:230) 经 helper 调用 `Reapply`。
+位置：[WindowAppearanceController.cs:321](../../src/UI/Helpers/WindowAppearanceController.cs)、[WindowAppearanceController.cs:356](../../src/UI/Helpers/WindowAppearanceController.cs)。Resize 由 [MainForm_Transparent.cs:230](../../src/UI/MainForm_Transparent.cs) 经 helper 调用 `Reapply`。
 
 控制器缓存了旧快照中已经按旧窗口高度夹紧的 `FrameLengthPx`。Resize 更新 bounds，但没有重新取当前快照；绘制层随后重新计算快照，二者出现不同几何。
 
@@ -81,7 +81,7 @@
 
 ### R5 · P2：solid 底板仍按局部裁剪尺寸从窗口原点填充
 
-位置：[UIRenderer.cs:73](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/UI/UIRenderer.cs:73)、[HorizontalRenderer.cs:33](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/UI/HorizontalRenderer.cs:33)，后者第 51 行亦然。
+位置：[UIRenderer.cs:73](../../src/UI/UIRenderer.cs)、[HorizontalRenderer.cs:33](../../src/UI/HorizontalRenderer.cs)，后者第 51 行亦然。
 
 这是旧实现的已知问题在 A13 中延续。填充使用窗口原点和 `VisibleClipBounds` 的尺寸，失效区偏离原点时漏补底色；新入口也没有修复。v4 和 lead-review 的 B-2/H-3 已明确要求底板锚定完整客户区。
 
@@ -93,7 +93,7 @@
 
 ### R6 · P2：效果全关时，竖屏每帧仍新增 200 字节分配
 
-位置：[UIRenderer.cs:79](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/UI/UIRenderer.cs:79)、同文件第 122 行。
+位置：[UIRenderer.cs:79](../../src/UI/UIRenderer.cs)、同文件第 122 行。
 
 只要有 runtime，调用方就构造 `BuildGroupRegions` 列表，之后下层才检查纹理是否关闭。旧主题也会新增 List 和后备数组。
 
@@ -103,7 +103,7 @@
 
 ### R7 · P2：纹理进度条的斜线只擦过瓦片角点
 
-位置：[DecorTextureFactory.cs:195](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/UI/Decor/DecorTextureFactory.cs:195)。
+位置：[DecorTextureFactory.cs:195](../../src/UI/Decor/DecorTextureFactory.cs)。
 
 两条直线分别位于 `x+y=0` 与 `x+y=2×size`，没有贯穿正方形瓦片内部；常见条高和位置下，条内部只显示半透明平底。
 
@@ -113,7 +113,7 @@
 
 ### R8 · P2：纹理源图与记账时取得的图像没有确定的释放路径
 
-位置：[DecorResourceHost.cs:315](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/UI/Decor/DecorResourceHost.cs:315)、[DecorRenderer.cs:443](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/UI/Decor/DecorRenderer.cs:443)、[DecorResourceCache.cs:401](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a13-audit-954a634/target-src/src/UI/Decor/DecorResourceCache.cs:401)。
+位置：[DecorResourceHost.cs:315](../../src/UI/Decor/DecorResourceHost.cs)、[DecorRenderer.cs:443](../../src/UI/Decor/DecorRenderer.cs)、[DecorResourceCache.cs:401](../../src/UI/Decor/DecorResourceCache.cs)。
 
 前两处创建 `Bitmap tile` 后仅返回 `new TextureBrush(tile)`，未释放源图；记账时取得 `tb.Image` 也未释放。缓存淘汰时释放另一次取得的 `tb.Image`，无法补上此前源图和临时图的释放。
 

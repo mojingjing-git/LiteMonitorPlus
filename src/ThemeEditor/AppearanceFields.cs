@@ -157,15 +157,6 @@ namespace LiteMonitor.ThemeEditor
                 r, g, b, alpha.ToString("0.###", CultureInfo.InvariantCulture));
         }
 
-        /// <summary>alpha（0–1）→ 字节（0–255），AwayFromZero 舍入（0.5 → 128）。</summary>
-        public static int ToAlphaByte(double alpha)
-        {
-            if (double.IsNaN(alpha) || double.IsInfinity(alpha)) return 0;
-            if (alpha < 0) alpha = 0;
-            if (alpha > 1) alpha = 1;
-            return (int)Math.Round(alpha * 255d, MidpointRounding.AwayFromZero);
-        }
-
         private static bool TryHexByte(string hex, int offset, out int value)
         {
             value = 0;
@@ -301,13 +292,6 @@ namespace LiteMonitor.ThemeEditor
             }
 
             return clone;
-        }
-
-        /// <summary>深拷贝颜色配置。</summary>
-        public static ColorConfig CloneColor(ColorConfig source)
-        {
-            if (source == null) throw new ArgumentNullException(nameof(source));
-            return (ColorConfig)CloneObject(source);
         }
 
         // ------------------------------------------------------------
@@ -986,13 +970,6 @@ namespace LiteMonitor.ThemeEditor
         public string? GetColorValue(string key)
         {
             return _colorValues.TryGetValue(key, out string? v) ? v : null;
-        }
-
-        /// <summary>设置某个颜色字段的颜色文本（内存），并刷新对应控件。</summary>
-        public void SetColorValue(string key, string? value)
-        {
-            _colorValues[key] = value;
-            if (_alphaEditors.TryGetValue(key, out AppearanceAlphaEditor? editor)) editor.SetColorText(value);
         }
 
         // ================================================================

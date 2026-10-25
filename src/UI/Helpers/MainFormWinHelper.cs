@@ -156,14 +156,23 @@ namespace LiteMonitor.src.UI.Helpers
 
         /// <summary>
         /// 当前窗口是否处于**分层窗口**状态（<c>WS_EX_LAYERED</c>）。
-        /// <para>★ <c>WS_EX_LAYERED</c> 与 <c>WDA_EXCLUDEFROMCAPTURE</c> **互斥**（合同 §10 GPU-003）：
-        /// 分层窗口上不得申请 WDA 排除 ⇒ 期望路由由
-        /// <c>RenderingRouteRequest.WindowIsLayered</c> 交给
-        /// <c>RenderingRoutePolicy.Decide</c> 判定（有效路由降级为 <c>GpuFixedInput</c>，
-        /// 原因码 <c>wda_capture_policy_unsupported_on_layered_window</c>）。</para>
+        /// <para>★ <b>不要再按"分层 ⇒ 降级为 <c>GpuFixedInput</c>"来改这里。</b>
+        /// 那条硬闸来自 T02 合同 §10 GPU-003，其前提"<c>WS_EX_LAYERED</c> 与
+        /// <c>WDA_EXCLUDEFROMCAPTURE</c> 互斥"已被 2026-10-24 步 0 实机实验<b>证伪</b>：
+        /// legacy 路线在同一块分层窗口（<c>Opacity=0.85</c>）上成功抓到实时背景，
+        /// 亲和性全程保持 <c>0x11</c>。按<b>方案 A</b>，分层判定已被降级为
+        /// <b>纯诊断</b>——<c>RenderingRoutePolicy.Decide</c> 不再因分层改变路由，
+        /// 只追加诊断条目 <c>diagnostic_window_is_layered</c>
+        /// （见 <c>src/Rendering/Configuration/RenderingRoutePolicy.cs:122-131</c>）。
+        /// 原因码 <c>wda_capture_policy_unsupported_on_layered_window</c> 已随之作废，
+        /// 全仓仅剩 <c>docs/</c> 的历史记录，生产代码不再产生该码。</para>
         /// <para>★ 本方法**只读**，绝不修改 ex-style（合同 §1.3 明确否决"顺手清 WS_EX_LAYERED"）。</para>
         /// <para>★ 期望状态 = <c>Opacity &lt; 1 || ClickThrough</c>（合同 §4 步 7 / GPU-003）：
         /// 重建后新 HWND 的 <c>WS_EX_LAYERED</c> 由 <c>CreateParams</c> 按配置决定 ⇒ 旧残留**不继承**。</para>
+        /// <para>★ 消费方：<c>RenderingRouteRequest.WindowIsLayered</c>（路由诊断）与
+        /// <c>src/UI/Settings/RenderingRoutePage.cs:207</c>（设置页状态行）。
+        /// 注意：<c>RenderingRouteDecision.Errors</c> 目前<b>没有生产消费者</b>，
+        /// 状态行走的是本方法这条独立路径。</para>
         /// </summary>
         public bool IsWindowLayered()
         {

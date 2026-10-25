@@ -1,6 +1,7 @@
 # LiteMonitor++ 外观改造：Agent 执行计划（v4）
 
-> 状态：待实施。本次只审查和细化计划，未修改业务代码，未构建、运行测试或实测新效果。
+> 状态：**已实施**（A13–A16 外观改造线已交付；独立复审见 [A13](../../reviews/2026-10-20-appearance-a13-independent-review.md)、[A14](../../reviews/2026-10-20-appearance-a14-independent-recheck.md)、[A15](../../reviews/2026-10-21-appearance-a15-independent-review.md)）。
+> ⚠️ 下文正文中的"待实施 / 未改动源码 / 不代表已完成"等字样保留为**计划撰写当时**的原始表述；当前实际状态以本行为准。
 >
 > 审查基线：2026-10-20，`97f793dccac6d5ab37120602ecab4f6238a855da`。`docs/APPEARANCE_PLAN.md` 当时已有未提交修改，本轮在其基础上修订。
 >

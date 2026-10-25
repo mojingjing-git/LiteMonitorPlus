@@ -17,12 +17,6 @@ public readonly record struct SamplingBounds(int Left, int Top, int Right, int B
     public int Height => Math.Max(0, Bottom - Top);
 }
 
-public readonly record struct GeometryShaderConstants(
-    Vector4 Bounds,
-    Vector4 Shape,
-    Vector4 Edge,
-    Vector4 Sampling);
-
 public sealed record PanelGeometry
 {
     public PanelGeometry(
@@ -153,29 +147,6 @@ public sealed record PanelGeometry
         int bottom = Math.Clamp((int)Math.Ceiling(sample.Y + sample.Height), top, textureHeight);
         return new SamplingBounds(left, top, right, bottom);
     }
-
-    public GeometryShaderConstants ToShaderConstants() =>
-        new(
-            new Vector4(
-                (float)Bounds.X,
-                (float)Bounds.Y,
-                (float)Bounds.X + (float)Bounds.Width,
-                (float)Bounds.Y + (float)Bounds.Height),
-            new Vector4(
-                (float)((int)Shape),
-                (float)CornerRadius,
-                (float)CutLength,
-                (float)OutlineWidth),
-            new Vector4(
-                (float)RefractionRadius,
-                (float)BlurRadius,
-                (float)ShadowRadius,
-                (float)GlowRadius),
-            new Vector4(
-                (float)SamplingRectangle.X,
-                (float)SamplingRectangle.Y,
-                (float)SamplingMargin,
-                0));
 
     public static PanelGeometry LiquidGlass(LogicalRect bounds, double cornerRadius = 24) =>
         new(

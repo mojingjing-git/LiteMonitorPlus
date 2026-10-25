@@ -19,6 +19,7 @@
     "BAT.Power": "Bat Pwr",
     "BAT.Voltage": "Bat Volt",
     "BAT.Current": "Bat Curr",
+    "SYS.Power": "Total Power",
     "CPU.Load": "CPU Usage",
     "CPU.Temp": "CPU Temp",
     "CPU.Clock": "CPU Clock",
@@ -78,7 +79,8 @@
     "BAT.Percent": "BAT",
     "BAT.Power": "BPWR",
     "BAT.Voltage": "BVOL",
-    "BAT.Current": "BCUR"
+    "BAT.Current": "BCUR",
+    "SYS.Power": "SPWR"
   },
   "Menu": {
     "RenderingRoute": "Rendering route",
@@ -124,9 +126,6 @@
     "Reset": "Reset",
     "ResetConfirm": "Reset all settings?\n(App will restart)",
     "Enable": "Enable",
-    "LiveGlass": "Live Glass",
-    "LiveGlassHint": "Live Glass captures the screen behind this window in real time.\nWhile capturing, the panel may briefly disappear or flicker in screen recordings or screenshots.",
-    "LiveGlassStatus": "Current status",
     "NoVisibleItems": "No metrics enabled",
     "ConfigWriteBlocked": "Settings could not be read; your changes will not be saved",
     "ConfigWriteBlockedShort": "Settings not saved",
@@ -274,12 +273,10 @@
     "GpuMonitorCountTip": "In multi-GPU mode the top N GPUs by priority are monitored; temperature / load / power are shown per GPU",
     "Auto": "Auto",
     "UseWinPerCounters": "Use Sys Counters",
-    "UseWinPerCountersTip": "Disable if inaccurate. CPU/GPU/MEM/DISK read from sensors.",
     "Refresh": "Rate",
     "RefreshTip": "This only sets how often the interface redraws. Normal hardware data is sampled at most once per second, so a smaller value does not sample more often.",
     "IgnoreSMBTraffic": "Ignore SMB Traffic",
     "MemoryDisplayMode": "RAM Display",
-    "MemoryCommitHint": "Committed memory: shows the committed amount / the current commit limit (commit limit = RAM + page file commit quota; it is a separate metric from physical RAM usage)",
 
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",

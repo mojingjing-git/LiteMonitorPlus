@@ -83,7 +83,7 @@ internal sealed class ProbeForm : Form
             if (!GpuSceneRenderer.TryCreate(Handle, _generations, 1280, 900, MaterialKind.LiquidGlass, _ledger,
                     settings, 96, 1, null, out _renderer, out var code, out var message))
                 throw new InvalidOperationException(code + ": " + message);
-            FixedBackgroundInput input = ToolbarPreviewFixture.CreateInput(1280, 900);
+            FixedBackgroundInput input = ToolbarPreviewSurface.CreateInput(1280, 900);
             if (_pattern != "v4")
             {
                 byte[] pixels = new byte[1280 * 900 * 4];

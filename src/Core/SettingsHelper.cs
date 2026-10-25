@@ -623,6 +623,9 @@ namespace LiteMonitor
                 new MonitorItemConfig { Key = "MOBO.Temp", SortIndex = 404, VisibleInPanel = false },
                 new MonitorItemConfig { Key = "DISK.Temp", SortIndex = 405, VisibleInPanel = false },
                 new MonitorItemConfig { Key = "CASE.Fan",  SortIndex = 406, VisibleInPanel = false },
+
+                // ★★★ [SYS.Power] 整机总功耗（CPU+GPU 派生项），HOST 分组（Settings.cs 归组白名单已加）★★★
+                new MonitorItemConfig { Key = "SYS.Power", SortIndex = 407, VisibleInPanel = false },
                 
                 // [5xx] BATTERY (New Group)
                 new MonitorItemConfig { Key = "BAT.Percent", SortIndex = 501, VisibleInPanel = false, VisibleInTaskbar = false },
@@ -941,13 +944,16 @@ namespace LiteMonitor
             if (val <= 0 || float.IsNaN(val) || float.IsInfinity(val)) return;
             
             if (key.Contains("Clock") && val > 10000) return; 
-            if (key.Contains("Power") && val > 1000) return;
+            if (key.Contains("Power") && !key.StartsWith("SYS.", StringComparison.Ordinal) && val > 1000) return;
+            // ★ [SYS.Power] 整机总功耗合法可超 1000W（高端台式机），与 B3 sanity ceiling(2000W) 口径对齐
+            if (key.StartsWith("SYS.", StringComparison.Ordinal) && val > 2000) return;
             if ((key.Contains("Fan") || key.Contains("Pump")) && val > 10000) return;
 
             // ★★★ [多显卡] 带序号的 Key ("GPU.1.Power") 归一化成基础 Key ("GPU.Power") 后再比对 ★★★
             string baseKey = GpuKey.ToBaseKey(key);
 
             if (baseKey == "CPU.Power" && val > settings.RecordedMaxCpuPower) { settings.RecordedMaxCpuPower = val; changed = true; }
+            else if (baseKey == "SYS.Power" && val > settings.RecordedMaxSysPower) { settings.RecordedMaxSysPower = val; changed = true; }
             else if (baseKey == "CPU.Clock" && val > settings.RecordedMaxCpuClock) { settings.RecordedMaxCpuClock = val; changed = true; }
             else if (baseKey == "GPU.Power" && val > settings.RecordedMaxGpuPower) { settings.RecordedMaxGpuPower = val; changed = true; }
             else if (baseKey == "GPU.Clock" && val > settings.RecordedMaxGpuClock) { settings.RecordedMaxGpuClock = val; changed = true; }

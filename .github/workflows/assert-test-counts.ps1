@@ -279,17 +279,21 @@ if ($reports.Count -eq 0) {
     exit 2
 }
 
-# 同一程序集有多个 TRX（重复跑过）时取**最后一次**运行的结果，
-# 并明确告警 —— 绝不取"最大"或"最小"，免得旧的好结果盖住新的坏结果。
+# 同一程序集出现多份 TRX ⇒ 计数被重复累加/新旧混杂 ⇒ 任何"总数达标"都不可信。
+# 【C-1 / 评审阻断 1】因此这里**不再"取最后一次 + 警告"**（那是旧行为，已废止）：
+#   重复时由下方 $duplicated 分支直接 FAIL（exit 4），让这类状态现形，
+#   而不是挑一份好看的糊弄过去。
+# 本段只做**按程序集分组**，供 $duplicated 判定与失败时逐条列出。
 $byAssembly = @{}
 foreach ($r in $reports) {
     $key = $r.Assembly.ToLowerInvariant()
-    if (-not $byAssembly.ContainsKey($key) -or $r.LastWrite -gt $byAssembly[$key].LastWrite) {
+    if (-not $byAssembly.ContainsKey($key)) {
         $byAssembly[$key] = $r
     }
 }
 $duplicated = $reports.Count -ne $byAssembly.Count
 
+# $duplicated 为假时，每个程序集恰好一份 TRX ⇒ $selected 与 $reports 等价。
 $selected = @($byAssembly.Values | Sort-Object -Property Assembly)
 
 # ----------------------------------------------------------------------

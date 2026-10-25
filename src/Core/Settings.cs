@@ -156,6 +156,8 @@ namespace LiteMonitor
         public float RecordedMaxCpuPower { get; set; } = 65.0f;
         public float RecordedMaxCpuClock { get; set; } = 4200.0f;
         public float RecordedMaxGpuPower { get; set; } = 100.0f;
+        // ★★★ [SYS.Power] 整机总功耗（CPU+GPU 派生项）峰值，供进度条自适应 ★★★
+        public float RecordedMaxSysPower { get; set; } = 800.0f;
         public float RecordedMaxGpuClock { get; set; } = 1800.0f;
         
         // ★★★ [新增] FPS 固定最大值 (用于进度条上限，推荐 144) ★★★
@@ -792,7 +794,7 @@ namespace LiteMonitor
 
                 // ★ "MEM.Commit.Load"（内存已提交）与 "MEM.Load"（物理内存）同属 HOST，
                 //   两条路径必须同步，否则新项会掉进一个标题为 "MEM" 的独立分组。
-                if (_key == "MEM.Load" || _key == "MEM.Commit.Load" || _key == "MOBO.Temp" || _key == "DISK.Temp" || _key == "CASE.Fan"|| _key == "FPS")
+                if (_key == "MEM.Load" || _key == "MEM.Commit.Load" || _key == "MOBO.Temp" || _key == "DISK.Temp" || _key == "CASE.Fan"|| _key == "FPS" || _key == "SYS.Power")
                     CachedUIGroup = "HOST";
                 else if (_key.StartsWith("DASH."))
                 {
@@ -868,7 +870,8 @@ namespace LiteMonitor
                     Key == "MOBO.Temp" || 
                     Key == "DISK.Temp" || 
                     Key == "CASE.Fan"|| 
-                    Key == "FPS") 
+                    Key == "FPS" ||
+                    Key == "SYS.Power")
                 { 
                     return "HOST"; 
                 } 

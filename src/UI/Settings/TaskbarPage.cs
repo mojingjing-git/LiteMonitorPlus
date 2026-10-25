@@ -15,8 +15,7 @@ namespace LiteMonitor.src.UI.SettingsPage
         private List<Control> _customColorInputs = new List<Control>();
         private List<Control> _customLayoutInputs = new List<Control>();
         private Control _styleCombo;
-        private CheckBox _chkCustomLayout;
-        
+
         // 类型名称修正为 LiteComboBox
         private LiteComboBox _cbFont;
         private Task<List<string>> _taskFonts;
@@ -188,7 +187,6 @@ namespace LiteMonitor.src.UI.SettingsPage
             var chk = group.AddToggle(this, "Menu.TaskbarCustomLayout", 
                 () => Config?.TaskbarCustomLayout ?? false, 
                 v => { if(Config!=null) Config.TaskbarCustomLayout = v; });
-            _chkCustomLayout = chk;
             chk.CheckedChanged += (s, e) => {
                 foreach(var c in _customLayoutInputs) c.Enabled = chk.Checked;
                 if (_styleCombo != null) 

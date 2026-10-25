@@ -12,13 +12,15 @@ name: CI
 #   总计/通过/失败/跳过，任何一个程序集"0 发现"、缺程序集、或总数低于阈值，
 #   都会让 job 以非零退出码失败。
 #
-# ★ 行尾说明：本仓库 core.autocrlf=true 且仓库根目录**没有 .gitattributes**。
+# ★ 行尾说明：本仓库 core.autocrlf=true，且仓库根目录**已有** .gitattributes
+#   （文本 text eol=crlf、二进制 binary、契约夹具区 eol=lf 显式例外）。
 #   windows-latest runner 的系统 gitconfig 同样是 autocrlf=true，
 #   检出行为与本地一致（文本文件 CRLF），因此脚本按 LF 提交的写法在 runner 上照常工作，
-#   无需额外的 .gitattributes 或 actions/checkout 的 crlf 设置。
+#   无需 actions/checkout 的 crlf 设置。
 #
 #   ★ 例外：tests/fixtures/plugin-repo/ 目录**自带**一个局部 .gitattributes
-#     （*.json text eol=lf）。插件市场契约测试要对 plugin.json 的**原始字节**求
+#     （*.json / *.md text eol=lf），且根 .gitattributes 对该目录显式声明 eol=lf。
+#     插件市场契约测试要对 plugin.json 的**原始字节**求
 #     SHA-256 与长度，CRLF 转换会让字节口径与 index.json 里的 sha256 / size 对不上。
 #     该 .gitattributes 只作用于该子目录，不影响仓库其它文件。
 # ============================================================================

@@ -14,7 +14,7 @@
 
 ### S1 · P1：Stop 超时后重启，新旧捕获线程重叠，旧线程向新生命周期发布
 
-位置：[BackdropCaptureService.cs:810](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a15-audit-33245bc/target-src/src/System/Backdrop/BackdropCaptureService.cs:810)、同文件第 691、1274、1112 行。
+位置：[BackdropCaptureService.cs:810](../../src/System/Backdrop/BackdropCaptureService.cs)、同文件第 691、1274、1112 行。
 
 `StopCore` 等待线程退出前就清空 `_worker/_cts`。若 Join 超时，`Start` 仍能启动下一线程，并重新将全实例共享的 `_stopRequested` 清零。旧请求与新请求代次相同的场景下，旧线程返回的结果通过发布检查；旧线程退出时还会覆盖新生命周期的状态。
 
@@ -31,7 +31,7 @@
 
 ### S2 · P2：失效或已停止的 active 帧仍被借出，Dispose 后仍报告 Glass
 
-位置：[BackdropCaptureService.cs:963](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a15-audit-33245bc/target-src/src/System/Backdrop/BackdropCaptureService.cs:963)，另见第 918、984 行。
+位置：[BackdropCaptureService.cs:963](../../src/System/Backdrop/BackdropCaptureService.cs)，另见第 918、984 行。
 
 `UpdateRequest` 与暂停/Dispose 会作废租约，但 `TryGetFrame`、`IsReady` 和 `Status` 只判断 Image 是否非空，没有判断租约有效性与服务生命周期。Stop 也没有可靠撤销 active 的可用性。
 
@@ -41,7 +41,7 @@
 
 ### S3 · P2：暂停后，在途结果能重新发布并将 Suspended 改回 Running
 
-位置：[BackdropCaptureService.cs:1274](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a15-audit-33245bc/target-src/src/System/Backdrop/BackdropCaptureService.cs:1274)，接管入口亦未拒绝暂停状态。
+位置：[BackdropCaptureService.cs:1274](../../src/System/Backdrop/BackdropCaptureService.cs)，接管入口亦未拒绝暂停状态。
 
 `SetSuspended(true)` 清空 pending，但发布检查没有判断 `_suspended`。暂停前已经进入后端的一次捕获，返回时会重新填入 pending，允许 UI 接管，并由成功路径覆盖状态。
 
@@ -51,7 +51,7 @@
 
 ### S4 · P2：捕获恢复成功后，StateText 仍显示之前的故障
 
-位置：[BackdropCaptureService.cs:1379](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a15-audit-33245bc/target-src/src/System/Backdrop/BackdropCaptureService.cs:1379)。
+位置：[BackdropCaptureService.cs:1379](../../src/System/Backdrop/BackdropCaptureService.cs)。
 
 `RecordSuccess` 更新 Running、清空降级原因，却没有更新 `_stateText`。本轮新增字段的失败转换已被加固，成功转换仍有遗漏。
 
@@ -61,7 +61,7 @@
 
 ### S5 · P2：启动脚本用 DPI 数值判断 PMv2，存在双向误报
 
-位置：[run-livecheck.ps1:375](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a15-audit-33245bc/target-src/scripts/run-livecheck.ps1:375)。
+位置：[run-livecheck.ps1:375](../../scripts/run-livecheck.ps1)。
 
 脚本将 `DPI > 96` 判为 Per-Monitor 生效，将 `DPI == 96` 判为仍是系统感知。实际 `GetDpiForWindow` 返回缩放数值：SystemAware 返回系统 DPI，PerMonitor 返回所在显示器的 DPI。[微软定义](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdpiforwindow)
 
@@ -75,7 +75,7 @@
 
 ### S6 · P2：首个可见窗口可能是驱动安装对话框，未必是 MainForm
 
-位置：[run-livecheck.ps1:212](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a15-audit-33245bc/target-src/scripts/run-livecheck.ps1:212)。启动路径见 [Program.cs:89](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a15-audit-33245bc/target-src/src/System/Program.cs:89)、[DriverInstaller.cs:889](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a15-audit-33245bc/target-src/src/System/HardwareServices/DriverInstaller.cs:889)。
+位置：[run-livecheck.ps1:212](../../scripts/run-livecheck.ps1)。启动路径见 [Program.cs:89](../../src/System/Program.cs)、[DriverInstaller.cs:889](../../src/System/HardwareServices/DriverInstaller.cs)。
 
 脚本虽按目标 PID 枚举并取最大客户区，但轮询发现任何可见窗口就立即返回。PawnIO 缺失/升级时，程序会在创建 MainForm **之前**显示同 PID 的 `UpdateDialog`。此时脚本即可把驱动对话框当作主窗口，报告其 DPI 和客户区。
 

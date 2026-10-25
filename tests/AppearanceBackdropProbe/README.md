@@ -95,7 +95,7 @@
 ## 6. 运行
 
 ```powershell
-$dotnet = 'G:\TOOL\dotnet-sdk\dotnet.exe'
+$dotnet = 'C:\Program Files\dotnet\dotnet.exe'
 $probe  = 'tests\AppearanceBackdropProbe\bin\Release\net8.0-windows\AppearanceBackdropProbe.dll'
 
 dotnet build tests\AppearanceBackdropProbe\AppearanceBackdropProbe.csproj -c Release

@@ -1,6 +1,7 @@
 # GPU 与旧管线运行时切换修复计划
 
-日期：2026-10-22。状态：**REVISION-1 / 已按独立复审修订，待复审；仍未执行实现、构建或测试**。
+日期：2026-10-22。状态：**REVISION-1 / 已按独立复审修订；实现已交付**（GPU ↔ legacy 运行时切换已并入 master，合同见 `src/UI/RenderingTransitionCoordinator.cs`，复审见 [2026-10-22-gpu-legacy-runtime-transition-plan-review.md](../../reviews/2026-10-22-gpu-legacy-runtime-transition-plan-review.md)）。
+> ⚠️ 下文正文中的"待实施 / 未改动源码 / 不代表已完成"等字样保留为**计划撰写当时**的原始表述；当前实际状态以本行为准。
 
 > **修订记录（2026-10-22，独立复审第 1 轮）**：复审报告 `docs/reviews/2026-10-22-gpu-legacy-runtime-transition-plan-review.md` 判定 NEEDS-REVISION，列 4 中 + 3 低 + 2 信息共 9 项。本次已逐项落到条款：
 > - **A1（HWND 代次缺单一真相源）** → §4.1 / §4.2 新增"句柄代次的唯一真相源"段，指名既有 `LiveGlassController._handleGeneration` 与其捕获请求链；§4.3 步骤 5 加同步约束。

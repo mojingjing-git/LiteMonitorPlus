@@ -115,7 +115,6 @@ public sealed class NetworkTrafficExclusionService : IDisposable
     private long _windowStartTicks;
     private bool _discardNextWindow;
     private FilteredNetworkSnapshot? _published;
-    private bool _havePublished;
 
     public NetworkTrafficExclusionService(
         INetworkTrafficEventSource source,
@@ -191,7 +190,6 @@ public sealed class NetworkTrafficExclusionService : IDisposable
 
             // 规则换代：旧窗口的字节属于旧规则，必须作废。
             _discardNextWindow = true;
-            _havePublished = false;
             _published = null;
         }
 
@@ -222,7 +220,6 @@ public sealed class NetworkTrafficExclusionService : IDisposable
             {
                 // 网卡切换 → 旧窗口作废，重新建立基线（不出现尖峰或负值）。
                 _discardNextWindow = true;
-                _havePublished = false;
                 _published = null;
             }
         }
@@ -269,7 +266,6 @@ public sealed class NetworkTrafficExclusionService : IDisposable
         lock (_gate)
         {
             _windowOpen = false;
-            _havePublished = false;
             _published = null;
             _discardNextWindow = true;
             _demandUntilTicks = 0;
@@ -484,7 +480,6 @@ public sealed class NetworkTrafficExclusionService : IDisposable
                 _nextStartAttemptTicks = 0;
                 _discardNextWindow = true;
                 _windowOpen = false;
-                _havePublished = false;
                 _published = null;
             }
             _filter.SetRules(_rules, TargetIfIndex, RetransmitPolicy.ExcludeRetransmitFromTotal);
@@ -521,7 +516,6 @@ public sealed class NetworkTrafficExclusionService : IDisposable
         {
             _sourceRunning = false;
             _windowOpen = false;
-            _havePublished = false;
             _published = null;
             _discardNextWindow = true;
         }
@@ -568,7 +562,6 @@ public sealed class NetworkTrafficExclusionService : IDisposable
             {
                 _windowStartTicks = now;
                 _discardNextWindow = true;
-                _havePublished = false;
                 _published = null;
             }
             return;
@@ -597,14 +590,12 @@ public sealed class NetworkTrafficExclusionService : IDisposable
             lock (_gate)
             {
                 _windowStartTicks = now;
-                _havePublished = false;
                 _published = null;
             }
             return;
         }
 
         _published = snap;
-        lock (_gate) { _havePublished = true; }
     }
 
     private int CurrentGeneration() => Volatile.Read(ref _activeGeneration);

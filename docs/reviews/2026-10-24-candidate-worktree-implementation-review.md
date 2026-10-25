@@ -417,3 +417,103 @@ F04 段审查 agent 用**执行方自己的 TRX** 做时间轴分析（`startTim
   主审已用自己的双配置全量复跑间接覆盖了这些用例（LiteMonitor.Tests 1770 条中含 F06/F07/F08 新增 56 条，
   本次 Debug 通过 1762 / 失败 1 —— **失败的是市场持久化用例，不在 F06–F08 段**）。
 - 全部改动**仍未提交**（41 个已跟踪文件修改 + 29 个新文件 = 执行方 70 项）；G 盘 master 上**没有** P1-01 修复与本批任何改动。
+
+---
+
+## 11. 状态跟踪（2026-10-24 工作目录清理轮次之后）
+
+> **本节是追加的状态记录，不修改上文 §1–§10 的任何原始审查结论。**
+> 上文记录的是 2026-10-24 **审查当时**的快照；本节记录同日随后进行的「工作目录全面清理」轮次之后，
+> 这些登记项的**当前实际状态**。每一条都以当前工作区**实测**为准，并给出可复核的落点。
+
+### 11.1 已闭合（7 项）
+
+| # | 闭合方式（实测依据） |
+|---|---|
+| **R-2** | 「分层 ⇄ WDA 互斥」的失实注释已按 R3 步 0 实测结论改写（`src/UI/Helpers/MainFormWinHelper.cs`）。 |
+| **R-3** | `src/Rendering/Presentation/WindowExtendedStyle.cs` **整类已删除**（零生产引用的死代码）。 |
+| **R-5** | `Menu.LiveGlass` / `Menu.LiveGlassStatus` / `Menu.LiveGlassHint` 三个死 key 已从**全部 9 个语言包**删除（实测每个文件 `"LiveGlass` 命中数 = 0）。 |
+| **R-7** | `scripts/add-rendering-route-i18n.py` **已删除** —— 一次性脚本、机器绝对路径、CRLF→LF 换行污染源三重问题一并消除。 |
+| **R-9** | `README.md:91-92` 现给出真实枚举字面量 `GpuFixedInput` / `GpuLiveBackground`（见 `src/Rendering/Configuration/RenderingRoutePolicy.cs:8-9`）；`:94` 已改用全角 `（GPU 材质）`，与 `resources/lang/zh.json:85` 一致。 |
+| **R-15** | 「脚本 + 九语言包」双份翻译真相源消除 —— 生成脚本已删（见 R-7），现只余 9 个语言包一份。 |
+| **A-8** | **fork 引入的 UTF-8 BOM 已去除**：`PluginExecutor.cs` / `PluginManager.cs` / `PluginMonitorSyncService.cs` / `PluginProcessor.cs` / `CryptoNative.cs` 五个文件在 `upstream/master` 与 `fork-source/master` **均无 BOM**、HEAD 却带 BOM ⇒ 判定为 fork 偏差，已去除。上游自带的 BOM（`src/Core/LanguageManager.cs`、`src/UI/UILayout.cs`）**保留** —— 「`src/` 下 184 个 .cs 仅 7 个带 BOM」说明 BOM 是少数派例外，不做反向的全仓统一。 |
+
+### 11.2 仍开放（12 行，覆盖 19 个登记项，待产品 / 维护决策）
+
+| # | 当前实际状态（实测） |
+|---|---|
+| **C-1'** | **完全未闭合**：`PluginSandboxException.Reason`（`src/Plugins/PluginProcessor.cs:509`）在 `src/` 内**仍零消费者**（`src/` 内全部 `.Reason` 命中均属 `UpdateChecker.notice` / `IpRuleError` / `BackdropDegradeReason` / `PluginMarketPage.pm` 等无关类型）；`PublishExecutionErrorAsync`（`src/Plugins/PluginExecutor.cs:1373`）**仍只写 `error.Message`**，`[reason]` 前缀依旧丢失 ⇒ 命中沙箱上限时日志里**没有 `LM009_*`**，「无任何测试会发现」这一判断**至今成立**。 |
+| **R-1** | `RenderingRouteDecision.Errors` **仍无生产消费者**（`src/` 内零读取）；代码注释已如实标注该事实（`src/UI/Helpers/MainFormWinHelper.cs:174`），但 R3 计划 §10.1「供渲染路线页状态行读取」的表述**仍失真**。 |
+| **R-4** | `src/UI/Settings/RenderingRoutePage.cs:36` 的 `Text(zh, en)` 二元 helper 与 **15 处硬编码仍在** ⇒ de/es/fr/ja/ko/ru/zh-tw 七语用户仍看到英文，同页中英混杂依旧。 |
+| **R-6** | `.gitignore:17` **仍排除** `/docs/reviews/evidence/`（该目录 1768 文件 / 134 MB 留在工作区，未入库）。 |
+| **R-8** | 步 0 判据 6 的「空转」属**历史证据内容**，无法回溯补强；帧率项缺失同样无法在事后补入判据集。 |
+| **R-10** | `Menu.RouteStatus` **仍是** `Menu` 段下唯一的嵌套对象（`resources/lang/zh.json:87`），「扁平单层」惯例仍被打破。 |
+| **R-11** | `ThemeManager.IsGpuTheme`（`src/Core/ThemeManager.cs:477`）**仍每次调用读盘**（`File.Exists` + 读主题文件），与 `RenderingRoutePage.ThemeRouteText()` 的双真相源依旧存在。 |
+| **R-12** | `.github/workflows/assert-test-counts.ps1:412` **仍是** `$r.Skipped -ne $r.SkippedTests.Count`（counter 推导 vs 节点扫描双来源混用）。 |
+| **R-13** | `LiveGlassSettingMigrationTests` **仍直写用户真实 `settings.json`**，`Dispose` 的 catch 仍吞异常。 |
+| **R-14** | `ci.yml` **仍只构建/运行 `GpuHostLifecycleProbe`**（`:148`）；`AppearanceSettingsProbe` 的新用例仍未进 CI ⇒ 该护栏在 CI 里**仍无约束力**。 |
+| **A-1 / A-2 / A-3 / A-5 / B-1 / B-6 / B-7** | 逐项复核后**均未闭合**：`ShouldDiscardCallback`（`src/UI/RenderingTransitionCoordinator.cs:614`）仍只有测试调用；`ScheduleExplicitCapturePolicyRecovery`（`src/UI/UIController.cs:1513`）**仍 `out _` 丢弃 `rearmErrorCode`**；`TryChangeMarketRecord`（`src/Core/SettingsHelper.cs:311-314`）**仍只替换第一条**同 id 记录。 |
+| **C-3** | legacy 实时玻璃整链下线属**产品决策**，本轮**已降级为待办**而非直接执行：删除 2 个 LiveGlass 测试文件会使发现数从 **1862 降至 1846**，跌破 `ci.yml:86` / `release.yml:65` 的 `MIN_TEST_TOTAL: 1862` ⇒ 流水线必红；且 `tests/AppearanceM2Probe/`（不在 sln、被 `scripts/run-probes.ps1` 构建）大量引用待删捕获链，删链会破坏探针编译。 |
+| **D-1** | `DISK.<盘符>.Used` **仍无生产者**（实测全仓只有 `DISK.Temp` / `DISK.Read` / `DISK.Write` / `DISK.Activity`）⇒ F06 的修复仍是**防御性**的，「用户可见缺陷已闭环」在现有代码上**依然不可证**。 |
+
+### 11.3 本轮清理轮次的工程结论（供后续接手者参考）
+
+- **全仓 133 份 md 的本地绝对路径链接 = 0**，**真实断链 = 0**
+  （唯一「断链」命中是 `docs/superpowers/plans/2026-10-20-performance-sampling-verification.md:804` 表格单元格里的
+  PowerShell 代码 `[int]($n/2)` 被链接正则误判，该文件不在本轮改动集内）。
+- `README.en.md` 的截图断链已修：`overview6.png` / `overview5.png` 早在 2025-12-02 提交 `2a336b9` 即被删除
+  （同批新增替代品 `overview5.jpg`），上游 `README.en.md` 从未跟进，中文 `README.md` 已改而英文版未改 ⇒ 现已对齐。
+- **换行口径**：`git ls-files --eol` 全仓索引 `i/lf`、工作区 `w/crlf`；
+  `tests/fixtures/plugin-repo/**` 由嵌套 `.gitattributes` 强制 `eol=lf`（该目录是 sha256 字节契约的依据，不能改成 CRLF）。
+- **测试基线未变**：全量 `dotnet test` 稳定在**发现 1862 / 通过 1855 / 跳过 7 / 失败 0**，
+  与 `MIN_TEST_TOTAL: 1862` 精确吻合；`sln` 之外的 22 个探针工程**逐个构建 0 失败**（`sln` 构建覆盖不到它们）。
+
+### 11.4 C-1 间歇失败：2026-10-25 验收轮次的基线对照实测（**非本轮回归**）
+
+验收轮次在当前工作树复跑全量时，连续两轮出现 `ReviewMarketPersistenceRegressionTests` 失败
+（`UnauthorizedAccessException: Access to the path is denied.`，抛自
+`PluginMarketInstallCore.CommitInstall` 内的 `File.Move(stagePath, targetPath, overwrite: true)`
+⇒ `src/Plugins/PluginMarket.cs:1001`）。**该文件不在清理轮次的改动集内**
+（`git diff HEAD --name-only` 无 `PluginMarket.cs`）。
+
+**基线对照**：以 `git worktree add --detach … 70406b6` 建**不含本轮任何清理改动**的基线树，
+跑**逐字相同**的命令（`dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Debug --no-build`）：
+
+| 树 | 轮次 | 结果 |
+|---|---|---|
+| 当前工作树（含清理轮次改动） | 第 1 轮 | **失败 1**（`ExtendedJournalMetadata_IsValidatedBeforeRecovery`） |
+| 当前工作树 | 第 2 轮 | **失败 1**（`Recovery_LockedJournalRemainsPending`）——**换了另一条用例** |
+| 当前工作树 | 第 3 轮 | 通过 1769 / 失败 0 |
+| 当前工作树 | 第 4 轮 | 通过 1769 / 失败 0 |
+| 当前工作树 | 第 5 轮 | 通过 1769 / 失败 0 |
+| 当前工作树 | 第 6 轮 | 通过 1769 / 失败 0 |
+| **基线树 70406b6（零清理改动）** | 第 1 轮 | 通过 1769 / 失败 0 |
+| **基线树 70406b6** | 第 2 轮 | **失败 1**（1768 通过 / 1 失败） |
+| **基线树 70406b6** | 第 3 轮 | 通过 1769 / 失败 0 |
+| **基线树 70406b6** | 第 4 轮 | 通过 1769 / 失败 0 |
+| **基线树 70406b6** | 第 5 轮 | 通过 1769 / 失败 0 |
+
+⇒ **同机、同命令，基线树 2/5 轮翻红、当前树 2/6 轮翻红，且每次挂的用例不同**
+⇒ 与清理轮次**无因果关系**，属 §1 已登记的 C-1 历史 flaky。
+
+**失败机理（本轮新增取证）**：失败点是 OS 级 `File.Move`，非断言逻辑；
+同一工作树"单跑该类 33 条 = 33/33 全过"（隔离复现通过），
+失败窗口内 `src/`+`tests/` **无任何源文件被修改**（最近改动为 07:18:54 的 `src/Core/Settings.cs` 换行归一，与插件市场无关）；
+机器上 `WSearch`（Windows 索引服务）处于 Running 且 G 盘在索引范围内
+⇒ 新写入的 `.stage` 文件被索引服务短暂持有句柄，是 `UnauthorizedAccessException` 的经典成因。
+**与 §1.2 判定一致**：根因是**进程级共享状态**（固定 `settings.json` 路径 + `Settings._instance` 活单例
++ `MarketIndexContractTests` 不在 `"cfgfile"` 集合却在 CI 被 `LITEMONITOR_PLUGIN_REPO` 打开），
+**不是**清理轮次引入的回归。
+
+**已收口的部分（C-1 三项整改实测在位）**：
+① `SettingsHelper.PathOverride` 接缝（`src/Core/SettingsHelper.cs:15-22`）让 `PersistenceScope` 用独立沙箱目录；
+② 生产侧唯一 tmp 文件名 `settings.json.{pid}.tmp`（`:28-29`）+ 加载时清扫他人残留（`:105-108`）；
+③ 门禁收紧：`assert-test-counts.ps1` 同一程序集多份 TRX **改为 FAIL（exit 4）**
+（原"取最后一次+警告"已废止，`:282-284` / `:323-331`）；
+`ci.yml` 的 `MUST_EXECUTE_TEST_CLASS` 已含 `ReviewMarketPersistenceRegressionTests`。
+
+**仍开放的两点（实测）**：
+- `MUST_EXECUTE_TEST_CLASS_MIN_COUNT: 6` 对**两个类共用**同一阈值（`ci.yml:108`），
+  而 `ReviewMarketPersistenceRegressionTests` 实有 33 条 ⇒ 门禁对该类只要求 6 条，
+  达不到 §1 C-1 建议的「≥33 条」强度。
+- **`flaky 台账`仍未落地**（`docs/` 下无该文件），本节 §11.4 可作为其首个条目。

@@ -9,10 +9,10 @@
 
 A lightweight and fully customizable **Windows hardware monitor** — track CPU, GPU, memory, disk, and network statistics in real time.
 
-> **Download latest version:**  
+> **Download latest version:**
 > [GitHub Releases → LiteMonitor++ Latest](https://github.com/mojingjing-git/LiteMonitorPlus/releases/latest)
 
-LiteMonitor++ is a modern **Windows desktop system monitoring tool**.  
+LiteMonitor++ is a modern **Windows desktop system monitoring tool**.
 It supports horizontal/vertical display, multiple languages, theme switching, transparency, adaptive DPI scaling, and three-level color alerts — in a clean and highly configurable interface.
 
 
@@ -21,7 +21,7 @@ It supports horizontal/vertical display, multiple languages, theme switching, tr
 ![LiteMonitor++ Horizontal](./resources/screenshots/overview3.png)
 
 ###  **New Network Speed Test Feature**
-![LiteMonitor++ Network Speed Test](./resources/screenshots/overview4.png)  ![LiteMonitor++ 菜单](./resources/screenshots/overview6.png) ![LiteMonitor++ 菜单](./resources/screenshots/overview5.png)
+![LiteMonitor++ Network Speed Test](./resources/screenshots/overview4.png)  ![LiteMonitor++ Menu](./resources/screenshots/overview5.jpg)
 
 ###  **New Theme Editor**
 ![LiteMonitor++ Theme Editor](./resources/screenshots/overview2.jpg)
@@ -67,6 +67,16 @@ It supports horizontal/vertical display, multiple languages, theme switching, tr
 
 Some themes declare `rendering.backend = "gpu"` in their JSON and render the panel material directly through DirectX 11 (DXGI / D3D11) instead of the classic GDI+ path. **Both** the theme declaration **and** the user switch must be satisfied to enter the GPU route; either one missing keeps the original GDI+ appearance.
 
+### The three rendering routes
+
+| Route | Preconditions | Result |
+|---|---|---|
+| **GDI+ legacy route** (enum `Legacy`, automatic fallback) | Theme does not declare `rendering.backend = "gpu"`, or the GPU does not support DirectX 11, or the app was started with `--safe` | Classic GDI+ rendering; works in every environment |
+| **GPU fixed background** (enum `GpuFixedInput`) | GPU theme **and** "GPU material rendering" enabled | Real glass material (refraction / thickness / highlights) over a procedural background |
+| **GPU live desktop background** (enum `GpuLiveBackground`) | Everything above **plus** "Live desktop background" enabled **plus** the WDA policy accepted | A live blurred desktop behind the glass; verified on 2026-10-24 to work even on a layered window (opacity < 100%) |
+
+Settings → **"Rendering route"** shows the theme's declared route and the route actually in effect (including the real reason codes, such as `safe_mode` / `gpu_effects_opt_in_required`), and hosts the GPU route switches. Theme drop-down and tray-menu entries are labelled ` (GPU material)` / ` (GDI+)`. The old "Live glass" switch has been removed; the GPU route's "Live desktop background" replaces it (old config values are migrated to off on load).
+
 ### Support Matrix
 
 | Item | Requirement | When not met |
@@ -75,7 +85,7 @@ Some themes declare `rendering.backend = "gpu"` in their JSON and render the pan
 | Runtime | .NET 8 desktop runtime (the release package is framework-dependent) | Cannot start |
 | GPU | A DXGI adapter with DirectX 11 support | Falls back to GDI+, panel still renders |
 | Theme | Theme JSON declares `rendering.backend = "gpu"` | Theme keeps its original GDI+ look |
-| User switch | Settings → Main panel → Appearance → "GPU material rendering" | GPU route is not entered |
+| User switch | Settings → **Rendering route** → "GPU material rendering" | GPU route is not entered |
 | Multi-monitor / mixed DPI | Supported, including a secondary display with a negative origin | — |
 | Live desktop background | Requires DXGI Desktop Duplication and WDA | On capture failure a readable fixed material is kept |
 
@@ -158,9 +168,9 @@ Example:
 ```
 
 **Theme System v2 Improvements:**
-- Unified layout fields  
-- Separate scaling for layout (DPI×UIScale) and fonts (UIScale only)  
-- Cleaner JSON structure, easier for custom themes  
+- Unified layout fields
+- Separate scaling for layout (DPI×UIScale) and fonts (UIScale only)
+- Cleaner JSON structure, easier for custom themes
 
 ---
 
@@ -189,28 +199,47 @@ Example:
 
 ## Architecture Overview
 
-| File | Responsibility |
+Source lives under `src/` (paths below are relative to `src/`; `LiteMonitor.Updater/` sits at the repository root).
+
+| File / Directory | Responsibility |
 |------|----------------|
-| `MainForm_Transparent.cs` | Window behavior, drag, menus, auto-hide, transparency |
-| `UIController.cs` | Theme loading, DPI/UIScale scaling, layout rebuilds, rendering |
-| `UIRenderer.cs` | Vertical-mode rendering (groups, bars, texts) |
-| `HorizontalRenderer.cs` | Horizontal-mode rendering (two-row layout) |
-| `UILayout.cs` | Dynamic vertical layout calculation |
-| `HorizontalLayout.cs` | Column width and total panel width calculation |
-| `ThemeManager.cs` | Load themes, parse colors, build fonts |
-| `LanguageManager.cs` | Localization loader with flattened key access |
-| `HardwareMonitor.cs` | Collects CPU/GPU/MEM/NET/DISK data; smart device auto-selection |
-| `AutoStart.cs` | Manages Windows Task Scheduler startup task |
-| `UpdateChecker.cs` | GitHub + China mirror version checking |
-| `AboutForm.cs` | About dialog |
+| `System/Program.cs` | Entry point: single-instance mutex, global exception capture, DPI init, driver pre-check |
+| `UI/MainForm_Transparent.cs` | Main window, drag, tray menu, auto-hide, opacity, position persistence |
+| `UI/UIController.cs` | Theme loading, DPI/UIScale scaling, layout rebuilds, rendering entry, refresh timer |
+| `UI/UIRenderer.cs` | Vertical-mode rendering (groups, bars, texts) |
+| `UI/HorizontalRenderer.cs` | Horizontal-mode rendering (two-row layout) |
+| `UI/UILayout.cs` | Dynamic vertical layout calculation |
+| `UI/HorizontalLayout.cs` | Column width and total panel width calculation |
+| `UI/Decor/` | GDI+ decoration layer (frame, bars, geometry, texture cache) |
+| `UI/Settings/` | Settings pages (main panel, monitor items, plugins, plugin market, rendering route, thresholds, taskbar, system & hardware) |
+| `Core/ThemeManager.cs` | Load themes, parse colors, build fonts |
+| `Core/LanguageManager.cs` | Localization loader with flattened key access |
+| `Core/Settings.cs` | `settings.json` model; credential migration, encryption and persistence |
+| `Core/MetricItem.cs` / `Core/MetricUtils.cs` | Metric model, value formatting, three-color threshold states, progress ratio |
+| `System/HardwareMonitor.cs` | Collects CPU/GPU/MEM/NET/DISK data; smart device auto-selection |
+| `System/HardwareServices/` | Sampling coordinator (single ≤1 Hz entry point), sensor mapping and device selection, VRAM capacity, CPU voltage, committed memory, driver install |
+| `System/NetworkTraffic/` | ETW network traffic capture, zero-copy decoding, per-remote-IP exclusion |
+| `System/Backdrop/` | **Legacy live-glass** desktop capture and blur chain (GDI+ route) |
+| `System/WebServer/` | Web monitor service: HTTP/1.1 + WebSocket, session/password protocol, theme CSS mapping |
+| `System/UpdateChecker.cs` | GitHub + China mirror version checking, update metadata signature verification |
+| `System/AutoStart.cs` | Manages Windows Task Scheduler startup task |
+| `Rendering/` | **GPU/D3D11 rendering route**: contracts, configuration and route decisions, device and resource ledger, geometry, materials, scene, presentation, desktop-duplication capture |
+| `Plugins/` | Plugin model, network sandbox (method set / host allow-list / redirect re-check / concurrency cap), executor, market install and uninstall transactions |
+| `ThemeEditor/` | Theme editor and theme file service |
+| `UI/AboutForm.cs` | About dialog |
+| `LiteMonitor.Updater/` | Standalone updater: digest verification, transactional replacement and rollback on failure |
+
+> ⚠️ **Two parallel backdrop capture chains**: `System/Backdrop/` (legacy live glass, GDI+ route) and
+> `Rendering/Capture/` (new GPU route) each implement their own frame source, WDA exclusion and
+> cleanup logic, and share nothing. Before touching capture code, confirm which chain you are on.
 
 ---
 
 ## Build Instructions
 
 ### Requirements
-- Windows 10 / 11  
-- .NET 8 SDK  
+- Windows 10 / 11
+- .NET 8 SDK
 - Visual Studio 2022 / JetBrains Rider
 
 ### Build
@@ -238,7 +267,7 @@ Released under the **MIT License** (free for personal & commercial use).
 ---
 
 ## Contact
-**Maintainer:** mojingjing-git  
+**Maintainer:** mojingjing-git
 **Project:** [https://github.com/mojingjing-git/LiteMonitorPlus](https://github.com/mojingjing-git/LiteMonitorPlus)
 
 **Upstream project (by Diorser, MIT License):** [https://github.com/Diorser/LiteMonitor](https://github.com/Diorser/LiteMonitor)

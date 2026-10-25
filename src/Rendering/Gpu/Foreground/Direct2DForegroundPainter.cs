@@ -162,13 +162,6 @@ public sealed class Direct2DForegroundPainter : IDisposable
         return Math.Clamp((dpi / 96f) * normalizedUserScale, 0.5f, 4f);
     }
 
-    public bool NeedsPaint(ForegroundDrawList drawList)
-    {
-        ArgumentNullException.ThrowIfNull(drawList);
-        string signature = BuildSignature(drawList);
-        return !string.Equals(signature, _lastSignature, StringComparison.Ordinal);
-    }
-
     public void Paint(ForegroundDrawList drawList, bool force = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

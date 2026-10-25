@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.IO;
@@ -101,7 +101,6 @@ namespace LiteMonitor.src.Plugins
             internal HashSet<string> DataKeys;
         }
 
-        public event Action OnPluginSchemaChanged;
         internal const int InitialTickDelayMs = 50;
         internal int InvisibleRetryIntervalMs { get; set; } = 2000;
         internal Func<string, bool> VisibilityProbe { get; set; }
@@ -113,8 +112,6 @@ namespace LiteMonitor.src.Plugins
         internal PluginManager(PluginExecutor executor = null)
         {
             _executor = executor ?? new PluginExecutor();
-            // No new schema notification source is introduced by reconciliation.
-            _executor.OnSchemaChanged += () => OnPluginSchemaChanged?.Invoke();
         }
 
         internal int GetConsecutiveFailures(string instanceId)

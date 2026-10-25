@@ -1224,7 +1224,7 @@ git commit -m "feat(gpu): 新增显卡监控项同步器
 在 `src/Core/SettingsHelper.cs` 的 `InternAllStrings` 方法中，把：
 
 ```csharp
-                    // 2. Is it a valid Plugin item? 
+                    // 2. Is it a valid Plugin item?
                     // [Safety] 只要是 DASH. 开头，一律保留，防止误删用户自定义的简单插件
                     if (item.Key.StartsWith("DASH.", StringComparison.OrdinalIgnoreCase))
                     {
@@ -1236,7 +1236,7 @@ git commit -m "feat(gpu): 新增显卡监控项同步器
 替换为：
 
 ```csharp
-                    // 2. Is it a valid Plugin item? 
+                    // 2. Is it a valid Plugin item?
                     // [Safety] 只要是 DASH. 开头，一律保留，防止误删用户自定义的简单插件
                     if (item.Key.StartsWith("DASH.", StringComparison.OrdinalIgnoreCase))
                     {
@@ -1270,9 +1270,9 @@ git commit -m "feat(gpu): 新增显卡监控项同步器
             // 必须过滤掉 DASH.HOST/DASH.Time 等标准项，否则会重复！
             migratedList.AddRange(settings.MonitorItems
                 .Where(x => x.Key.StartsWith("DASH.", StringComparison.OrdinalIgnoreCase) && !standardKeys.Contains(x.Key))
-                .Select(x => { 
-                    if (x.TaskbarSortIndex == 0) x.TaskbarSortIndex = x.SortIndex; 
-                    return x; 
+                .Select(x => {
+                    if (x.TaskbarSortIndex == 0) x.TaskbarSortIndex = x.SortIndex;
+                    return x;
                 }));
 ```
 
@@ -1283,9 +1283,9 @@ git commit -m "feat(gpu): 新增显卡监控项同步器
             // 必须过滤掉 DASH.HOST/DASH.Time 等标准项，否则会重复！
             migratedList.AddRange(settings.MonitorItems
                 .Where(x => x.Key.StartsWith("DASH.", StringComparison.OrdinalIgnoreCase) && !standardKeys.Contains(x.Key))
-                .Select(x => { 
-                    if (x.TaskbarSortIndex == 0) x.TaskbarSortIndex = x.SortIndex; 
-                    return x; 
+                .Select(x => {
+                    if (x.TaskbarSortIndex == 0) x.TaskbarSortIndex = x.SortIndex;
+                    return x;
                 }));
 
             // 3.5 ★★★ [多显卡] 同样找回带序号的显卡 Key ("GPU.0.Custom") ★★★
@@ -1318,8 +1318,8 @@ git commit -m "feat(gpu): 新增显卡监控项同步器
         {
             bool changed = false;
             if (val <= 0 || float.IsNaN(val) || float.IsInfinity(val)) return;
-            
-            if (key.Contains("Clock") && val > 10000) return; 
+
+            if (key.Contains("Clock") && val > 10000) return;
             if (key.Contains("Power") && val > 1000) return;
             if ((key.Contains("Fan") || key.Contains("Pump")) && val > 10000) return;
 
@@ -1330,7 +1330,7 @@ git commit -m "feat(gpu): 新增显卡监控项同步器
             else if (baseKey == "CPU.Clock" && val > settings.RecordedMaxCpuClock) { settings.RecordedMaxCpuClock = val; changed = true; }
             else if (baseKey == "GPU.Power" && val > settings.RecordedMaxGpuPower) { settings.RecordedMaxGpuPower = val; changed = true; }
             else if (baseKey == "GPU.Clock" && val > settings.RecordedMaxGpuClock) { settings.RecordedMaxGpuClock = val; changed = true; }
-            
+
             else if (baseKey == "CPU.Fan" && val > settings.RecordedMaxCpuFan) { settings.RecordedMaxCpuFan = val; changed = true; }
             else if (baseKey == "CPU.Pump" && val > settings.RecordedMaxCpuPump) { settings.RecordedMaxCpuPump = val; changed = true; }
             else if (baseKey == "GPU.Fan" && val > settings.RecordedMaxGpuFan) { settings.RecordedMaxGpuFan = val; changed = true; }
@@ -1770,7 +1770,7 @@ git commit -m "feat(gpu): 保存设置时同步显卡监控项并按实际卡数
                     {
                         newGpu = hw;
                     }
-                    
+
                     // ★★★ [新增] GPU 风扇映射 ★★★
                     var fan = hw.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Fan);
                     if (fan == null) fan = hw.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Control);
@@ -1839,7 +1839,7 @@ git commit -m "feat(gpu): 保存设置时同步显卡监控项并按实际卡数
                             // [Fix] 冲突解决策略：优先选择 Vendor (非 D3D) 传感器
                             // 必须严格保护高优先级显卡的数据，防止被低优先级显卡覆盖！
                             var existing = newMap[key];
-                            
+
                             // 1. 如果现有数据来自"更强"的显卡 (Priority数值更小)，绝对禁止覆盖！
                             // (注意：RegisterTo 按照 0->100 顺序遍历，所以 existing 的优先级只可能 <= 当前 hw 的优先级)
                             // 如果 existing < hw，说明它是更强的显卡写入的，直接跳过。
@@ -1852,7 +1852,7 @@ git commit -m "feat(gpu): 保存设置时同步显卡监控项并按实际卡数
                             // 则应用 D3D vs Vendor 优选逻辑。
                             bool existingIsD3D = existing.Name.Contains("D3D", StringComparison.OrdinalIgnoreCase);
                             bool newIsD3D = s.Name.Contains("D3D", StringComparison.OrdinalIgnoreCase);
-                            
+
                             // 如果现有的是 D3D 而新来的不是 D3D -> 替换为新来的 (Upgrade)
                             if (existingIsD3D && !newIsD3D)
                             {
@@ -1899,7 +1899,7 @@ git commit -m "feat(gpu): 保存设置时同步显卡监控项并按实际卡数
                             // [Fix] 冲突解决策略：优先选择 Vendor (非 D3D) 传感器
                             // 必须严格保护高优先级显卡的数据，防止被低优先级显卡覆盖！
                             var existing = newMap[finalKey];
-                            
+
                             // 1. 如果现有数据来自"更强"的显卡 (Priority数值更小)，绝对禁止覆盖！
                             if (HardwareRules.GetHwPriority(existing.Hardware) < HardwareRules.GetHwPriority(hw))
                             {
@@ -1909,7 +1909,7 @@ git commit -m "feat(gpu): 保存设置时同步显卡监控项并按实际卡数
                             // 2. 如果优先级相同，则应用 D3D vs Vendor 优选逻辑。
                             bool existingIsD3D = existing.Name.Contains("D3D", StringComparison.OrdinalIgnoreCase);
                             bool newIsD3D = s.Name.Contains("D3D", StringComparison.OrdinalIgnoreCase);
-                            
+
                             // 如果现有的是 D3D 而新来的不是 D3D -> 替换为新来的 (Upgrade)
                             if (existingIsD3D && !newIsD3D)
                             {
@@ -2002,23 +2002,23 @@ newMap[\"GPU.Fan\"] 无条件赋值导致多卡时风扇读数被后一张卡覆
                 if (key == "GPU.Clock")
                 {
                     var s = gpu.Sensors.FirstOrDefault(x => x.SensorType == SensorType.Clock && (SensorMap.Has(x.Name, "graphics") || SensorMap.Has(x.Name, "core") || SensorMap.Has(x.Name, "shader")));
-                    if (s != null && s.Value.HasValue) 
-                    { 
-                        float val = s.Value.Value; 
-                        if (val > 6000.0f) return null; 
-                        _cfg.UpdateMaxRecord(key, val); 
-                        return val; 
+                    if (s != null && s.Value.HasValue)
+                    {
+                        float val = s.Value.Value;
+                        if (val > 6000.0f) return null;
+                        _cfg.UpdateMaxRecord(key, val);
+                        return val;
                     }
                 }
                 else if (key == "GPU.Power")
                 {
                     var s = gpu.Sensors.FirstOrDefault(x => x.SensorType == SensorType.Power && (SensorMap.Has(x.Name, "package") || SensorMap.Has(x.Name, "ppt") || SensorMap.Has(x.Name, "board") || SensorMap.Has(x.Name, "core") || SensorMap.Has(x.Name, "gpu")));
-                    if (s != null && s.Value.HasValue) 
-                    { 
-                        float val = s.Value.Value; 
-                        if (val > 1200.0f) return null; 
-                        _cfg.UpdateMaxRecord(key, val); 
-                        return val; 
+                    if (s != null && s.Value.HasValue)
+                    {
+                        float val = s.Value.Value;
+                        if (val > 1200.0f) return null;
+                        _cfg.UpdateMaxRecord(key, val);
+                        return val;
                     }
                 }
             }
@@ -2044,23 +2044,23 @@ newMap[\"GPU.Fan\"] 无条件赋值导致多卡时风扇读数被后一张卡覆
                 if (metric.Equals("Clock", StringComparison.OrdinalIgnoreCase))
                 {
                     var s = gpu.Sensors.FirstOrDefault(x => x.SensorType == SensorType.Clock && (SensorMap.Has(x.Name, "graphics") || SensorMap.Has(x.Name, "core") || SensorMap.Has(x.Name, "shader")));
-                    if (s != null && s.Value.HasValue) 
-                    { 
-                        float val = s.Value.Value; 
-                        if (val > 6000.0f) return null; 
-                        _cfg.UpdateMaxRecord(key, val); 
-                        return val; 
+                    if (s != null && s.Value.HasValue)
+                    {
+                        float val = s.Value.Value;
+                        if (val > 6000.0f) return null;
+                        _cfg.UpdateMaxRecord(key, val);
+                        return val;
                     }
                 }
                 else if (metric.Equals("Power", StringComparison.OrdinalIgnoreCase))
                 {
                     var s = gpu.Sensors.FirstOrDefault(x => x.SensorType == SensorType.Power && (SensorMap.Has(x.Name, "package") || SensorMap.Has(x.Name, "ppt") || SensorMap.Has(x.Name, "board") || SensorMap.Has(x.Name, "core") || SensorMap.Has(x.Name, "gpu")));
-                    if (s != null && s.Value.HasValue) 
-                    { 
-                        float val = s.Value.Value; 
-                        if (val > 1200.0f) return null; 
-                        _cfg.UpdateMaxRecord(key, val); 
-                        return val; 
+                    if (s != null && s.Value.HasValue)
+                    {
+                        float val = s.Value.Value;
+                        if (val > 1200.0f) return null;
+                        _cfg.UpdateMaxRecord(key, val);
+                        return val;
                     }
                 }
             }
@@ -2214,12 +2214,12 @@ git commit -m "fix(gpu): 标签兜底按基础 Key 归一化
                         {
                             result = sFan.Value;
                         }
-                        else 
+                        else
                         {
                             if (_manualSensorCache.TryGetValue(key, out var autoS) && autoS.Value.HasValue)
                                 result = autoS.Value.Value;
                         }
-                        if (result.HasValue && result.Value < 10000f) 
+                        if (result.HasValue && result.Value < 10000f)
                             _cfg.UpdateMaxRecord(key, result.Value);
                         break;
 ```
@@ -2303,7 +2303,7 @@ git commit -m "fix(gpu): 标签兜底按基础 Key 归一化
                             {
                                 result = _perfManager.GetCpuFreq();
                             }
-                            
+
                             if (result == null)
                             {
                                 result = _componentProcessor.GetCompositeValue(key, _manualSensorCache);
@@ -2328,7 +2328,7 @@ git commit -m "fix(gpu): 标签兜底按基础 Key 归一化
                             {
                                 result = _perfManager.GetCpuFreq();
                             }
-                            
+
                             if (result == null)
                             {
                                 result = _componentProcessor.GetCompositeValue(key, _manualSensorCache);
@@ -2406,8 +2406,8 @@ git commit -m "fix(gpu): 标签兜底按基础 Key 归一化
                  var cfg = Settings.Load();
                  if (cfg.MemoryDisplayMode == 1) // 容量模式
                  {
-                     double totalGB = (key.IndexOf("MEM", StringComparison.OrdinalIgnoreCase) >= 0) 
-                        ? Settings.DetectedRamTotalGB 
+                     double totalGB = (key.IndexOf("MEM", StringComparison.OrdinalIgnoreCase) >= 0)
+                        ? Settings.DetectedRamTotalGB
                         : Settings.DetectedGpuVramTotalGB;
 
                      if (totalGB > 0)
@@ -2425,8 +2425,8 @@ git commit -m "fix(gpu): 标签兜底按基础 Key 归一化
                  var cfg = Settings.Load();
                  if (cfg.MemoryDisplayMode == 1) // 容量模式
                  {
-                     double totalGB = (key.IndexOf("MEM", StringComparison.OrdinalIgnoreCase) >= 0) 
-                        ? Settings.DetectedRamTotalGB 
+                     double totalGB = (key.IndexOf("MEM", StringComparison.OrdinalIgnoreCase) >= 0)
+                        ? Settings.DetectedRamTotalGB
                         : GetGpuVramTotalGB(key);
 
                      if (totalGB > 0)
@@ -2678,9 +2678,9 @@ git commit -m "fix(gpu): 阈值自适应对带序号的 Key 做归一化
             if (config == null) return "";
 
             // 1. 用户自定义 (最高优先级)
-            if (!string.IsNullOrEmpty(config.UserLabel)) 
+            if (!string.IsNullOrEmpty(config.UserLabel))
                 return config.UserLabel;
-            
+
             // 2. 运行时动态注入 (高优先级)
 ```
 
@@ -2692,7 +2692,7 @@ git commit -m "fix(gpu): 阈值自适应对带序号的 Key 做归一化
             if (config == null) return "";
 
             // 1. 用户自定义 (最高优先级)
-            if (!string.IsNullOrEmpty(config.UserLabel)) 
+            if (!string.IsNullOrEmpty(config.UserLabel))
                 return config.UserLabel;
 
             // 2. [多显卡] 标签带上显卡简称, 例如 "3080 Ti 温度"
@@ -2721,7 +2721,7 @@ git commit -m "fix(gpu): 阈值自适应对带序号的 Key 做归一化
             if (config == null) return "";
 
             // 1. 用户自定义
-            if (!string.IsNullOrEmpty(config.TaskbarLabel)) 
+            if (!string.IsNullOrEmpty(config.TaskbarLabel))
                 return config.TaskbarLabel;
 
             // 2. 运行时动态注入
@@ -2735,7 +2735,7 @@ git commit -m "fix(gpu): 阈值自适应对带序号的 Key 做归一化
             if (config == null) return "";
 
             // 1. 用户自定义
-            if (!string.IsNullOrEmpty(config.TaskbarLabel)) 
+            if (!string.IsNullOrEmpty(config.TaskbarLabel))
                 return config.TaskbarLabel;
 
             // 2. [多显卡] 任务栏用显卡简称区分 (数值单位已能区分指标: % / °C / W / GHz)

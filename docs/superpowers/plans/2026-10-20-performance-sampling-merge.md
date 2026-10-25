@@ -12,10 +12,10 @@
 
 | 项目 | 当前状态 |
 |---|---|
-| 主检出 | `G:/TOOL/LiteMonitor-fork` |
+| 主检出 | 仓库根目录（本机为 `G:\TOOL\LiteMonitor-fork`） |
 | 主线 | `master` @ `949835f7b0a7f8a2f888dd6965716b4a077b6d3f` |
 | 本地缓存的 `origin/master` | 与本地 master 相同；本次未联网刷新，执行时必须 fetch |
-| 性能工作树 | `G:/TOOL/LiteMonitor-fork/.worktrees/codex-performance-sampling` |
+| 性能工作树 | 仓库内 `.worktrees/codex-performance-sampling` |
 | 性能分支已提交 HEAD | `codex/performance-sampling` @ `15e1fc64f1b5ac740c41c0ab61f0d2d0c1b0c8a9` |
 | 分叉情况 | 主线独有 0 提交，功能分支独有 42 提交；主线是功能分支祖先 |
 | 尚未提交的最终修复 | `FpsCounter.cs`、`FpsStateTests.cs`，共 +82 / −14 |
@@ -27,7 +27,7 @@
 - `src/System/HardwareServices/FpsCounter.cs`：`e519409ca2e6157c5270c9a170b6203ada1e1692`
 - `tests/LiteMonitor.Tests/FpsStateTests.cs`：`d0ffe74928fc1706d1f315a00af7262bf5fa3e0b`
 
-详细证据见 [最终修复验证记录](G:/TOOL/LiteMonitor-fork/.review-scratch/performance-admission-fix/verification.md)。
+详细证据见当时的 `最终修复验证记录`（位于本地忽略的 `.review-scratch/performance-admission-fix/verification.md`，属工作目录清理时已移除的临时产物）；结论以本表「最终修复验证」一行为准。
 
 ### 主检出的同路径未跟踪文件
 

@@ -2086,20 +2086,6 @@ namespace LiteMonitor.src.WebServer
         }
 
         /// <summary>
-        /// 以恒定时间比较两个字符串的 UTF-8 编码。
-        /// </summary>
-        /// <remarks>
-        /// <see cref="CryptographicOperations.FixedTimeEquals"/> 的耗时只取决于长度，
-        /// 与"从第几个字节开始不同"无关 —— 这正是逐位试错所需的信息。
-        /// </remarks>
-        private static bool FixedTimeEqualsUtf8(string left, string right)
-        {
-            byte[] leftBytes = Encoding.UTF8.GetBytes(left);
-            byte[] rightBytes = Encoding.UTF8.GetBytes(right);
-            return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
-        }
-
-        /// <summary>
         /// 发送 HTTP 响应。
         /// </summary>
         /// <remarks>

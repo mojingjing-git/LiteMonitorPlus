@@ -8,7 +8,7 @@
 
 ## 计划与执行流程
 
-[详细修复计划](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/docs/superpowers/plans/2026-10-23-independent-review-remediation-plan.md) 明确了生产约束、文件分工、失败矩阵、串行构建、门禁和验收边界。计划先经两位独立 Agent 审查：R1 的保存／发布／恢复协议问题在 v2 关闭，R2 的 authority／scope／Release／跳过身份问题在 v3 关闭，随后才派四组 Agent 实施。
+[详细修复计划](../superpowers/plans/2026-10-23-independent-review-remediation-plan.md) 明确了生产约束、文件分工、失败矩阵、串行构建、门禁和验收边界。计划先经两位独立 Agent 审查：R1 的保存／发布／恢复协议问题在 v2 关闭，R2 的 authority／scope／Release／跳过身份问题在 v3 关闭，随后才派四组 Agent 实施。
 
 四组分别负责 GPU、插件调度与主机政策、市场持久化、磁盘／Stock／网页；主控处理 T09、流水线和集成。所有实施者停止写入后才统一构建。实施复审再次发现的点分 ID 误删、未决安装与卸载相交问题均已补修、独立复核并加入运行回归。
 
@@ -16,17 +16,17 @@
 
 | 项目 | 最终行为 | 主要实现 |
 | --- | --- | --- |
-| F01 / P1，新回归 | 同一 HWND 代次的呈现历史只前进；替换宿主绑定前失败不再抹去旧窗口的 Presented。真实新代次才重置，旧／重复通知不启动宿主。 | [RenderingTransitionCoordinator](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/UI/RenderingTransitionCoordinator.cs)、[UIController](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/UI/UIController.cs) |
-| F02 / P2，新回归 | 明确恢复只接管尚未 Reclaimed 的失败责任；A 耗尽、B 耗尽、C 成功后正确解除闸门，保留精确 affinity／HWND 和失败审计。 | [CapturePolicyCleanupLedger](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/UI/CapturePolicyCleanupLedger.cs) |
-| F03 / P2，历史调度与 fork 热加载交叉 | 模板与实例内容共同决定是否重启；更新执行新模板，卸载退役旧任务。执行快照、发布租约与退役共同排序，迟到成功／异常不能污染新值、属性、缓存或调度收尾。 | [PluginManager](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/Plugins/PluginManager.cs)、[PluginExecutor](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/Plugins/PluginExecutor.cs) |
-| F04 / P2，fork 市场事务 | 所有保存和市场暂态变更共用保存门；失败如实报告并恢复当前记录。补偿记录先于文件，恢复以独立磁盘记录为据，未完成时保留必要材料；卸载尊重未决安装所有权。 | [SettingsHelper](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/Core/SettingsHelper.cs)、[PluginMarket](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/Plugins/PluginMarket.cs)、[卸载核心](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/Plugins/PluginMarketUninstallCore.cs) |
-| F05 / P2，LM-094 残留及相关边界 | 完整静态 authority 先验证再提取规范主机；完整／压缩 IPv6 一致，非法 userinfo／端口不贡献声明。统一拒绝 scoped IPv6，检查早于缓存和在途复用，HTTP／凭据／redirect／native 使用一致政策。 | [PluginHostPolicy](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/Plugins/PluginHostPolicy.cs)、[PluginProcessor](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/Plugins/PluginProcessor.cs)、[CryptoNative](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/Plugins/Native/CryptoNative.cs) |
-| F06 / P2，继承上游 | 合法逻辑盘 Used 先于物理缓存取值；冷／热／刷新缓存下都有实际使用率，保留物理盘休眠调度。 | [DiskManager](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/System/HardwareServices/DiskManager.cs) |
-| F07 / P2，上游已有适用修复 | 精确移植上游 `a71ce7584d892230d157c02047bf052fad6a738f` 的 Stock 规则；先处理美股 `us.`，再清后缀，`us.NDX` 得到 `usNDX`。 | [Stock.json](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/resources/plugins/Stock.json) |
-| F08 / P2，上游格式补丁未完整接入 | 真实网页快照把 UnitPanel 同时传给数值和显示单位；自定义 `%` 与桌面一致，进度和状态仍按原始值，FPS／DASH 合同保留。 | [LiteWebServer](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/System/WebServer/LiteWebServer.cs) |
-| T09，Release 测试误报 | IL 检查关联真正的字段／局部槽接收者，兼容局部地址，拒绝静态同名 Dispose 和只释放其他对象的反例；原请求、响应、JsonDocument 检查保留。 | [HttpLifecycleTests](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/tests/LiteMonitor.Tests/HttpLifecycleTests.cs)、[IlInspector](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/tests/LiteMonitor.Tests/IlInspector.cs) |
+| F01 / P1，新回归 | 同一 HWND 代次的呈现历史只前进；替换宿主绑定前失败不再抹去旧窗口的 Presented。真实新代次才重置，旧／重复通知不启动宿主。 | [RenderingTransitionCoordinator](../../src/UI/RenderingTransitionCoordinator.cs)、[UIController](../../src/UI/UIController.cs) |
+| F02 / P2，新回归 | 明确恢复只接管尚未 Reclaimed 的失败责任；A 耗尽、B 耗尽、C 成功后正确解除闸门，保留精确 affinity／HWND 和失败审计。 | [CapturePolicyCleanupLedger](../../src/UI/CapturePolicyCleanupLedger.cs) |
+| F03 / P2，历史调度与 fork 热加载交叉 | 模板与实例内容共同决定是否重启；更新执行新模板，卸载退役旧任务。执行快照、发布租约与退役共同排序，迟到成功／异常不能污染新值、属性、缓存或调度收尾。 | [PluginManager](../../src/Plugins/PluginManager.cs)、[PluginExecutor](../../src/Plugins/PluginExecutor.cs) |
+| F04 / P2，fork 市场事务 | 所有保存和市场暂态变更共用保存门；失败如实报告并恢复当前记录。补偿记录先于文件，恢复以独立磁盘记录为据，未完成时保留必要材料；卸载尊重未决安装所有权。 | [SettingsHelper](../../src/Core/SettingsHelper.cs)、[PluginMarket](../../src/Plugins/PluginMarket.cs)、[卸载核心](../../src/Plugins/PluginMarketUninstallCore.cs) |
+| F05 / P2，LM-094 残留及相关边界 | 完整静态 authority 先验证再提取规范主机；完整／压缩 IPv6 一致，非法 userinfo／端口不贡献声明。统一拒绝 scoped IPv6，检查早于缓存和在途复用，HTTP／凭据／redirect／native 使用一致政策。 | [PluginHostPolicy](../../src/Plugins/PluginHostPolicy.cs)、[PluginProcessor](../../src/Plugins/PluginProcessor.cs)、[CryptoNative](../../src/Plugins/Native/CryptoNative.cs) |
+| F06 / P2，继承上游 | 合法逻辑盘 Used 先于物理缓存取值；冷／热／刷新缓存下都有实际使用率，保留物理盘休眠调度。 | [DiskManager](../../src/System/HardwareServices/DiskManager.cs) |
+| F07 / P2，上游已有适用修复 | 精确移植上游 `a71ce7584d892230d157c02047bf052fad6a738f` 的 Stock 规则；先处理美股 `us.`，再清后缀，`us.NDX` 得到 `usNDX`。 | [Stock.json](../../resources/plugins/Stock.json) |
+| F08 / P2，上游格式补丁未完整接入 | 真实网页快照把 UnitPanel 同时传给数值和显示单位；自定义 `%` 与桌面一致，进度和状态仍按原始值，FPS／DASH 合同保留。 | [LiteWebServer](../../src/System/WebServer/LiteWebServer.cs) |
+| T09，Release 测试误报 | IL 检查关联真正的字段／局部槽接收者，兼容局部地址，拒绝静态同名 Dispose 和只释放其他对象的反例；原请求、响应、JsonDocument 检查保留。 | [HttpLifecycleTests](../../tests/LiteMonitor.Tests/HttpLifecycleTests.cs)、[IlInspector](../../tests/LiteMonitor.Tests/IlInspector.cs) |
 
-点分实例隔离采用[完整键归属](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/Plugins/PluginKeyOwnership.cs)与[精确删除入口](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/System/InfoService/InfoService.cs)，[MonitorSync](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/src/Plugins/PluginMonitorSyncService.cs)复用同一规则。测试覆盖 A／A.B 及 A／AB 的更新、输出替换和移除，检查邻居值、标签／单位、MonitorItems、缓存及原计时器。
+点分实例隔离采用[完整键归属](../../src/Plugins/PluginKeyOwnership.cs)与[精确删除入口](../../src/System/InfoService/InfoService.cs)，[MonitorSync](../../src/Plugins/PluginMonitorSyncService.cs)复用同一规则。测试覆盖 A／A.B 及 A／AB 的更新、输出替换和移除，检查邻居值、标签／单位、MonitorItems、缓存及原计时器。
 
 市场交叉回归从公开 Uninstall 进入：afterRecord 后锁住真实备份，使恢复保持 pending；卸载必须拒绝并保留新版文件／记录及材料。解除锁并恢复后可卸载、重装。journal 独占锁也不能被当作“没有事务”。
 
@@ -34,10 +34,10 @@
 
 | 范围 | 最终结论与报告 |
 | --- | --- |
-| GPU／指标 | [PASS](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/docs/reviews/2026-10-24-remediation-code-review-gpu-metrics.md) |
-| 市场／共享保存／恢复 | [PASS，MKT-R02 定向关闭](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/docs/reviews/2026-10-24-remediation-code-review-market.md:76) |
-| 插件调度／主机／键归属 | [PASS，P2-PLUG-01 定向关闭](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/docs/reviews/2026-10-24-remediation-code-review-plugins.md:61) |
-| T09／持续门禁 | [PASS](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/docs/reviews/2026-10-24-remediation-code-review-validation.md) |
+| GPU／指标 | [PASS](./2026-10-24-remediation-code-review-gpu-metrics.md) |
+| 市场／共享保存／恢复 | [PASS，MKT-R02 定向关闭](./2026-10-24-remediation-code-review-market.md) |
+| 插件调度／主机／键归属 | [PASS，P2-PLUG-01 定向关闭](./2026-10-24-remediation-code-review-plugins.md) |
+| T09／持续门禁 | [PASS](./2026-10-24-remediation-code-review-validation.md) |
 
 报告保留首轮 REQUEST_CHANGES 作为审查过程记录，以各自末尾定向复核的最终 PASS 为准。复审者只写报告，实际构建／测试由主控统一执行；四份报告记录了所审文件哈希。
 
@@ -89,6 +89,17 @@
 
 ## 证据入口
 
-汇总与精简证据位于 [remediation-20261024-9238bb9](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/docs/reviews/evidence/remediation-20261024-9238bb9)：包含 `validation-summary.json`、`probe-results.json`、双配置门禁、阈值后复测、启动结果、最终依赖日志和 `source-sha256.json`。
+汇总与精简证据位于 `docs/reviews/evidence/`（随仓库保留的证据区；本轮对应的 `remediation-20261024-9238bb9` 快照位于当时的独立复核工作树，未随仓库入库）。
 
-六份完整 TRX、构建／测试日志位于 [.review-scratch/remediation-20261023/validation](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/.review-scratch/remediation-20261023/validation)。独立探针与验证脚本位于同一 remediation 目录。证据目录按项目既有规则保留为本地忽略文件，生产修复和回归用例均为正常源文件。
+> ★ **证据可及性说明（2026-10-24 工作目录清理时补记）**
+>
+> 本报告原引用的两处证据目录都属于**本地临时工作区**，从未进入版本库：
+>
+> - `docs/reviews/evidence/remediation-20261024-9238bb9/` —— 位于当时的独立复核工作树；
+> - `.review-scratch/remediation-20261023/validation/` —— 六份完整 TRX 与构建／测试日志，
+>   位于按项目规则**本地忽略**的临时目录。
+>
+> 两者已随工作目录清理移除，无法再从仓库内直接取到。保留在仓库里的证据区
+> （`docs/reviews/evidence/`）包含同期的 `full-project-20261023-9238bb9/` 快照
+> （门禁计数、探针结果、启动自检与测试汇总），可作为同批次的旁证；
+> 结论以本报告正文为准。

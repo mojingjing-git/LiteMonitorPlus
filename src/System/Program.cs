@@ -67,10 +67,10 @@ namespace LiteMonitor
 
                 _mutex = new Mutex(true, mutexName, out createNew);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 // 记录一下异常（可选），方便调试为什么会创建失败
-                // LogCrash(ex, "Mutex_Creation_Failed"); 
+                // LogCrash(ex, "Mutex_Creation_Failed");
                 
                 // 回退策略
                 mutexName = "Global\\LiteMonitor_SingleInstance_Mutex_UniqueKey";

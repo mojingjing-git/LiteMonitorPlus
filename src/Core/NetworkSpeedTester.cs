@@ -493,7 +493,7 @@ namespace LiteMonitor
                             double speedMbps = (now * 8.0 / 1_000_000) / Math.Max(sw.Elapsed.TotalSeconds, 0.1);
                             progress?.Invoke(speedMbps);
                         }
-                        catch (TaskCanceledException ex) when (uploadTimeoutCts.IsCancellationRequested)
+                        catch (TaskCanceledException) when (uploadTimeoutCts.IsCancellationRequested)
                         {
                             // 如果是内部超时导致的取消，记录并继续
                             Log($"Upload request timed out for worker: {url}");

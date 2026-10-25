@@ -273,20 +273,6 @@ namespace LiteMonitor.src.UI.Decor
         }
 
         /// <summary>
-        /// 构造切角矩形路径（四角各切掉一个等腰直角）。
-        /// 切角边长会被夹紧到 min(宽, 高) / 2，<b>调用方负责 Dispose 返回的路径。</b>
-        /// </summary>
-        /// <param name="rect">目标矩形（物理像素）。</param>
-        /// <param name="cornerPx">切角边长（物理像素）。</param>
-        public static GraphicsPath BuildChamferPath(Rectangle rect, int cornerPx)
-        {
-            GraphicsPath path = new GraphicsPath();
-            if (rect.Width <= 0 || rect.Height <= 0) return path;
-            AddChamfer(path, rect, ClampCornerLengthPx(cornerPx, rect));
-            return path;
-        }
-
-        /// <summary>
         /// 构造圆角矩形路径。半径会被夹紧到 min(宽, 高) / 2，
         /// <b>调用方负责 Dispose 返回的路径。</b>
         /// </summary>
@@ -298,20 +284,6 @@ namespace LiteMonitor.src.UI.Decor
             if (rect.Width <= 0 || rect.Height <= 0) return path;
             AddRounded(path, rect, ClampRadiusPx(radiusPx, rect));
             return path;
-        }
-
-        /// <summary>
-        /// 向内描边用的矩形：先按 insetPx 缩进，再按描边宽度缩进。
-        /// 宽高不再为正时返回 <see cref="Rectangle.Empty"/>。
-        /// </summary>
-        /// <param name="bounds">完整客户区矩形（物理像素）。</param>
-        /// <param name="frameWidthPx">描边宽度（物理像素）。</param>
-        /// <param name="insetPx">相对 bounds 向内缩进的物理像素数。</param>
-        public static Rectangle BuildInnerStrokeBounds(Rectangle bounds, int frameWidthPx, int insetPx)
-        {
-            Rectangle outer = Deflate(bounds, insetPx);
-            if (outer.Width <= 0 || outer.Height <= 0) return Rectangle.Empty;
-            return Deflate(outer, Math.Max(0, frameWidthPx));
         }
 
         // ============================================================

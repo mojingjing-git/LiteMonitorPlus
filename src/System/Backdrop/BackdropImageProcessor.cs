@@ -86,26 +86,6 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         }
 
         /// <summary>
-        /// 用 96 DPI 逻辑模糊值 + DPI 比例 + 用户缩放构造。
-        /// 换算与 <c>ThemeAppearanceOptions.BlurPx</c> 完全一致（逻辑值 × DPI 比例 × 用户缩放）。
-        /// </summary>
-        /// <param name="blurLogicalPx">96 DPI 逻辑模糊值（0–32）。</param>
-        /// <param name="dpiScale">DPI 比例（DeviceDpi / 96）。</param>
-        /// <param name="userScale">用户缩放倍率。</param>
-        /// <param name="captureScale">捕获降采样比例。</param>
-        /// <param name="resampleWithoutBlur">σ = 0 时是否仍然重采样（默认 false）。</param>
-        public static BackdropBlurContract FromLogicalBlur(
-            double blurLogicalPx,
-            double dpiScale,
-            double userScale,
-            double captureScale,
-            bool resampleWithoutBlur = false)
-        {
-            double effective = (dpiScale > 0 ? dpiScale : 1.0) * (userScale > 0 ? userScale : 1.0);
-            return new BackdropBlurContract(blurLogicalPx * effective, captureScale, resampleWithoutBlur);
-        }
-
-        /// <summary>
         /// 3×box blur 的等效半径 r = round((√(1+4σ²) − 1) / 2)。
         /// <para>推导：半径 r 的 box 方差为 r(r+1)/3，3 次卷积后 σ² = 3 · r(r+1)/3 = r(r+1)，
         /// 反解 r 即得上式；取最近的整数 r 即得"等效 σ 最接近目标 σ"的半径。</para>

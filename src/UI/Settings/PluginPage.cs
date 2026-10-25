@@ -84,10 +84,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             // Always rebuild UI on show to prevent Handle creation issues with deeply nested controls
             // when switching back to this page.
             RebuildUI();
-            _isLoaded = true;
         }
-
-        private bool _isLoaded = false;
 
         private void RebuildUI()
         {

@@ -363,7 +363,7 @@ A08 在**渐变主题**下的成本已包含在 §3.2 的 +11.77ms 里，由 §4
 
 ### 5.1 结论
 
-独立验收已执行，报告：[`docs/reviews/2026-10-20-appearance-a13-independent-review.md`](../reviews/2026-10-20-appearance-a13-independent-review.md)。
+独立验收已执行，报告：[`docs/reviews/2026-10-20-appearance-a13-independent-review.md`](../../reviews/2026-10-20-appearance-a13-independent-review.md)。
 
 **A13 暂不通过。** 确认 **8 项 P2**，未发现 P0/P1：
 

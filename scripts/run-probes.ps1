@@ -66,7 +66,8 @@ param(
     [string]$Configuration = 'Release',
     [string[]]$Groups = @('default'),
     [switch]$ListGroups,
-    [string]$ResultPath
+    [string]$ResultPath,
+    [string]$Dotnet
 )
 
 $ErrorActionPreference = 'Stop'
@@ -125,17 +126,9 @@ if ($ListGroups) {
     exit 0
 }
 
-# ── 定位 dotnet ────────────────────────────────────────────────────────────
-$Dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue)
-if ($Dotnet) {
-    $DotnetExe = $Dotnet.Source
-}
-elseif (Test-Path 'G:\TOOL\dotnet-sdk\dotnet.exe') {
-    $DotnetExe = 'G:\TOOL\dotnet-sdk\dotnet.exe'
-}
-else {
-    throw '找不到 dotnet。请把 dotnet 加入 PATH，或安装到 G:\TOOL\dotnet-sdk。'
-}
+# ── 定位 dotnet（共享助手：按能力探测挑一个**带 SDK** 的 dotnet）──
+. (Join-Path $PSScriptRoot 'Resolve-Dotnet.ps1')
+$DotnetExe = Resolve-Dotnet $Dotnet
 
 Write-Host "仓库根    : $RepoRoot"
 Write-Host "dotnet    : $DotnetExe"

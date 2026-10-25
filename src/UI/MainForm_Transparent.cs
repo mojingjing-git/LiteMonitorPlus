@@ -30,7 +30,6 @@ namespace LiteMonitor
         private CancellationTokenSource _displayChangeCts;
 
         private Point _dragOffset;
-        private bool _uiDragging = false;
 
         /// <summary>
         /// 【GPU T03 / 合同 §4 全局约束 / U10】窗体是否已进入关闭过程。
@@ -294,7 +293,6 @@ namespace LiteMonitor
                 if (e.Button == MouseButtons.Left)
                 {
                     _ui?.SetDragging(true);
-                    _uiDragging = true;
                     _bizHelper.IsDragging = true;
                     _dragOffset = e.Location;
                 }
@@ -312,7 +310,6 @@ namespace LiteMonitor
                 if (e.Button == MouseButtons.Left)
                 {
                     _ui?.SetDragging(false);
-                    _uiDragging = false;
                     _bizHelper.IsDragging = false;
                     _bizHelper.ClampToScreen(); 
                     _bizHelper.SavePos();

@@ -16,7 +16,7 @@
 
 ### N1 · P2：配对经过时间不能作为 CPU 预算及整机 CPU 增量的实测值
 
-位置：[AppearanceProbe.cs:445](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a14-audit-9c16ad3/target-src/tests/LiteMonitor.PerformanceProbe/AppearanceProbe.cs:445)、同文件第 501 行；结论使用处为 [A14 acceptance:282](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a14-audit-9c16ad3/target-src/docs/superpowers/plans/2026-10-20-appearance-a14-acceptance.md:282)、第 451 行。
+位置：[AppearanceProbe.cs:445](../../tests/LiteMonitor.PerformanceProbe/AppearanceProbe.cs)、同文件第 501 行；结论使用处为 [A14 acceptance:282](../superpowers/plans/2026-10-20-appearance-a14-acceptance.md)、第 451 行。
 
 `MeasurePaired` 的前后差值完全来自 `Stopwatch.GetTimestamp`，输出为 `extraMsPerDraw`；没有配对测量新、旧入口的处理器时间。微软对 [Stopwatch](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.stopwatch?view=net-8.0) 的定义是经过时间计量，等待、抢占等同样计入，不能因为绘制通常消耗 CPU 就直接替代 CPU 时间。
 
@@ -35,7 +35,7 @@
 
 ### N2 · P2：编辑器固定样本图被报告为 LiveFrame
 
-位置：[ThemePreviewControl.cs:85](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a14-audit-9c16ad3/target-src/src/ThemeEditor/ThemePreviewControl.cs:85)、[BackdropRenderer.cs:115](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a14-audit-9c16ad3/target-src/src/System/Backdrop/BackdropRenderer.cs:115)。
+位置：[ThemePreviewControl.cs:85](../../src/ThemeEditor/ThemePreviewControl.cs)、[BackdropRenderer.cs:115](../../src/System/Backdrop/BackdropRenderer.cs)。
 
 编辑器将 `PreviewFrameSource` 作为普通 `IBackdropFrameSource` 注入运行时。运行时没有设置 `options.PreviewSource`；背景层于是把可用结果标成 `isPreview:false`，最终来源为 `LiveFrame`。
 
@@ -47,7 +47,7 @@
 
 ### 补充加固项：纹理创建失败后的接管资源清理
 
-位置：[DecorResourceCache.cs:243](G:/TOOL/LiteMonitor-fork/.review-scratch/appearance-a14-audit-9c16ad3/target-src/src/UI/Decor/DecorResourceCache.cs:243)。
+位置：[DecorResourceCache.cs:243](../../src/UI/Decor/DecorResourceCache.cs)。
 
 正常创建、淘汰和 Dispose 的源图/画刷释放路径已修复，记账也不再取得 `TextureBrush.Image`。不过，源位图从工厂转移所有权后，到 `new TextureBrush(source)` 及入表完成之前没有异常清理；构造或入表抛异常时，源图/画刷可能脱离缓存管理。旧项还在新画刷创建成功前就被淘汰。
 

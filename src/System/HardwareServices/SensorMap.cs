@@ -70,9 +70,6 @@ namespace LiteMonitor.src.SystemServices
             get { lock (_lock) { return _cpuVoltageCandidates; } }
         }
         
-        // ★★★ [新增] 配置引用 ★★★
-        private Settings _cfg;
-
         // [Fix] 回归 v1.2.9 的简单逻辑
         // 只有在初始化时才需要 build，之后除非手动触发或 10 分钟兜底，否则不需要任何检测。
         //
@@ -105,16 +102,6 @@ namespace LiteMonitor.src.SystemServices
                 _cpuVoltageRefs.Clear();
                 _cpuVoltageCandidates = Array.Empty<CpuVoltageCandidate>();
                 // _lastSensorFingerprint = 0; // 已移除
-            }
-        }
-
-
-
-        public bool TryGetSensor(string key, out ISensor? sensor)
-        {
-            lock (_lock)
-            {
-                return _map.TryGetValue(key, out sensor);
             }
         }
 
@@ -178,7 +165,6 @@ namespace LiteMonitor.src.SystemServices
 
         public void Rebuild(Computer computer, Settings cfg) // ★ 签名修改
         {
-            _cfg = cfg;
             // 1. 准备临时容器 (线程安全)
             var newMap = new Dictionary<string, ISensor>(StringComparer.OrdinalIgnoreCase); // 使用忽略大小写的比较器，减少字符串重复
             var newCpuCache = new List<CpuCoreSensors>();

@@ -101,6 +101,22 @@
   <Compile Remove="tests\**" />
   <Compile Remove="tools\**" />
   <Compile Remove="docs\**" />
+  <!--
+    ★ 本地工作区排除（与上面的既有排除同族）★
+    SDK 项目的 Compile 默认通配是 **/*.cs，而 Compile Remove 只排除了
+    LiteMonitor.Updater / LiteMonitor.Wpf / tests / tools / docs。
+    但本地存在 10+ 个 git worktree 的**全量副本**（.artifacts\ 与 .worktrees\），
+    复审暂存目录 .review-scratch\ 里也有 target-src 全量副本。
+    ★ .gitignore / .git/info/exclude 只影响 git，**不影响 MSBuild 通配** ⇒
+      副本里的 src\System\Program.cs、tools\*Probe\Program.cs 全被编译进来，
+      报 CS0017「程序定义了多个入口点」（本地可稳定复现）。
+    ★ .artifacts\ 与 .worktrees\ 由 .git/info/exclude 排除、不入库
+      ⇒ CI 全新 checkout 不含这些目录 ⇒ 这几条对 CI 是 no-op。
+  -->
+  <Compile Remove=".artifacts\**" />
+  <Compile Remove=".worktrees\**" />
+  <Compile Remove=".review-scratch\**" />
+  <Compile Remove="undefined\**" />
   <EmbeddedResource Remove="LiteMonitor.Updater\**" />
   <EmbeddedResource Remove="LiteMonitor.Wpf\**" />
   <EmbeddedResource Remove="tests\**" />

@@ -108,9 +108,6 @@ namespace LiteMonitor.src.SystemServices.Backdrop
         internal static extern int GetSystemMetrics(int nIndex);
 
         [DllImport("user32.dll")]
-        internal static extern uint GetDpiForWindow(IntPtr hwnd);
-
-        [DllImport("user32.dll")]
         internal static extern IntPtr GetThreadDpiAwarenessContext();
 
         [DllImport("user32.dll")]
@@ -172,23 +169,6 @@ namespace LiteMonitor.src.SystemServices.Backdrop
             catch (EntryPointNotFoundException)
             {
                 return DPI_AWARENESS_INVALID;
-            }
-        }
-
-        /// <summary>取窗口所在显示器的实际 DPI（96 = 100%）。</summary>
-        internal static uint GetWindowDpi(IntPtr hwnd)
-        {
-            try
-            {
-                return GetDpiForWindow(hwnd);
-            }
-            catch (DllNotFoundException)
-            {
-                return 96;
-            }
-            catch (EntryPointNotFoundException)
-            {
-                return 96;
             }
         }
     }

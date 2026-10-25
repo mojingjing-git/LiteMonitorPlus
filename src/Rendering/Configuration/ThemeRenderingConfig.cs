@@ -58,20 +58,6 @@ public sealed class ThemeRenderingConfig
     public bool IsGpuRequested =>
         string.Equals(Backend, GpuBackend, StringComparison.OrdinalIgnoreCase);
 
-    public RenderingConfig ToContract()
-    {
-        Dictionary<string, JsonElement> CopyDictionary(Dictionary<string, JsonElement> source) =>
-            source.ToDictionary(pair => pair.Key, pair => pair.Value.Clone(), StringComparer.Ordinal);
-
-        return new RenderingConfig(
-            Version,
-            Backend,
-            Material,
-            CopyDictionary(Parameters ?? new Dictionary<string, JsonElement>()),
-            CopyDictionary(Motion ?? new Dictionary<string, JsonElement>()),
-            CopyDictionary(Fallback ?? new Dictionary<string, JsonElement>()));
-    }
-
     public IReadOnlyList<string> Validate() => Validate(out _);
 
     /// <summary>

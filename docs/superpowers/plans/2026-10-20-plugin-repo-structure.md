@@ -1,6 +1,7 @@
 # 插件仓库结构改造与 PR 协作流程 Implementation Plan
 
-> **状态**：待实施（本文件只是计划，尚未改动任何仓库或源码）
+> **状态**：待实施 —— ⚠️ 本计划针对的是**独立插件仓库** `mojingjing-git/awesome-litemonitor-plugins`（不在本仓库内），因此"尚未改动任何仓库或源码"指的是**那个仓库**，本仓库侧不因本计划产生任何改动。
+> ⚠️ 下文正文中的"待实施 / 未改动源码 / 不代表已完成"等字样保留为**计划撰写当时**的原始表述；当前实际状态以本行为准。
 > **编写时间**：2026-10-20
 > **适用仓库**：`https://github.com/mojingjing-git/awesome-litemonitor-plugins`（本地路径 `G:\TOOL\awesome-litemonitor-plugins`）
 > **关联计划**：`docs/superpowers/plans/2026-10-20-plugin-market-hardening.md`（客户端侧计划）—— 本计划**取代**其 Task 1 与 §3.2，详见 §1.4
@@ -924,7 +925,7 @@ LiteMonitor++ 的插件仓库。每个插件一个目录，目录下的 `README.
 
 ## 插件清单
 
-见 [PLUGINS.md](./PLUGINS.md)（由 CI 自动生成，请勿手改）
+见 [PLUGINS.md](https://github.com/mojingjing-git/awesome-litemonitor-plugins/blob/main/PLUGINS.md)（在**插件仓库**内由 CI 自动生成，请勿手改）
 
 ## 目录结构
 

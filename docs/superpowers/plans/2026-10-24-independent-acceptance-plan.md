@@ -1,6 +1,7 @@
 # LiteMonitor 修复批次独立验收计划
 
-日期：2026-10-24（Asia/Shanghai）。版本：v1。状态：**待独立 Agent 执行，本文件不代表验收已通过。**
+日期：2026-10-24（Asia/Shanghai）。版本：v1。状态：**已执行** —— 独立验收报告见 [2026-10-24-independent-acceptance-20261023T193422Z-474953d8.md](../../reviews/2026-10-24-independent-acceptance-20261023T193422Z-474953d8.md)。
+> ⚠️ 下文正文中的"待实施 / 未改动源码 / 不代表已完成"等字样保留为**计划撰写当时**的原始表述；当前实际状态以本行为准。
 
 ## 1. 验收目标与结论口径
 
@@ -32,9 +33,9 @@ HEAD:   9238bb9961e6f1dc4aa9cfaf7c1311c360bf734f
 
 参考材料：
 
-- [修复计划 v3](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/docs/superpowers/plans/2026-10-23-independent-review-remediation-plan.md)。
-- [原始独立审查报告](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/docs/reviews/2026-10-23-full-project-regression-and-upstream-review.md)。
-- [修复与既有验证报告](C:/Users/wrz20/.codex/worktrees/review-remediation-20261023/LiteMonitor-fork/docs/reviews/2026-10-24-remediation-validation.md)。
+- [修复计划 v3](./2026-10-23-independent-review-remediation-plan.md)。
+- [原始独立审查报告](../../reviews/2026-10-23-full-project-regression-and-upstream-review.md)。
+- [修复与既有验证报告](../../reviews/2026-10-24-remediation-validation.md)。
 - 四份 `docs/reviews/2026-10-24-remediation-code-review-*.md`：关注末尾最终结论；市场和插件报告保留了早期 REQUEST_CHANGES，不应截取首轮结论代替最终复核。
 - 交付的 31 文件清单：`docs/reviews/evidence/remediation-20261024-9238bb9/source-sha256.json`。清单本身 SHA-256 必须是 **`A33B8A76829C3381939FB19682E2C3D7FB29B6E9AE82209FC59DD2EAFAC4750F`**。
 

@@ -30,13 +30,15 @@
     输出目录（相对仓库根），默认 dist。
 
 .PARAMETER Dotnet
-    dotnet 可执行文件路径。留空时依次尝试 $env:LITEMONITOR_DOTNET 与 PATH 上的 dotnet。
+    dotnet 可执行文件路径。留空时由 scripts/Resolve-Dotnet.ps1 依次尝试
+    $env:LITEMONITOR_DOTNET、$env:DOTNET_ROOT、常见安装位置与 PATH 上的 dotnet，
+    并只接受**真的带 SDK** 的那一个。
 
 .EXAMPLE
     pwsh -File scripts/pack-release.ps1 -Version 1.0.0
 
 .EXAMPLE
-    pwsh -File scripts/pack-release.ps1 -Version 1.0.0 -Dotnet 'G:\TOOL\dotnet-sdk\dotnet.exe'
+    pwsh -File scripts/pack-release.ps1 -Version 1.0.0 -Dotnet 'C:\Program Files\dotnet\dotnet.exe'
 #>
 [CmdletBinding()]
 param(
@@ -63,23 +65,9 @@ $runtimeAssets = @('driver.zip', 'LiteMonitorPlusFPS.exe', 'CityCode.json')
 
 function Write-Step { param([string]$Text) Write-Host "==> $Text" -ForegroundColor Cyan }
 
-function Resolve-Dotnet {
-    param([string]$Explicit)
-
-    $candidates = [System.Collections.Generic.List[string]]::new()
-    if ($Explicit) { $candidates.Add($Explicit) }
-    if ($env:LITEMONITOR_DOTNET) { $candidates.Add($env:LITEMONITOR_DOTNET) }
-    $candidates.Add('dotnet')
-
-    foreach ($c in $candidates) {
-        try {
-            $sdks = & $c --list-sdks 2>$null
-            if ($LASTEXITCODE -eq 0 -and $sdks) { return $c }
-        }
-        catch { }
-    }
-    throw "找不到可用的 .NET SDK。请用 -Dotnet 指定 dotnet.exe，或设置环境变量 LITEMONITOR_DOTNET。"
-}
+# ★ dotnet 解析已收敛到 scripts/Resolve-Dotnet.ps1（与 run-dev / run-livecheck /
+#   start-current / run-probes 共用同一份实现），避免各处各写一套、行为不一致。
+. (Join-Path $PSScriptRoot 'Resolve-Dotnet.ps1')
 
 function Remove-Tree {
     param([string]$Path)

@@ -84,7 +84,6 @@ namespace LiteMonitor.src.SystemServices
         private volatile bool _webDataDemand = false;
 
         // 计时器相关
-        private long _tickCounter = 0;
         private double _secondAccumulator = 0;
         private long _secondsCounter = 0;
 
@@ -1026,10 +1025,7 @@ namespace LiteMonitor.src.SystemServices
 
         private double UpdateTiming()
         {
-            // 1. 统一心跳计数 (假设 UpdateAll 约 1秒调用一次)
-            _tickCounter++;
-            
-            // 2. 计算精确时间差 (仅用于网速计算)
+            // 1. 计算精确时间差 (仅用于网速计算)
             //    ★ 改用**单调时钟**：墙上时间回拨（用户改系统时间 / NTP 校时）不会产生负 delta。
             //      这里量的是"两次真实采集之间的经过时间"，与 UI Tick 次数无关。
             long now = _time.GetTimestamp();

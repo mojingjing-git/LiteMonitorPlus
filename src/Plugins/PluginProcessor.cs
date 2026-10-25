@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -67,8 +67,17 @@ namespace LiteMonitor.src.Plugins
     /// <para>
     /// 本文件提供的是沙箱<b>原语</b>；执行路径要真正受这些上限保护，调用方必须显式使用
     /// <see cref="PluginSandboxScope"/> / <see cref="PluginSandbox"/>。
-    /// <see cref="PluginExecutor"/> 目前只带传输层上限（8 MiB 正文 / 10 s 客户端超时），
-    /// <b>尚未</b>接入本沙箱 —— 接入属于 <c>PluginExecutor.cs</c> 的改动范围，不在本文件内。
+    /// <b>生产路径已经接入</b>：<see cref="PluginExecutor"/> 的实例级入口与步骤级入口都经
+    /// <c>CreateScope(token)</c> 取得 <see cref="PluginSandboxScope"/>
+    /// （<c>PluginExecutor.cs</c> 的 <c>ExecuteInstanceWithScopeAsync</c> 与
+    /// <c>ExecuteStepAsync</c>），正文读取上限也由
+    /// <c>PluginExecutor.EffectiveMaxResponseBytes</c> 夹到
+    /// <see cref="PluginSandboxLimits.MaxResponseBytes"/>（2 MiB）。
+    /// </para>
+    /// <para>
+    /// ★ 保持本文件与执行层口径同步：改动 <see cref="PluginSandboxLimits"/> 的任一常量时，
+    ///   必须同时确认 <c>PluginExecutor</c> 侧的实例级上限（LM-003a，用户可配）与沙箱上限
+    ///   取<b>较小者</b>，否则会出现"本文件写 2 MiB、实际放行 8 MiB"的口径分裂。
     /// </para>
     /// </summary>
     public static class PluginProcessor
@@ -924,22 +933,6 @@ namespace LiteMonitor.src.Plugins
             }
 
             return ms.ToArray();
-        }
-
-        /// <summary>
-        /// [LM-009] 带字节上限的响应体读取（按指定编码解码）。
-        /// </summary>
-        public static async Task<string> ReadResponseTextAsync(Stream body, int maxBytes, string encoding, CancellationToken token)
-        {
-            byte[] bytes = await ReadResponseBodyAsync(body, maxBytes, token).ConfigureAwait(false);
-
-            if (!string.IsNullOrEmpty(encoding) && encoding.Equals("gbk", StringComparison.OrdinalIgnoreCase))
-            {
-                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-                return Encoding.GetEncoding("GBK").GetString(bytes);
-            }
-
-            return Encoding.UTF8.GetString(bytes);
         }
 
         /// <summary>

@@ -430,7 +430,7 @@ namespace LiteMonitor
 
 
             // 网络测速 (独立窗口，保持原样)
-            var speedWindow = new ToolStripMenuItem(LanguageManager.T("Menu.Speedtest"));
+            var speedWindow = new ToolStripMenuItem(LanguageManager.T("Menu.SpeedTest"));
             speedWindow.Image = Properties.Resources.NetworkIcon;
             speedWindow.Click += (_, __) =>
             {

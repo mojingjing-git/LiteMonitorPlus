@@ -124,20 +124,6 @@ public sealed class GpuDeviceLifecycle
         }
     }
 
-    public GpuDeviceTransition ResetRecoveryBudget()
-    {
-        lock (_gate)
-        {
-            if (_state is not RenderLifecycleState.Running)
-            {
-                throw InvalidTransition(RenderLifecycleState.Running);
-            }
-
-            _recoveryAttempt = 0;
-            return new GpuDeviceTransition(_state, _state, _deviceGeneration, _recoveryAttempt, null);
-        }
-    }
-
     public GpuDeviceTransition BeginStop()
     {
         lock (_gate)

@@ -12,7 +12,8 @@
 （`tests/LiteMonitor.Tests/PluginRepoFactAttribute.cs:21`）：
 
 ```powershell
-$env:LITEMONITOR_PLUGIN_REPO = 'G:\TOOL\LiteMonitor-fork\tests\fixtures\plugin-repo'
+# 从仓库根解析成绝对路径（测试进程的工作目录不是仓库根，写相对路径会找不到目录）
+$env:LITEMONITOR_PLUGIN_REPO = (Resolve-Path 'tests/fixtures/plugin-repo').Path
 dotnet test tests/LiteMonitor.Tests/LiteMonitor.Tests.csproj -c Debug --nologo `
   --filter "FullyQualifiedName~MarketIndexContractTests"
 ```
@@ -73,8 +74,12 @@ plugin-repo/
 
 ## ★ 行尾陷阱（改动夹具前务必先读）
 
-本仓库 `core.autocrlf=true` 且**仓库根目录没有 `.gitattributes`**，
-所以 `.json` 文件在 Windows 检出时会被转换成 CRLF，
+本仓库 `core.autocrlf=true`；仓库**根目录**现在也有一份 `.gitattributes`
+（文本一律以 LF 入库、CRLF 落工作区），但它**不会**覆盖本目录 ——
+根规则里专门为 `tests/fixtures/plugin-repo/**` 显式声明了 `text eol=lf`，
+且**子目录**的 `.gitattributes` 优先级更高。
+
+若 `.json` 文件在 Windows 检出时被转换成 CRLF，
 `File.ReadAllBytes` 读到的字节就与仓库 blob 不一致 → `sha256` / `size` 断言必然失败。
 
 **解法**就是本目录下的 `.gitattributes`：

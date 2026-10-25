@@ -96,20 +96,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 # 定位 dotnet
 # ----------------------------------------------------------------------
 
-function Resolve-Dotnet([string]$explicit) {
-    if ($explicit) {
-        if (-not (Test-Path -LiteralPath $explicit)) {
-            throw "找不到 dotnet 可执行文件: $explicit"
-        }
-        return (Resolve-Path -LiteralPath $explicit).Path
-    }
-    # 本机 SDK 在 PATH 上的 dotnet 经常是残废的（报 No .NET SDKs found），优先用已知的完整 SDK
-    $known = 'G:\TOOL\dotnet-sdk\dotnet.exe'
-    if (Test-Path -LiteralPath $known) { return $known }
-    $cmd = Get-Command dotnet -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    throw '找不到 dotnet，请用 -Dotnet 指定完整路径'
-}
+. (Join-Path $PSScriptRoot 'Resolve-Dotnet.ps1')
 
 # ----------------------------------------------------------------------
 # Win32 互操作：只为读主窗口的 DPI

@@ -346,8 +346,6 @@ namespace LiteMonitor.src.UI.Controls
 
         public static Font Underline(float size) => Get(size, FontStyle.Underline);
 
-        public static Font BoldUnderline(float size) => Get(size, FontStyle.Bold | FontStyle.Underline);
-
         private static Font Get(float size, FontStyle style)
         {
             return _cache.GetOrAdd(
@@ -578,7 +576,6 @@ namespace LiteMonitor.src.UI.Controls
             Inner.BringToFront(); 
         }
 
-        public void SetTextColor(Color c) => Inner.ForeColor = c;
         public void SetBg(Color c) { Inner.BackColor = c; }
         
         protected override void OnPaint(PaintEventArgs e) {

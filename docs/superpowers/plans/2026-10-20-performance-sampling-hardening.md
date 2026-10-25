@@ -1,6 +1,7 @@
 # 硬件采集限频与调度修复执行计划
 
-> 状态：待执行。本文只制定计划，不表示实现、测试或性能验收已经完成。
+> 状态：**已实施并完成性能验收**（采集协调见 `src/System/HardwareServices/HardwareSamplingCoordinator.cs`，性能探针见 `tests/LiteMonitor.PerformanceProbe/`）。
+> ⚠️ 下文正文中的"待实施 / 未改动源码 / 不代表已完成"等字样保留为**计划撰写当时**的原始表述；当前实际状态以本行为准。
 >
 > 编写日期：2026-10-20。
 >

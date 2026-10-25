@@ -165,8 +165,8 @@ src/UI/AboutForm.cs:20-23,84,95   # 双份版权 + 上游致谢链接
 ### 5.1 一条命令
 
 ```powershell
-Set-Location 'G:\TOOL\LiteMonitor-fork'
-pwsh -File scripts/pack-release.ps1 -Version 1.0.0 -Dotnet 'G:\TOOL\dotnet-sdk\dotnet.exe'
+Set-Location '<仓库根>'
+pwsh -File scripts/pack-release.ps1 -Version 1.0.0
 ```
 
 产物：`dist/LiteMonitorPlus_v1.0.0-win-x64.zip`（约 6.2 MB，58 个条目），脚本末尾输出包 SHA256。
@@ -343,8 +343,7 @@ Get-ChildItem -Recurse -Include *.cs,*.json,*.md,*.txt |
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$dotnet = 'G:\TOOL\dotnet-sdk\dotnet.exe'
-Set-Location 'G:\TOOL\LiteMonitor-fork'
+Set-Location '<仓库根>'
 
 # 启动 dev 版（构建 + 平铺驱动/FPS 资源 + 启动）
 & pwsh -File scripts/run-dev.ps1

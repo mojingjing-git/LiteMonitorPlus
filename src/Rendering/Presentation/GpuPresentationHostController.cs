@@ -824,7 +824,7 @@ public sealed class GpuPresentationHostController : IDisposable
             _renderer.ClearFixedBackground();
             return;
         }
-        if (!_renderer.TrySetFixedBackground(ToolbarPreviewFixture.CreateInput(_renderer.Width, _renderer.Height),
+        if (!_renderer.TrySetFixedBackground(ToolbarPreviewSurface.CreateInput(_renderer.Width, _renderer.Height),
                 out string? code, out string? message))
             throw new InvalidOperationException(code + ": " + message);
     }

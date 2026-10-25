@@ -220,7 +220,6 @@ namespace LiteMonitor.src.SystemServices
         public float? GetDiskRead() => SafeRead(_diskReadCounter);
         public float? GetDiskWrite() => SafeRead(_diskWriteCounter);
         public float? GetDiskActive() => SafeRead(_diskActiveCounter);
-        public float? GetUptime() => SafeRead(_uptimeCounter);
 
         /// <summary>
         /// 获取本周期内估算的 SMB 流量增量 (含协议开销补偿)

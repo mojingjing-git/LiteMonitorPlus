@@ -629,6 +629,34 @@ namespace LiteMonitor.src.SystemServices
                 // ★★★ [终极优化] 使用 switch 替代 if-else 链，实现 O(1) 哈希跳转 ★★★
                 switch (key)
                 {
+                    // ★★★ [SYS.Power] 整机总功耗派生项: CPU.Package + Σ(GPU.i.Power) ★★★
+                    // 递归 GetValue 复用同代次缓存 (Monitor 可重入, 各 key 独立缓存)。
+                    // 分量各自沿用原熔断 (CPU >600W / GPU >1200W, 见 ComponentProcessor)。
+                    case "SYS.Power":
+                    {
+                        float? cpuP = GetValue("CPU.Power");
+                        float sum = 0f;
+                        bool anyComp = cpuP.HasValue;
+                        if (cpuP.HasValue) sum += cpuP.Value;
+
+                        for (int gi = 0; gi < _cfg.MonitoredGpuCount; gi++)
+                        {
+                            // B2 暂缓: 不做 APU 核显去重 (无可靠判据, 详见 plan §3.2)
+                            float? gpuP = GetValue(GpuKey.Build(gi, "Power"));
+                            if (gpuP.HasValue) { sum += gpuP.Value; anyComp = true; }
+                        }
+
+                        result = anyComp ? (float?)sum : null;
+
+                        // B3 sanity ceiling: 仅过滤传感器异常, 不约束正常量程
+                        if (result.HasValue && result.Value > 2000f) result = null;
+
+                        // ★ 峰值自记: 必须显式调 UpdateMaxRecord, 否则 RecordedMaxSysPower 永远停在初值
+                        //   与 ComponentProcessor.cs:149/187 (CPU/GPU Power) 及 ReadFanValue(:1053) 同范式
+                        if (result.HasValue) _cfg.UpdateMaxRecord("SYS.Power", result.Value);
+
+                        break;
+                    }
                     // 1. CPU.Load
                     case "CPU.Load":
                         if (useCounter)

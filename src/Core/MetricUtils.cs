@@ -647,6 +647,7 @@ namespace LiteMonitor.src.Core
 
             if (baseKey == "CPU.Clock") max = cfg.RecordedMaxCpuClock;
             else if (baseKey == "CPU.Power") max = cfg.RecordedMaxCpuPower;
+            else if (baseKey == "SYS.Power") max = cfg.RecordedMaxSysPower;   // ★ [SYS.Power] 整机总功耗
             else if (baseKey == "GPU.Clock") max = cfg.RecordedMaxGpuClock;
             else if (baseKey == "GPU.Power") max = cfg.RecordedMaxGpuPower;
             else if (baseKey == "CPU.Fan") max = cfg.RecordedMaxCpuFan;
@@ -678,6 +679,5 @@ namespace LiteMonitor.src.Core
         // =========================================================
         public static int ParseInt(string s) => int.TryParse(new string(s?.Where(c => char.IsDigit(c) || c == '-').ToArray()), out int v) ? v : 0;
         public static double ParseDouble(string s) => double.TryParse(new string(s?.Where(c => char.IsDigit(c) || c == '.' || c == '-').ToArray()), out double v) ? v : 0;
-        public static string ToStr(double v, string format = "F1") => v.ToString(format);
     }
 }

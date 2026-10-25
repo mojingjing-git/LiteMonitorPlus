@@ -312,16 +312,5 @@ namespace LiteMonitor.src.UI.Decor
             clone.Transform = source.Transform;
             return clone;
         }
-
-        /// <summary>
-        /// 用瓦片位图创建一个平铺纹理画刷（<b>调用方负责释放</b>，位图的生命周期仍归原主）。
-        /// </summary>
-        /// <param name="tile">瓦片位图（借用引用）。</param>
-        /// <returns>新的纹理画刷（调用方负责释放）。</returns>
-        public static TextureBrush CreateTiledBrush(Bitmap tile)
-        {
-            if (tile == null) throw new ArgumentNullException(nameof(tile));
-            return new TextureBrush(tile);
-        }
     }
 }

@@ -147,19 +147,6 @@ namespace LiteMonitor.src.SystemServices
             return byName.Count == 1 ? byName[0] : null;
         }
 
-        public static GpuOption? FindGpuOptionByConfig(IComputer computer, string configValue)
-        {
-            if (string.IsNullOrWhiteSpace(configValue)) return null;
-
-            var options = ListAllGpuOptions(computer);
-            var byValue = options.FirstOrDefault(o =>
-                string.Equals(o.Value, configValue, StringComparison.OrdinalIgnoreCase));
-            if (byValue != null) return byValue;
-
-            var byName = options.Where(o => string.Equals(o.Name, configValue, StringComparison.OrdinalIgnoreCase)).ToList();
-            return byName.Count == 1 ? byName[0] : null;
-        }
-
         public static bool IsGpuHardware(IHardware hw)
         {
             return hw.HardwareType == HardwareType.GpuNvidia ||

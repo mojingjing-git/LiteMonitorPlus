@@ -44,6 +44,11 @@ namespace LiteMonitor
         internal const string HandleRecreateStaleFlagCode = "gpu_presentation_handle_recreate_stale_flag";
 
         /// <summary>【合同 §4 步 5】句柄代次推进失败。</summary>
+        /// <remarks>
+        /// ★ **当前无产生点**：唯一写它的接缝 <c>FailGenerationAdvance</c> 从未被接线，
+        /// 已按零引用清理删除。本常量按 §5 错误码词表**保留**——
+        /// 将来补上"代次推进失败"这条失败路径时应复用它，而不是另起一个码。
+        /// </remarks>
         internal const string GenerationAdvanceFailedCode = "gpu_transition_generation_advance_failed";
 
         /// <summary>【合同 §4 步 6】大小 / DPI / 布局恢复失败。</summary>
@@ -459,15 +464,6 @@ namespace LiteMonitor
 
             _state = _state with { Phase = RenderingTransitionPhase.Restoring };
             return true;
-        }
-
-        /// <summary>
-        /// 【合同 §4 步 5 失败语义】代次推进失败 ⇒ 记 <c>gpu_transition_generation_advance_failed</c>、
-        /// <c>Phase = Failed</c>。
-        /// </summary>
-        internal void FailGenerationAdvance()
-        {
-            SetFailure(GenerationAdvanceFailedCode);
         }
 
         /// <summary>

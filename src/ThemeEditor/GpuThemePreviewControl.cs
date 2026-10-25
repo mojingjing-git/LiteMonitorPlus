@@ -193,7 +193,7 @@ public sealed class GpuThemePreviewControl : Control
     private void SetPreviewBackground()
     {
         if (_renderer is null || _runtimeSettings.GlassStyle != GlassSurfaceStyle.FloatingToolbar) return;
-        if (!_renderer.TrySetFixedBackground(ToolbarPreviewFixture.CreateInput(Width, Height),
+        if (!_renderer.TrySetFixedBackground(ToolbarPreviewSurface.CreateInput(Width, Height),
                 out string? code, out string? message))
             throw new InvalidOperationException(code + ": " + message);
     }

@@ -59,7 +59,6 @@ namespace LiteMonitor
         private const int WM_RBUTTONDOWN = 0x0204;
         private const int WM_RBUTTONUP = 0x0205;
         private const int WM_LBUTTONDBLCLK = 0x0203;
-        private bool _isWin11;
 
         /// <param name="timeProvider">
         /// 可注入的单调时钟（默认 <see cref="TimeProvider.System"/>）。
@@ -73,8 +72,6 @@ namespace LiteMonitor
             TargetDevice = _cfg.TaskbarMonitorDevice;
 
             _themeCheckTrigger = CreateThemeCheckTrigger(timeProvider);
-
-            _isWin11 = Environment.OSVersion.Version >= new Version(10, 0, 22000);
 
             // 初始化组件
             _winHelper = new TaskbarWinHelper(this);

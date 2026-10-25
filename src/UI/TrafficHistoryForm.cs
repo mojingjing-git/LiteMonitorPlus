@@ -17,8 +17,6 @@ namespace LiteMonitor
         private DataGridView _grid;
         private Dictionary<HistoryViewMode, Button> _viewButtons = new Dictionary<HistoryViewMode, Button>();
 
-        private HistoryViewMode _currentMode = HistoryViewMode.Daily;
-
         private float _scale = 1.0f;
 
         // 参考 SettingsForm，使用 WS_EX_COMPOSITED 消除首次打开闪烁
@@ -298,7 +296,6 @@ namespace LiteMonitor
 
         private void SwitchView(HistoryViewMode mode)
         {
-            _currentMode = mode;
             foreach (var kv in _viewButtons)
             {
                 bool active = kv.Key == mode;

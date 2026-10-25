@@ -509,7 +509,7 @@ SensorMap.Rebuild 建表前不触发 Update, 导致核显的 \"GPU.Load\" 键缺
 // [Fix] 回归 v1.2.9 的简单逻辑
 // 只有在初始化时才需要 build，之后除非手动触发或 10 分钟兜底，否则不需要任何检测。
 // EnsureFresh 的返回值改为 void，因为不需要外部感知是否重建。
-public void EnsureFresh(Computer computer, Settings cfg) 
+public void EnsureFresh(Computer computer, Settings cfg)
 {
     if ((DateTime.Now - _lastMapBuild).TotalMinutes > 10)
     {
@@ -528,7 +528,7 @@ public void EnsureFresh(Computer computer, Settings cfg)
 // 调用方必须据此刷新 HardwareValueProvider 的静态取值缓存 ——
 // GetValue 的通用兜底只查 _manualSensorCache (已移除对 _sensorMap 的直接查找),
 // 重建后若不刷新缓存, 映射表里补上的键依然取不到值。
-public bool EnsureFresh(Computer computer, Settings cfg) 
+public bool EnsureFresh(Computer computer, Settings cfg)
 {
     if ((DateTime.Now - _lastMapBuild).TotalMinutes > 10)
     {

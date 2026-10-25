@@ -23,8 +23,8 @@
 # 构建并启动 Debug
 .\start.cmd -Build -Configuration Debug
 
-# 构建时指定 .NET SDK
-.\start.cmd -Build -Dotnet "G:\TOOL\dotnet-sdk\dotnet.exe"
+# 构建时显式指定 .NET SDK（一般不需要：脚本会自动挑一个**带 SDK** 的 dotnet）
+.\start.cmd -Build -Dotnet "C:\Program Files\dotnet\dotnet.exe"
 ```
 
 脚本通过自身位置定位仓库，可以从其他工作目录调用，支持路径中的空格。

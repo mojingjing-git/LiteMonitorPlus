@@ -1,7 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices.InfoService;
 
@@ -203,45 +202,5 @@ namespace LiteMonitor.src.Plugins
             catch { return ""; }
         }
 
-        private static readonly Regex _varsRegex = new Regex(@"\{\{(.+?)\}\}", RegexOptions.Compiled);
-
-        private bool CanResolveAllVars(string pattern, Dictionary<string, string> inputs)
-        {
-            if (string.IsNullOrEmpty(pattern)) return true;
-            if (!pattern.Contains("{{")) return true;
-
-            bool success = true;
-            var matches = _varsRegex.Matches(pattern);
-            foreach (Match m in matches)
-            {
-                string content = m.Groups[1].Value.Trim();
-                bool resolved = false;
-
-                if (content.Contains("??"))
-                {
-                    var parts = content.Split(new[] { "??" }, StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var part in parts)
-                    {
-                        string key = part.Trim();
-                        if (inputs.TryGetValue(key, out string val) && !string.IsNullOrEmpty(val))
-                        {
-                            resolved = true;
-                            break;
-                        }
-                    }
-                }
-                else
-                {
-                    if (inputs.ContainsKey(content) && !string.IsNullOrEmpty(inputs[content])) resolved = true;
-                }
-
-                if (!resolved)
-                {
-                    success = false;
-                    break;
-                }
-            }
-            return success;
-        }
     }
 }

@@ -10,7 +10,7 @@
 A lightweight and customizable desktop hardware monitoring tool — real-time monitoring of system performance such as CPU, GPU, memory, disk, and network.
 
 支持横/竖屏/任务栏/网页显示、主题切换、多语言、透明度显示、三色报警等，界面简洁且高度可配置 。
-> **立即下载最新版本：** [GitHub Releases → LiteMonitor++ 最新版](https://github.com/mojingjing-git/LiteMonitorPlus/releases/latest)    
+> **立即下载最新版本：** [GitHub Releases → LiteMonitor++ 最新版](https://github.com/mojingjing-git/LiteMonitorPlus/releases/latest)
 
 > 已支持【内存清理】和【自定义插件】功能，详见：[插件开发指南（无需编程）](./resources/plugins/PLUGIN_DEV_GUIDE.md)
 
@@ -41,7 +41,7 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 
 ---
 
-###  网络测速功能 
+###  网络测速功能
 ![LiteMonitor++ 网速测试](./resources/screenshots/overview4.png)  ![LiteMonitor++ 菜单](./resources/screenshots/overview5.jpg)
 
 
@@ -53,7 +53,7 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 
 ###  网页版监控
 ![LiteMonitor++ 网页版监控](./resources/screenshots/web.png)
- 
+
 ---
 
 # 产品功能
@@ -87,11 +87,11 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 
 | 路线 | 前置条件 | 表现 |
 |---|---|---|
-| **GDI+ 旧路线**（自动兜底） | 主题未声明 `rendering.backend = "gpu"`、显卡不支持 DirectX 11、或 `--safe` 启动 | 传统 GDI+ 绘制，任何环境可用 |
-| **GPU 固定背景** | GPU 主题 + 「GPU 材质渲染」开 | 真实玻璃材质（折射/厚度/高光），背景为程序化材质 |
-| **GPU 实时桌面背景** | 上一条全部满足 + 「实时桌面背景」开 + WDA 政策已接受 | 玻璃后面是**实时模糊桌面**；透明度 <100%（分层窗口）实测同样可用 |
+| **GDI+ 旧路线**（自动兜底，枚举 `Legacy`） | 主题未声明 `rendering.backend = "gpu"`、显卡不支持 DirectX 11、或 `--safe` 启动 | 传统 GDI+ 绘制，任何环境可用 |
+| **GPU 固定背景**（枚举 `GpuFixedInput`） | GPU 主题 + 「GPU 材质渲染」开 | 真实玻璃材质（折射/厚度/高光），背景为程序化材质 |
+| **GPU 实时桌面背景**（枚举 `GpuLiveBackground`） | 上一条全部满足 + 「实时桌面背景」开 + WDA 政策已接受 | 玻璃后面是**实时模糊桌面**；透明度 <100%（分层窗口）实测同样可用 |
 
-设置面板 → **「渲染路线」页**：查看当前主题声明路线与实际生效路线（含真实原因码，如 `safe_mode` / `gpu_effects_opt_in_required`），GPU 路线开关也在这里。主题下拉与托盘菜单的主题项都会标注 `(GPU 材质)` / `(GDI+)`。旧版「实时玻璃」开关已移除，由 GPU 路线的「实时桌面背景」替代（旧配置值会在加载时自动迁移为关闭）。
+设置面板 → **「渲染路线」页**：查看当前主题声明路线与实际生效路线（含真实原因码，如 `safe_mode` / `gpu_effects_opt_in_required`），GPU 路线开关也在这里。主题下拉与托盘菜单的主题项都会标注 `（GPU 材质）` / `（GDI+）`。旧版「实时玻璃」开关已移除，由 GPU 路线的「实时桌面背景」替代（旧配置值会在加载时自动迁移为关闭）。
 
 ### 支持矩阵
 
@@ -126,8 +126,8 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 
 ## 安装与使用
 
-1. 前往 [Releases 页面](https://github.com/mojingjing-git/LiteMonitorPlus/releases) 下载最新版压缩包  
-2. 解压后运行 `LiteMonitor++.exe`  
+1. 前往 [Releases 页面](https://github.com/mojingjing-git/LiteMonitorPlus/releases) 下载最新版压缩包
+2. 解压后运行 `LiteMonitor++.exe`
 3. 程序会自动根据系统语言加载对应语言文件
 
 ---
@@ -153,7 +153,7 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 
 ## 主题系统
 
-主题文件位于 `/themes/` 目录。
+主题文件位于 `resources/themes/` 目录。
 
 示例：
 ```json
@@ -168,11 +168,11 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 }
 ```
 
-> 主题系统 v2 新特点：  
-> - 布局字段更精简、统一  
-> - 字体与布局分别独立缩放  
-> - 所有布局由 Theme.Scale 自动处理  
-> - 更容易构建自己的主题模板  
+> 主题系统 v2 新特点：
+> - 布局字段更精简、统一
+> - 字体与布局分别独立缩放
+> - 所有布局由 Theme.Scale 自动处理
+> - 更容易构建自己的主题模板
 
 ---
 
@@ -201,28 +201,47 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 
 ## 架构概览
 
-| 文件 | 功能 |
+源码位于 `src/`（下表路径相对 `src/`；`LiteMonitor.Updater/` 位于仓库根目录）。
+
+| 文件 / 目录 | 功能 |
 |------|------|
-| `MainForm_Transparent.cs` | 主窗体、拖拽、菜单托盘、自动隐藏、透明度、位置保存 |
-| `UIController.cs` | 主题加载、DPI/UIScale 缩放、布局重构、渲染入口、定时刷新 |
-| `UIRenderer.cs` | 竖屏渲染器（组块、进度条、标题渲染） |
-| `HorizontalRenderer.cs` | 横屏渲染器（两行布局、智能标签与数值） |
-| `UILayout.cs` | 竖屏动态布局计算 |
-| `HorizontalLayout.cs` | 横屏列宽计算、面板总宽度计算 |
-| `ThemeManager.cs` | 主题加载、颜色解析、字体构建 |
-| `LanguageManager.cs` | 多语言加载、扁平化 Key 访问 |
-| `HardwareMonitor.cs` | 采集 CPU/GPU/MEM/NET/DISK 信息；自动/手动设备选择 |
-| `AutoStart.cs` | 管理计划任务，实现开机自启 |
-| `UpdateChecker.cs` | GitHub + 国内双源版本检测 |
-| `AboutForm.cs` | 关于窗口 |
+| `System/Program.cs` | 程序入口：单实例互斥、全局异常捕获、DPI 初始化、驱动前置检查 |
+| `UI/MainForm_Transparent.cs` | 主窗体、拖拽、菜单托盘、自动隐藏、透明度、位置保存 |
+| `UI/UIController.cs` | 主题加载、DPI/UIScale 缩放、布局重构、渲染入口、定时刷新 |
+| `UI/UIRenderer.cs` | 竖屏渲染器（组块、进度条、标题渲染） |
+| `UI/HorizontalRenderer.cs` | 横屏渲染器（两行布局、智能标签与数值） |
+| `UI/UILayout.cs` | 竖屏动态布局计算 |
+| `UI/HorizontalLayout.cs` | 横屏列宽计算、面板总宽度计算 |
+| `UI/Decor/` | GDI+ 装饰层绘制（外框、进度条、几何、纹理缓存） |
+| `UI/Settings/` | 设置面板各分页（主面板、监控项、插件、插件市场、渲染路线、阈值、任务栏、系统与硬件） |
+| `Core/ThemeManager.cs` | 主题加载、颜色解析、字体构建 |
+| `Core/LanguageManager.cs` | 多语言加载、扁平化 Key 访问 |
+| `Core/Settings.cs` | `settings.json` 配置模型；口令与插件密钥的迁移、加密与落盘 |
+| `Core/MetricItem.cs` / `Core/MetricUtils.cs` | 监控项模型、数值格式化、三色阈值判定、进度条比例 |
+| `System/HardwareMonitor.cs` | 采集 CPU/GPU/MEM/NET/DISK 信息；自动/手动设备选择 |
+| `System/HardwareServices/` | 采样协调器（≤1Hz 单一入口）、传感器映射与设备选路、显存容量、CPU 电压、提交内存、驱动安装 |
+| `System/NetworkTraffic/` | ETW 网络流量采集、零拷贝解码、按远端 IP 排除流量 |
+| `System/Backdrop/` | **旧版实时玻璃**的桌面背景捕获与模糊链（属 GDI+ 路线） |
+| `System/WebServer/` | 网页监控服务：HTTP/1.1 + WebSocket、会话与口令协议、主题 CSS 映射 |
+| `System/UpdateChecker.cs` | GitHub + 国内双源版本检测、更新元数据签名校验 |
+| `System/AutoStart.cs` | 管理计划任务，实现开机自启 |
+| `Rendering/` | **GPU/D3D11 渲染路线**：契约、配置与路由判定、设备与资源账本、几何、材质、场景、呈现、桌面复制捕获 |
+| `Plugins/` | 插件模型、网络沙箱（方法面/主机白名单/重定向复核/并发上限）、执行器、市场安装与卸载事务 |
+| `ThemeEditor/` | 主题编辑器与主题文件读写服务 |
+| `UI/AboutForm.cs` | 关于窗口 |
+| `LiteMonitor.Updater/` | 独立更新器：摘要校验、事务替换与失败回滚 |
+
+> ⚠️ **两套并行的背景捕获链**：`System/Backdrop/`（旧版实时玻璃，GDI+ 路线）与
+> `Rendering/Capture/`（新 GPU 路线）各自独立实现帧源、WDA 排除与清理逻辑，互不共享。
+> 改动捕获相关代码前，请先确认自己处于哪一条链上。
 
 ---
 
 ## 编译说明
 
 ### 环境要求
-- Windows 10 / 11  
-- .NET 8 SDK  
+- Windows 10 / 11
+- .NET 8 SDK
 - Visual Studio 2022 或 Rider
 
 ### 编译命令
@@ -250,7 +269,7 @@ dotnet build -c Release
 ---
 
 ## 联系方式
-**本项目作者**：mojingjing-git  
+**本项目作者**：mojingjing-git
 **项目主页**：[https://github.com/mojingjing-git/LiteMonitorPlus](https://github.com/mojingjing-git/LiteMonitorPlus)
 
 **上游项目（原作者 Diorser，MIT 协议）**：[https://github.com/Diorser/LiteMonitor](https://github.com/Diorser/LiteMonitor)

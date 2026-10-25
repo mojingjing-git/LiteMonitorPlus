@@ -18,7 +18,7 @@
     pwsh -File scripts/start-current.ps1 -NoBuild             # 直接启动已有构建
     pwsh -File scripts/start-current.ps1 -Restart             # 先结束同目录旧实例再启动
     pwsh -File scripts/start-current.ps1 -ImportSettings      # 首次可带上旧配置
-    pwsh -File scripts/start-current.ps1 -Dotnet 'G:\TOOL\dotnet-sdk\dotnet.exe'
+    pwsh -File scripts/start-current.ps1 -Dotnet 'C:\Program Files\dotnet\dotnet.exe'
 
   说明：
     * settings.json 位于各运行目录自身（SettingsHelper 按 AppContext.BaseDirectory 解析），
@@ -48,21 +48,9 @@ $runDir = Join-Path $repoRoot "bin\run\$Configuration\net8.0-windows"
 $exePath = Join-Path $runDir 'LiteMonitor++.exe'
 
 # ----------------------------------------------------------------------
-# 定位 dotnet（与 run-dev.ps1 同口径：本机 PATH 上的 dotnet 可能是残缺的）
+# 定位 dotnet（共享助手：按能力探测挑一个**带 SDK** 的 dotnet）
 # ----------------------------------------------------------------------
-function Resolve-Dotnet([string]$explicit) {
-    if ($explicit) {
-        if (-not (Test-Path -LiteralPath $explicit)) {
-            throw "找不到 dotnet 可执行文件: $explicit"
-        }
-        return (Resolve-Path -LiteralPath $explicit).Path
-    }
-    $known = 'G:\TOOL\dotnet-sdk\dotnet.exe'
-    if (Test-Path -LiteralPath $known) { return $known }
-    $cmd = Get-Command dotnet -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    throw '找不到 dotnet，请用 -Dotnet 指定完整路径'
-}
+. (Join-Path $PSScriptRoot 'Resolve-Dotnet.ps1')
 
 function Get-InstancePath([System.Diagnostics.Process]$p) {
     # 提权实例从非管理员进程读不到 Path（返回空）——尽力而为，读不到就按未知处理。

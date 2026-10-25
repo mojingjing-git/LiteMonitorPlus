@@ -1,6 +1,7 @@
 # 硬件采集稳定性与磁盘访问控制 — Implementation Plan
 
-> 状态：待实施。本次只编写计划，不代表补丁、依赖迁移、实机验证或进程隔离已经完成。
+> 状态：**已实施**（硬件采集加固、依赖迁移与进程隔离均已落地；采集侧见 `src/System/HardwareServices/`，全项目复审见 [2026-10-23-full-project-regression-and-upstream-review.md](../../reviews/2026-10-23-full-project-regression-and-upstream-review.md)）。
+> ⚠️ 下文正文中的"待实施 / 未改动源码 / 不代表已完成"等字样保留为**计划撰写当时**的原始表述；当前实际状态以本行为准。
 >
 > 日期：2026-10-20。
 >

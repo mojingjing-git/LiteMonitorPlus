@@ -288,21 +288,6 @@ namespace LiteMonitor
         /// <summary>实时玻璃是否已开启（配置值）。</summary>
         public bool LiveGlassEnabled => _cfg.LiveGlassEnabled;
 
-        /// <summary>实时玻璃的**实际**状态说明（人类可读）—— 设置页展示用。</summary>
-        public string LiveGlassStatusText =>
-            _liveGlass?.StatusText ?? "实时玻璃未启用。";
-
-        /// <summary>
-        /// 打开 / 关闭实时玻璃。
-        /// <para>★ 配置与服务状态**必须同步**：配置说"开"而服务没起来时，
-        ///   状态说明会显示真实原因（合同 §7「降级不静默」、A16「配置和实际降级状态一致」）。</para>
-        /// </summary>
-        public void SetLiveGlassEnabled(bool enabled)
-        {
-            _cfg.LiveGlassEnabled = enabled;
-            _liveGlass?.SetEnabled(enabled);
-        }
-
         /// <summary>窗口可见性变化（隐藏 / 最小化 ⇒ 暂停捕获）。</summary>
         public void NotifyLiveGlassVisibility(bool visible) =>
             _liveGlass?.OnVisibilityChanged(visible);
@@ -315,9 +300,6 @@ namespace LiteMonitor
 
         /// <summary>窗口位置变化（客户区几何代次 +1）。</summary>
         public void NotifyLiveGlassLocationChanged() => _liveGlass?.OnLocationChanged();
-
-        /// <summary>主题 / DPI 变化（主题代次随外观运行时自增）。</summary>
-        public void NotifyLiveGlassAppearanceChanged() => _liveGlass?.OnAppearanceChanged();
 
         /// <summary>
         /// 停止实时玻璃（**整停**：服务 + 配置态开关）—— 窗口**真退出**时调用。

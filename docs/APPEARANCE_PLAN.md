@@ -7,7 +7,9 @@
 > 便于在其他分支/并行改动存在时仍然有效。
 >
 > **v4 —— 2026-10-20 基于 HEAD `97f793d` 再次审查。执行入口：[18 个工作包、Agent 分工与验收](superpowers/plans/2026-10-20-appearance-agent-execution.md)。**
-> 本文保留设计背景及 v2/v3 历史记录；默认值、技术门槛、写集和验收以 v4 执行计划为准。当前只更新计划，未实现或实测新效果。历史工期、行数、性能数字不能视为当前结论。
+> 本文保留设计背景及 v2/v3 历史记录；默认值、技术门槛、写集和验收以 v4 执行计划为准。历史工期、行数、性能数字不能视为当前结论。
+>
+> ⚠️ **状态更新（2026-10-24 复核）**：v4 执行计划（`superpowers/plans/2026-10-20-appearance-agent-execution.md`）**已实施并交付**（A13–A16 接线完成，当前 15 个内置主题）。本文 §0.2 与附录 B 是**撰写当时**的缺陷清单，已修复项在对应表格中逐条标注；未标注的即**仍然存在**。
 
 ---
 
@@ -39,11 +41,11 @@
 
 ### 0.2 已存在但被忽略的主题字段（当前丢失）
 
-| 丢失位置 | 现象 |
-|---|---|
-| `color.border` / `color.shadow` / `color.textSecondary` | 10 个内置主题中有 **7 个**声明了（`AuroraDream_Purple`、`CyberBlue_Neon`、`DeepOcean_Blue`、`Dracula_Vampire`、`LightPure_Elegant`、`MatrixGreen_Terminal`、`Monokai_Pro`），但 `ColorConfig` **没有**对应属性 → 反序列化时丢弃 |
-| `font.scale` | **全部 10 个**主题都声明了，但 `FontConfig` **没有** `Scale` 属性 → 同样被丢弃 |
-| `color.shadow` 的值格式 | 7 个主题用的是 `rgba(0,255,255,0.2)` 这种写法，而 `ParseColor` **不识别 `rgba()`** → 即使属性补上了，值也会退化为全透明 |
+| 丢失位置 | 现象（撰写当时） | 现状（2026-10-24 复核） |
+|---|---|---|
+| `color.border` / `color.shadow` / `color.textSecondary` | 当时 10 个内置主题中有 **7 个**声明了（`AuroraDream_Purple`、`CyberBlue_Neon`、`DeepOcean_Blue`、`Dracula_Vampire`、`LightPure_Elegant`、`MatrixGreen_Terminal`、`Monokai_Pro`），但 `ColorConfig` **没有**对应属性 → 反序列化时丢弃 | ✅ **已修复**：`ColorConfig` 现有 `Border` / `Shadow` / `TextSecondary` 三个属性（`src/Core/ThemeManager.cs`），且 `ThemeAppearanceOptions` 已消费这三个值；当前 15 个内置主题中有 **12 个**声明了这三个键 |
+| `font.scale` | 当时**全部 10 个**主题都声明了，但 `FontConfig` **没有** `Scale` 属性 → 同样被丢弃 | ⚠️ **仍然丢弃**：`FontConfig` 至今没有 `Scale` 属性，只作未知键扩展数据保留；当前 **15 个**主题**全部**声明了 `font.scale` |
+| `color.shadow` 的值格式 | 当时 7 个主题用的是 `rgba(0,255,255,0.2)` 这种写法，而 `ParseColor` **不识别 `rgba()`** → 即使属性补上了，值也会退化为全透明 | ✅ **已修复**：`ThemeManager.ParseColor` 现已识别 `rgba(r,g,b,a)`（`src/Core/ThemeManager.cs`） |
 
 **结论：机能风所需的 schema 已由作者预留，本次工作属于"补完半成品"，不是从零设计。**
 
@@ -151,7 +153,7 @@ v4 补充已有视觉目标缺少的 `Grid`（0–100，默认0）与 `BarStyle`
 |---|---|
 | `Theme` | 尚未类型化的未来顶层字段；Backdrop类型化后由其已知属性承接 |
 | `ColorConfig` | 未知未来颜色键；border/shadow/textSecondary由新增已知属性承接 |
-| `FontConfig` | **全部 10 个主题的 `font.scale`** |
+| `FontConfig` | **全部 15 个主题的 `font.scale`** |
 | `LayoutConfig` | 防御性，为并行开发预留的布局字段 |
 | `ThresholdConfig` / `ThresholdSet` | thresholds 本层与各阈值子对象的未来键 |
 | `BackdropConfig` | 引入类型化背景配置后的本层未来键 |
@@ -455,7 +457,7 @@ v4 的确定选择：主题 JSON 管理外观，不引入全局覆盖；效果�
 
 | 条件 | 状态 |
 |---|---|
-| .NET SDK | ✅ 8.0.426（系统 + `G:\TOOL\dotnet-sdk`） |
+| .NET SDK | ✅ 8.0.426（系统安装的 `dotnet`） |
 | 主工程构建 | ✅ `dotnet build -c Release` **3.48 s，0 错误**（242 个既有警告） |
 | 单元测试工程 | ✅ `tests/LiteMonitor.Tests/`（xUnit，25 个测试文件） |
 | 性能探针 | ✅ `tests/LiteMonitor.PerformanceProbe/`，**已含"兼容缓冲绘制"基准**（用真实 `UILayout`/`UIRenderer`/`HorizontalRenderer` 测绘制成本）→ 阶段二/三的开销可**量化**而非靠感觉 |
@@ -524,7 +526,7 @@ feat(ui): 新增液态玻璃背景层
 | 缺陷 | 位置 | 说明 | 处理阶段 |
 |---|---|---|---|
 | 主题嵌套字段被丢弃 | `src/ThemeEditor/ThemeFileService.cs` → `SaveTheme` | 序列化 `Theme` 对象，未映射键直接丢 | 阶段一 §1.4 |
-| `font.scale` 被丢弃 | `src/Core/ThemeManager.cs` → `FontConfig` | 全部 10 个主题都声明了，但无对应属性 | 阶段一 §1.4 |
+| `font.scale` 被丢弃 | `src/Core/ThemeManager.cs` → `FontConfig` | 全部 15 个主题都声明了，但无对应属性 | 阶段一 §1.4 |
 | 保存时写出 `null` | `src/ThemeEditor/ThemeFileService.cs` → `SaveTheme` | 无 `DefaultIgnoreCondition` | 阶段一 §1.5 |
 | 写出 `ItemSize` | `src/Core/ThemeManager.cs` → `FontConfig` | 内部 setter 泄漏到 JSON | 阶段一 §1.5 |
 | 换主题不刷新圆角 | `src/UI/Helpers/MainFormWinHelper.cs` → `ApplyRoundedCorners` | 只绑 `Resize`；`ApplyTheme` 无调用 | 阶段二 §2.4 |

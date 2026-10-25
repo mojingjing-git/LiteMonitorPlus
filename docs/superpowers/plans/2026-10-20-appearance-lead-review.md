@@ -902,7 +902,7 @@ A07 提出的候选方案是"**底纹低频重铺**"（不每帧重铺，靠跳�
 ## A14 —— M0/M1 综合验收与独立审查（2026-10-20）
 
 完整报告：[`2026-10-20-appearance-a14-acceptance.md`](2026-10-20-appearance-a14-acceptance.md)。
-独立验收报告：[`../reviews/2026-10-20-appearance-a13-independent-review.md`](../reviews/2026-10-20-appearance-a13-independent-review.md)。
+独立验收报告：[`../../reviews/2026-10-20-appearance-a13-independent-review.md`](../../reviews/2026-10-20-appearance-a13-independent-review.md)。
 
 ### 独立审查结论
 

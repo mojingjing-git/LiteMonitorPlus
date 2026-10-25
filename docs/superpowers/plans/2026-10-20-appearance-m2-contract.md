@@ -3,7 +3,7 @@
 > 工作包：**A15 前置合同冻结**（A15/A16/A17 的共同前提）
 > 权威规格：[2026-10-20-appearance-agent-execution.md](2026-10-20-appearance-agent-execution.md)
 > 技术路线裁决：[2026-10-20-appearance-a06-glass-validation.md](2026-10-20-appearance-a06-glass-validation.md)
-> 上游复核：[2026-10-20-appearance-a14-independent-recheck.md](../reviews/2026-10-20-appearance-a14-independent-recheck.md)
+> 上游复核：[2026-10-20-appearance-a14-independent-recheck.md](../../reviews/2026-10-20-appearance-a14-independent-recheck.md)
 > 状态：**已冻结**（2026-10-20）。本文件是 A15 派发前的**唯一合同来源**。
 > 冻结人：主集成者。
 

@@ -43,7 +43,8 @@
     "BAT.Percent": "电池电量",
     "BAT.Power": "电池功耗",
     "BAT.Voltage": "电池电压",
-    "BAT.Current": "电池电流"
+    "BAT.Current": "电池电流",
+    "SYS.Power": "总功耗"
   },
   "Short": {
     "DASH.HOST": " ",
@@ -78,7 +79,8 @@
     "BAT.Percent": "电量",
     "BAT.Power": "功耗",
     "BAT.Voltage": "电压",
-    "BAT.Current": "电流"
+    "BAT.Current": "电流",
+    "SYS.Power": "SPWR"
   },
   "Menu": {
     "RenderingRoute": "渲染路线",
@@ -124,9 +126,6 @@
     "Reset": "全部重置",
     "ResetConfirm": "确定要全部恢复系统默认设置吗？\n(程序将自动重启)",
     "Enable": "启用",
-    "LiveGlass": "实时玻璃",
-    "LiveGlassHint": "启用实时玻璃需要实时捕获窗口背后的画面。\n捕获瞬间，面板可能从录屏或截图中短暂消失或闪动。",
-    "LiveGlassStatus": "当前状态",
     "NoVisibleItems": "未启用任何监控项",
     "ConfigWriteBlocked": "配置暂时无法读取，本次修改不会保存",
     "ConfigWriteBlockedShort": "配置未保存",
@@ -274,12 +273,10 @@
     "GpuMonitorCountTip": "多显卡模式下按性能优先级取前 N 张显卡，温度/占用/功耗等指标会分卡显示",
     "Auto": "自动模式",
     "UseWinPerCounters": "优先使用系统计数器",
-    "UseWinPerCountersTip": "如数据不准可关闭系统计数器，关闭后，CPU使用率、CPU频率、内存占用、磁盘读取将直读硬件传感器",
     "Refresh": "刷新频率",
     "RefreshTip": "刷新频率只决定界面重绘的快慢；普通硬件数据最高每秒采集一次，调小刷新率不会提高硬件采集频率",
     "IgnoreSMBTraffic": "不统计局域网SMB流量",
     "MemoryDisplayMode": "内存/显存显示",
-    "MemoryCommitHint": "内存已提交：显示已提交量 / 当前提交上限（提交上限 = 物理内存 + 分页文件的提交额度，与物理内存占用率是两个独立口径）",
     
     "__Comment_Page6__": "--- 6. 插件管理 (PluginPage) ---",
     "Plugins": "插件管理",

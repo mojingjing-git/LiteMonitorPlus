@@ -1,6 +1,7 @@
 # 设置面板「渲染路线」独立化（R3 · 实机核查后修订版）
 
-> 状态：**待执行**（R2 的改动一/二/四/五/六 已按 R3 修订；R2 的改动三降级为条件项）
+> 状态：**已执行并交付**（R3 渲染路线已并入 master：路由策略见 `src/Rendering/Configuration/RenderingRoutePolicy.cs`，三条路线 `Legacy` / `GpuFixedInput` / `GpuLiveBackground`；交付复审见 [2026-10-24-candidate-worktree-implementation-review.md](../../reviews/2026-10-24-candidate-worktree-implementation-review.md)）。
+> ⚠️ 下文正文中的"待实施 / 未改动源码 / 不代表已完成"等字样保留为**计划撰写当时**的原始表述；当前实际状态以本行为准。
 > 日期：2026-10-24
 > 基线：候选工作树 `codex/review-remediation-20261023` @ `9238bb9`（含未提交的修复批次）
 > 前序：R2《设置面板「渲染路线」独立化 + 移除旧实时玻璃开关》（已按自审修订）
@@ -379,7 +380,7 @@ R3 §3.3 六项判据全部通过（证据：`docs/reviews/evidence/rendering-ro
 | 0 | ✅ 方案 A | 见 §10.1；实验改动**保留为正式改动**（policy 诊断化 + 宿主放开），守卫用例按方案 A 改写 |
 | 1 | ✅ | `src/UI/Settings/RenderingRoutePage.cs`（路线总览卡 + GPU 路线卡迁入，OnShow 惰性创建对齐 MainPanelPage 模式）、`RenderingRouteStatusBuilder.cs`（纯函数聚合）、`SettingsForm` nav + Apply 重试申请改读新页；MainPanelPage 的 GPU 卡/`GpuStartupRetryRequested` 移除 |
 | 2 | ✅ | `ThemeManager.IsGpuTheme`（JsonDocument 轻读 + 全路径容错归 legacy）；设置页主题下拉改 `AddComboPair` 带 `(GPU 材质)/(GDI+)` 后缀（Value 不变）；托盘主题项同后缀（同 helper 同 key） |
-| 3 | ✅ | 9 个语言文件各 +10 key（`Menu.RenderingRoute` / `Menu.RouteSuffixGpu|Gdi` / `Menu.RouteStatus.*` 7 条），文本级插入，逐文件 JSON 解析验证通过（`scripts/add-rendering-route-i18n.py`） |
+| 3 | ✅ | 9 个语言文件各 +10 key（`Menu.RenderingRoute` / `Menu.RouteSuffixGpu|Gdi` / `Menu.RouteStatus.*` 7 条），文本级插入，逐文件 JSON 解析验证通过（一次性迁移脚本，已在 2026-10-24 工作目录清理中移除；产出已入库 9 个语言包） |
 | 4 | ✅ | 新增 31 条用例：StatusBuilder 10 + 原因码 8（含"分层码不得复活"）+ IsGpuTheme 9 + LiveGlass 迁移 3；守卫改写 1 + 新增 1；门禁阈值 1831→**1862**（ci.yml + release.yml 逐字一致）；`AppearanceSettingsProbe` 增加新页真实构造 + OnShow 用例 |
 | 5 | ✅ | README：三条渲染路线矩阵 + 设置路径改为「渲染路线」页 + 旧开关迁移说明 |
 | 6 | ✅ | 旧实时玻璃开关移除；迁移落点 = `SettingsHelper.Load` **每次加载路径**（强制 `LiveGlassEnabled=false`，字段保留）；`LiveGlassController`/`UIController` 机器全保留（`get_LiveGlassEnabled` 调用点未动，IL 护栏原样通过） |
