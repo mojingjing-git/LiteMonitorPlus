@@ -669,6 +669,28 @@ Windows 上 `MoveFileEx(..., MOVEFILE_REPLACE_EXISTING)` 要求**目标文件当
 
 ⇒ **该配置可解决 18/23**；#592 与 #568 恰好是本机唯二做不了的两项，而 NVIDIA + Win11 又恰好覆盖不了（#592 除非另找 Intel 机器，否则无解）。
 
+**推送方案（2026-10-26 用户裁定）**
+
+用户裁定三条：① **拆碎点提交**；② **等 W3 三包合完再一起推**；③ 工作树上防火墙排查会话的 2 个未提交改动（`docs/development-windows-firewall.md`、`docs/verification/acceptance/F00-baseline.md`）**不碰，留给对方自己提交**。
+
+**前提事实（2026-10-26 实测）**：`master` 追踪 `origin/master`，**ahead 109**，**远端领先 0** ⇒ 推送是干净 fast-forward，不会撞车。三个远端：`origin` = `mojingjing-git/LiteMonitorPlus`（推送目标）、`upstream` = `Diorser/LiteMonitor`（上游）、`fork-source` = `mojingjing-git/LiteMonitor`。
+
+**⚠️ 109 条里有 64 条不属于本批次**：10-24 的 2 条与 10-25 的部分提交属**主题市场线**（`feat(theme-market)` M1–M6、`R3 渲染路线`、`行尾治理`）—— 那是另一条工作线，非本次 issue 修复。整批推会把两条线塞进同一段历史，导致**无法单独回滚 issue 修复**、发布说明边界模糊、并可能顺带公开尚未打算公开的主题市场线。
+
+**粒度选择（三档，采用 B）**
+
+| 档 | 做法 | 粒度 | 结论 |
+|---|---|---|---|
+| A 最细 | 逐条 cherry-pick ~50 条（merge 需 `-m 1`） | 每包每提交独立 | ❌ merge 节点易错，需处理 cherry-pick 冲突 |
+| **B 按包** | 对每包用 `git merge --squash <分支>` ⇒ **一个包一个提交** | 可单独 revert 某包 | ✅ **采用** |
+| C 最粗 | 全部 squash 成 1 条 | 不可分 | ❌ 不满足"拆碎" |
+
+**执行方式**：从 `origin/master`（`9238bb9`）切 `release/issue-fixes`，按包依次 squash 合并。已核实 **14 个包分支全部仍在本地**：`fix/F01-ws-upgrade-parse`、`fix/F03-network-sample-freshness`、`fix/F04-taskbar-host-lifecycle`、`fix/F08a-disk-counters-only`、`fix/F12-font-measure-safety`、`fix/F13-plugin-fallback`、`tools/F15-forensics-harness`、`research/F09a-dependency-candidate`（W1 八包）；`fix/F03b-network-cache-window`、`fix/F02-reverse-proxy-policy`、`fix/F07-stable-device-identity`、`fix/F05-taskbar-geometry`、`fix/F14a-market-page-cache`、`fix/F17-market-install-race`（W2 五包 + F17）。
+
+⇒ 基线为 **14 个提交**；**W3 三包（F06 / F08b / F14b）合完后为 17 个**。主题市场线**留本地不推**，另议。
+
+> 合并顺序须与集成顺序一致（F07 先于 F08b/F10，因在 `SensorMap.cs` 有冲突面）。每 squash 一包后需确认构建通过。
+
 **F01 遗留裁定（→ F16 发布说明）**
 
 1. **普通 HTTP 路由对超大头块（> 8 KB）**：升级路径已返 431，普通路径仍走普通路由 → **裁定统一 431**，由 F16 实现。
