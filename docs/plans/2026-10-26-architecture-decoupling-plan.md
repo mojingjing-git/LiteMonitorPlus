@@ -2,7 +2,7 @@
 
 - 日期：2026-10-26。
 - 状态：B0～B2已批准（2026-10-26，与Plan A的I0～I1同批拍板）；B3～B6维持评估稿，由首批结果再评估。尚未开始实施，本文不表示架构已完成拆分。
-- 源码观察基线：`1f652c1f0e402f124c4535fcf878f19c216c5e39`。实施时重新记录HEAD与并行改动。
+- 源码观察基线：`1f652c1f0e402f124c4535fcf878f19c216c5e39`。B0 启动基线：`9da07af`（2026-10-26，W3 合并后），盘点见 [B0/I0 基线盘点](2026-10-26-B0-I0-baseline-inventory.md)。
 - 对应问题：UI、硬件采集、全局设置、格式化和应用副作用相互引用，修改一处容易影响多条路径。
 - 关联：[Plan A：采集进程隔离](2026-10-26-hardware-process-isolation-plan.md)、[原R06需求](2026-10-24-architecture-debt-requirements.md)、[原R06计划](2026-10-24-architecture-debt-plan.md)。
 
@@ -194,6 +194,8 @@ Draft-Commit保证用户草稿隔离，不代表多个外部服务动作天然�
 启动规则：上表分支全部合入或明确搁置、热点文件（`Settings.cs`、`SettingsHelper.cs`、`MetricItem.cs`、`UIController.cs`、`HardwareMonitor.cs`、`LiteWebServer.cs`、`SystemHardwarPage.cs`）冻结后，方可启动B0；启动时重录HEAD与未提交改动。B0完成条件包含本表执行情况核对。
 
 两份首批同批批准即触发上文同一负责人条款：C1契约与消费方迁移（本计划B1/B2≙Plan A的I1）只做一次；合并WBS待B0/I0共同基线盘点后按实际重算。
+
+**执行核对（2026-10-26，W3 合并后）**：F08b（含接线）/f14b/f06 已合入，F17 已放弃，r06c 已封存并摘取脚本——棘轮基线随 W3 上调（C-1=147、C-3=172、C-4=353，+5 文件/+15 public 类型，均为已验收代码；A 组零变化），历史见 `scripts/architecture-baseline.json`。autohide 未合入（待实机冒烟 4 步），其落点为 `AppActions`/`MainForm_Transparent` 等 B3 文件、不在冻结清单，不阻塞 B0～B2/I0～I1；B3 启动前必须合入或明确搁置。B0 已启动，静态盘点完成，见 [B0/I0 基线盘点](2026-10-26-B0-I0-baseline-inventory.md)。
 
 ## 8. 提交与回滚
 
