@@ -329,8 +329,16 @@ if ($UpdateBaseline) {
         note        = '棘轮基线：断言期望=此处记录值；实际值变大即失败，变小（改善）通过。随 B1/B2/B5 落地逐项下调，B6 收敛为 0 后本文件退役。'
         counts      = [ordered]@{}
     }
+    # 保留既有 history（若存在），UpdateBaseline 只追加新条目，不抹掉上调依据
+    $priorHistory = $null
+    if (Test-Path -LiteralPath $BaselinePath) {
+        try { $priorHistory = (Get-Content -LiteralPath $BaselinePath -Raw | ConvertFrom-Json).history } catch { $priorHistory = $null }
+    }
     foreach ($r in $Results) { $obj.counts[$r.Id] = $r.Actual }
-    [System.IO.File]::WriteAllText($BaselinePath, ($obj | ConvertTo-Json))
+    if ($priorHistory) {
+        $obj['history'] = @($priorHistory) + @(@{ date = (Get-Date -Format 'yyyy-MM-dd'); commit = ''; event = 'UpdateBaseline 重录（请在提交前手工补全 commit 与事由）' })
+    }
+    [System.IO.File]::WriteAllText($BaselinePath, ($obj | ConvertTo-Json -Depth 6))
     Write-Host ("基线已写入: " + $BaselinePath + "（" + $Results.Count + " 项）——确认差异后随脚本一起提交。")
     exit 0
 }
