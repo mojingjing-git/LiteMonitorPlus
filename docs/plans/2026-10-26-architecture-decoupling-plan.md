@@ -199,6 +199,8 @@ Draft-Commit保证用户草稿隔离，不代表多个外部服务动作天然�
 
 **分工拍板（2026-10-26）**：B0 收尾（行为 fixture + 性能基线）派发 [P-B0b](dispatch/P-B0b.md) 由独立会话在工作树执行；B1+B2（≙Plan A 的 I1）由主会话按 [P-B1B2](dispatch/P-B1B2.md) 执行，C1 契约已在派工单字段级固定。
 
+**B1/B2 收口（2026-10-26）**：契约工程、进程内适配器与消费方迁移完成——UI/Web 对 `LibreHardwareMonitor`/`ComputerInstance`/`SyncLock` 的代码引用清零（§6.2 检查2达成），采样入口统一走契约，契约目录类型定名 `HardwareCatalog`（与 F07 既有类型撞名，见派工单订正）。验证：构建 0 错误、主测试 2134/0 全绿、架构断言 12/12 基线零变化。`Instance` 残留 10 文件为登记例外（撤除阶段均 B3/B4，清单见 [B1B2 验收记录](../verification/acceptance/B1B2-report.md)）。首批整体验收待 P-B0b fixture 合入后复跑。
+
 ## 8. 提交与回滚
 
 - 按B阶段拆小提交；文件移动、类型/命名空间改名与行为修改分开，便于检查差异。
