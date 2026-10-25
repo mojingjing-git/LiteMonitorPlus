@@ -281,7 +281,17 @@ $ dotnet test tests/LiteMonitor.Updater.Tests/... -c Debug --no-build --nologo
 
 - **新增用例数 = 1969 − 1936 = 33**（9 + 8 + 9 + 5 + 2）。
 - 跳过数 7 vs 基线记录的 1：差的是 `MarketIndexContractTests`（6）+ `MarketE2ETests`（1）——**联网/索引环境性跳过**，与本包无关（协调者基线环境里这些是跑通的）。
-- **未出现**基线已知 flaky（`ReviewMarketPersistenceRegressionTests`）：本次全量 0 失败。
+
+### 7.1 基线已知 flaky（如实记录，未修）
+
+最终验收那一轮全量跑出现过 **1 条**间歇失败（随后重跑为 0 失败）。定位结论：**基线已知 flaky，与本包无关**。
+
+- 复现（只跑该类，连跑 6 次）：第 4 次 `SuccessfulInstallAndUpdate_PersistRecordAndPayload(update: True)` 失败、
+  第 6 次 `ExtendedJournalMetadata_IsValidatedBeforeRecovery(...)` 两条失败 —— **每次失败的用例都不同**，
+  是典型的**类内跨用例状态污染**。
+- 本包**未触碰**该用例涉及的任何文件（`src/Core/Settings.cs`、`src/Core/SettingsHelper.cs`、插件/市场持久化代码），
+  `git diff af572c0 HEAD -- src/Core/Settings.cs src/Core/SettingsHelper.cs tests/LiteMonitor.Tests/ReviewMarketPersistenceRegressionTests.cs` 输出为空。
+- 按派发单「坑 #1」处理：**不修**，仅在此注明（协调者已在纯净基线 d52c0ab 上复现过同一现象）。
 
 ---
 
