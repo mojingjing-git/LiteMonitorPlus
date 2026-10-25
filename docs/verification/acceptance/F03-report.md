@@ -12,6 +12,7 @@
     （`tests/LiteMonitor.Tests/NetworkSampleFreshnessTests.cs` 新建、`SamplingCacheTests.cs`、`TrafficDeltaTests.cs`）
   - `8983e97` `docs(F03): 验收记录 —— 网络值时效、失败恢复与自动选卡（#96）`
     （`docs/verification/acceptance/F03-report.md` 新建）
+  - `8bbab30` `docs(F03): 验收记录补齐提交 SHA 列表`（仅补本文件）
 - 完成日期：2026-10-25
 - 执行者：worker 会话 `mvs_e49dfeadf93c4de0917086821974bb12`（P-F03 外派单）
 
