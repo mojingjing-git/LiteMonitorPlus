@@ -335,6 +335,42 @@ namespace LiteMonitor.Tests
         }
 
         // ================================================================
+        // ⑦ 布局回归护栏：改造后的视觉顺序必须与改造前逐项一致
+        // ================================================================
+
+        [Fact]
+        public void 页面视觉顺序与改造前一致()
+        {
+            RunSta(() =>
+            {
+                var page = NewPage();
+                var host = new Panel();
+                host.Controls.Add(page);
+                page.OnShow();
+
+                Control container = page.Controls[0];
+                List<Control> visual = VisualOrder(container);
+
+                Assert.Equal(8, visual.Count);
+                Assert.IsType<LiteHintRow>(visual[0]);                              // 列表提示行
+                Assert.IsType<Label>(visual[1]);                                     // 启动自检提示
+                Assert.IsType<Label>(visual[2]);                                     // 进度/错误状态
+                Assert.Equal(LanguageManager.T("Menu.PluginMarketCategory"),
+                    ((LiteActionRow)visual[3]).Label.Text);                         // 分类页签行
+                Assert.Equal(LanguageManager.T("Menu.PluginMarketSource"),
+                    ((LiteActionRow)visual[4]).Label.Text);                         // 插件源行
+                bool listHostOk = false;
+                foreach (Control c in visual)
+                {
+                    if (c is Panel p && p.Controls.OfType<LiteSettingsGroup>().Any()) { listHostOk = true; break; }
+                }
+                Assert.True(listHostOk, "列表区不在预期的视觉位置");   // 列表区
+                Assert.IsType<Panel>(visual[6]);                                    // 间隔
+                Assert.IsType<Panel>(visual[7]);                                    // 预览窗格宿主
+            });
+        }
+
+        // ================================================================
         // 夹具
         // ================================================================
 
@@ -445,6 +481,20 @@ namespace LiteMonitor.Tests
         internal static List<LiteSettingsGroup> Groups(List<Control> controls)
         {
             return controls.OfType<LiteSettingsGroup>().ToList();
+        }
+
+        /// <summary>
+        /// 视觉顺序：WinForms 的 Dock=Top 按 z 序**逆序**停靠（索引越大越靠上），
+        /// 所以视觉顺序 = 集合顺序的逆序。
+        /// </summary>
+        internal static List<Control> VisualOrder(Control container)
+        {
+            var list = new List<Control>();
+            for (int i = container.Controls.Count - 1; i >= 0; i--)
+            {
+                list.Add(container.Controls[i]);
+            }
+            return list;
         }
 
         internal static List<ThemePreviewControl> PreviewControls(Control root)
