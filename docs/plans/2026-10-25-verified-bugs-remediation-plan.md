@@ -489,6 +489,9 @@ System.UnauthorizedAccessException: Access to the path is denied.
 | **纯净基线 `d52c0ab`（无任何 W1 改动）** 全量 | 1784 | 1 | `GenericCallback_MutatesMemoryThenThrows_IsCompensated` |
 | `integration/w1` 全量 | 1936 | 1 | `AfterRecordFileRestorationFailure_RemainsPendingUntilRequiredMoveOrDeleteSucceeds` |
 | `integration/w1` 全量（**F08a 单例修复并入后**） | 1936 | 1 | `ExtendedJournalMetadata_IsValidatedBeforeRecovery` |
+| `master@f423c84` 全量 第 1 轮（F08a 收尾 `86ba7e6` 后） | 1937 | **0** | — |
+| `master@f423c84` 全量 第 2 轮 | 1937 | **0** | — |
+| `master@f423c84` 全量 第 3 轮 | 1937 | **1** | `SuccessfulInstallAndUpdate_PersistRecordAndPayload` |
 | `integration/w1` 整类单跑（第 1 轮） | 33 | 1 | `Recovery_CorruptPrimaryDoesNotUseBackupOrLiveRecordAsCommitEvidence` |
 | `integration/w1` 整类单跑（第 2 轮） | 33 | **0** | — |
 | `integration/w1` 整类单跑（第 3 轮） | 33 | 1 | `SuccessfulInstallAndUpdate_PersistRecordAndPayload` |
@@ -505,11 +508,19 @@ Windows 上 `MoveFileEx(..., MOVEFILE_REPLACE_EXISTING)` 要求对**目标文件
 
 `CommitAndRecovery_UseOneTransactionGate` 这条用例**故意**让恢复线程与提交线程并发 ⇒ 正好撞上这个窗口；窗口窄 ⇒ 表现为**间歇失败**、**受害用例随机轮换**（任何走 `CommitInstall` 的用例都可能中招），单条单跑则全绿。
 
-**归属**：`src/Plugins/PluginMarket.cs` 属**主题市场工作线**；安装事务的并发替换失败路径**没有有界重试**（与「恢复有界」约束不符）。**W1 八分支零触碰该文件**（已逐一核对文件集）⇒ 判定为**既有缺陷**，非 W1 引入。
+**归属与撞车风险（2026-10-25 晚更正）**
 
-**建议修法（属该工作线）**：① `CommitInstall` 的原子替换对 `UnauthorizedAccessException` / `IOException` 做**有界重试**（配合既有写前日志 + 恢复机制，符合「恢复有界」）；或 ② 读取侧（`ComputeFileSha` / `FindPersisted`）改用 `FileShare.ReadWrite | FileShare.Delete` 打开。两条都不在 W1 的授权文件清单内，故本轮未改。
+`src/Plugins/PluginMarket.cs` 的主题市场功能（M5/M6）**已合入 master**。仓库里**唯一活跃的并行会话是 Windows 防火墙排查会话**，其工作面是防火墙规则、`.tmp/` 脚本与 `docs/development-windows-firewall.md`，**不碰 `src/Plugins/**`**；另一条 `feat/r06c-namespace` 分支最后提交在 2026-10-24，worktree 只剩未跟踪残留，不活跃。
 
-⚠️ **CI 的 `MUST_EXECUTE_TEST_CLASS` 钉死了该类 ⇒ 一旦命中即流水线红**（全量跑命中概率约 2/3），须由该工作线尽快收口。
+⇒ **不存在"被并行会话同时修改"的撞车风险**，本会话可直接立项修复该缺陷（若用户批准）。此前基于"并行会话＝主题市场线"的判断不成立，已更正。
+
+该文件还存在第二层问题：安装事务的并发替换失败路径**没有有界重试**（与「恢复有界」约束不符）。**W1 八分支零触碰该文件**（已逐一核对文件集）⇒ 判定为**既有缺陷**，非 W1 引入。
+
+**真实用户影响**：`CommitInstall` 先写写前日志（`:1028`）再原子替换（`:1038`）；若**恢复线程**在这两步之间读到该日志并读取目标文件，就会与自己的替换相撞 ⇒ 安装**静默失败并留下事务日志**，下次启动被回滚 ⇒ **用户的安装丢失且没有明确报错**。触发窗口窄，但在"启动即恢复"与"用户正在安装"重叠时会真实发生。
+
+**建议修法（两条都不在 W1 的授权文件清单内，故本轮未改）**：① `CommitInstall` 的原子替换对 `UnauthorizedAccessException` / `IOException` 做**有界重试**（配合既有写前日志 + 恢复机制，符合「恢复有界」）；或 ② 读取侧（`ComputeFileSha` / `FindPersisted`）改用 `FileShare.ReadWrite | FileShare.Delete` 打开。
+
+⚠️ **CI 的 `MUST_EXECUTE_TEST_CLASS` 钉死了该类 ⇒ 一旦命中即流水线红**（最新 master 实测 **1/3 轮命中**；F08a 收尾把 `DiskProbeMode` 改成 `int?`+`WhenWritingNull`（旧配置不再被写盘）后症状从约 2/3 降到 1/3，**但根因未修**），须尽快收口。
 
 **F01 遗留裁定（→ F16 发布说明）**
 
