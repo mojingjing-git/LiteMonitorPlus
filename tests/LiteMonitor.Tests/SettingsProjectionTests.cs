@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using LiteMonitor.Contracts;
 using LiteMonitor.Core;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.Plugins; // MarketPluginRecord(插件投影用例)
 using Xunit;
 
 namespace LiteMonitor.Tests
