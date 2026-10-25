@@ -35,6 +35,30 @@ namespace LiteMonitor
         public int PanelWidth { get; set; } = 240;
         public double UIScale { get; set; } = 1.0;
 
+        // ====== 设置窗体的明暗模式（F14b / issue #437 暗色半项）======
+        // ★ 刻意新增一个字段，而不是复用 Settings.Skin：
+        //   Skin 是**悬浮窗皮肤**（磁盘上的 resources/themes/*.json，由 ThemeManager 加载，
+        //   还决定 GPU 材质渲染路线）；本属性只管**设置窗体自身的界面底色**，
+        //   两套体系互不相干 —— 详见 src/Core/SettingThemeMode.cs 的说明。
+        //
+        // ★ 迁移：默认值 0 = System。旧版 settings.json 没有此字段时反序列化得到 default，
+        //   即 System ⇒ 跟随系统；界面观感与修复前一致（修复前写死的是一套浅色）。
+        //
+        // ★ 为什么用手写 getter/setter 而不是自动属性：
+        //   settings.json 是**用户可编辑**的文本文件，一个手写的 "SettingThemeMode": 7
+        //   会被 System.Text.Json 原样塞进枚举的 int 位（枚举不做范围校验）。
+        //   若放任不管，后续 UI 的 switch 会落到 default 分支 —— 行为其实和 System 一样，
+        //   但那份非法值会被**原样写回磁盘**并一直带着（掩盖问题、也让诊断困难）。
+        //   因此在 set 处统一夹回合法值：既不整份配置加载失败（那会连用户的其它设置一起丢），
+        //   也不把非法值静默当成某个别的意思 —— 一律落到 System（"跟随系统"）。
+        private LiteMonitor.src.Core.SettingThemeMode _settingThemeMode = LiteMonitor.src.Core.SettingThemeMode.System;
+
+        public LiteMonitor.src.Core.SettingThemeMode SettingThemeMode
+        {
+            get => LiteMonitor.src.Core.SettingThemeModes.Coerce(_settingThemeMode);
+            set => _settingThemeMode = LiteMonitor.src.Core.SettingThemeModes.Coerce(value);
+        }
+
         // ====== 实时玻璃（M2 / A16）======
         // ★ 实时玻璃**默认关闭**（M2 合同 §8.1）：开启需要用户显式操作，
         //   并且首次开启时必须提示"捕获瞬间面板可能从录屏/截图中短暂消失或闪动"。
@@ -80,6 +104,29 @@ namespace LiteMonitor
         //   ★ 用户的磁盘偏好（PreferredDisk / LastAutoDisk）与监控项**不因迁移被改动**。
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public int? DiskProbeMode { get; set; }
+
+        // ====== [#245 缓解] 控制器（USB / HID）探测策略 ======
+        //   0 = 自动（默认）：沿用 fork 既有规则 —— 仅当监控项需要风扇/水泵时才开启控制器扫描；
+        //   1 = 关闭：永不构造任何控制器组（遇到 USB/HID 冲突如 DAPLink 时的明确开关）；
+        //   2 = 强制开启：无条件构造控制器组（排查/对照用，风险自负）。
+        //   null = **未设置**（键不存在）：★ 迁移状态 ⇒ 按"自动"运行（既有行为），
+        //       并在设置页提示"可以彻底关闭控制器扫描"。
+        //   ★ 与 DiskProbeMode 同一口径：用 null + WhenWritingNull ⇒
+        //     用户没做选择前，旧 settings.json **一个字节都不会被改写**。
+        //   ★ 边界（不冒充 #245 完整修复）：本开关是**构造前**隔离（有 IL 级保证；
+        //     开关为 false 时 LHM 根本不构造 8 个控制器组，因此不碰任何 HID/USB 设备）；
+        //     但它**不能**逐个排除"某一个" USB 设备 —— 单个设备的排除列表
+        //     （ControllerDeviceExclusion）作用在构造之后，只降低二次触碰频率。
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? ControllerProbeMode { get; set; }
+
+        // ★ [#245 缓解] 控制器设备排除匹配串（大小写不敏感的字符串包含匹配）。
+        //   命中 ⇒ 跳过该设备的 Update（**不能**阻止它被构造，见上面"边界"）。
+        //   null / 空 ⇒ 不排除任何设备（沿用既有行为）。
+        //   ★ 只按显示名与 Identifier 匹配：LHM 不暴露 USB VID/PID 或 PnP 硬件 ID，
+        //     这二者按 F07 分级都**不是**跨重启的稳定身份 ⇒ 只用于"跳过 Update"，不用于身份绑定。
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<string>? ControllerExclusionPatterns { get; set; }
 
         // ====== [#610] 按指定 IP 排除实时网速 ======
         // ★ 默认关闭。关闭或没有有效规则时**不启动任何额外事件采集**（零新增会话/逐包处理）。

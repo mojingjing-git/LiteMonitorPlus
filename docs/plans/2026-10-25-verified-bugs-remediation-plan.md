@@ -411,12 +411,12 @@ Release同样执行；TRX交给仓库现有门禁脚本核对发现数/跳过数
 | #88 | F14/F16回归 | 原页面缓存修复不回退 | 已验证（不生效·可关闭） |
 | #96 | F03 | 缓存过期与实际网络切换/恢复通过 | 代码完成（F03 四层时效 + F03b 事件驱动刷新；待实机：真实热插拔） |
 | #235 | F13/F16回归 | 断网后恢复、重试与发布租约保持 | 已验证（不生效·可关闭；F13 另做兜底加固） |
-| #245 | F08 | 控制器隔离与DAPLink实机通过；磁盘策略不替代此验收 | 已缓解（F08a 策略层已落地；DAPLink 实机待验） |
+| #245 | F08 | 控制器隔离与DAPLink实机通过；磁盘策略不替代此验收 | 代码完成（F08b 构造前隔离开关已落地**并接线**；DAPLink 实机待验，默认排除串含推断成分须核对） |
 | #287 | F03/F16回归 | Wi-Fi/网卡切换后IP及时刷新 | 已验证（不生效·可关闭；F03 另做时效加固） |
 | #290 | F07/F09/F10 | 身份稳定、原生句柄修复和显卡切换场景共同通过 | 代码完成（部分，F07 身份目录已落地；**现场闪退关闭仍需 F09b 的 NVML 句柄 + F10 映射自愈**） |
 | #416 | F15 | 有内核栈归因后实施对应优化；未归因不宣称根因解决 | 仍需调查（F15 WPA 采集脚本就绪，待火焰图归因） |
 | #434 | F10 | 缺失Key运行时恢复；区分无值遥测 | 未开始 |
-| #437 | F14-A/F14-B | 卡顿与暗色两个子项分别验收 | 卡顿半项**代码完成**（F14a：重复打开 p95 8566ms → 1.58ms）；暗色半项未开始（F14b） |
+| #437 | F14-A/F14-B | 卡顿与暗色两个子项分别验收 | 卡顿半项**代码完成**（F14a：重复打开 p95 8566ms → 1.58ms）；暗色半项**引擎代码完成**（F14b：明暗调色板/管理器/应用器 + 52 条用例）；**⚠️ 无设置页 UI 入口**（无下拉框、8 语种文案未加）⇒ 用户暂不可达，待裁决是否补 UI |
 | #450 | F10/F07 | 无需手动切卡恢复，自动选卡语义保持 | 未开始 |
 | #466 | F08/F09 | 构造前排除与USB盘安全移除实测通过 | 已缓解（F08a CountersOnly 止血；F08b 精细策略未做） |
 | #497 | F09/F16回归 | 保持已有AMD匹配能力，驱动问题不冒充软件修复 | 已验证（不生效·可关闭） |
@@ -439,11 +439,11 @@ Release同样执行；TRX交给仓库现有门禁脚本核对发现数/跳过数
 | #589 | F01/F16回归 | 四种头名大小写保持通过 | 已验证（不生效·可关闭；探针实测 4/4 = 101） |
 | #592 | F10/F11/F15 | GCL真机可读才算采集修复，缺失文案仅属改善 | 仍需调查（部分生效；需 B580 真机） |
 | #596 | F10 | 运行时映射自愈，无手动切卡依赖 | 未开始（部分生效） |
-| #599 | F06 | 合成兄弟窗口迟到覆盖后自动恢复，无焦点变化 | 未开始 |
+| #599 | F06 | 合成兄弟窗口迟到覆盖后自动恢复，无焦点变化 | 代码完成（F06 同级 Z 序 + 有界后续检查；待实机：真实驱动热更新/虚拟桌面/多显示器混合 DPI） |
 | #601 | F08/F09 | HWiNFO共存实机验收；禁SMART只算明确缓解 | 已缓解（F08a 已落地策略层） |
 | #603 | F10/F11/F16回归 | 预热路径保持；不以真实0触发无效重建 | 已验证（不生效·可关闭） |
 | #611 | F13 | 主源失败→本地兜底→主源恢复全链路 | 代码完成（`continue_on_error` 与 `native://newyear` 已恢复） |
-| #612 | F06 | 主窗置顶与纯任务栏Z序分别验收 | 未开始 |
+| #612 | F06 | 主窗置顶与纯任务栏Z序分别验收 | 代码完成（**部分**）：F06 移除了 `!_form.Visible` 早退 + 加样式位/真实层级双判；**"层级异常可恢复"这一支只有替身证据** —— 实测 Windows 同步维护样式位与真实层级，自动化无法构造"位在层级掉" ⇒ 待实机，建议按"仅隐藏停摆这一半"计 |
 | MARKET-RACE | F17 | 修复后安装事务在并发读取下不再抛 `ERROR_ACCESS_DENIED`；**全量测试 5 次连跑全绿**；安装与恢复并发后不出现"文件已换但记录没换" | **代码完成（F17）** —— 读取侧共享读 + 替换侧有界重试 + 可识别异常兜底；新增 5 条确定性用例；门禁全量连跑收口中 |
 | WEB-OWS | F01 | 合法SP/HTAB请求进入握手，不再静默200 | 已验证（探针实测 C5/C6 由 200 翻 101） |
 
@@ -707,6 +707,66 @@ Windows 上 `MoveFileEx(..., MOVEFILE_REPLACE_EXISTING)` 要求**目标文件当
 | 2 | `MatchNativeNetworkAdapter` 的 10 秒重匹配节流 | **P-F03b**（新建，W2 并行） | 同上 |
 | 3 | 产品无「完全关闭 GPU 传感器采样」开关（`MonitoredGpuCount` 下限 1） | **P-F10** | 与 #450/#592 一起收口 |
 | 4 | `Intel GCL Initialized` 只出现在整机报告，而非单卡 `GetReport()` | **P-F10** | 支撑 #592 的「GCL 真机可读才算采集修复」 |
+
+### 7.3 W3 批次集成记录（2026-10-26）
+
+**集成方式**：沿用 `integration/w1`，先 fast-forward 到当时 master（`1f652c1`），再逐分支 `git merge --no-ff`。**三包文件集两两零重叠**（`Settings.cs` 是 f08b 与 f14b 各加不同字段；`PluginMarketRecoveryBoundaryTests.cs` 的"改动"经 `--ignore-cr-at-eol` 双重确认**仅行尾差异**，未纳入任何提交）⇒ **全部自动合并成功**。
+
+| 包 | 分支 | 主要产物 | 新增用例 |
+|---|---|---|---|
+| F08b | `fix/F08b-disk-allowlist` | `ControllerProbePolicy.cs`（新，352 行）+ `tools/F08bDiskAllowlistSpike/`（取证工程）+ `Settings.cs` 2 个新字段 + **`HardwareMonitor.cs` 接线（+33/−4）** | 28 |
+| F14b | `fix/F14b-settings-theme` | `SettingThemeMode.cs` / `SettingsThemePalette.cs` / `SettingsThemeManager.cs` / `SettingsThemeApplier.cs`（4 个新文件）+ `LiteUI.cs` 硬编码色改语义槽位 | 52 |
+| F06 | `fix/F06-zorder-topmost` | `TaskbarWinHelper` Z 序原语、`TaskbarStrategyWin11` 按需维护泵、`MainFormBizHelper` 置顶看门狗重写、`MainFormWinHelper` 真实层级判定 | 13 |
+
+**F08b：Spike 决策门结论为「负」（这是正确结果）**
+
+判定标准：排除必须发生在库**创建设备与打开句柄之前**；构造后过滤 = 未隔离。
+
+| 变体 | 依赖 | 枚举入口 | 有允许列表/过滤形参？ |
+|---|---|---|---|
+| Baseline（生产） | LHM 0.9.6 / DIT 1.1.2 | `StorageManager.ReloadStorages()`（无参） | **无** |
+| Latest（F09a 推荐） | 0.9.7-pre771 / DIT 2.2.2 | `Storage.GetDisks()`（无参） | **无**；只有全局布尔 `ExcludeUsbDevices`，且实测是**开过句柄再丢弃** |
+
+关键：`StorageDetectionEngine.GetDisks(Func<…>)` 带委托的两个重载是 **`internal`**，fork 侧调不到；`Storage..ctor` 体内即 `SafeFileHandler.OpenHandle`（逐个盘 `CreateFile` + IOCTL）。
+
+⇒ **用户裁定：维持不开放**「仅内部盘/允许列表的 SMART 模式」。不构造假的安全感。
+
+**顺带取证（#245 得以成立的原因）**：`_controllerEnabled` 与 `_storageEnabled` 是同一套构造前隔离机制，**8 个控制器组全部受单一开关守护**（IL：`ldfld _controllerEnabled` → `brfalse` → 跳过）⇒ `IsControllerEnabled=false` 是**真隔离**。
+
+**⚠️ 死代码 → 已接线（协调者执行，用户已授权）**：F08b 交付时 `ControllerProbePolicy` 全仓仅在自身文件内被引用（`HardwareMonitor.cs` 无授权额度故未接线）⇒ 352 行 + 28 条用例等于零交付。已按裁决接线：`ShouldEnableController()` 改走策略，并新增 `ApplyControllerProbeMode()`。策略的 `Auto` 分支**就是**既有规则 ⇒ **未配置用户行为一字不变**。
+
+**F14b：重映射歧义的根因修复**
+
+`SettingsThemeApplier.Remap` 是「按色值反查语义槽位」。修复前浅色下 `CardBg`/`SurfaceBg`/`InputBg`/`MenuBg`/`PreviewBg` **全是 `Color.White`**，深色下 `CardBg`=`MenuBg`、`SurfaceBg`=`GroupHeader` ⇒ 白底一律命中数组最前的 `CardBg`，输入框被刷成卡片色，且**只在反方向切换时暴露**。
+
+**修法不是调数组顺序**（那只是换个槽位继续串），而是给容器类/正文字类槽位**各差 1–2 级**（观感仍是白/灰，亮度 0.913~1.000 肉眼无差）。新增护栏用例 `同一套配色内没有两个槽位取相同色值` 钉住该不变量 —— **该护栏在收尾期又抓出 5 组人工没枚举到的同值冲突**。
+
+豁免 3 组有意同义复用（`Primary`=`InputLineFocused`、`CardBg`=`MenuSelectedText`、`SidebarBg`=`Separator`），理由已写进测试注释。
+
+**⚠️ F14b 缺口（如实登记）**：交付的是**引擎**，**设置页无 UI 入口**（无下拉框；8 语种各有 351 键但均无明暗模式文案）⇒ 用户暂不可达。补完需新增下拉框 + 8 语种文案（约 100+ 行），待裁决。
+
+**F06：红→绿取证 5 轮**
+
+按 F04 的做法（保留 API 外壳、临时回退内部行为打 `RED-STATE` 标记）：R1 恢复 `!_form.Visible` 早退 / R2 去掉层级双判 / R3 去掉让路 / R4 Z 序维护空转 / R5 配额改无限 ⇒ 13 条中 **8 条**在至少一轮变红；恢复后 13/13 全绿，`RED-STATE` 残留 0。
+
+**F06 执行偏差（2 处，已如实登记）**：① R5 轮误删 `SetPosition` 末尾两行致多一条红，已恢复并在报告 §4.1 记录；② `#612` 的"层级异常可恢复"支**只有替身证据** —— 实测 `SetWindowLong` 写不回 `WS_EX_TOPMOST` 位、`SetWindowPos(A, hNormal)` 会顺带清掉该位 ⇒ Windows 同步维护二者，自动化**无法**构造"位在层级掉"，已降级为待实机。
+
+**F06 提请裁决**：`TaskbarStrategyWin11.cs:158` 面板意外脱离时**既有**代码用 `HWND_TOPMOST`，与本包"面板不得写成顶级 TOPMOST"语义**相反**。属既有行为、不在本包范围，建议归后续包。
+
+**W3 门禁实测（三包合并态，2026-10-26）**
+
+| 项 | 实测 |
+|---|---|
+| `dotnet build -c Debug --no-incremental` | **0 错误 / 530 警告**（同口径基线 530 ⇒ 三包**零警告增量**） |
+| `dotnet build -c Release --no-incremental` | 0 错误 / **530 警告** |
+| `LiteMonitor.Tests` | **2141 总计**（2140 通过 + 1 跳过 E2E） |
+| `LiteMonitor.Updater.Tests` | 73 |
+| `LiteMonitor.GpuNonperformance.Tests` | 19 |
+| 合计（TRX `total` 口径） | **2233** ⇒ `MIN_TEST_TOTAL` 由 2139 上调至 **2233**（`ci.yml` / `release.yml` **逐字一致**；`MAX_SKIPPED_TESTS: 1` **未放宽**） |
+| `assert-test-counts.ps1` 实跑 | **EXIT=0**：合计 2233（通过 2232 / 失败 0 / 跳过 1）；`MUST_EXECUTE` 五类全执行零跳过（6 / 33 / 6 / 8 / 6） |
+| `pwsh scripts/run-probes.ps1 -Groups web` | **PASS** |
+
+**收尾期协调者接手修复（F14b 执行体中断）**：F14b 在「值重映射歧义」修复途中中断，留下 2 个 CS0103 编译错误（`_explicitColor` 字段声明丢失）+ 3 条失败。已修复：① 补字段声明并在构造函数保存 `fontColor`（显式告警色优先于主题色）；② `TextDisabled` 深色相对亮度 0.1891 < 门槛 0.35 ⇒ 120→**168**（0.3935，注释写明"禁用态要传达不可操作，而非不存在"）；③ 修一条**测试自身前提写反**（切深色前刚 Push 的是 Light 却断言 `darkExpected: true`）。
 
 ## 8. 实施启动清单
 
