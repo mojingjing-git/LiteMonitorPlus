@@ -78,6 +78,11 @@ namespace LiteMonitor.src.UI.Helpers
         /// <summary>SetWindowPos 的 hWndInsertAfter：置顶到同级最前（不激活）。</summary>
         public static readonly IntPtr HWND_TOP = IntPtr.Zero;
 
+        /// <summary>GetWindow 的关系命令：取 Z 序上"前一个"（更靠前）的同级窗口。</summary>
+        public const uint GW_HWNDPREV = 3;
+
+        [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
         [StructLayout(LayoutKind.Sequential)]
         public struct POINT { public int X, Y; }
 
@@ -217,6 +222,31 @@ namespace LiteMonitor.src.UI.Helpers
                     0,
                     0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
+        }
+
+        /// <summary>
+        /// 【P-F06 / #599】显示变化之后<b>立即</b>检查一次同级 Z 序。
+        /// <para>★ 合成层在显示变化那一刻往往已被重建 ⇒ 不能只等下一次定位周期。</para>
+        /// </summary>
+        public void RequestDisplayChangeCheck()
+        {
+            if (_strategy is TaskbarStrategyWin11 win11)
+            {
+                win11.RequestDisplayChangeCheck();
+            }
+        }
+
+        /// <summary>
+        /// 【P-F06 / #599】维护周期内的一次低成本同级 Z 序检查（由 <c>TaskbarForm.Tick</c> 调用）。
+        /// <para>★ 只在"还有后续检查配额"时才真的看一眼，配额由定位 / 显示变化排定，
+        /// 用完即止 ⇒ 不会被放大成每帧无条件重排。</para>
+        /// </summary>
+        public void PumpZOrderMaintenance()
+        {
+            if (_strategy is TaskbarStrategyWin11 win11)
+            {
+                win11.PumpZOrderMaintenance();
             }
         }
 
@@ -569,6 +599,46 @@ namespace LiteMonitor.src.UI.Helpers
         public static void ActivateWindow(IntPtr handle) => SetForegroundWindow(handle);
 
         public static bool IsWindow(IntPtr hWnd) => NativeMethods.IsWindow(hWnd);
+
+        /// <summary>
+        /// 把一个**子窗口**提升到<b>同级最前</b>（<c>HWND_TOP</c>）—— 不移动、不改大小、不激活。
+        /// <para>★ 这是"同级 Z 序维护"的<b>唯一</b>写法：面板是任务栏的<b>子窗口</b>，
+        /// 正确语义只到 <c>HWND_TOP</c>（同级最前），<b>绝不</b>是顶级窗口的
+        /// <c>HWND_TOPMOST</c>（那会把面板从任务栏层级里拔出来，压住整个桌面）。</para>
+        /// </summary>
+        public static bool RaiseSiblingToTop(IntPtr hWnd)
+        {
+            if (hWnd == IntPtr.Zero) return false;
+            return SetWindowPos(hWnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+
+        /// <summary>
+        /// 该窗口的<b>同级 Z 序</b>是否已经被可见窗口挡住（前方存在可见的同级窗口）。
+        /// <para>★ 判定只沿 <c>GW_HWNDPREV</c> 链走 —— 这是"同级"Z 序的<b>真实</b>定义，
+        /// 不需要遍历系统窗口（母计划 F06 第 2 步明确禁止遍历 / 每帧无条件置顶）。</para>
+        /// <para>★ 链上可能有不可见的占位窗口（隐藏层、零面积层），它们<b>不会</b>遮挡内容
+        /// ⇒ 只看可见窗口，避免"明明没被挡却反复重排"的抖动。</para>
+        /// </summary>
+        public static bool IsCoveredByVisibleSibling(IntPtr hWnd)
+        {
+            if (hWnd == IntPtr.Zero) return false;
+
+            IntPtr previous = GetWindow(hWnd, GW_HWNDPREV);
+            return previous != IntPtr.Zero && IsWindowVisible(previous);
+        }
+
+        /// <summary>
+        /// 按需恢复同级 Z 序：<b>只有确实被可见同级窗口挡住时</b>才重排。
+        /// <para>★ 为什么必须"按需"：无条件每帧 <c>HWND_TOP</c> 会与任务栏自身的合成层
+        /// （以及第三方任务栏）互相抢占，表现为闪烁。这里先判再动，
+        /// 且重排只带 NOMOVE / NOSIZE / NOACTIVATE —— 矩形与焦点都不受影响。</para>
+        /// </summary>
+        /// <returns>是否真的执行过一次重排。</returns>
+        public static bool RaiseSiblingToTopIfCovered(IntPtr hWnd)
+        {
+            if (!IsCoveredByVisibleSibling(hWnd)) return false;
+            return RaiseSiblingToTop(hWnd);
+        }
 
         public static void ApplyChildWindowStyle(IntPtr hWnd)
         {

@@ -92,6 +92,13 @@ namespace LiteMonitor
         public void RebuildMenus() => _bizHelper.RebuildMenus();
         public void ShowNotification(string title, string text, ToolTipIcon icon) => _bizHelper.ShowNotification(title, text, icon);
         
+        /// <summary>
+        /// 【P-F06 / #612】主面板当前是否处于"自动隐藏已收起"状态（转发给业务助手）。
+        /// <para>★ 用途：置顶看门狗在面板收起时<b>不得</b>重插 Z 序 —— 收起状态下重插没有意义，
+        /// 还可能把本该藏起来的边缘露出来。规格要求"尊重自动隐藏行为"。</para>
+        /// </summary>
+        public bool IsAutoHidden => _bizHelper?.IsHidden ?? false;
+
         // 供 Helper 调用
         public void ToggleLayoutMode() => _bizHelper.ToggleLayoutMode();
         public void EnsureVisibleAndSavePos() => _bizHelper.SavePos();
@@ -561,6 +568,9 @@ namespace LiteMonitor
             {
                 // ★ 显示设置变化（任务栏大小 / 位置 / 自动隐藏）⇒ 任务栏矩形缓存必须失效并重新定位（#539）。
                 _taskbar?.RequestTaskbarRecovery(TaskbarRecoveryReason.SettingChange);
+
+                // ★ P-F06 / #599：任务栏设置变化同样会重建合成层 ⇒ 立即检查一次同级 Z 序。
+                _taskbar?.NotifyDisplayChanged();
             }
 
             if (m.Msg == WM_DISPLAYCHANGE)
@@ -573,6 +583,10 @@ namespace LiteMonitor
 
                 // ★ 任务栏侧：拓扑/分辨率变化后必须重新解析目标设备并重挂（#539 / #573 / #583）。
                 _taskbar?.RequestTaskbarRecovery(TaskbarRecoveryReason.DisplayChange);
+
+                // ★ P-F06 / #599：显示变化会重建任务栏的合成层 ⇒ 立即检查一次同级 Z 序，
+                //   并排定有限次后续检查覆盖迟到的合成层（与上面的恢复请求互不替代）。
+                _taskbar?.NotifyDisplayChanged();
 
                 Task.Delay(500, token).ContinueWith(t => 
                 {
@@ -628,6 +642,9 @@ namespace LiteMonitor
             ApplyWindowAppearance();
             // ★ P-F04：任务栏侧的 DPI 变化同样要重解析目标设备、重算任务栏矩形并重挂（#539）。
             _taskbar?.RequestTaskbarRecovery(TaskbarRecoveryReason.DpiChanged);
+
+            // ★ P-F06 / #599：DPI 变化会重建任务栏合成层 ⇒ 立即检查一次同级 Z 序。
+            _taskbar?.NotifyDisplayChanged();
             this.Invalidate();
         }
 
