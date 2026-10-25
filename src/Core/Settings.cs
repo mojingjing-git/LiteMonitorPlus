@@ -81,6 +81,29 @@ namespace LiteMonitor
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public int? DiskProbeMode { get; set; }
 
+        // ====== [#245 缓解] 控制器（USB / HID）探测策略 ======
+        //   0 = 自动（默认）：沿用 fork 既有规则 —— 仅当监控项需要风扇/水泵时才开启控制器扫描；
+        //   1 = 关闭：永不构造任何控制器组（遇到 USB/HID 冲突如 DAPLink 时的明确开关）；
+        //   2 = 强制开启：无条件构造控制器组（排查/对照用，风险自负）。
+        //   null = **未设置**（键不存在）：★ 迁移状态 ⇒ 按"自动"运行（既有行为），
+        //       并在设置页提示"可以彻底关闭控制器扫描"。
+        //   ★ 与 DiskProbeMode 同一口径：用 null + WhenWritingNull ⇒
+        //     用户没做选择前，旧 settings.json **一个字节都不会被改写**。
+        //   ★ 边界（不冒充 #245 完整修复）：本开关是**构造前**隔离（有 IL 级保证；
+        //     开关为 false 时 LHM 根本不构造 8 个控制器组，因此不碰任何 HID/USB 设备）；
+        //     但它**不能**逐个排除"某一个" USB 设备 —— 单个设备的排除列表
+        //     （ControllerDeviceExclusion）作用在构造之后，只降低二次触碰频率。
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? ControllerProbeMode { get; set; }
+
+        // ★ [#245 缓解] 控制器设备排除匹配串（大小写不敏感的字符串包含匹配）。
+        //   命中 ⇒ 跳过该设备的 Update（**不能**阻止它被构造，见上面"边界"）。
+        //   null / 空 ⇒ 不排除任何设备（沿用既有行为）。
+        //   ★ 只按显示名与 Identifier 匹配：LHM 不暴露 USB VID/PID 或 PnP 硬件 ID，
+        //     这二者按 F07 分级都**不是**跨重启的稳定身份 ⇒ 只用于"跳过 Update"，不用于身份绑定。
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<string>? ControllerExclusionPatterns { get; set; }
+
         // ====== [#610] 按指定 IP 排除实时网速 ======
         // ★ 默认关闭。关闭或没有有效规则时**不启动任何额外事件采集**（零新增会话/逐包处理）。
         public bool IpTrafficExclusionEnabled { get; set; } = false;
