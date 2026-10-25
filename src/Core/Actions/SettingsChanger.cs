@@ -1,4 +1,5 @@
 using System.Linq;
+using LiteMonitor.Core.Actions.Services; // 模块服务与差异类型(P-B3 阶段一)
 using LiteMonitor.src.Core;
 using System.Reflection;
 using System.Collections.Generic;
@@ -171,5 +172,94 @@ namespace LiteMonitor.src.Core.Actions
             if (target == null || plugin == null) return;
             target.PluginInstances.Remove(plugin);
         }
+
+        // ── P-B3 阶段一：差异清单（纯计算，不改任何既有行为）──────────────────────
+        // 供设置应用编排"只重配受影响模块"（Plan B §4.2）；与 Merge 共用运行时黑名单。
+
+        /// <summary>采样相关字段：触发硬件重配（颜色/语言变化不在此列——它们不应触发硬件重建）。</summary>
+        private static readonly HashSet<string> SamplingFields = new()
+        {
+            "RefreshMs", "ControllerProbeMode", "DiskProbeMode", "MonitorItems", "HorizontalFollowsTaskbar",
+        };
+
+        /// <summary>Web 相关字段：单独重启监听。</summary>
+        private static readonly HashSet<string> WebFields = new()
+        {
+            "WebServerEnabled", "WebServerPort", "WebServerPassword", "WebServerPasswordSalt", "WebServerTrustProxyHeaders",
+        };
+
+        /// <summary>外观相关字段：主题/语言/布局重绘，不触碰硬件。</summary>
+        private static readonly HashSet<string> AppearanceFields = new()
+        {
+            "Skin", "Language", "SettingThemeMode",
+        };
+
+        /// <summary>插件相关字段。</summary>
+        private static readonly HashSet<string> PluginFields = new()
+        {
+            "PluginInstances", "MarketPlugins", "Themes",
+        };
+
+        /// <summary>
+        /// 计算 live → draft 的字段差异并按模块归属分类。
+        /// 复杂类型（列表/对象）用 JSON 序列化比较保证语义等价；运行时黑名单字段不算差异。
+        /// </summary>
+        public static List<SettingsFieldDiff> ComputeDiff(Settings live, Settings draft)
+        {
+            var diffs = new List<SettingsFieldDiff>();
+            if (live == null || draft == null) return diffs;
+
+            var runtimeProps = RuntimePropertyBlacklist();
+            var props = typeof(Settings).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            foreach (var p in props)
+            {
+                if (!p.CanWrite || !p.CanRead) continue;
+                if (runtimeProps.Contains(p.Name)) continue;
+
+                var liveVal = p.GetValue(live);
+                var draftVal = p.GetValue(draft);
+                if (ValuesEqual(liveVal, draftVal)) continue;
+
+                diffs.Add(new SettingsFieldDiff(p.Name, Classify(p.Name)));
+            }
+            return diffs;
+        }
+
+        internal static SettingsModule Classify(string field)
+        {
+            if (SamplingFields.Contains(field)) return SettingsModule.Sampling;
+            if (WebFields.Contains(field)) return SettingsModule.WebServer;
+            if (AppearanceFields.Contains(field)) return SettingsModule.Appearance;
+            if (PluginFields.Contains(field)) return SettingsModule.Plugins;
+            if (field.StartsWith("Taskbar", StringComparison.OrdinalIgnoreCase)) return SettingsModule.Taskbar;
+            return SettingsModule.Other;
+        }
+
+        private static bool ValuesEqual(object? a, object? b)
+        {
+            if (a is null && b is null) return true;
+            if (a is null || b is null) return false;
+            var t = a.GetType();
+            if (t.IsPrimitive || t == typeof(string) || t.IsEnum) return Equals(a, b);
+            try
+            {
+                var ja = System.Text.Json.JsonSerializer.Serialize(a);
+                var jb = System.Text.Json.JsonSerializer.Serialize(b);
+                return string.Equals(ja, jb, StringComparison.Ordinal);
+            }
+            catch
+            {
+                return Equals(a, b);
+            }
+        }
+
+        private static HashSet<string> RuntimePropertyBlacklist() => new()
+        {
+            "LastAutoNetwork", "LastAutoDisk",
+            "ScreenDevice", "MaxLimitTipShown",
+            "TotalUpload", "TotalDownload",
+            "SessionUploadBytes", "SessionDownloadBytes",
+            "LastAutoSaveTime", "LastAlertTime"
+        };
     }
 }
