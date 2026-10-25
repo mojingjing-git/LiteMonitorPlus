@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>WebProbe</AssemblyName>
+    <RootNamespace>WebProbe</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NoWarn>$(NoWarn);CS8600;CS8602;CS8604</NoWarn>
+  </PropertyGroup>
+
+  <!-- ★ 必须与被测程序集同版本：fork 引用 System.Text.Json 10.0.3（包），
+       而 net8.0 共享框架内建的是 v8。版本不一致会在默认 ALC 里撞版本冲突。 -->
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="10.0.3" />
+  </ItemGroup>
+
+</Project>

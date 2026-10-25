@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     LiteMonitor++ 外观探针统一入口 —— 串行构建并运行全部外观探针（+ 单元测试）。
 
@@ -22,10 +22,15 @@
       | AppearanceWindowShapeProbe     | 窗口轮廓                           | 跑 |
       | AppearanceSettingsProbe        | W3 设置页「意外回写」防回退（56 项）| 跑 |
       | AppearanceBackdropProbe        | 实时玻璃后端（**实机屏幕捕获**）    | 需 -IncludeBackdrop |
+      | WebProbe                       | Web/WS 协议级 A/B（反射驱动真实产品代码，裸 TCP） | 需 -Groups web |
       | LiteMonitor.Tests              | 单元测试                           | 跑（-SkipUnitTests 可跳过） |
 
     AppearanceBackdropProbe 需要实机抓屏、耗时约 1 分钟，且会**真的捕获屏幕**
     ⇒ 默认不跑，要跑请显式加 -IncludeBackdrop。
+
+    WebProbe 属 Web 修复线（F00 入库）：会**先构建主工程**（LiteMonitor.csproj，
+    同配置），再以沙箱 settings 目录驱动其产物跑 12 用例协议矩阵，
+    证据落在 <OutDir>\WebProbe\，不碰用户 settings.json。
 
 .PARAMETER SkipUnitTests
     跳过单元测试（只跑探针）。
@@ -42,7 +47,7 @@
 .PARAMETER Groups
     选择要执行的组。默认 default 保持原入口行为。
     可用组：default/all、nonperformance、static、fixtures、appearance、
-    settings、live、unit。
+    settings、live、unit、web（web 组会先构建主工程，再跑 WebProbe）。
 
 .PARAMETER ListGroups
     只列出可用组，不构建或运行任何项目。
@@ -91,7 +96,8 @@ $KnownGroups = @(
     'appearance',
     'settings',
     'live',
-    'unit'
+    'unit',
+    'web'
 )
 $RequestedGroups = @(
     $Groups |
@@ -121,6 +127,7 @@ if ($ListGroups) {
             settings = 'AppearanceSettingsProbe only.'
             live = 'AppearanceBackdropProbe only; requires -IncludeBackdrop.'
             unit = 'LiteMonitor.Tests only.'
+            web = 'WebProbe only; builds the main project first, then runs the bare-TCP protocol suite against the built product assembly with a sandboxed settings dir.'
         }
     } | ConvertTo-Json -Depth 5
     exit 0
@@ -147,7 +154,8 @@ $Probes = @(
     @{ Name = 'AppearanceDecorRendererProbe'; Project = 'tests\AppearanceDecorRendererProbe'; Exe = 'output\AppearanceDecorRendererProbe.exe'; NeedsOut = $true; Groups = @('fixtures') },
     @{ Name = 'AppearanceWindowShapeProbe';   Project = 'tests\AppearanceWindowShapeProbe';   Exe = 'output\AppearanceWindowShapeProbe.exe';   NeedsOut = $true; Groups = @('fixtures') },
     @{ Name = 'AppearanceSettingsProbe';      Project = 'tests\AppearanceSettingsProbe';      Exe = 'output\AppearanceSettingsProbe.exe';      NeedsOut = $true; Groups = @('settings', 'fixtures') },
-    @{ Name = 'AppearanceBackdropProbe';      Project = 'tests\AppearanceBackdropProbe';      Exe = 'bin\Release\net8.0-windows\AppearanceBackdropProbe.exe'; NeedsOut = $true; NeedsLive = $true; Groups = @('live') }
+    @{ Name = 'AppearanceBackdropProbe';      Project = 'tests\AppearanceBackdropProbe';      Exe = 'bin\Release\net8.0-windows\AppearanceBackdropProbe.exe'; NeedsOut = $true; NeedsLive = $true; Groups = @('live') },
+    @{ Name = 'WebProbe';                     Project = 'tests\WebProbe';                     Exe = ('bin\{0}\net8.0-windows\WebProbe.exe' -f $Configuration);  NeedsOut = $false; WebOnly = $true; Groups = @('web') }
 )
 
 $RunUnitTests = -not $SkipUnitTests -and (
@@ -166,12 +174,16 @@ $SelectLiveProbe = $RequestedGroups -contains 'default' -or
     $RequestedGroups -contains 'all' -or
     $RequestedGroups -contains 'live'
 $IncludeLive = $SelectLiveProbe -and $IncludeBackdrop
+$IncludeWeb = $RequestedGroups -contains 'web'
 
 $SelectedProbes = @(
     $Probes | Where-Object {
         $probe = $_
         if ($probe.ContainsKey('NeedsLive') -and $probe.NeedsLive) {
             return $SelectLiveProbe
+        }
+        if ($probe.ContainsKey('WebOnly') -and $probe.WebOnly) {
+            return $IncludeWeb
         }
         if (-not $IncludeStatic) {
             return $false
@@ -236,6 +248,16 @@ foreach ($probe in $SelectedProbes) {
         continue
     }
 
+    if ($probe.ContainsKey('WebOnly') -and $probe.WebOnly) {
+        $mainProj = Join-Path $RepoRoot 'LiteMonitor.csproj'
+        $rm = Invoke-Native -FilePath $DotnetExe -Arguments @('build', $mainProj, '-c', $Configuration, '--nologo')
+        if ($rm.Exit -ne 0) {
+            $BuildFailed += $probe.Name
+            Add-Result -Name $probe.Name -Status 'FAIL' -Exit 1 -Detail '主工程构建失败（WebProbe 依赖其产物）'
+            continue
+        }
+    }
+
     $r = Invoke-Native -FilePath $DotnetExe -Arguments @('build', $proj, '-c', $Configuration, '--nologo')
     if ($r.Exit -ne 0) {
         $BuildFailed += $probe.Name
@@ -270,12 +292,21 @@ foreach ($probe in $SelectedProbes) {
     if ($probe.NeedsOut) {
         $args += @('--out', (Join-Path $OutDir $probe.Name))
     }
+    if ($probe.ContainsKey('WebOnly') -and $probe.WebOnly) {
+        $mainDll = Join-Path $RepoRoot ('bin\{0}\net8.0-windows\LiteMonitor++.dll' -f $Configuration)
+        $args += @($mainDll, (Join-Path (Join-Path $OutDir $probe.Name) 'settings'), 'fork')
+    }
     if ($RequestedGroups -contains 'nonperformance' -and
         $probe.Name -eq 'AppearanceM2Probe') {
         $args += @('--groups', 'nonperformance')
     }
 
     $r = Invoke-Native -FilePath $exe -Arguments $args
+    if ($probe.ContainsKey('WebOnly') -and $probe.WebOnly) {
+        $webDir = Join-Path $OutDir $probe.Name
+        New-Item -ItemType Directory -Path $webDir -Force | Out-Null
+        $r.Out | Set-Content -LiteralPath (Join-Path $webDir 'run-output.txt') -Encoding utf8
+    }
     $summary = ($r.Out -split "`r?`n" |
         Where-Object { $_ -match '合计|结果:|用例 \d+ 个|通过 \d+ 项' } |
         Select-Object -Last 1)
