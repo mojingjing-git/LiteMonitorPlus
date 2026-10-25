@@ -5,7 +5,14 @@
 - 工作包：P-F03b（F03 的收尾补口，不是新功能）
 - 分支：`fix/F03b-network-cache-window`
 - 基线 SHA（开工时 HEAD）：`bbbfdaf`（master，已含 W1 批次集成，F03 已合并）
-- 提交 SHA 列表：见 §9
+- 提交 SHA 列表（`git log --oneline bbbfdaf..HEAD`）：
+  - `b911315` `fix(F03b): IP 地址缓存窗与重匹配节流改为事件驱动优先 + 时间窗兜底`
+    （`src/System/HardwareServices/NetworkManager.cs` 改；
+    `NetworkAddressCache.cs` / `NetworkChangeSource.cs` / `NetworkAdapterSource.cs` 新建）
+  - `b8d2b21` `test(F03b): 热插拔立即刷新、事件丢失时间窗兜底、事件风暴有界、双网卡不串`
+    （`tests/LiteMonitor.Tests/NetworkCacheWindowTests.cs` 新建，18 条用例）
+  - `0f4a9b2` `docs(F03b): 验收记录 —— 网络地址缓存窗与重匹配节流收口（#96 关闭条件补齐）`
+    （`docs/verification/acceptance/F03b-report.md` 新建）
 - 完成日期：2026-10-25
 - 执行者：P-F03b 外派执行会话（worktree：`G:\TOOL\LiteMonitor-fork\.worktrees\f03b`）
 
@@ -209,8 +216,25 @@ Set-Location 'G:\TOOL\LiteMonitor-fork\.worktrees\f03b'
 ## 9. 提交
 
 ```
-（见 §1 与下方 git log）
+b911315 fix(F03b): IP 地址缓存窗与重匹配节流改为事件驱动优先 + 时间窗兜底
+b8d2b21 test(F03b): 热插拔立即刷新、事件丢失时间窗兜底、事件风暴有界、双网卡不串
+0f4a9b2 docs(F03b): 验收记录 —— 网络地址缓存窗与重匹配节流收口（#96 关闭条件补齐）
 ```
+
+改动文件（`git diff --name-status bbbfdaf..HEAD`）：
+
+```
+A  src/System/HardwareServices/NetworkAdapterSource.cs
+A  src/System/HardwareServices/NetworkAddressCache.cs
+A  src/System/HardwareServices/NetworkChangeSource.cs
+M  src/System/HardwareServices/NetworkManager.cs
+A  tests/LiteMonitor.Tests/NetworkCacheWindowTests.cs
+A  docs/verification/acceptance/F03b-report.md
+```
+
+> 禁改清单核对：`.github/workflows/ci.yml`、`.github/workflows/release.yml`、
+> `src/System/HardwareMonitor.cs`、`src/Core/Settings.cs`、`src/Core/Actions/AppActions.cs`、
+> `src/UI/UIController.cs` —— **均未出现在改动列表中**（一字未动）。
 
 ## 10. 环境
 
