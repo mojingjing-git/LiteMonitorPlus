@@ -134,9 +134,14 @@ namespace LiteMonitor
             _cfg = cfg;
             _form = form;
             _mon = new HardwareMonitor(cfg);
-            // B1/C1 最小接线：UI 持有采集契约；Tick 采样暂仍走 _mon 旧路径，B2 迁移时切换消费面。
-            _hwClient = new HardwareClientAdapter(_mon, cfg.MonitorItems.Select(x => x.Key).ToList());
-            // B3 阶段三：应用层网关注册（组合根唯一注册点；全部消费方经网关取用，Instance 已降 internal）
+            // B1/C1 最小接线 + P-I2 构造缝（唯一 UI 例外）：默认路径零行为变化（HardwareClientAdapter
+            // 保持进程内默认，正式发布不自动回退同进程模式，Plan A §9）；--hardware-host /
+            // LITEMONITOR_HARDWARE_HOST=1 时显示链路改经管道客户端取数（_mon 直读点维持进程内现状，见 I2 报告已知边界）。
+            _hwClient = LiteMonitor.SystemServices.Pipe.HardwareHostMode.IsRequested()
+                ? new LiteMonitor.SystemServices.Pipe.PipeHardwareClient(cfg.RefreshMs, fallbackNetworkIp: () => _mon.GetNetworkIP())
+                : new HardwareClientAdapter(_mon, cfg.MonitorItems.Select(x => x.Key).ToList());
+            // B3 阶段三：应用层网关注册（组合根唯一注册点；全部消费方经网关取用，Instance 已降 internal）。
+            // Host 模式下网关的契约面（Client）同样是管道客户端——经网关取数的消费方（传感器窗口）读到 Host 快照。
             HardwareGateway.Register(_mon, _hwClient);
 
             _layout = new UILayout(ThemeManager.Current);

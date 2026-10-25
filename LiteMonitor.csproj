@@ -56,13 +56,37 @@
   </ItemGroup>
 
   <!-- B1/C1：契约工程源码不得再被主工程递归 Compile 通配收编（同类型双编译），
-       只经下方 ProjectReference 引用（Plan B §3、派发单 P-B1B2）。 -->
+       只经下方 ProjectReference 引用（Plan B §3、派发单 P-B1B2）。
+       P-I2 同理：src/HardwareHost 的源码也必须从主 WinExe 的直接编译范围排除
+       （否则主工程双入口 CS0017）；Host 产物经 CopyHardwareHostToOutput 进入主输出目录，
+       主程序不引用 Host 程序集、也不把它当依赖启动（Plan A §7）。 -->
   <ItemGroup>
     <Compile Remove="src\Contracts\**\*.cs" />
+    <Compile Remove="src\HardwareHost\**\*.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="src\Contracts\LiteMonitor.Contracts.csproj" />
+    <!-- ReferenceOutputAssembly=false：只取构建顺序，不引用 Host 程序集。 -->
+    <ProjectReference Include="src\HardwareHost\LiteMonitor.HardwareHost.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <!-- P-I2：Host 产物复制进主输出目录（I2 只保证 Debug 输出可运行；发布打包属 I5）。
+       仅复制 LiteMonitor.HardwareHost.*（exe/dll/deps.json/runtimeconfig.json），
+       LHM 与 Contracts 依赖由主输出目录内同名同版本程序集满足。
+       BaseOutputPath 会在 ProjectReference 间流动（如 perf-baseline.ps1 的 bin/perf-run/），
+       Host 实际产物目录 = src/HardwareHost/$(BaseOutputPath)$(Configuration)，须与主输出同基。 -->
+  <Target Name="CopyHardwareHostToOutput" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <HardwareHostBinDir>$(MSBuildThisFileDirectory)src\HardwareHost\$(BaseOutputPath)$(Configuration)\net8.0-windows\</HardwareHostBinDir>
+    </PropertyGroup>
+    <ItemGroup Condition="Exists('$(HardwareHostBinDir)')">
+      <HardwareHostOutputs Include="$(HardwareHostBinDir)LiteMonitor.HardwareHost.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(HardwareHostOutputs)"
+          DestinationFiles="@(HardwareHostOutputs->'$(OutDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 
     <!-- 自动复制 themes 与 lang 目录下的所有文件 -->
     <ItemGroup>

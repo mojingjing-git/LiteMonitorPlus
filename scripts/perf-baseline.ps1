@@ -47,6 +47,10 @@
 .PARAMETER OutRoot
     输出根目录，默认 docs\verification\baseline。
 
+.PARAMETER LaunchArgs
+    透传给 GUI 的启动参数。'--hardware-host' 时按主+Host 双进程合计统计 CPU/私有字节/
+    线程/句柄，并采集客户端指标文件（首样延迟/接收延迟 p95）。
+
 .EXAMPLE
     # 管理员 PowerShell 中：完整基线（约 20 分钟）
     pwsh -File scripts/perf-baseline.ps1
@@ -74,7 +78,11 @@ param(
     [int]$SteadySeconds = 0,
 
     [string]$OutRoot,
-    [string]$Dotnet
+    [string]$Dotnet,
+
+    # P-I2 §2.7：透传给 GUI 的启动参数（如 '--hardware-host' 开启采集进程隔离模式）。
+    # 传入后采样窗口按「主进程 + HardwareHost」双进程合计统计（不影响既有单进程默认行为）。
+    [string]$LaunchArgs = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -182,6 +190,9 @@ $appVersion = (Get-Item -LiteralPath $exePath).VersionInfo.ProductVersion
 # ----------------------------------------------------------------------
 $launchRecords = @()
 $guiSkipReason = $null
+$hostMode = $LaunchArgs -match 'hardware-host'
+$preExistingHostPids = @()
+$i2MetricsPath = $null
 
 if ($SkipGui) {
     $guiSkipReason = '命令行 -SkipGui'
@@ -191,12 +202,37 @@ if ($SkipGui) {
         $guiSkipReason = ("已有 LiteMonitor++ 实例在跑（PID {0}），无法归属本次测量" -f (($existing | ForEach-Object Id) -join ','))
         Write-Warning $guiSkipReason
     }
+    if ($hostMode) {
+        $preExistingHostPids = @(Get-Process -Name 'LiteMonitor.HardwareHost' -ErrorAction SilentlyContinue | ForEach-Object Id)
+        if ($preExistingHostPids.Count -gt 0) {
+            $guiSkipReason = ("已有 HardwareHost 实例在跑（PID {0}），Host 资源无法归属本次测量" -f ($preExistingHostPids -join ','))
+            Write-Warning $guiSkipReason
+        }
+    }
+}
+
+function Get-HostSamples {
+    # 本轮启动之后出现的 HardwareHost 进程（监督器重启会换 PID，逐 tick 动态发现）。
+    param([int[]]$ExcludePids)
+    $found = @(Get-Process -Name 'LiteMonitor.HardwareHost' -ErrorAction SilentlyContinue |
+        Where-Object { $ExcludePids -notcontains $_.Id })
+    foreach ($hp in $found) {
+        try { $hp.Refresh() } catch { }
+    }
+    return , $found
 }
 
 if (-not $guiSkipReason -and -not $SkipGui) {
     for ($i = 1; $i -le $Launches; $i++) {
         Write-Host ("==> GUI 第 {0}/{1} 轮：启动并测启动时间..." -f $i, $Launches) -ForegroundColor Cyan
-        $p = Start-Process -FilePath $exePath -WorkingDirectory $runDir -PassThru
+        if ($hostMode -and $i -eq 1) {
+            # 客户端指标（首样延迟/接收延迟）落盘：子进程继承本环境变量。
+            $i2MetricsPath = Join-Path $OutRoot ("i2-metrics-{0}.json" -f $Ts)
+            $env:LITEMONITOR_I2_METRICS = $i2MetricsPath
+        }
+        $launchSplat = @{ FilePath = $exePath; WorkingDirectory = $runDir; PassThru = $true }
+        if ($LaunchArgs) { $launchSplat.ArgumentList = $LaunchArgs }
+        $p = Start-Process @launchSplat
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $startupMs = $null
         $startupNote = ''
@@ -229,7 +265,7 @@ if (-not $guiSkipReason -and -not $SkipGui) {
                 $tick++
                 try {
                     $p.Refresh()
-                    $samples += [ordered]@{
+                    $row = [ordered]@{
                         t = [math]::Round(([DateTime]::UtcNow - $winStart).TotalSeconds, 1)
                         cpuSeconds = [math]::Round($p.TotalProcessorTime.TotalSeconds, 3)
                         privateBytes = $p.PrivateMemorySize64
@@ -237,6 +273,30 @@ if (-not $guiSkipReason -and -not $SkipGui) {
                         threads = $p.Threads.Count
                         handles = $p.HandleCount
                     }
+                    if ($hostMode) {
+                        $hosts = Get-HostSamples -ExcludePids @($preExistingHostPids)
+                        $hostCpu = 0.0; $hostPriv = [long]0; $hostWs = [long]0; $hostThreads = 0; $hostHandles = 0
+                        foreach ($hp in $hosts) {
+                            try {
+                                $hostCpu += $hp.TotalProcessorTime.TotalSeconds
+                                $hostPriv += $hp.PrivateMemorySize64
+                                $hostWs += $hp.WorkingSet64
+                                $hostThreads += $hp.Threads.Count
+                                $hostHandles += $hp.HandleCount
+                            } catch { }
+                        }
+                        $row.hostCount = $hosts.Count
+                        $row.hostCpuSeconds = [math]::Round($hostCpu, 3)
+                        $row.hostPrivateBytes = $hostPriv
+                        $row.hostWorkingSetBytes = $hostWs
+                        $row.hostThreads = $hostThreads
+                        $row.hostHandles = $hostHandles
+                        $row.cpuSecondsTotal = [math]::Round($row.cpuSeconds + $hostCpu, 3)
+                        $row.privateBytesTotal = $row.privateBytes + $hostPriv
+                        $row.threadsTotal = $row.threads + $hostThreads
+                        $row.handlesTotal = $row.handles + $hostHandles
+                    }
+                    $samples += $row
                 } catch {
                     $samples += [ordered]@{ t = [math]::Round(([DateTime]::UtcNow - $winStart).TotalSeconds, 1); error = "采样被拒绝: $($_.Exception.GetType().Name)" }
                 }
@@ -248,9 +308,16 @@ if (-not $guiSkipReason -and -not $SkipGui) {
         } catch {
             $winError = "采样窗口异常: $($_.Exception.GetType().Name): $($_.Exception.Message)"
         } finally {
-            # 无论成败都必须回收自己启动的实例
+            # 无论成败都必须回收自己启动的实例（含 Host：Job Object 兜底之外再显式回收）
             try { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction Stop } } catch { Write-Warning "结束进程失败（请手动退出）：$($_.Exception.Message)" }
             try { $p.WaitForExit(15000) | Out-Null } catch { }
+            if ($hostMode) {
+                $leftovers = Get-HostSamples -ExcludePids @($preExistingHostPids)
+                foreach ($hp in $leftovers) {
+                    try { Stop-Process -Id $hp.Id -Force -ErrorAction Stop } catch { }
+                }
+                if ($leftovers.Count -gt 0) { Start-Sleep -Seconds 2 }
+            }
         }
         if ($winError) { Write-Warning $winError }
 
@@ -275,6 +342,23 @@ if (-not $guiSkipReason -and -not $SkipGui) {
                 handlesFirst = $okSamples[0].handles
                 handlesLast = $okSamples[-1].handles
                 sampleCount = $okSamples.Count
+            }
+            if ($hostMode -and $okSamples.Count -ge 2 -and $okSamples[0].Contains('cpuSecondsTotal')) {
+                $cpuDeltaTotal = $okSamples[-1].cpuSecondsTotal - $okSamples[0].cpuSecondsTotal
+                $privTotalVals = @($okSamples | ForEach-Object { $_.privateBytesTotal })
+                $steadyTotal = @($okSamples | Select-Object -Skip 5)
+                $steadyPrivTotal = @($steadyTotal | ForEach-Object { $_.privateBytesTotal })
+                $stat += [ordered]@{
+                    combinedCpuSecondsDelta = [math]::Round($cpuDeltaTotal, 3)
+                    combinedCpuPercentAllCores = [math]::Round(100 * $cpuDeltaTotal / $winElapsed / [Environment]::ProcessorCount, 3)
+                    combinedPrivateBytesAvg = [math]::Round(($privTotalVals | Measure-Object -Average).Average, 0)
+                    combinedPrivateBytesMax = ($privTotalVals | Measure-Object -Maximum).Maximum
+                    combinedPrivateBytesSteadyAvg = if ($steadyPrivTotal.Count -gt 0) { [math]::Round(($steadyPrivTotal | Measure-Object -Average).Average, 0) } else { $null }
+                    hostPrivateBytesSteadyAvg = if ($steadyPrivTotal.Count -gt 0) { [math]::Round(($steadyTotal | ForEach-Object { $_.privateBytesTotal - $_.privateBytes } | Measure-Object -Average).Average, 0) } else { $null }
+                    combinedThreadsLast = $okSamples[-1].threadsTotal
+                    combinedHandlesLast = $okSamples[-1].handlesTotal
+                    hostCountLast = $okSamples[-1].hostCount
+                }
             }
         }
 
@@ -356,6 +440,13 @@ if (-not $SkipProbe) {
 # ----------------------------------------------------------------------
 # 4. 汇总输出 md + json
 # ----------------------------------------------------------------------
+# P-I2：Host 模式客户端指标（若 GUI 阶段启用且产物存在）
+$i2Metrics = $null
+if ($i2MetricsPath -and (Test-Path -LiteralPath $i2MetricsPath)) {
+    try { $i2Metrics = Get-Content -LiteralPath $i2MetricsPath -Raw | ConvertFrom-Json } catch { $i2Metrics = $null }
+}
+Remove-Item Env:LITEMONITOR_I2_METRICS -ErrorAction SilentlyContinue
+
 $record = [ordered]@{
     kind = 'perf_baseline'
     createdAt = (Get-Date).ToString('o')
@@ -363,6 +454,8 @@ $record = [ordered]@{
     meta = $meta
     appVersion = $appVersion
     windowSeconds = $WindowSeconds
+    launchArgs = $LaunchArgs
+    i2ClientMetrics = $i2Metrics
     gui = [ordered]@{
         skipped = [bool]$guiSkipReason
         reason = $guiSkipReason
@@ -423,6 +516,38 @@ if ($guiSkipReason) {
     }
     [void]$sb.AppendLine()
     [void]$sb.AppendLine('每秒原始采样（CPU 时间/私有字节/工作集/线程/句柄）见同名 `.json` 文件 `gui.launches[].samples`。')
+    if ($LaunchArgs) {
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine(("启动参数：`{0}`（HardwareHost 双进程合计）" -f $LaunchArgs))
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine('| 轮 | 合计 CPU 秒 (Δ) | 合计 CPU% | 合计私有字节 avg/max | 合计稳态均值 | Host 稳态增量 | 末线程/句柄 |')
+        [void]$sb.AppendLine('|---|---|---|---|---|---|---|')
+        foreach ($l in $launchRecords) {
+            if ($null -eq $l.stats -or -not $l.stats.Contains('combinedCpuSecondsDelta')) {
+                [void]$sb.AppendLine(("| {0} | — | — | 采样不足/失败 | — | — | — |" -f $l.launch))
+                continue
+            }
+            $s = $l.stats
+            [void]$sb.AppendLine(("| {0} | {1} | {2} | {3} / {4} | {5} | {6} | {7}/{8} |" -f `
+                $l.launch, $s.combinedCpuSecondsDelta, $s.combinedCpuPercentAllCores,
+                (FmtMB $s.combinedPrivateBytesAvg), (FmtMB $s.combinedPrivateBytesMax),
+                ($(if ($s.combinedPrivateBytesSteadyAvg) { FmtMB $s.combinedPrivateBytesSteadyAvg } else { '—' })),
+                ($(if ($s.hostPrivateBytesSteadyAvg) { FmtMB $s.hostPrivateBytesSteadyAvg } else { '—' })),
+                $s.combinedThreadsLast, $s.combinedHandlesLast))
+        }
+        if ($i2Metrics) {
+            [void]$sb.AppendLine()
+            [void]$sb.AppendLine('客户端 IPC 指标（PipeHardwareClient，采集方法=客户端接收循环时间戳）：')
+            [void]$sb.AppendLine('')
+            [void]$sb.AppendLine(("| 首样延迟 (ms) | 快照数 | 发布→接收 p50/p95/max (ms) | 样本→接收 p95 (ms) | 序号缺口 | 迟到响应 | 会话数/重启数 |" -f ''))
+            [void]$sb.AppendLine('|---|---|---|---|---|---|---|')
+            [void]$sb.AppendLine(("| {0} | {1} | {2} / {3} / {4} | {5} | {6} | {7} | {8}/{9} |" -f `
+                ($i2Metrics.FirstSnapshotDelayMs ?? '—'), $i2Metrics.SnapshotCount,
+                ($i2Metrics.PublishToReceiveP50Ms ?? '—'), ($i2Metrics.PublishToReceiveP95Ms ?? '—'), ($i2Metrics.PublishToReceiveMaxMs ?? '—'),
+                ($i2Metrics.SampleToReceiveP95Ms ?? '—'), $i2Metrics.SequenceGaps, $i2Metrics.LateResponses,
+                $i2Metrics.SessionCount, $i2Metrics.RestartCount))
+        }
+    }
 }
 [void]$sb.AppendLine()
 [void]$sb.AppendLine('## 3. 采集探针（tests/LiteMonitor.PerformanceProbe）')
