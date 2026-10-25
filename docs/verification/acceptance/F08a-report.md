@@ -148,10 +148,19 @@ LHM 0.9.6 `Computer.Open()` → `AddGroups()`：
 
 ### 发现的相邻问题（不属于本包，建议归属）
 
-- **`ReviewMarketPersistenceRegressionTests` 全量跑时 flaky**（两次全量各挂 1 条，但**不是同一条**用例：
-  一次 `InitialRecordFailure_…(update:True, blockSave:True)`，一次 `AfterRecordCompensationFailure_…(update:True, blockCompensation:False)`；
-  单独跑该类 33/33 全绿，与 `cfgfile` 集合一起跑 48/48 全绿）⇒ 属**既有**的 settings.json 并发/顺序敏感问题
-  （仓库自己记录过"单跑全绿、全量间歇挂"），与本包无关，建议归 **F16/回归治理**。本包未修改该测试或相关实现。
+- **`ReviewMarketPersistenceRegressionTests` 全量跑时 flaky —— 已确认是**既有**问题，与本包无关**：
+  - 症状：`Assert.Throws<MarketRecordPersistenceException>` 实际收到
+    `System.UnauthorizedAccessException: Access to the path is denied.`
+    （两个测试类并发访问同一个 settings 路径 ⇒ 文件锁冲突；仓库自己在
+    `CfgFileCollection.cs` 与 `ReviewMarketPersistenceRegressionTests.PersistenceScope` 的构造函数注释里
+    记录过这一现象："单跑全绿、全量间歇挂（评审同机三次复现三条不同用例）"）。
+  - **决定性对照**（复现命令里**不含本包的任何测试文件**，只有两个既有测试类）：
+    `dotnet test tests/LiteMonitor.Tests/… --filter "FullyQualifiedName~ReviewMarketPersistenceRegressionTests|FullyQualifiedName~MarketE2ETests"`
+    - 本支 `fix/F08a-disk-counters-only`：13 次运行 → 2 次失败（≈15%）；
+    - 基线 `d52c0ab`（未做任何改动）：21 次运行 → 2 次失败（≈10%）。
+    - 失败率同量级 ⇒ **既有竞态**，本包既没有引入、也没有修复它（本包未改动该测试与相关实现）。
+  - 归属建议：**F16 / 回归治理**（把 `MarketE2ETests` 也并入 `cfgfile` 集合，或让
+    `PersistenceScope` 的沙箱路径覆盖全局 `PathOverride` 的读写方）。
 - **`HardwareMonitor.ApplyDiskProbeMode` 的校验依赖 `LastHardwareError`**：该字段是**静态**的，
   理论上可能被其它路径的失败"沾上"（误判为降级）。已在报告中标出，若协调者要求更严格，可改为比较
   硬件树指纹（仅计数器模式下树内不得有 Storage 设备 —— 该判定已同时存在）。
