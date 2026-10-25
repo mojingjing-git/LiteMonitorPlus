@@ -439,7 +439,9 @@ namespace LiteMonitor.Tests
 
             public FixedIndexProvider(MarketIndex index) => _index = index;
 
-            public Task<MarketIndex?> FetchAsync() => Task.FromResult<MarketIndex?>(_index);
+            // [W2 集成期修正] 本工程 <Nullable>disable</Nullable> ⇒ 可空标注脱离 "#nullable" 上下文会报 CS8632。
+            // 该标注在 oblivious 模式下不承载语义，去掉即可，零行为影响（基线历史文件不在本次范围内，不动）。
+            public Task<MarketIndex> FetchAsync() => Task.FromResult<MarketIndex>(_index);
         }
 
         // ================================================================
@@ -537,7 +539,7 @@ namespace LiteMonitor.Tests
         /// <summary>在 STA 线程上执行（WinForms 控件需要 STA）。</summary>
         internal static void RunSta(Action action)
         {
-            Exception? captured = null;
+            Exception captured = null;
             var thread = new Thread(() =>
             {
                 try { action(); }
