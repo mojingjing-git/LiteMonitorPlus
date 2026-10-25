@@ -170,7 +170,6 @@
     "Feedback": "Feedback",
     "Changelog": "Änderungen",
     "RestartApp": "Neustart",
-
     "__Comment_Page1__": "--- 1. Panel ---",
     "MainFormSettings": "Hauptpanel",
     "HideMainForm": "Verstecken",
@@ -200,7 +199,6 @@
     "WebServerTrustProxyHeadersTip": "Wirkt nur für die oben aufgeführten Proxys: X-Forwarded-Host / X-Forwarded-Proto gelten dann als die echte externe Adresse.",
     "WebServerReverseProxyExamples": "Beispiele: der Proxy behält den Host → https://tunnel.example.com eintragen; der Proxy schreibt den Host um → Proxy-IP unter Vertrauenswürdige Proxy-IPs eintragen und Weiterleitungs-Header vertrauen aktivieren.",
     "WebServerReverseProxyErrors": "Häufige Fehler: 403 Host steht nicht in der Liste der erlaubten externen Adressen | 403 für externen Zugriff wird ein Passwort benötigt | 400 mehrdeutige Weiterleitungs-Header (der Proxy sendete mehrere X-Forwarded-Host / X-Forwarded-Proto)",
-
     "Appearance": "Design",
     "Theme": "Thema",
     "DisplayMode": "Modus",
@@ -211,7 +209,6 @@
     "Opacity": "Transp.",
     "Percent": "Prozent",
     "UsedSize": "Absolut",
-
     "__Comment_Page2__": "--- 2. Taskleiste ---",
     "TaskbarSettings": "Taskleiste",
     "TaskbarShow": "Anzeigen",
@@ -234,7 +231,6 @@
     "TaskbarItemSpacing": "Abstand",
     "TaskbarInnerSpacing": "Inn.Abstand",
     "TaskbarVerticalPadding": "Polsterung",
-
     "TaskbarCustomColors": "Farben",
     "TaskbarCustomTip": "Hintergrund passend zur Taskleiste wählen.",
     "ScreenColorPicker": "Farbwähler",
@@ -245,7 +241,6 @@
     "ValueWarnColor": "Warnung",
     "ValueCritColor": "Kritisch",
     "BackgroundColor": "Hintergr.",
-
     "__Comment_Page3__": "--- 3. Elemente ---",
     "MonitorItemDisplay": "Elemente",
     "MonitorItem": "Item",
@@ -258,7 +253,6 @@
     "MainForm": "Panel",
     "OnlyShowEnabled": "Nur aktiviert",
     "MonitorItemTip": "Tipp: Leerzeichen in Name/Kurz verbirgt Label. Leer setzt zurück. Einheiten: {u}+Zeichen.",
-
     "__Comment_Page4__": "--- 4. Grenzwerte ---",
     "Thresholds": "Grenzwerte",
     "ThresholdsTips": "Balkenfarbe nach Grenzwert",
@@ -267,31 +261,24 @@
     "ThresholdWarnLowered": "Der Warnwert darf nicht über dem kritischen Wert liegen; auf {0} angeglichen",
     "AlertTemp": "Hitze-Alarm",
     "AlertThreshold": "Limit",
-
     "GeneralHardware": "Hardware",
     "HardwareLoad": "Last",
     "HardwareTemp": "Temp",
-
     "NetworkDiskSpeed": "I/O Speed",
     "DiskIOSpeed": "Disk I/O",
     "UploadSpeed": "Upload",
     "DownloadSpeed": "Download",
-
     "DailyTraffic": "Datenlimit",
-
     "__Comment_Page5__": "--- 5. System ---",
     "SystemHardwar": "System",
-    
     "SystemSettings": "Allgemein",
     "Language": "Sprache",
     "AutoStart": "Autostart",
     "AutoCheckUpdate": "Auto-Check",
     "HideTrayIcon": "Tray aus",
-
     "Calibration": "Kalibrier.",
     "MaxLimits": "Max Wert",
     "CalibrationTip": "Definiert 100% der Balken. Leer = Auto-Lernen.",
-
     "HardwareSettings": "Quelle",
     "DiskSource": "Disk",
     "NetworkSource": "Netz",
@@ -304,7 +291,6 @@
     "RefreshTip": "Legt nur fest, wie oft die Oberfläche neu gezeichnet wird. Normale Hardwaredaten werden höchstens einmal pro Sekunde abgetastet – ein kleinerer Wert tastet nicht häufiger ab.",
     "IgnoreSMBTraffic": "SMB ignorieren",
     "MemoryDisplayMode": "RAM Anzeige",
-
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",
     "PluginDevGuide": "Entwickler-Guide",
@@ -356,10 +342,13 @@
     "PluginMarketReinstall": "Neuinstallation erforderlich",
     "PluginMarketReinstallAction": "Neu installieren",
     "PluginMarketPageLink": "Plugin-Seite",
-    "PluginMarketSelfCheck": "Dateien erkannt, die integrierte Plugins überschrieben haben könnten: {0}. Bitte löschen und das Programm neu installieren."
-,
+    "PluginMarketSelfCheck": "Dateien erkannt, die integrierte Plugins überschrieben haben könnten: {0}. Bitte löschen und das Programm neu installieren.",
     "CpuVoltageSource": "CPU-Spannungsquelle",
-    "CpuVoltageSourceTip": "Auto: bevorzugt wird die vom Prozessor gemeldete Kernversorgungsspannung; gibt es nur eine angeforderte Spannung (VID), wird sie klar als Referenzwert gekennzeichnet. Verschwindet eine manuell gewählte Quelle, zeigt die App «Quelle nicht verfügbar» und wechselt nicht ungefragt auf eine andere Spannung."
+    "CpuVoltageSourceTip": "Auto: bevorzugt wird die vom Prozessor gemeldete Kernversorgungsspannung; gibt es nur eine angeforderte Spannung (VID), wird sie klar als Referenzwert gekennzeichnet. Verschwindet eine manuell gewählte Quelle, zeigt die App «Quelle nicht verfügbar» und wechselt nicht ungefragt auf eine andere Spannung.",
+    "SettingsThemeMode": "Einstellungen-Design",
+    "SettingsThemeSystem": "System folgen",
+    "SettingsThemeLight": "Hell",
+    "SettingsThemeDark": "Dunkel"
   },
   "CpuVoltage": {
     "Auto": "Auto",

@@ -170,7 +170,6 @@
     "Feedback": "Feedback",
     "Changelog": "Changelog",
     "RestartApp": "Restart App",
-
     "__Comment_Page1__": "--- 1. Main Panel ---",
     "MainFormSettings": "Main Panel",
     "HideMainForm": "Hide Panel",
@@ -200,7 +199,6 @@
     "WebServerTrustProxyHeadersTip": "Only takes effect for the proxies listed above: X-Forwarded-Host / X-Forwarded-Proto are then used as the real external address.",
     "WebServerReverseProxyExamples": "Examples: the proxy keeps the Host header -> list https://tunnel.example.com; the proxy rewrites the Host header -> add the proxy IP to the trusted list and turn on Trust forwarded headers.",
     "WebServerReverseProxyErrors": "Common errors: 403 Host is not in the allowed external addresses list | 403 external access requires an access password | 400 ambiguous forwarded headers (the proxy sent more than one X-Forwarded-Host / X-Forwarded-Proto)",
-
     "Appearance": "Appearance",
     "Theme": "Theme",
     "DisplayMode": "Display Mode",
@@ -211,7 +209,6 @@
     "Opacity": "Opacity",
     "Percent": "Percent",
     "UsedSize": "Used Size",
-
     "__Comment_Page2__": "--- 2. Taskbar ---",
     "TaskbarSettings": "Taskbar",
     "TaskbarShow": "Show Taskbar",
@@ -234,7 +231,6 @@
     "TaskbarItemSpacing": "Item Space",
     "TaskbarInnerSpacing": "Inner Space",
     "TaskbarVerticalPadding": "Padding",
-
     "TaskbarCustomColors": "Colors",
     "TaskbarCustomTip": "Set BG color close to system taskbar color.",
     "ScreenColorPicker": "Color Picker",
@@ -244,7 +240,6 @@
     "ValueWarnColor": "Warn",
     "ValueCritColor": "Crit",
     "BackgroundColor": "Background",
-
     "__Comment_Page3__": "--- 3. Items ---",
     "MonitorItemDisplay": "Monitor Items",
     "MonitorItem": "Item",
@@ -258,7 +253,6 @@
     "OnlyShowEnabled": "Enabled Only",
     "HorizontalFollowsTaskbar": "Bar follows taskbar order",
     "MonitorItemTip": "Tip: Space in Name/Short hides label. Empty resets. Units support {u}+char.",
-
     "__Comment_Page4__": "--- 4. Thresholds ---",
     "Thresholds": "Thresholds",
     "ThresholdsTips": "Bar color changes by threshold",
@@ -267,31 +261,24 @@
     "ThresholdWarnLowered": "Warning must not be higher than Critical; synced to {0}",
     "AlertTemp": "Temp Alert",
     "AlertThreshold": "Limit",
-
     "GeneralHardware": "Hardware",
     "HardwareLoad": "Load",
     "HardwareTemp": "Temp",
-
     "NetworkDiskSpeed": "I/O Speed",
     "DiskIOSpeed": "Disk I/O",
     "UploadSpeed": "Upload",
     "DownloadSpeed": "Download",
-
     "DailyTraffic": "Data Limit",
-
     "__Comment_Page5__": "--- 5. System ---",
     "SystemHardwar": "System",
-    
     "SystemSettings": "General",
     "Language": "Language",
     "AutoStart": "Auto Start",
     "AutoCheckUpdate": "Auto Check Update",
     "HideTrayIcon": "Hide Tray",
-
     "Calibration": "Calibration",
     "MaxLimits": "Max Value",
     "CalibrationTip": "Define hardware limits for accurate bars. Empty = Auto-learn.",
-
     "HardwareSettings": "Source",
     "DiskSource": "Disk",
     "NetworkSource": "Network",
@@ -304,7 +291,6 @@
     "RefreshTip": "This only sets how often the interface redraws. Normal hardware data is sampled at most once per second, so a smaller value does not sample more often.",
     "IgnoreSMBTraffic": "Ignore SMB Traffic",
     "MemoryDisplayMode": "RAM Display",
-
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",
     "PluginDevGuide": "Dev Guide",
@@ -356,10 +342,13 @@
     "PluginMarketReinstall": "Reinstall required",
     "PluginMarketReinstallAction": "Reinstall",
     "PluginMarketPageLink": "Plugin page",
-    "PluginMarketSelfCheck": "Detected files that may have overwritten built-in plugins: {0}. Please delete them and reinstall."
-,
+    "PluginMarketSelfCheck": "Detected files that may have overwritten built-in plugins: {0}. Please delete them and reinstall.",
     "CpuVoltageSource": "CPU voltage source",
-    "CpuVoltageSourceTip": "Auto: prefers the core supply voltage reported by the processor; when only a requested voltage (VID) exists it is clearly marked as a reference value. If a manually selected source disappears, the app shows «Source unavailable» and never silently switches to another voltage."
+    "CpuVoltageSourceTip": "Auto: prefers the core supply voltage reported by the processor; when only a requested voltage (VID) exists it is clearly marked as a reference value. If a manually selected source disappears, the app shows «Source unavailable» and never silently switches to another voltage.",
+    "SettingsThemeMode": "Settings theme",
+    "SettingsThemeSystem": "Follow system",
+    "SettingsThemeLight": "Light",
+    "SettingsThemeDark": "Dark"
   },
   "CpuVoltage": {
     "Auto": "Auto",

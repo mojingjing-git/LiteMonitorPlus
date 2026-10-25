@@ -5,7 +5,6 @@
     "CPU": "CPU",
     "GPU": "GPU",
     "HOST": "Host",
-
     "DISK": "Disque",
     "NET": "Réseau",
     "DATA": "Données",
@@ -171,7 +170,6 @@
     "Feedback": "Retour",
     "Changelog": "Changements",
     "RestartApp": "Redémarrer",
-
     "__Comment_Page1__": "--- 1. Panneau ---",
     "MainFormSettings": "Panneau P.",
     "HideMainForm": "Cacher",
@@ -201,7 +199,6 @@
     "WebServerTrustProxyHeadersTip": "N'a effet que pour les proxys listés ci-dessus : X-Forwarded-Host / X-Forwarded-Proto sont alors considérés comme l'adresse externe réelle.",
     "WebServerReverseProxyExamples": "Exemples : le proxy conserve le Host → ajouter https://tunnel.example.com ; le proxy réécrit le Host → ajouter l'IP du proxy à la liste de confiance et activer « Faire confiance aux en-têtes transférés ».",
     "WebServerReverseProxyErrors": "Erreurs fréquentes : 403 le Host n'est pas dans la liste des adresses externes autorisées | 403 l'accès externe exige un mot de passe | 400 en-têtes transférés ambigus (le proxy a envoyé plusieurs X-Forwarded-Host / X-Forwarded-Proto)",
-
     "Appearance": "Apparence",
     "Theme": "Thème",
     "DisplayMode": "Mode",
@@ -212,7 +209,6 @@
     "Opacity": "Opacité",
     "Percent": "Pourcent",
     "UsedSize": "Taille",
-
     "__Comment_Page2__": "--- 2. Barre Tâches ---",
     "TaskbarSettings": "Barre Tâches",
     "TaskbarShow": "Afficher",
@@ -235,7 +231,6 @@
     "TaskbarItemSpacing": "Espace",
     "TaskbarInnerSpacing": "Int.Esp",
     "TaskbarVerticalPadding": "Remplissage",
-
     "TaskbarCustomColors": "Couleurs",
     "TaskbarCustomTip": "Le fond doit correspondre à la barre.",
     "ScreenColorPicker": "Sélecteur",
@@ -246,7 +241,6 @@
     "ValueWarnColor": "Alerte",
     "ValueCritColor": "Critique",
     "BackgroundColor": "Fond",
-
     "__Comment_Page3__": "--- 3. Éléments ---",
     "MonitorItemDisplay": "Éléments",
     "MonitorItem": "Item",
@@ -259,7 +253,6 @@
     "MainForm": "Panel",
     "OnlyShowEnabled": "Actifs seulement",
     "MonitorItemTip": "Note: Espace ds Nom/Bref cache libellé. Vide réinit. Unités: {u}+car.",
-
     "__Comment_Page4__": "--- 4. Seuils ---",
     "Thresholds": "Seuils",
     "ThresholdsTips": "Couleur barre selon seuil",
@@ -268,31 +261,24 @@
     "ThresholdWarnLowered": "Le seuil d'alerte ne peut pas être supérieur au seuil critique ; synchronisé à {0}",
     "AlertTemp": "Alerte Temp",
     "AlertThreshold": "Limite",
-
     "GeneralHardware": "Matériel",
     "HardwareLoad": "Charge",
     "HardwareTemp": "Temp",
-
     "NetworkDiskSpeed": "Vitesse E/S",
     "DiskIOSpeed": "Disque",
     "UploadSpeed": "Envoi",
     "DownloadSpeed": "Reçu",
-
     "DailyTraffic": "Limite Data",
-
     "__Comment_Page5__": "--- 5. Système ---",
     "SystemHardwar": "Système",
-    
     "SystemSettings": "Général",
     "Language": "Langue",
     "AutoStart": "Démarrage",
     "AutoCheckUpdate": "Vérif. auto",
     "HideTrayIcon": "Cacher Tray",
-
     "Calibration": "Calibrage",
     "MaxLimits": "Valeur Max",
     "CalibrationTip": "Définit le 100% des barres. Vide = Auto.",
-
     "HardwareSettings": "Source",
     "DiskSource": "Disque",
     "NetworkSource": "Réseau",
@@ -305,7 +291,6 @@
     "RefreshTip": "Ne règle que la fréquence de redessin de l'interface. Les données matérielles normales sont prélevées au plus une fois par seconde : une valeur plus faible n'augmente pas la fréquence de collecte.",
     "IgnoreSMBTraffic": "Ignorer SMB",
     "MemoryDisplayMode": "Aff. RAM",
-
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",
     "PluginDevGuide": "Guide Dév",
@@ -357,10 +342,13 @@
     "PluginMarketReinstall": "Réinstallation requise",
     "PluginMarketReinstallAction": "Réinstaller",
     "PluginMarketPageLink": "Page du plugin",
-    "PluginMarketSelfCheck": "Fichiers détectés ayant pu écraser des plugins intégrés : {0}. Supprimez-les puis réinstallez le programme."
-,
+    "PluginMarketSelfCheck": "Fichiers détectés ayant pu écraser des plugins intégrés : {0}. Supprimez-les puis réinstallez le programme.",
     "CpuVoltageSource": "Source de tension CPU",
-    "CpuVoltageSourceTip": "Automatique : la tension d'alimentation du cœur rapportée par le processeur est préférée ; si seule une tension demandée (VID) existe, elle est clairement signalée comme valeur de référence. Si une source choisie manuellement disparaît, l'application affiche «Source indisponible» et ne bascule pas silencieusement vers une autre tension."
+    "CpuVoltageSourceTip": "Automatique : la tension d'alimentation du cœur rapportée par le processeur est préférée ; si seule une tension demandée (VID) existe, elle est clairement signalée comme valeur de référence. Si une source choisie manuellement disparaît, l'application affiche «Source indisponible» et ne bascule pas silencieusement vers une autre tension.",
+    "SettingsThemeMode": "Thème des paramètres",
+    "SettingsThemeSystem": "Suivre le système",
+    "SettingsThemeLight": "Clair",
+    "SettingsThemeDark": "Sombre"
   },
   "CpuVoltage": {
     "Auto": "Automatique",

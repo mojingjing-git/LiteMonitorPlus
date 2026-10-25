@@ -170,7 +170,6 @@
     "Feedback": "피드백",
     "Changelog": "변경 로그",
     "RestartApp": "앱 재시작",
-
     "__Comment_Page1__": "--- 1. Main Panel ---",
     "MainFormSettings": "메인 패널",
     "HideMainForm": "패널 숨김",
@@ -200,7 +199,6 @@
     "WebServerTrustProxyHeadersTip": "위 목록의 프록시에만 적용됩니다: 이때 X-Forwarded-Host / X-Forwarded-Proto 를 실제 외부 주소로 사용합니다.",
     "WebServerReverseProxyExamples": "예: 프록시가 Host 를 그대로 유지 → 허용된 외부 주소에 https://tunnel.example.com 추가. 프록시가 Host 를 재작성 → 신뢰할 프록시 IP 에 프록시 IP 추가 후 전달 헤더 신뢰 켜기.",
     "WebServerReverseProxyErrors": "자주 발생하는 오류: 403 Host 가 허용된 외부 주소 목록에 없음 | 403 외부 접근에는 접근 암호가 필요함 | 400 전달 헤더가 모호함(프록시가 여러 X-Forwarded-Host / X-Forwarded-Proto 전송)",
-
     "Appearance": "테마 설정",
     "Theme": "테마",
     "DisplayMode": "표시 모드",
@@ -211,7 +209,6 @@
     "Opacity": "투명도",
     "Percent": "퍼센트",
     "UsedSize": "사용량",
-
     "__Comment_Page2__": "--- 2. Taskbar ---",
     "TaskbarSettings": "작업 표시줄",
     "TaskbarShow": "표시 켜기",
@@ -234,7 +231,6 @@
     "TaskbarItemSpacing": "항목 간격",
     "TaskbarInnerSpacing": "내부 간격",
     "TaskbarVerticalPadding": "패딩",
-
     "TaskbarCustomColors": "색상 설정",
     "TaskbarCustomTip": "배경색을 작업 표시줄 색상과 맞춰주세요.",
     "ScreenColorPicker": "색상 선택기",
@@ -245,7 +241,6 @@
     "ValueWarnColor": "경고 값",
     "ValueCritColor": "위험 값",
     "BackgroundColor": "배경색",
-
     "__Comment_Page3__": "--- 3. Items ---",
     "MonitorItemDisplay": "항목 관리",
     "MonitorItem": "항목",
@@ -258,7 +253,6 @@
     "MainForm": "패널",
     "OnlyShowEnabled": "사용중만",
     "MonitorItemTip": "참고: 이름/약어에 공백 입력 시 라벨 숨김. 이름 삭제 시 기본값 복원. 일부 단위 {u}+문자 지원.",
-
     "__Comment_Page4__": "--- 4. Thresholds ---",
     "Thresholds": "알림 임계값",
     "ThresholdsTips": "바와 숫자 색상이 임계값에 따라 변경",
@@ -267,31 +261,24 @@
     "ThresholdWarnLowered": "경고 값은 심각 값보다 클 수 없습니다. {0}(으)로 동기화했습니다",
     "AlertTemp": "고온 경보",
     "AlertThreshold": "온도 제한",
-
     "GeneralHardware": "하드웨어",
     "HardwareLoad": "로드",
     "HardwareTemp": "온도",
-
     "NetworkDiskSpeed": "속도 제한",
     "DiskIOSpeed": "디스크 I/O",
     "UploadSpeed": "업로드",
     "DownloadSpeed": "다운로드",
-
     "DailyTraffic": "일일 데이터",
-
     "__Comment_Page5__": "--- 5. System ---",
     "SystemHardwar": "시스템",
-    
     "SystemSettings": "일반",
     "Language": "언어 / Language",
     "AutoStart": "자동 실행",
     "AutoCheckUpdate": "자동 확인",
     "HideTrayIcon": "트레이 숨김",
-
     "Calibration": "보정",
     "MaxLimits": "최대값",
     "CalibrationTip": "정확한 바 표시를 위해 하드웨어 최대값을 입력하세요. 비우면 자동 학습.",
-
     "HardwareSettings": "하드웨어 소스",
     "DiskSource": "디스크",
     "NetworkSource": "네트워크",
@@ -304,7 +291,6 @@
     "RefreshTip": "갱신 주기는 화면을 다시 그리는 간격만 정합니다. 일반 하드웨어 데이터는 최대 초당 한 번만 수집되므로 값을 낮춰도 수집 횟수는 늘지 않습니다.",
     "IgnoreSMBTraffic": "SMB 트래픽 무시",
     "MemoryDisplayMode": "메모리 표시",
-
     "__Comment_Page6__": "--- 6. 플러그인 (PluginPage) ---",
     "Plugins": "플러그인 관리",
     "PluginDevGuide": "개발 가이드",
@@ -356,10 +342,13 @@
     "PluginMarketReinstall": "재설치 필요",
     "PluginMarketReinstallAction": "재설치",
     "PluginMarketPageLink": "플러그인 페이지",
-    "PluginMarketSelfCheck": "내장 플러그인을 덮어썼을 수 있는 파일을 발견했습니다: {0}. 이 파일들을 삭제한 뒤 프로그램을 다시 설치하세요."
-,
+    "PluginMarketSelfCheck": "내장 플러그인을 덮어썼을 수 있는 파일을 발견했습니다: {0}. 이 파일들을 삭제한 뒤 프로그램을 다시 설치하세요.",
     "CpuVoltageSource": "CPU 전압 소스",
-    "CpuVoltageSourceTip": "자동: 프로세서가 보고하는 코어 공급 전압을 우선합니다. 요청 전압(VID)만 있으면 참고값으로 명확히 표시합니다. 수동 지정한 소스가 사라지면 「소스를 사용할 수 없음」을 표시하고 다른 전압으로 바꾸지 않습니다."
+    "CpuVoltageSourceTip": "자동: 프로세서가 보고하는 코어 공급 전압을 우선합니다. 요청 전압(VID)만 있으면 참고값으로 명확히 표시합니다. 수동 지정한 소스가 사라지면 「소스를 사용할 수 없음」을 표시하고 다른 전압으로 바꾸지 않습니다.",
+    "SettingsThemeMode": "설정 테마",
+    "SettingsThemeSystem": "시스템 따르기",
+    "SettingsThemeLight": "라이트",
+    "SettingsThemeDark": "다크"
   },
   "CpuVoltage": {
     "Auto": "자동",

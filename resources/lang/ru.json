@@ -170,7 +170,6 @@
     "Feedback": "Отзыв",
     "Changelog": "Список изм.",
     "RestartApp": "Перезапуск",
-
     "__Comment_Page1__": "--- 1. Panel ---",
     "MainFormSettings": "Гл. Панель",
     "HideMainForm": "Скрыть",
@@ -200,7 +199,6 @@
     "WebServerTrustProxyHeadersTip": "Действует только для прокси из списка выше: тогда X-Forwarded-Host / X-Forwarded-Proto считаются настоящим внешним адресом.",
     "WebServerReverseProxyExamples": "Примеры: прокси сохраняет Host → добавьте https://tunnel.example.com; прокси переписывает Host → добавьте IP прокси в список доверенных и включите «Доверять пересылаемым заголовкам».",
     "WebServerReverseProxyErrors": "Частые ошибки: 403 Host не в списке разрешённых внешних адресов | 403 для внешнего доступа нужен пароль | 400 неоднозначные пересылаемые заголовки (прокси прислал несколько X-Forwarded-Host / X-Forwarded-Proto)",
-
     "Appearance": "Внешний вид",
     "Theme": "Тема",
     "DisplayMode": "Режим",
@@ -211,7 +209,6 @@
     "Opacity": "Прозр.",
     "Percent": "Процент",
     "UsedSize": "Размер",
-
     "__Comment_Page2__": "--- 2. Taskbar ---",
     "TaskbarSettings": "Панель задач",
     "TaskbarShow": "Показывать",
@@ -234,7 +231,6 @@
     "TaskbarItemSpacing": "Расстояние",
     "TaskbarInnerSpacing": "Внутреннее",
     "TaskbarVerticalPadding": "Заполнение",
-
     "TaskbarCustomColors": "Цвета",
     "TaskbarCustomTip": "Фон должен совпадать с панелью задач.",
     "ScreenColorPicker": "Выбор цвета",
@@ -245,7 +241,6 @@
     "ValueWarnColor": "Внимание",
     "ValueCritColor": "Критич.",
     "BackgroundColor": "Фон",
-
     "__Comment_Page3__": "--- 3. Items ---",
     "MonitorItemDisplay": "Мониторинг",
     "MonitorItem": "Поле",
@@ -258,7 +253,6 @@
     "MainForm": "Окно",
     "OnlyShowEnabled": "Только вкл",
     "MonitorItemTip": "Прим: Пробел в Имя/Сокр скрывает метку. Пустое имя сбрасывает. Единицы подд. {u}+символ.",
-
     "__Comment_Page4__": "--- 4. Thresholds ---",
     "Thresholds": "Пороги",
     "ThresholdsTips": "Цвет шкалы по порогу",
@@ -267,31 +261,24 @@
     "ThresholdWarnLowered": "Предупреждающее значение не может быть больше критического; приведено к {0}",
     "AlertTemp": "Алерт Темп",
     "AlertThreshold": "Лимит",
-
     "GeneralHardware": "Железо",
     "HardwareLoad": "Загрузка",
     "HardwareTemp": "Темп",
-
     "NetworkDiskSpeed": "Скорость I/O",
     "DiskIOSpeed": "Диск",
     "UploadSpeed": "Отдача",
     "DownloadSpeed": "Загрузка",
-
     "DailyTraffic": "Лимит Траф.",
-
     "__Comment_Page5__": "--- 5. System ---",
     "SystemHardwar": "Система",
-    
     "SystemSettings": "Общее",
     "Language": "Язык",
     "AutoStart": "Автозапуск",
     "AutoCheckUpdate": "Авто-проверка",
     "HideTrayIcon": "Без иконки",
-
     "Calibration": "Калибровка",
     "MaxLimits": "Максимум",
     "CalibrationTip": "Задает 100% для шкал. Пусто = Авто.",
-
     "HardwareSettings": "Источник",
     "DiskSource": "Диск",
     "NetworkSource": "Сеть",
@@ -304,7 +291,6 @@
     "RefreshTip": "Задаёт только частоту перерисовки интерфейса. Обычные данные железа опрашиваются не чаще одного раза в секунду — меньшее значение не увеличивает частоту опроса.",
     "IgnoreSMBTraffic": "Игнор. SMB",
     "MemoryDisplayMode": "Вид ОЗУ",
-
     "__Comment_Page6__": "--- 6. Плагины (PluginPage) ---",
     "Plugins": "Плагины",
     "PluginDevGuide": "Гайд Dev",
@@ -356,10 +342,13 @@
     "PluginMarketReinstall": "Требуется переустановка",
     "PluginMarketReinstallAction": "Переустановить",
     "PluginMarketPageLink": "Страница плагина",
-    "PluginMarketSelfCheck": "Обнаружены файлы, которые могли перезаписать встроенные плагины: {0}. Удалите их и переустановите программу."
-,
+    "PluginMarketSelfCheck": "Обнаружены файлы, которые могли перезаписать встроенные плагины: {0}. Удалите их и переустановите программу.",
     "CpuVoltageSource": "Источник напряжения CPU",
-    "CpuVoltageSourceTip": "Авто: предпочтительно используется напряжение ядра, сообщаемое процессором; если доступно только запрошенное напряжение (VID), оно чётко помечается как справочное. Если выбранный вручную источник исчезает, отображается «Источник недоступен» — приложение не переключается молча на другое напряжение."
+    "CpuVoltageSourceTip": "Авто: предпочтительно используется напряжение ядра, сообщаемое процессором; если доступно только запрошенное напряжение (VID), оно чётко помечается как справочное. Если выбранный вручную источник исчезает, отображается «Источник недоступен» — приложение не переключается молча на другое напряжение.",
+    "SettingsThemeMode": "Тема настроек",
+    "SettingsThemeSystem": "Как в системе",
+    "SettingsThemeLight": "Светлая",
+    "SettingsThemeDark": "Тёмная"
   },
   "CpuVoltage": {
     "Auto": "Авто",

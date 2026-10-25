@@ -170,7 +170,6 @@
     "Feedback": "问题反馈",
     "Changelog": "更新日志",
     "RestartApp": "重启软件",
-
     "__Comment_Page1__": "--- 1. 主界面设置 (MainPanelPage) ---",
     "MainFormSettings": "主界面设置",
     "HideMainForm": "隐藏主界面",
@@ -200,7 +199,6 @@
     "WebServerTrustProxyHeadersTip": "仅对上面列出的代理生效：此时 X-Forwarded-Host / X-Forwarded-Proto 会被当作真实的外部地址。",
     "WebServerReverseProxyExamples": "范例：代理保留 Host → 在「允许的外部地址」填 https://tunnel.example.com；代理重写 Host → 把代理 IP 填进「可信代理 IP」并打开「信任转发头」。",
     "WebServerReverseProxyErrors": "常见错误：403 Host 不在允许的外部地址白名单内 | 403 外部访问尚未配置访问口令 | 400 转发头歧义（代理发了多个 X-Forwarded-Host / X-Forwarded-Proto）",
-
     "Appearance": "外观设置",
     "Theme": "主题",
     "DisplayMode": "显示模式",
@@ -211,7 +209,6 @@
     "Opacity": "透明度",
     "Percent": "百分比",
     "UsedSize": "已用容量",
-
     "__Comment_Page2__": "--- 2. 任务栏设置 (TaskbarPage) ---",
     "TaskbarSettings": "任务栏设置",
     "TaskbarShow": "任务栏显示",
@@ -243,7 +240,6 @@
     "BackgroundColor": "字体背景色",
     "ScreenColorPicker": "屏幕取色工具",
     "ScreenColorPickerTip": "是否将字体背景颜色设为：",
-
     "__Comment_Page3__": "--- 3. 监控项显示 (MonitorPage) ---",
     "MonitorItemDisplay": "监控项显示",
     "MonitorItem": "监控项",
@@ -257,41 +253,32 @@
     "OnlyShowEnabled": "仅看显示项",
     "HorizontalFollowsTaskbar": "横条模式采用任务栏排序",
     "MonitorItemTip": "注：名称/简称/单位输入空格即可不显示标签或单位，而清空保存后会恢复默认，部分单位支持占位符{u}+字符",
-
     "__Comment_Page4__": "--- 4. 告警阈值设置 (ThresholdPage) ---",
     "Thresholds": "告警阈值设置",
     "AlertTemp": "高温报警弹窗",
     "AlertThreshold": "高温报警阈值",
-    
     "ThresholdsTips": "进度条和数值将根据硬件阈值显示对应的颜色",
     "ThresholdClamped": "值超出有效范围，已调整为 {0}",
     "ThresholdCritRaised": "严重值不能低于告警值，已同步为 {0}",
     "ThresholdWarnLowered": "告警值不能高于严重值，已同步为 {0}",
     "GeneralHardware": "通用硬件",
     "HardwareLoad": "硬件负载",
-    
     "HardwareTemp": "硬件温度",
-
     "NetworkDiskSpeed": "网络与磁盘速率",
     "DiskIOSpeed": "磁盘读写速率",
     "UploadSpeed": "上传速率",
     "DownloadSpeed": "下载速率",
-
     "DailyTraffic": "每日流量统计",
-
     "__Comment_Page5__": "--- 5. 系统与硬件 (SystemHardwarPage) ---",
     "SystemHardwar": "硬件与系统",
-    
     "SystemSettings": "系统设置",
     "Language": "语言/Language",
     "AutoStart": "开机启动",
     "AutoCheckUpdate": "自动检查更新",
     "HideTrayIcon": "隐藏托盘图标",
-
     "Calibration": "硬件参数校准",
     "MaxLimits": "最大值",
     "CalibrationTip": "为了进度条显示更准确，请填写硬件实际的最大值，不填将在高负载时自动学习并更新最大值",
-
     "HardwareSettings": "硬件与传感器设置",
     "DiskSource": "首选磁盘",
     "NetworkSource": "首选网卡",
@@ -304,7 +291,6 @@
     "RefreshTip": "刷新频率只决定界面重绘的快慢；普通硬件数据最高每秒采集一次，调小刷新率不会提高硬件采集频率",
     "IgnoreSMBTraffic": "不统计局域网SMB流量",
     "MemoryDisplayMode": "内存/显存显示",
-    
     "__Comment_Page6__": "--- 6. 插件管理 (PluginPage) ---",
     "Plugins": "插件管理",
     "PluginDevGuide": "插件开发指南",
@@ -356,10 +342,13 @@
     "PluginMarketReinstall": "需重装",
     "PluginMarketReinstallAction": "重新安装",
     "PluginMarketPageLink": "插件介绍页",
-    "PluginMarketSelfCheck": "检测到疑似覆盖内置插件的文件：{0}。请删除这些文件后重新安装本程序。"
-,
+    "PluginMarketSelfCheck": "检测到疑似覆盖内置插件的文件：{0}。请删除这些文件后重新安装本程序。",
     "CpuVoltageSource": "CPU 电压来源",
-    "CpuVoltageSourceTip": "自动: 优先使用处理器上报的核心供电电压; 只有请求电压(VID)时会明确标注为参考值。手动指定后若该来源消失, 会显示「来源不可用」, 不会改用其它电压。"
+    "CpuVoltageSourceTip": "自动: 优先使用处理器上报的核心供电电压; 只有请求电压(VID)时会明确标注为参考值。手动指定后若该来源消失, 会显示「来源不可用」, 不会改用其它电压。",
+    "SettingsThemeMode": "设置配色",
+    "SettingsThemeSystem": "跟随系统",
+    "SettingsThemeLight": "浅色",
+    "SettingsThemeDark": "深色"
   },
   "CpuVoltage": {
     "Auto": "自动",

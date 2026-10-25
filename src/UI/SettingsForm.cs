@@ -106,7 +106,13 @@ namespace LiteMonitor.src.UI
             
             // ★★★ Draft 机制核心：创建深拷贝 ★★★
             _draftCfg = _cfg.DeepClone();
-            
+
+            // E05：构建 UI **之前**初始化主题状态机——窗体从第一帧起就是正确的明暗，
+            // 不做"先浅色再翻深"的闪烁。订阅 ThemeChanged 与系统配色变更（退出时注销）。
+            SettingsThemeManager.Initialize(_cfg.SettingThemeMode);
+            SettingsThemeManager.ThemeChanged += OnSettingsThemeChanged;
+            Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+
             InitializeComponent(); 
             
             // ★★★ 关键点 1：构造时就初始化所有页面 ★★★
@@ -332,6 +338,48 @@ namespace LiteMonitor.src.UI
             // 5. [Fix] Rebase Draft to match Live
             // 将 Live 环境中由插件生成的最新监控项同步回 Draft，并保留动态显示属性
             SettingsChanger.RebaseDraftMonitorItems(_cfg, _draftCfg);
+
+            // E05：保存成功 ⇒ 主题状态机提交到新模式（预览态落成为已提交；无变化时为幂等空操作）
+            SettingsThemeManager.SyncFromSettings(_cfg);
+        }
+
+        // ── E05：明暗主题接线 ──────────────────────────────────────────────────
+        private void OnSettingsThemeChanged(object? sender, EventArgs e)
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            if (InvokeRequired) { BeginInvoke(OnSettingsThemeChanged); return; }
+            // 双层重绘：全局取色表推送（LiteUI 控件按 IThemeRefreshable 自刷）+ 槽位重映射兜底历史控件
+            SettingsThemeManager.ApplyTo(this);
+            SettingsThemeApplier.Apply(this);
+        }
+
+        private void OnUserPreferenceChanged(object? sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+        {
+            if (e.Category != Microsoft.Win32.UserPreferenceCategory.General) return; // 应用配色变更走 General
+            if (IsDisposed || !IsHandleCreated) return;
+            if (InvokeRequired) { BeginInvoke(OnSystemColorChanged); return; }
+            OnSystemColorChanged();
+        }
+
+        private void OnSystemColorChanged()
+        {
+            if (IsDisposed) return;
+            bool? light = SettingsThemeManager.TryReadSystemUsesLightTheme();
+            if (light.HasValue) SettingsThemeManager.ApplySystemColorChange(light.Value);
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            // E05：取消/关闭（含保存后关闭——此时已提交，为幂等空操作）丢弃未保存预览
+            SettingsThemeManager.CancelPreview();
+            base.OnFormClosing(e);
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            SettingsThemeManager.ThemeChanged -= OnSettingsThemeChanged;
+            Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+            base.OnFormClosed(e);
         }
     }
 }

@@ -170,7 +170,6 @@
     "Feedback": "Comentarios",
     "Changelog": "Cambios",
     "RestartApp": "Reiniciar App",
-
     "__Comment_Page1__": "--- 1. Panel ---",
     "MainFormSettings": "Panel Principal",
     "HideMainForm": "Ocultar",
@@ -200,7 +199,6 @@
     "WebServerTrustProxyHeadersTip": "Solo tiene efecto para los proxies de la lista: entonces X-Forwarded-Host / X-Forwarded-Proto se toman como la dirección externa real.",
     "WebServerReverseProxyExamples": "Ejemplos: el proxy conserva el Host → añadir https://tunnel.example.com; el proxy reescribe el Host → añadir la IP del proxy a la lista de confianza y activar «Confiar en las cabeceras reenviadas».",
     "WebServerReverseProxyErrors": "Errores frecuentes: 403 el Host no está en la lista de direcciones externas permitidas | 403 el acceso externo necesita una contraseña | 400 cabeceras reenviadas ambiguas (el proxy envió varias X-Forwarded-Host / X-Forwarded-Proto)",
-
     "Appearance": "Apariencia",
     "Theme": "Tema",
     "DisplayMode": "Modo",
@@ -211,7 +209,6 @@
     "Opacity": "Opacidad",
     "Percent": "Porcentaje",
     "UsedSize": "Tamaño",
-
     "__Comment_Page2__": "--- 2. Taskbar ---",
     "TaskbarSettings": "Barra Tareas",
     "TaskbarShow": "Mostrar",
@@ -234,7 +231,6 @@
     "TaskbarItemSpacing": "Espacio",
     "TaskbarInnerSpacing": "Int.Esp",
     "TaskbarVerticalPadding": "Relleno",
-
     "TaskbarCustomColors": "Colores",
     "TaskbarCustomTip": "El fondo debe coincidir con la barra.",
     "ScreenColorPicker": "Selector color",
@@ -245,7 +241,6 @@
     "ValueWarnColor": "Aviso",
     "ValueCritColor": "Crítico",
     "BackgroundColor": "Fondo",
-
     "__Comment_Page3__": "--- 3. Items ---",
     "MonitorItemDisplay": "Elementos",
     "MonitorItem": "Ítem",
@@ -258,7 +253,6 @@
     "MainForm": "Panel",
     "OnlyShowEnabled": "Solo activados",
     "MonitorItemTip": "Tip: Espacio en Nombre/Corto oculta etiqueta. Vacío restaura. Unidades: {u}+car.",
-
     "__Comment_Page4__": "--- 4. Umbrales ---",
     "Thresholds": "Umbrales",
     "ThresholdsTips": "Color barra según umbral",
@@ -267,31 +261,24 @@
     "ThresholdWarnLowered": "El valor de advertencia no puede ser mayor que el crítico; sincronizado a {0}",
     "AlertTemp": "Alerta Temp",
     "AlertThreshold": "Límite",
-
     "GeneralHardware": "Hardware",
     "HardwareLoad": "Carga",
     "HardwareTemp": "Temp",
-
     "NetworkDiskSpeed": "Velocidad E/S",
     "DiskIOSpeed": "Disco",
     "UploadSpeed": "Subida",
     "DownloadSpeed": "Bajada",
-
     "DailyTraffic": "Límite Datos",
-
     "__Comment_Page5__": "--- 5. Sistema ---",
     "SystemHardwar": "Sistema",
-    
     "SystemSettings": "General",
     "Language": "Idioma",
     "AutoStart": "Inicio auto",
     "AutoCheckUpdate": "Auto-Check",
     "HideTrayIcon": "Ocultar icono",
-
     "Calibration": "Calibración",
     "MaxLimits": "Máximos",
     "CalibrationTip": "Define el 100% de las barras. Vacío = Auto.",
-
     "HardwareSettings": "Fuente",
     "DiskSource": "Disco",
     "NetworkSource": "Red",
@@ -304,7 +291,6 @@
     "RefreshTip": "Solo define cada cuánto se redibuja la interfaz. Los datos normales del hardware se muestrean como máximo una vez por segundo, así que un valor menor no muestrea más a menudo.",
     "IgnoreSMBTraffic": "Ignorar SMB",
     "MemoryDisplayMode": "Vis. RAM",
-
     "__Comment_Page6__": "--- 6. Plugins (PluginPage) ---",
     "Plugins": "Plugins",
     "PluginDevGuide": "Guía Dev",
@@ -356,10 +342,13 @@
     "PluginMarketReinstall": "Requiere reinstalación",
     "PluginMarketReinstallAction": "Reinstalar",
     "PluginMarketPageLink": "Página del plugin",
-    "PluginMarketSelfCheck": "Se detectaron archivos que podrían haber sobrescrito plugins integrados: {0}. Elimínalos y reinstala el programa."
-,
+    "PluginMarketSelfCheck": "Se detectaron archivos que podrían haber sobrescrito plugins integrados: {0}. Elimínalos y reinstala el programa.",
     "CpuVoltageSource": "Fuente de tensión de CPU",
-    "CpuVoltageSourceTip": "Automático: se prefiere la tensión de alimentación del núcleo informada por el procesador; si solo existe una tensión solicitada (VID), se indica claramente como valor de referencia. Si una fuente elegida manualmente desaparece, la aplicación muestra «Fuente no disponible» y no cambia de tensión en silencio."
+    "CpuVoltageSourceTip": "Automático: se prefiere la tensión de alimentación del núcleo informada por el procesador; si solo existe una tensión solicitada (VID), se indica claramente como valor de referencia. Si una fuente elegida manualmente desaparece, la aplicación muestra «Fuente no disponible» y no cambia de tensión en silencio.",
+    "SettingsThemeMode": "Tema de ajustes",
+    "SettingsThemeSystem": "Seguir al sistema",
+    "SettingsThemeLight": "Claro",
+    "SettingsThemeDark": "Oscuro"
   },
   "CpuVoltage": {
     "Auto": "Automático",

@@ -96,6 +96,25 @@ namespace LiteMonitor.src.UI.SettingsPage
                 }),
                 () => Config.Skin,
                 v => Config.Skin = v ?? "");
+            // E05：设置窗体明暗主题（与悬浮窗 Skin 分离）——选择即写草稿并即时预览，
+            // 保存经 ApplySettings 落定（SyncFromSettings 提交），取消/关闭由 FormClosing 还原。
+            group.AddComboIndex(this, "Menu.SettingsThemeMode",
+                new[]
+                {
+                    LanguageManager.T("Menu.SettingsThemeSystem"),
+                    LanguageManager.T("Menu.SettingsThemeLight"),
+                    LanguageManager.T("Menu.SettingsThemeDark"),
+                },
+                () => (int)Config.SettingThemeMode,
+                idx =>
+                {
+                    Config.SettingThemeMode = (SettingThemeMode)idx;
+                    if (SettingsThemeManager.BeginPreview((SettingThemeMode)idx) && FindForm() is { } root)
+                    {
+                        SettingsThemeManager.ApplyTo(root);
+                        SettingsThemeApplier.Apply(root);
+                    }
+                });
 
             // 2. Orientation
             group.AddComboIndex(this, "Menu.DisplayMode", 

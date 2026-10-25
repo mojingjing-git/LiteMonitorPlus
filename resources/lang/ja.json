@@ -5,7 +5,6 @@
     "CPU": "CPU",
     "GPU": "GPU",
     "HOST": "ホスト",
-
     "DISK": "ディスク",
     "NET": "ネット",
     "DATA": "通信量",
@@ -171,7 +170,6 @@
     "Feedback": "フィードバック",
     "Changelog": "更新履歴",
     "RestartApp": "再起動",
-
     "__Comment_Page1__": "--- 1. メイン画面 ---",
     "MainFormSettings": "メイン画面",
     "HideMainForm": "画面を隠す",
@@ -201,7 +199,6 @@
     "WebServerTrustProxyHeadersTip": "上記に挙げたプロキシにのみ有効：このとき X-Forwarded-Host / X-Forwarded-Proto を実際の外部アドレスとして扱います。",
     "WebServerReverseProxyExamples": "例：プロキシが Host をそのまま保持 → 「許可する外部アドレス」に https://tunnel.example.com を追加。プロキシが Host を書き換える → 「信頼するプロキシ IP」にプロキシ IP を追加し「転送ヘッダーを信頼する」をオンにします。",
     "WebServerReverseProxyErrors": "よくあるエラー：403 Host が許可する外部アドレス一覧にありません | 403 外部アクセスにはアクセスパスワードが必要 | 400 転送ヘッダーが曖昧（プロキシが複数の X-Forwarded-Host / X-Forwarded-Proto を送信）",
-
     "Appearance": "外観設定",
     "Theme": "テーマ",
     "DisplayMode": "表示モード",
@@ -212,7 +209,6 @@
     "Opacity": "不透明度",
     "Percent": "パーセント",
     "UsedSize": "使用量",
-
     "__Comment_Page2__": "--- 2. タスクバー ---",
     "TaskbarSettings": "タスクバー",
     "TaskbarShow": "タスクバー表示",
@@ -235,7 +231,6 @@
     "TaskbarItemSpacing": "項目間隔",
     "TaskbarInnerSpacing": "内部間隔",
     "TaskbarVerticalPadding": "上下余白",
-
     "TaskbarCustomColors": "文字色設定",
     "TaskbarCustomTip": "背景色はタスクバーの色に合わせてください。",
     "ScreenColorPicker": "カラーピッカー",
@@ -246,7 +241,6 @@
     "ValueWarnColor": "警告値",
     "ValueCritColor": "危険値",
     "BackgroundColor": "文字背景",
-
     "__Comment_Page3__": "--- 3. 監視項目 ---",
     "MonitorItemDisplay": "監視項目",
     "MonitorItem": "項目",
@@ -259,7 +253,6 @@
     "MainForm": "パネル",
     "OnlyShowEnabled": "有効のみ",
     "MonitorItemTip": "注: 名前/略称にスペースでラベル非表示。空でデフォルト復元。一部単位は{u}+文字対応。",
-
     "__Comment_Page4__": "--- 4. 閾値設定 ---",
     "Thresholds": "アラート閾値",
     "ThresholdsTips": "バーと数値の色が閾値に応じて変化",
@@ -268,31 +261,24 @@
     "ThresholdWarnLowered": "警告値は重大値より大きくできません。{0} に同期しました",
     "AlertTemp": "高温警告",
     "AlertThreshold": "警告温度",
-
     "GeneralHardware": "ハードウェア",
     "HardwareLoad": "負荷率",
     "HardwareTemp": "温度",
-
     "NetworkDiskSpeed": "転送速度",
     "DiskIOSpeed": "ディスクI/O",
     "UploadSpeed": "アップロード",
     "DownloadSpeed": "ダウンロード",
-
     "DailyTraffic": "通信量制限",
-
     "__Comment_Page5__": "--- 5. システム ---",
     "SystemHardwar": "システム",
-    
     "SystemSettings": "一般設定",
     "Language": "言語 / Language",
     "AutoStart": "自動起動",
     "AutoCheckUpdate": "自動更新確認",
     "HideTrayIcon": "トレイ非表示",
-
     "Calibration": "ハードウェア校正",
     "MaxLimits": "最大値",
     "CalibrationTip": "バー表示の基準となる最大値を設定。空欄で自動学習。",
-
     "HardwareSettings": "ソース選択",
     "DiskSource": "ディスク",
     "NetworkSource": "ネットワーク",
@@ -305,7 +291,6 @@
     "RefreshTip": "更新頻度は画面の再描画の間隔だけです。通常のハードウェアデータは最大1秒に1回しか収集されないため、値を小さくしても収集頻度は上がりません。",
     "IgnoreSMBTraffic": "SMB通信を無視",
     "MemoryDisplayMode": "メモリ表示",
-
     "__Comment_Page6__": "--- 6. プラグイン (PluginPage) ---",
     "Plugins": "プラグイン管理",
     "PluginDevGuide": "開発ガイド",
@@ -357,10 +342,13 @@
     "PluginMarketReinstall": "再インストールが必要",
     "PluginMarketReinstallAction": "再インストール",
     "PluginMarketPageLink": "プラグインのページ",
-    "PluginMarketSelfCheck": "組み込みプラグインを上書きした可能性のあるファイルを検出しました：{0}。これらのファイルを削除してから本プログラムを再インストールしてください。"
-,
+    "PluginMarketSelfCheck": "組み込みプラグインを上書きした可能性のあるファイルを検出しました：{0}。これらのファイルを削除してから本プログラムを再インストールしてください。",
     "CpuVoltageSource": "CPU 電圧ソース",
-    "CpuVoltageSourceTip": "自動: プロセッサが報告するコア供給電圧を優先します。要求電圧 (VID) のみの場合は参考値として明示します。手動指定したソースが消失した場合は「ソースを利用できません」と表示し、別の電圧に勝手に切り替えません。"
+    "CpuVoltageSourceTip": "自動: プロセッサが報告するコア供給電圧を優先します。要求電圧 (VID) のみの場合は参考値として明示します。手動指定したソースが消失した場合は「ソースを利用できません」と表示し、別の電圧に勝手に切り替えません。",
+    "SettingsThemeMode": "設定テーマ",
+    "SettingsThemeSystem": "システムに従う",
+    "SettingsThemeLight": "ライト",
+    "SettingsThemeDark": "ダーク"
   },
   "CpuVoltage": {
     "Auto": "自動",
