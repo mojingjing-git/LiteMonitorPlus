@@ -83,7 +83,7 @@ namespace LiteMonitor.src.Plugins
             {
                 // Strict record removal restores its own memory on save failure.
                 // Restore the payload too, retaining the copy if restoration fails.
-                if (hadFile) File.Move(backupPath, plan.TargetPath, overwrite: true);
+                if (hadFile) MarketFileIo.MoveAtomic(backupPath, plan.TargetPath);
                 throw;
             }
 
