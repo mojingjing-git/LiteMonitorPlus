@@ -100,6 +100,29 @@ namespace LiteMonitor.Tests
         }
 
         /// <summary>
+        /// 在内层子窗口下再创建一层子窗口（WS_CHILD）。
+        /// <para>★ P-F05 需要：模拟 <c>Shell_TrayWnd → ReBarWindow32 → MSTaskSwWClass</c>
+        /// 这两级结构，让 Win10 占位策略能在**真实 HWND** 上驱动。</para>
+        /// </summary>
+        public IntPtr CreateSlotChild(IntPtr inner, int x, int y, int width, int height, string name = "LiteMonitorTaskbarSlot")
+        {
+            IntPtr hwnd = CreateWindowEx(
+                0, HostWindowClass, name,
+                WS_CHILD | WS_VISIBLE,
+                x, y, width, height,
+                inner, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+
+            if (hwnd == IntPtr.Zero)
+            {
+                throw new InvalidOperationException(
+                    $"CreateWindowEx(任务列表子窗口) 失败，Win32 错误码 = {Marshal.GetLastWin32Error()}");
+            }
+
+            _windows.Add(hwnd);
+            return hwnd;
+        }
+
+        /// <summary>
         /// 销毁根窗口 —— 真实的 <c>DestroyWindow</c>。
         /// <para>★ Windows 语义：父窗口销毁 ⇒ **子窗口一并销毁**（P5 探针已实测的机制基石）。</para>
         /// </summary>

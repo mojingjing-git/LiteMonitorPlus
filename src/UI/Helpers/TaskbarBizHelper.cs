@@ -22,6 +22,16 @@ namespace LiteMonitor.src.UI.Helpers
         private IntPtr _hTaskbar = IntPtr.Zero;
         private IntPtr _hTray = IntPtr.Zero;
 
+        // ★ P-F05：显式停靠方向（替代"宽高比猜垂直/水平"）
+        private TaskbarDockDirection _direction = TaskbarDockDirection.Unknown;
+
+        // ★ P-F05：兼容性判定（原生 / 第三方待验 / 未知）
+        private TaskbarCompatibility _compatibility = TaskbarCompatibility.Unknown;
+
+        // ★ P-F05：最近一次的面板尺寸（参与几何缓存键）
+        private int _panelWidth;
+        private int _panelHeight;
+
         // ★ 挂载时记录的内层子句柄：Explorer 重建子层（根 HWND 保留）时该句柄会变，
         //   变了就说明"当前挂载已过期" ⇒ 必须重新解析并重挂（母计划 F04 第 2 步）。
         private IntPtr _attachedInner = IntPtr.Zero;
@@ -35,6 +45,12 @@ namespace LiteMonitor.src.UI.Helpers
         public int Height => _taskbarHeight;
         public Rectangle Rect => _taskbarRect;
         public IntPtr HandleTaskbar => _hTaskbar;
+
+        /// <summary>当前停靠方向（显式枚举；未知 = 几何缺失/失败/过期）。</summary>
+        public TaskbarDockDirection Direction => _direction;
+
+        /// <summary>当前兼容性判定（原生 / 第三方待验 / 未知）。</summary>
+        public TaskbarCompatibility Compatibility => _compatibility;
 
         /// <summary>挂载时记录的内层子句柄（诊断 / 测试用）。</summary>
         public IntPtr AttachedInnerHandle => _attachedInner;
@@ -201,38 +217,98 @@ namespace LiteMonitor.src.UI.Helpers
             _winHelper.AttachToTaskbar(_hTaskbar);
         }
 
+        /// <summary>
+        /// 有效对齐（靠左 / 靠上）：用户设置 <b>且</b> 系统任务栏居中对齐。
+        /// <para>★ P-F05：只在这里算一次 —— 上层分支与策略内部的占位方向必须一致，
+        /// 否则会出现"面板放左边、图标却被整体右移"的互相重叠（#568）。</para>
+        /// </summary>
+        private static bool EffectiveAlignLeft(bool userAlignLeft, bool sysCentered)
+        {
+            return userAlignLeft && sysCentered;
+        }
+
         public void UpdateTaskbarRect()
         {
-            _taskbarRect = _winHelper.GetTaskbarRect(_hTaskbar, _cfg.TaskbarMonitorDevice);
+            bool alignLeft = EffectiveAlignLeft(_cfg.TaskbarAlignLeft, TaskbarWinHelper.IsCenterAligned());
+
+            // ★ 定位上下文统一在这里维护 ⇒ 几何解析与最终定位用同一份缓存键
+            _winHelper.SetPlacementContext(_panelWidth, _panelHeight, alignLeft, _cfg.TaskbarManualOffset);
+
+            // ★ P-F05：几何快照同时带回**显式停靠方向**（不再靠宽高比猜）。
+            var geometry = _winHelper.GetGeometry(
+                _hTaskbar,
+                _cfg.TaskbarMonitorDevice,
+                _panelWidth,
+                _panelHeight,
+                alignLeft,
+                _cfg.TaskbarManualOffset);
+
+            ApplyGeometry(geometry);
+        }
+
+        private void ApplyGeometry(TaskbarGeometry geometry)
+        {
+            _taskbarRect = geometry.TaskbarRect;
+            _direction = geometry.Direction;
+            _compatibility = geometry.Compatibility;
             _taskbarHeight = Math.Max(24, _taskbarRect.Height);
         }
 
+        /// <summary>
+        /// 是否为垂直停靠（左 / 右）。
+        /// <para>★ P-F05：改用<b>显式方向枚举</b>，不再用"任务栏矩形宽高比"猜
+        /// （高 DPI / 多行任务栏 / 第三方任务栏下宽高比会误判）。</para>
+        /// </summary>
         public bool IsVertical()
         {
-            return _taskbarRect.Height > _taskbarRect.Width;
+            return _direction == TaskbarDockDirection.Left || _direction == TaskbarDockDirection.Right;
         }
 
         public void UpdatePlacement(int panelWidth)
         {
             if (_hTaskbar == IntPtr.Zero) return;
 
-            int leftScreen = _taskbarRect.Left;
-            int topScreen;
+            _panelWidth = panelWidth;
+            _panelHeight = _form.Height;
 
-            // ★★★ 垂直任务栏定位 ★★★
-            if (IsVertical())
+            // ★ 有效对齐**只算一次**：上层分支与策略内部的占位方向必须一致。
+            //   旧实现把 "_cfg.TaskbarAlignLeft" 传给策略，却用
+            //   "_cfg.TaskbarAlignLeft && sysCentered" 决定分支 ⇒ 两者可以相反
+            //   ⇒ 面板被放到左边、图标却被整体右移 ⇒ 互相重叠（#568）。
+            bool sysCentered = TaskbarWinHelper.IsCenterAligned();
+            bool alignLeft = EffectiveAlignLeft(_cfg.TaskbarAlignLeft, sysCentered);
+
+            int rawWidgetWidth = TaskbarWinHelper.GetWidgetsWidth();
+            int manualOffset = _cfg.TaskbarManualOffset;
+
+            // ★ 定位上下文统一维护 ⇒ 几何解析与最终定位用同一份缓存键
+            _winHelper.SetPlacementContext(panelWidth, _form.Height, alignLeft, manualOffset);
+
+            // ★ 重新解析几何（含方向）：面板尺寸变化也要让缓存失效。
+            var geometry = _winHelper.GetGeometry(
+                _hTaskbar,
+                _cfg.TaskbarMonitorDevice,
+                panelWidth,
+                _form.Height,
+                alignLeft,
+                manualOffset);
+            ApplyGeometry(geometry);
+
+            // ★★★ 垂直停靠（左 / 右）★★★
+            if (_direction == TaskbarDockDirection.Left || _direction == TaskbarDockDirection.Right)
             {
                 // 如果策略自带布局逻辑 (如 Win10 挤占模式)，直接委托处理
                 if (_winHelper.UsesInternalLayout)
                 {
                     // 注意：垂直模式下，Width 是固定的（任务栏宽度），Height 是 Monitor 高度
-                    _winHelper.SetPosition(_hTaskbar, 0, 0, _taskbarRect.Width, _form.Height, _cfg.TaskbarManualOffset, _cfg.TaskbarAlignLeft);
+                    _winHelper.SetPosition(_hTaskbar, 0, 0, _taskbarRect.Width, _form.Height, manualOffset, alignLeft, _direction);
                     return;
                 }
 
                 // 尝试定位到托盘上方
+                int verticalLeftScreen = _taskbarRect.Left;
                 int bottomLimit = _taskbarRect.Bottom;
-                
+
                 if (_hTray != IntPtr.Zero && _winHelper.GetWindowRectWrapper(_hTray, out Rectangle trayRect))
                 {
                     if (trayRect.Top >= _taskbarRect.Top && trayRect.Bottom <= _taskbarRect.Bottom)
@@ -241,48 +317,46 @@ namespace LiteMonitor.src.UI.Helpers
                     }
                 }
 
-                topScreen = bottomLimit - _form.Height - _cfg.TaskbarManualOffset - 6;
-                if (topScreen < _taskbarRect.Top) topScreen = _taskbarRect.Top;
+                int verticalTopScreen = bottomLimit - _form.Height - manualOffset - 6;
+                if (verticalTopScreen < _taskbarRect.Top) verticalTopScreen = _taskbarRect.Top;
 
-                _winHelper.SetPosition(_hTaskbar, leftScreen, topScreen, _taskbarRect.Width, _form.Height);
+                _winHelper.SetPosition(_hTaskbar, verticalLeftScreen, verticalTopScreen, _taskbarRect.Width, _form.Height, 0, alignLeft, _direction);
                 return;
             }
 
-            // ★★★ 水平任务栏定位 ★★★
+            // ★★★ 水平停靠（上 / 下）或方向未知 ★★★
+
+            // ★ Win10：策略内部负责"占位 + 定位"（左右两种对齐都走这里）。
+            //   旧实现只在"居右"分支委托策略 ⇒ "居左"分支完全不做挤占，
+            //   面板直接压在系统任务按钮上（#568 的重叠现象之一）。
+            if (_winHelper.UsesInternalLayout)
+            {
+                _winHelper.SetPosition(_hTaskbar, 0, 0, panelWidth, _taskbarHeight, manualOffset, alignLeft, _direction);
+                return;
+            }
 
             var currentMonitor = _winHelper.Screens.GetMonitorForRectangle(_taskbarRect)
                                  ?? _winHelper.FindPrimaryMonitor();
             bool isPrimary = currentMonitor?.IsPrimary ?? true;
 
-            bool sysCentered = TaskbarWinHelper.IsCenterAligned();
-            
-            int rawWidgetWidth = TaskbarWinHelper.GetWidgetsWidth();      
-            int manualOffset = _cfg.TaskbarManualOffset; 
-            int leftModeTotalOffset = rawWidgetWidth + manualOffset;
+            // ★ P-F05：时钟预留区必须按**任务栏 DPI** 换算成物理像素。
+            //   旧实现硬编码 90（逻辑像素）⇒ 高 DPI 屏上时钟区比预留宽 ⇒ 面板可能压到时钟（#568 同类重叠）。
+            //   100% 缩放下取值与旧实现完全一致（90 物理像素），行为不变。
+            int timeWidth = _isWin11 ? (int)Math.Round(90.0 * geometry.Dpi / 96.0) : 0;
             int sysRightAvoid = sysCentered ? 0 : rawWidgetWidth;
             int rightModeTotalOffset = sysRightAvoid + manualOffset;
 
-            int timeWidth = _isWin11 ? 90 : 0; 
-            bool alignLeft = _cfg.TaskbarAlignLeft && sysCentered; 
-
-            topScreen = _taskbarRect.Top;
+            int topScreen = _taskbarRect.Top;
+            int leftScreen;
 
             if (alignLeft)
             {
                 int startX = _taskbarRect.Left + 6;
-                if (leftModeTotalOffset > 0) startX += leftModeTotalOffset;
+                if (rawWidgetWidth + manualOffset > 0) startX += rawWidgetWidth + manualOffset;
                 leftScreen = startX;
             }
             else
             {
-                // 如果策略自带布局逻辑 (如 Win10 挤占模式)，直接委托处理
-                // 我们不需要计算 Right 偏移，位置由 Strategy 内部决定
-                if (_winHelper.UsesInternalLayout)
-                {
-                    _winHelper.SetPosition(_hTaskbar, 0, 0, panelWidth, _taskbarHeight, _cfg.TaskbarManualOffset, _cfg.TaskbarAlignLeft);
-                    return;
-                }
-
                 if (isPrimary && _hTray != IntPtr.Zero && _winHelper.GetWindowRectWrapper(_hTray, out Rectangle tray))
                 {
                     leftScreen = tray.Left - panelWidth - 6;
@@ -296,7 +370,7 @@ namespace LiteMonitor.src.UI.Helpers
                 }
             }
 
-            _winHelper.SetPosition(_hTaskbar, leftScreen, topScreen, panelWidth, _taskbarHeight);
+            _winHelper.SetPosition(_hTaskbar, leftScreen, topScreen, panelWidth, _taskbarHeight, 0, alignLeft, _direction);
         }
 
         public void BuildVerticalLayout(List<Column> cols)
