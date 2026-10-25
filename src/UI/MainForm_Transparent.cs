@@ -7,6 +7,7 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -27,6 +28,19 @@ namespace LiteMonitor
         private readonly WindowAppearanceController _windowAppearance;
 
         private const int WM_DISPLAYCHANGE = 0x007E;
+        private const int WM_SETTINGCHANGE = 0x001A;
+        private const int WM_POWERBROADCAST = 0x0218;
+        private const int WM_WTSSESSION_CHANGE = 0x02B1;
+
+        private const int PBT_APMSUSPEND = 0x0004;
+        private const int PBT_APMRESUMESUSPEND = 0x0007;
+        private const int PBT_APMRESUMEAUTOMATIC = 0x0012;
+
+        private const int WTS_SESSION_LOGON = 0x5;
+        private const int WTS_SESSION_UNLOCK = 0x8;
+
+        private const int NOTIFY_FOR_THIS_SESSION = 0;
+
         private CancellationTokenSource _displayChangeCts;
 
         private Point _dragOffset;
@@ -83,6 +97,44 @@ namespace LiteMonitor
         public void EnsureVisibleAndSavePos() => _bizHelper.SavePos();
         public void ApplyRoundedCorners() => _winHelper.ApplyRoundedCorners();
         public void RefreshTopMost(bool forceReinsert = false) => _winHelper.RefreshTopMost(_cfg.TopMost, forceReinsert);
+
+        // =================================================================
+        // 【P-F04】会话变化通知（锁屏解锁 / 登录 ⇒ 任务栏整层重建）
+        // =================================================================
+
+        [DllImport("wtsapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool WTSRegisterSessionNotification(IntPtr hWnd, int dwFlags);
+
+        [DllImport("wtsapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool WTSUnRegisterSessionNotification(IntPtr hWnd);
+
+        /// <summary>已注册会话变化通知的句柄（句柄重建后需要重新注册）。</summary>
+        private IntPtr _sessionNotifiedHandle = IntPtr.Zero;
+
+        /// <summary>
+        /// 注册会话变化通知（<c>WM_WTSSESSION_CHANGE</c>）。
+        /// <para>★ 锁屏/解锁会让 Explorer 重建整个任务栏层 —— 这是 #553 的关键触发源之一。
+        /// 窗口销毁时系统会自动注销，这里只负责句柄重建后的重新注册。</para>
+        /// </summary>
+        private void RegisterSessionNotification()
+        {
+            try
+            {
+                if (!IsHandleCreated) return;
+                if (_sessionNotifiedHandle == Handle) return;
+
+                if (WTSRegisterSessionNotification(Handle, NOTIFY_FOR_THIS_SESSION))
+                {
+                    _sessionNotifiedHandle = Handle;
+                }
+            }
+            catch
+            {
+                // 注册失败（极老系统 / 权限）⇒ 不影响其它恢复路径。
+            }
+        }
 
         // ================================================================
         // 【GPU T03 / 合同 §4 步 7、§8、§10 GPU-003】窗口切换相关入口
@@ -364,6 +416,9 @@ namespace LiteMonitor
                 //   代次已在上方推进 ⇒ 这里消费的是**新**代次。
                 _ui?.NotifyLiveGlassHandleChanged();
                 _ui?.NotifyGpuHandleChanged(controlled, handleGeneration);
+
+                // ★ P-F04：注册会话变化通知（锁屏解锁 / 登录）⇒ 任务栏整层重建后可自愈。
+                RegisterSessionNotification();
             };
 
             // 换肤 / DPI 变化 → 重新应用窗口轮廓（外框样式可能在切角与圆角之间切换）
@@ -454,21 +509,58 @@ namespace LiteMonitor
             if (m.Msg == _wmTaskbarCreated && _wmTaskbarCreated != 0)
             {
                 // [Fix] Explorer 重启后，子窗口 TaskbarForm 会被销毁或失效。
-                // 必须由主窗口感知并重建 TaskbarForm，才能恢复显示。
+                // ★ P-F04：不再"销毁 + 重建整个 TaskbarForm"，而是**投递一次恢复请求** ——
+                //   Explorer 重启后根 HWND 可能换了、子层可能重建，但面板本身（及其定时器）应当保持**单份**。
+                //   恢复由任务栏恢复协调器统一去抖 + 有界退避完成（#553 / #573 / #583）。
                 if (_cfg.ShowTaskbar)
                 {
-                    // 延迟执行，确保 Explorer 初始化基本完成，同时避免阻塞消息泵
-                    this.BeginInvoke(new Action(async () =>
+                    if (_taskbar != null && !_taskbar.IsDisposed)
                     {
-                        try 
+                        _taskbar.RequestTaskbarRecovery(TaskbarRecoveryReason.ExplorerRestarted);
+                    }
+                    else
+                    {
+                        // 没有任务栏窗体可恢复 ⇒ 延迟新建一个（等 Explorer 缓口气）。
+                        this.BeginInvoke(new Action(async () =>
                         {
-                            await Task.Delay(3000); // 等待3秒让Explorer缓口气
-                            ToggleTaskbar(false);   // 彻底销毁旧实例
-                            ToggleTaskbar(true);    // 创建新实例(新实例自带重试机制)
-                        }
-                        catch { }
-                    }));
+                            try
+                            {
+                                await Task.Delay(3000);
+                                ToggleTaskbar(true);
+                            }
+                            catch { }
+                        }));
+                    }
                 }
+            }
+
+            if (m.Msg == WM_POWERBROADCAST)
+            {
+                int powerEvent = m.WParam.ToInt32();
+                if (powerEvent == PBT_APMRESUMESUSPEND ||
+                    powerEvent == PBT_APMRESUMEAUTOMATIC ||
+                    powerEvent == PBT_APMSUSPEND)
+                {
+                    // ★ 睡眠 / 唤醒 / Modern Standby：任务栏根 HWND 往往仍有效，
+                    //   但其子窗口、Z 序和显示器坐标已经被重建 ⇒ 投递恢复请求（#553）。
+                    _taskbar?.RequestTaskbarRecovery(TaskbarRecoveryReason.PowerResume);
+                }
+            }
+
+            if (m.Msg == WM_WTSSESSION_CHANGE)
+            {
+                int sessionEvent = m.WParam.ToInt32();
+                if (sessionEvent == WTS_SESSION_UNLOCK || sessionEvent == WTS_SESSION_LOGON)
+                {
+                    // ★ 锁屏解锁 / 会话切换：任务栏整层会被重建 ⇒ 投递恢复请求（#553）。
+                    _taskbar?.RequestTaskbarRecovery(TaskbarRecoveryReason.SessionChange);
+                }
+            }
+
+            if (m.Msg == WM_SETTINGCHANGE)
+            {
+                // ★ 显示设置变化（任务栏大小 / 位置 / 自动隐藏）⇒ 任务栏矩形缓存必须失效并重新定位（#539）。
+                _taskbar?.RequestTaskbarRecovery(TaskbarRecoveryReason.SettingChange);
             }
 
             if (m.Msg == WM_DISPLAYCHANGE)
@@ -478,6 +570,9 @@ namespace LiteMonitor
                 _displayChangeCts?.Cancel();
                 _displayChangeCts = new System.Threading.CancellationTokenSource();
                 var token = _displayChangeCts.Token;
+
+                // ★ 任务栏侧：拓扑/分辨率变化后必须重新解析目标设备并重挂（#539 / #573 / #583）。
+                _taskbar?.RequestTaskbarRecovery(TaskbarRecoveryReason.DisplayChange);
 
                 Task.Delay(500, token).ContinueWith(t => 
                 {
@@ -517,6 +612,8 @@ namespace LiteMonitor
             //   （真关闭在 OnFormClosed 里整停 —— 那时才允许把开关置 false。）
             _ui?.StopLiveGlassForHandleRecreate();
             _ui?.StopGpuPresentation();
+            // ★ P-F04：会话变化通知随句柄一起失效（系统会在窗口销毁时自动注销，这里只清标记）。
+            _sessionNotifiedHandle = IntPtr.Zero;
             base.OnHandleDestroyed(e);
         }
 
@@ -529,6 +626,8 @@ namespace LiteMonitor
             _ui?.NotifyLiveGlassSizeChanged();
             _ui?.NotifyGpuSizeChanged();
             ApplyWindowAppearance();
+            // ★ P-F04：任务栏侧的 DPI 变化同样要重解析目标设备、重算任务栏矩形并重挂（#539）。
+            _taskbar?.RequestTaskbarRecovery(TaskbarRecoveryReason.DpiChanged);
             this.Invalidate();
         }
 
@@ -602,6 +701,17 @@ namespace LiteMonitor
         {
             _isClosing = true;
             _ui?.NotifyFormClosing();
+
+            // ★ P-F04：关闭拥有最高优先级 —— 先把任务栏面板收掉：
+            //   取消排队的恢复请求、注销后续动作、**禁止在关闭过程中复活窗口**
+            //   （母计划 F04 第 6 步：关闭过程不新建 HWND）。
+            if (_taskbar != null && !_taskbar.IsDisposed)
+            {
+                _taskbar.Close();
+                _taskbar.Dispose();
+                _taskbar = null;
+            }
+
             base.OnFormClosing(e);
         }
 

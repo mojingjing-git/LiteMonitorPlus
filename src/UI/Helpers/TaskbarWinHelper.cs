@@ -57,10 +57,16 @@ namespace LiteMonitor.src.UI.Helpers
         public const int WS_EX_LAYERED = 0x80000;
         public const int WS_EX_TOOLWINDOW = 0x00000080;
         public const uint LWA_COLORKEY = 0x00000001;
+        public const uint SWP_NOSIZE = 0x0001;
+        public const uint SWP_NOMOVE = 0x0002;
         public const uint SWP_NOZORDER = 0x0004;
         public const uint SWP_NOACTIVATE = 0x0010;
+        public const uint SWP_SHOWWINDOW = 0x0040;
         public const int WS_EX_TRANSPARENT = 0x00000020;
         public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+
+        /// <summary>SetWindowPos 的 hWndInsertAfter：置顶到同级最前（不激活）。</summary>
+        public static readonly IntPtr HWND_TOP = IntPtr.Zero;
 
         [StructLayout(LayoutKind.Sequential)]
         public struct POINT { public int X, Y; }
@@ -83,6 +89,7 @@ namespace LiteMonitor.src.UI.Helpers
         [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
         [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
         [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindowVisible(IntPtr hWnd);
     }
 
     /// <summary>
@@ -99,14 +106,34 @@ namespace LiteMonitor.src.UI.Helpers
         private Rectangle _cachedResult = Rectangle.Empty;
         private bool _isCacheValid = false;
 
+        // ★ 缓存键的其余分量（P-F04 / #539）：任务栏 HWND 可能在显示器、工作区、DPI 变化后
+        //   **继续有效**，旧缓存只比较物理矩形 ⇒ 会一直复用过期坐标直到整个程序重启。
+        private IntPtr _lastTaskbarHandle = IntPtr.Zero;
+        private string _lastTargetDevice = string.Empty;
+        private Rectangle _lastScreenBounds = Rectangle.Empty;
+        private Rectangle _lastWorkingArea = Rectangle.Empty;
+        private uint _lastTaskbarDpi = 96;
+
+        // ★ 显示器拓扑来源（可注入 ⇒ 多屏/副屏缺失的判定可被真实调用验证）。
+        private readonly ITaskbarScreenProvider _screens;
+
+        // ★ 任务栏窗口查找来源（可注入 ⇒ 解析逻辑可在**真实测试 HWND** 上验证，
+        //   且测试过程绝不触碰真实的 Shell_TrayWnd）。
+        private readonly ITaskbarWindowSource _windows;
+
         // [Optimization] 静态缓存系统版本检测结果
         private static readonly bool _isWin11 = Environment.OSVersion.Version.Major == 10 && Environment.OSVersion.Version.Build >= 22000;
 
         public bool UsesInternalLayout => _strategy.HasInternalLayout;
-        
-        public TaskbarWinHelper(Form form)
+
+        /// <summary>当前使用的显示器拓扑来源。</summary>
+        public ITaskbarScreenProvider Screens => _screens;
+
+        public TaskbarWinHelper(Form form, ITaskbarScreenProvider? screens = null, ITaskbarWindowSource? windows = null)
         {
             _form = form;
+            _screens = screens ?? WinFormsTaskbarScreenProvider.Instance;
+            _windows = windows ?? Win32TaskbarWindowSource.Instance;
             // 策略工厂模式：根据系统版本选择合适的集成策略
             if (_isWin11)
             {
@@ -160,6 +187,49 @@ namespace LiteMonitor.src.UI.Helpers
         public void AttachToTaskbar(IntPtr taskbarHandle)
         {
             _strategy.Attach(taskbarHandle);
+
+            // Explorer 在启动/唤醒时可能保留父子关系，却把窗口排到新的任务栏层后面，
+            // 或者在句柄重建后把新窗口留在不可见状态。
+            // 每次恢复集成时重新确认可见性与同级位置（不激活、不移动、不改大小）。
+            if (_form.IsHandleCreated && IsWindow(_form.Handle))
+            {
+                SetWindowPos(
+                    _form.Handle,
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
+        }
+
+        /// <summary>
+        /// 期望的父窗口句柄（策略相关：Win11 = 任务栏根，Win10 = 任务栏根）。
+        /// </summary>
+        public IntPtr GetExpectedParent(IntPtr taskbarHandle)
+        {
+            return _strategy.GetExpectedParent(taskbarHandle);
+        }
+
+        /// <summary>
+        /// 面板当前是否真的挂在给定任务栏下（**实际父子关系**，不只是"根 HWND 非零"）。
+        /// </summary>
+        public bool IsAttachedToTaskbar(IntPtr taskbarHandle)
+        {
+            if (taskbarHandle == IntPtr.Zero) return false;
+            if (!_form.IsHandleCreated || !IsWindow(_form.Handle)) return false;
+
+            IntPtr expectedParent = _strategy.GetExpectedParent(taskbarHandle);
+            if (expectedParent == IntPtr.Zero || !IsWindow(expectedParent)) return false;
+
+            return GetParent(_form.Handle) == expectedParent;
+        }
+
+        /// <summary>任务栏矩形缓存失效（恢复 / 显示变化后必须调用）。</summary>
+        public void InvalidateTaskbarRectCache()
+        {
+            _isCacheValid = false;
         }
 
         public void SetPosition(IntPtr taskbarHandle, int left, int top, int w, int h, int manualOffset = 0, bool alignLeft = true)
@@ -184,41 +254,83 @@ namespace LiteMonitor.src.UI.Helpers
         // =================================================================
         // 句柄与信息获取 (通用逻辑)
         // =================================================================
-        public (IntPtr hTaskbar, IntPtr hTray) FindHandles(string targetDevice)
+
+        /// <summary>
+        /// 查找目标显示器。找不到返回 null（**不回退主屏**）。
+        /// </summary>
+        public TaskbarMonitorInfo? FindMonitor(string? targetDevice)
         {
-            Screen target = Screen.PrimaryScreen;
+            if (string.IsNullOrEmpty(targetDevice)) return null;
+            foreach (var monitor in _screens.GetMonitors())
+            {
+                if (monitor.DeviceName == targetDevice) return monitor;
+            }
+            return null;
+        }
+
+        /// <summary>主屏显示器信息（自动模式使用）。</summary>
+        public TaskbarMonitorInfo? FindPrimaryMonitor()
+        {
+            var monitors = _screens.GetMonitors();
+            foreach (var monitor in monitors)
+            {
+                if (monitor.IsPrimary) return monitor;
+            }
+            return monitors.Count > 0 ? monitors[0] : null;
+        }
+
+        /// <summary>
+        /// 解析目标任务栏句柄。
+        /// <para>★ [Fix #573 / #583] 指定了目标设备但**目标设备不存在**时返回
+        /// <see cref="IntPtr.Zero"/>，**不再回退到主屏**。
+        /// 旧实现回退主屏 ⇒ 拿到的句柄有效 ⇒ <c>IsTaskbarValid()</c> 恒真 ⇒
+        /// 永不重解析 ⇒ 开机竞态与 RDP 断开后永久锁死在错误屏幕上。</para>
+        /// </summary>
+        public (IntPtr hTaskbar, IntPtr hTray) FindHandles(string? targetDevice)
+        {
             if (!string.IsNullOrEmpty(targetDevice))
             {
-                target = Screen.AllScreens.FirstOrDefault(s => s.DeviceName == targetDevice) ?? Screen.PrimaryScreen;
+                var target = FindMonitor(targetDevice);
+                // ★ 目标设备缺失 ⇒ 交回"等待"状态，而不是偷偷绑主屏。
+                if (target == null) return (IntPtr.Zero, IntPtr.Zero);
+
+                if (target.Value.IsPrimary)
+                {
+                    IntPtr hTaskbar = _windows.FindWindow("Shell_TrayWnd", null);
+                    IntPtr hTray = _windows.FindWindowEx(hTaskbar, IntPtr.Zero, "TrayNotifyWnd", null);
+                    return (hTaskbar, hTray);
+                }
+                else
+                {
+                    IntPtr hTaskbar = FindSecondaryTaskbar(target.Value);
+                    return (hTaskbar, IntPtr.Zero);
+                }
             }
 
-            if (target.Primary)
+            // 自动模式（未指定目标设备）：使用主屏
             {
-                IntPtr hTaskbar = FindWindow("Shell_TrayWnd", null);
-                IntPtr hTray = FindWindowEx(hTaskbar, IntPtr.Zero, "TrayNotifyWnd", null);
+                IntPtr hTaskbar = _windows.FindWindow("Shell_TrayWnd", null);
+                IntPtr hTray = _windows.FindWindowEx(hTaskbar, IntPtr.Zero, "TrayNotifyWnd", null);
                 return (hTaskbar, hTray);
-            }
-            else
-            {
-                IntPtr hTaskbar = FindSecondaryTaskbar(target);
-                return (hTaskbar, IntPtr.Zero);
             }
         }
 
-        private IntPtr FindSecondaryTaskbar(Screen screen)
+        private IntPtr FindSecondaryTaskbar(TaskbarMonitorInfo screen)
         {
             IntPtr hWnd = IntPtr.Zero;
-            while ((hWnd = FindWindowEx(IntPtr.Zero, hWnd, "Shell_SecondaryTrayWnd", null)) != IntPtr.Zero)
+            while ((hWnd = _windows.FindWindowEx(IntPtr.Zero, hWnd, "Shell_SecondaryTrayWnd", null)) != IntPtr.Zero)
             {
                 GetWindowRect(hWnd, out RECT rect);
                 Rectangle r = Rectangle.FromLTRB(rect.left, rect.top, rect.right, rect.bottom);
                 if (screen.Bounds.Contains(r.Location) || screen.Bounds.IntersectsWith(r))
                     return hWnd;
             }
-            return FindWindow("Shell_TrayWnd", null);
+            // ★ [Fix #573 / #583] 副屏任务栏还没就绪 ⇒ 返回 Zero，
+            //   让上层进入"等待目标任务栏"状态并持续重试，**不回退主屏**。
+            return IntPtr.Zero;
         }
 
-        public Rectangle GetTaskbarRect(IntPtr hTaskbar, string targetDevice)
+        public Rectangle GetTaskbarRect(IntPtr hTaskbar, string? targetDevice)
         {
             if (hTaskbar == IntPtr.Zero) return Rectangle.Empty;
 
@@ -226,8 +338,39 @@ namespace LiteMonitor.src.UI.Helpers
             if (!GetWindowRect(hTaskbar, out RECT r)) return Rectangle.Empty;
             var rectPhys = Rectangle.FromLTRB(r.left, r.top, r.right, r.bottom);
 
-            // 缓存检查
-            if (_isCacheValid && rectPhys == _lastWindowRect) return _cachedResult;
+            // 2. 缓存键的其余分量（#539）：任务栏 HWND 可能在显示器、工作区、DPI 变化后继续有效，
+            //    旧缓存只比较物理矩形 ⇒ 切分辨率后一直复用过期坐标直到进程重启。
+            TaskbarMonitorInfo? screen = null;
+            Rectangle screenBounds = Rectangle.Empty;
+            Rectangle workingArea = Rectangle.Empty;
+            uint taskbarDpi = 96;
+
+            try
+            {
+                screen = FindMonitor(targetDevice);
+                screen ??= _screens.GetMonitorForHandle(hTaskbar);
+
+                if (screen.HasValue)
+                {
+                    screenBounds = screen.Value.Bounds;
+                    workingArea = screen.Value.WorkingArea;
+                }
+
+                taskbarDpi = GetDpiForWindow(hTaskbar);
+                if (taskbarDpi == 0) taskbarDpi = 96;
+            }
+            catch { }
+
+            if (_isCacheValid &&
+                hTaskbar == _lastTaskbarHandle &&
+                string.Equals(targetDevice ?? string.Empty, _lastTargetDevice, StringComparison.Ordinal) &&
+                rectPhys == _lastWindowRect &&
+                screenBounds == _lastScreenBounds &&
+                workingArea == _lastWorkingArea &&
+                taskbarDpi == _lastTaskbarDpi)
+            {
+                return _cachedResult;
+            }
 
             Rectangle finalRect = rectPhys;
 
@@ -236,22 +379,14 @@ namespace LiteMonitor.src.UI.Helpers
             // =========================================================================
             try
             {
-                Screen screen = null;
-                if (!string.IsNullOrEmpty(targetDevice)) 
-                    screen = Screen.AllScreens.FirstOrDefault(s => s.DeviceName == targetDevice);
-                if (screen == null) 
-                    screen = Screen.FromHandle(hTaskbar);
-
-                if (screen != null)
+                if (screen.HasValue)
                 {
-                    Rectangle workArea = screen.WorkingArea;
-                    Rectangle screenBounds = screen.Bounds;
-                    int reservedBottom = screenBounds.Bottom - workArea.Bottom;
+                    int reservedBottom = screenBounds.Bottom - workingArea.Bottom;
 
                     // 场景 A: 锚定模式
-                    if (reservedBottom > 2) 
+                    if (reservedBottom > 2)
                     {
-                        finalRect = new Rectangle(rectPhys.Left, workArea.Bottom, rectPhys.Width, reservedBottom);
+                        finalRect = new Rectangle(rectPhys.Left, workingArea.Bottom, rectPhys.Width, reservedBottom);
                     }
                     // 场景 B: 悬浮模式
                     else
@@ -264,15 +399,14 @@ namespace LiteMonitor.src.UI.Helpers
 
                             if (!isVertical)
                             {
-                                int dpi = GetTaskbarDpi();
-                                int standardHeight = (int)Math.Round(48.0 * dpi / 96.0);
+                                int standardHeight = (int)Math.Round(48.0 * taskbarDpi / 96.0);
 
                                 if (rectPhys.Height > (standardHeight * 0.8))
                                 {
                                     finalRect = new Rectangle(
-                                        rectPhys.Left, 
-                                        rectPhys.Bottom - standardHeight, 
-                                        rectPhys.Width, 
+                                        rectPhys.Left,
+                                        rectPhys.Bottom - standardHeight,
+                                        rectPhys.Width,
                                         standardHeight);
                                 }
                             }
@@ -284,6 +418,11 @@ namespace LiteMonitor.src.UI.Helpers
 
             _lastWindowRect = rectPhys;
             _cachedResult = finalRect;
+            _lastTaskbarHandle = hTaskbar;
+            _lastTargetDevice = targetDevice ?? string.Empty;
+            _lastScreenBounds = screenBounds;
+            _lastWorkingArea = workingArea;
+            _lastTaskbarDpi = taskbarDpi;
             _isCacheValid = true;
 
             return _cachedResult;

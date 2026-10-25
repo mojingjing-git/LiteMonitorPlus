@@ -21,6 +21,11 @@ namespace LiteMonitor.src.UI.Helpers
         private int _taskbarHeight = 32;
         private IntPtr _hTaskbar = IntPtr.Zero;
         private IntPtr _hTray = IntPtr.Zero;
+
+        // ★ 挂载时记录的内层子句柄：Explorer 重建子层（根 HWND 保留）时该句柄会变，
+        //   变了就说明"当前挂载已过期" ⇒ 必须重新解析并重挂（母计划 F04 第 2 步）。
+        private IntPtr _attachedInner = IntPtr.Zero;
+
         private bool _isWin11;
         
         // 样式相关
@@ -30,6 +35,9 @@ namespace LiteMonitor.src.UI.Helpers
         public int Height => _taskbarHeight;
         public Rectangle Rect => _taskbarRect;
         public IntPtr HandleTaskbar => _hTaskbar;
+
+        /// <summary>挂载时记录的内层子句柄（诊断 / 测试用）。</summary>
+        public IntPtr AttachedInnerHandle => _attachedInner;
         public Color TransparentKey => _transparentKey;
         public bool LastIsLightTheme => _lastIsLightTheme;
 
@@ -87,6 +95,97 @@ namespace LiteMonitor.src.UI.Helpers
             var handles = _winHelper.FindHandles(_cfg.TaskbarMonitorDevice);
             _hTaskbar = handles.hTaskbar;
             _hTray = handles.hTray;
+        }
+
+        /// <summary>
+        /// 解析目标任务栏宿主（P-F04）。
+        /// <para>★ 目标设备不存在时返回"未就绪"，**不回退主屏**（#573 / #583）。</para>
+        /// </summary>
+        public TaskbarHostResolution ResolveTarget()
+        {
+            string device = _cfg.TaskbarMonitorDevice ?? string.Empty;
+            bool specified = !string.IsNullOrEmpty(device);
+
+            TaskbarMonitorInfo? monitor = specified
+                ? _winHelper.FindMonitor(device)
+                : _winHelper.FindPrimaryMonitor();
+
+            // 自动模式（未指定设备）⇒ 主屏始终视为就绪；指定模式 ⇒ 目标显示器必须真的存在。
+            bool monitorPresent = specified ? monitor.HasValue : true;
+
+            var handles = _winHelper.FindHandles(device);
+            IntPtr root = handles.hTaskbar;
+            IntPtr inner = handles.hTray;
+
+            bool rootAlive = root != IntPtr.Zero && TaskbarWinHelper.IsWindow(root);
+            bool innerAlive = inner == IntPtr.Zero || TaskbarWinHelper.IsWindow(inner);
+
+            return new TaskbarHostResolution(root, inner, specified, monitorPresent, rootAlive, innerAlive);
+        }
+
+        /// <summary>
+        /// 面板当前是否**确实**挂在目标任务栏上。
+        /// <para>★ 不能只看"根 HWND 非零/有效"：必须同时校验
+        /// ① 实际父子关系 ② 内层子句柄 ③ 目标显示器 ④ 面板自身句柄有效。</para>
+        /// </summary>
+        public bool IsPanelAttached(TaskbarHostResolution resolution)
+        {
+            if (!resolution.IsReady) return false;
+            if (!_form.IsHandleCreated) return false;
+            if (!TaskbarWinHelper.IsWindow(_form.Handle)) return false;
+
+            // ① 实际父子关系
+            if (!_winHelper.IsAttachedToTaskbar(resolution.Root)) return false;
+
+            // ② 内层子句柄（子层被重建 ⇒ 挂载已过期）
+            if (resolution.Inner != IntPtr.Zero && !resolution.InnerAlive) return false;
+            if (resolution.Inner != _attachedInner) return false;
+
+            // ③ 目标显示器（挂错屏 ⇒ 视为未挂好，必须重解析）
+            if (!IsOnTargetMonitor(resolution)) return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// 当前任务栏根窗口是否位于**用户指定的目标显示器**上。
+        /// <para>★ 自动模式（未指定设备）不做该检查。</para>
+        /// </summary>
+        public bool IsOnTargetMonitor(TaskbarHostResolution resolution)
+        {
+            string device = _cfg.TaskbarMonitorDevice ?? string.Empty;
+            if (string.IsNullOrEmpty(device)) return true;
+
+            var target = _winHelper.FindMonitor(device);
+            if (!target.HasValue) return false;    // 目标显示器不存在 ⇒ 尚未就绪
+
+            if (!_winHelper.GetWindowRectWrapper(resolution.Root, out Rectangle rootRect)) return false;
+
+            return target.Value.Bounds.Contains(rootRect.Location) ||
+                   target.Value.Bounds.IntersectsWith(rootRect);
+        }
+
+        /// <summary>面板自身的 HWND 是否仍然是有效窗口。</summary>
+        public bool IsPanelHandleAlive()
+        {
+            if (!_form.IsHandleCreated) return false;
+            return TaskbarWinHelper.IsWindow(_form.Handle);
+        }
+
+        /// <summary>按解析结果执行一次挂载（重解析后的重挂路径）。</summary>
+        public void AttachToResolved(TaskbarHostResolution resolution)
+        {
+            if (!resolution.IsReady) return;
+
+            _hTaskbar = resolution.Root;
+            _hTray = resolution.Inner;
+            _attachedInner = resolution.Inner;
+
+            // 任务栏 HWND 可能换了 ⇒ 旧的任务栏矩形缓存必须失效（#539）。
+            _winHelper.InvalidateTaskbarRectCache();
+
+            _winHelper.AttachToTaskbar(resolution.Root);
+            UpdateTaskbarRect();
         }
 
         public bool IsTaskbarValid()
@@ -151,11 +250,11 @@ namespace LiteMonitor.src.UI.Helpers
 
             // ★★★ 水平任务栏定位 ★★★
 
-            Screen currentScreen = Screen.FromRectangle(_taskbarRect);
-            if (currentScreen == null) currentScreen = Screen.PrimaryScreen;
-            
+            var currentMonitor = _winHelper.Screens.GetMonitorForRectangle(_taskbarRect)
+                                 ?? _winHelper.FindPrimaryMonitor();
+            bool isPrimary = currentMonitor?.IsPrimary ?? true;
+
             bool sysCentered = TaskbarWinHelper.IsCenterAligned();
-            bool isPrimary = currentScreen.Primary;
             
             int rawWidgetWidth = TaskbarWinHelper.GetWidgetsWidth();      
             int manualOffset = _cfg.TaskbarManualOffset; 
