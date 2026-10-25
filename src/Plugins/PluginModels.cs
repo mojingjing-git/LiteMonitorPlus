@@ -164,6 +164,19 @@ namespace LiteMonitor.src.Plugins
         [JsonPropertyName("skip_if_set")]
         public string SkipIfSet { get; set; } = ""; // If context[SkipIfSet] is present & not empty, skip this step
 
+        /// <summary>
+        /// [F13] 允许本步骤失败后继续执行链中的后续步骤（默认 false）。
+        /// <para><b>默认 false</b>：行为与既有实现逐字一致 —— 步骤失败即中断整条链。</para>
+        /// <para><b>true</b> 时只有**业务可恢复失败**（请求失败 / 无有效数据 / 字段提取失败 /
+        /// 单请求超时）会被吞掉并进入下一步；<b>外层取消、单次执行总时长耗尽、沙箱违规</b>
+        /// （并发 / 响应体 / 步数 / 目标数 / 凭据目标 / 重定向）一律**不可吞**，
+        /// 必须照旧中断整条链。</para>
+        /// <para>★ 语义细节：可回退步骤使用<b>临时 context</b>，<b>只有成功</b>才把变量合并回链上下文
+        /// ⇒ 失败不会留下半成品（❓ / ❌）误触发后续步骤的 <see cref="SkipIfSet"/>。</para>
+        /// </summary>
+        [JsonPropertyName("continue_on_error")]
+        public bool ContinueOnError { get; set; } = false;
+
         [JsonPropertyName("proxy")]
         public string Proxy { get; set; } = ""; // Optional: "host:port" for proxy
     }
