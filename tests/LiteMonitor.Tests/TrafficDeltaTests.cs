@@ -367,5 +367,107 @@ namespace LiteMonitor.Tests
             Assert.Equal(0, result.UpBytes);
             Assert.Equal(0, result.DownBytes);
         }
+
+        // =========================================================
+        // ★ [F03] 反复切换网卡：新设备不继承累计量，且不产生负流量 / 尖峰
+        // =========================================================
+
+        [Fact]
+        public void 反复切换网卡不会产生负增量或流量尖峰()
+        {
+            var clock = new FakeTimeProvider();
+            var accumulator = new TrafficAccumulator(clock);
+
+            long up = 1_000_000, down = 2_000_000;
+            accumulator.Accumulate(new TrafficSample
+            {
+                NativeUpBytes = up,
+                NativeDownBytes = down
+            }, 1.0);
+
+            for (int round = 0; round < 5; round++)
+            {
+                // 切到另一张网卡：累计计数基线被重建（另一张卡的累计量完全不同）
+                up += 50_000_000;
+                down += 70_000_000;
+                accumulator.ResetBaseline(up, down);
+
+                clock.Advance(TimeSpan.FromSeconds(1));
+                var afterSwitch = accumulator.Accumulate(new TrafficSample
+                {
+                    NativeUpBytes = up,
+                    NativeDownBytes = down,
+                    LhmUpRate = 1000,
+                    LhmDownRate = 1000
+                }, 1.0);
+
+                // 切换后的第一轮不产生增量：不继承上一张卡的累计量，也没有尖峰
+                Assert.Equal(0, afterSwitch.UpBytes);
+                Assert.Equal(0, afterSwitch.DownBytes);
+                Assert.False(afterSwitch.NativeMismatch);
+                Assert.False(afterSwitch.ResetByLongGap);
+
+                // 稳态：增量等于两次真实采样之间的差值
+                clock.Advance(TimeSpan.FromSeconds(1));
+                up += 2_000;
+                down += 3_000;
+                var steady = accumulator.Accumulate(new TrafficSample
+                {
+                    NativeUpBytes = up,
+                    NativeDownBytes = down,
+                    LhmUpRate = 2000,
+                    LhmDownRate = 3000
+                }, 1.0);
+
+                Assert.Equal(2000, steady.UpBytes);
+                Assert.Equal(3000, steady.DownBytes);
+                Assert.True(steady.UpBytes >= 0);
+                Assert.True(steady.DownBytes >= 0);
+            }
+        }
+
+        [Fact]
+        public void 换卡后第一轮采样不会把另一张卡的累计量算进来()
+        {
+            var clock = new FakeTimeProvider();
+            var accumulator = new TrafficAccumulator(clock);
+
+            // 旧网卡：累计 1 MB / 2 MB
+            accumulator.Accumulate(new TrafficSample
+            {
+                NativeUpBytes = 1_000_000,
+                NativeDownBytes = 2_000_000
+            }, 1.0);
+
+            clock.Advance(TimeSpan.FromSeconds(1));
+            var beforeSwitch = accumulator.Accumulate(new TrafficSample
+            {
+                NativeUpBytes = 1_001_000,
+                NativeDownBytes = 2_001_000,
+                LhmUpRate = 1000,
+                LhmDownRate = 1000
+            }, 1.0);
+
+            Assert.Equal(1000, beforeSwitch.UpBytes);
+            Assert.Equal(1000, beforeSwitch.DownBytes);
+
+            // 换卡：新基线（另一张卡的累计量）
+            accumulator.ResetBaseline(900_000_000, 800_000_000);
+
+            clock.Advance(TimeSpan.FromSeconds(1));
+            var afterSwitch = accumulator.Accumulate(new TrafficSample
+            {
+                NativeUpBytes = 900_001_500,
+                NativeDownBytes = 800_002_500,
+                LhmUpRate = 1500,
+                LhmDownRate = 2500
+            }, 1.0);
+
+            // 只有新卡自己这一轮的增量，没有把旧卡的累计量带过来
+            Assert.Equal(1500, afterSwitch.UpBytes);
+            Assert.Equal(2500, afterSwitch.DownBytes);
+            Assert.True(afterSwitch.UpBytes >= 0);
+            Assert.True(afterSwitch.DownBytes >= 0);
+        }
     }
 }

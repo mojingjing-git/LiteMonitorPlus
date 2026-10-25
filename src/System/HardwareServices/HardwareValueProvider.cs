@@ -417,6 +417,10 @@ namespace LiteMonitor.src.SystemServices
                 }
 
                 // 自动检测配置变更：如果用户更改了首选风扇/磁盘/显卡，立即自动预热
+                // ★ [F03] 首选网卡变化：必须**立即**作废网络样本缓存与速率差分基线。
+                //   新网卡不得继承上一张卡的累计量，旧卡的值也不得继续冒充当前读数。
+                bool netPrefChanged = _lastPrefNet != _cfg.PreferredNetwork;
+
                 if (gpuChanged || gpuCountChanged ||
                     _lastPrefCpuFan != _cfg.PreferredCpuFan ||
                     _lastPrefCpuPump != _cfg.PreferredCpuPump ||
@@ -426,6 +430,11 @@ namespace LiteMonitor.src.SystemServices
                     _lastPrefNet != _cfg.PreferredNetwork)
                 {
                     PreCacheAllSensors(_sensorMap);
+                }
+
+                if (netPrefChanged)
+                {
+                    _networkManager.InvalidateNetworkSamples();
                 }
             }
         }
@@ -500,6 +509,27 @@ namespace LiteMonitor.src.SystemServices
         /// </summary>
         public bool IsLastValidValueStale(string key) => IsStaleValue(key);
 
+        /// <summary>
+        /// 网络指标的兜底取值：**必须**受"样本时效"约束。
+        /// <para>★ [F03] 旧实现直接回退到通用 <c>_lastValidMap</c>（永不失效），
+        /// 于是传感器停更时旧值会被当成新样本无限期重发布（#96 的冻结机制）。
+        /// 现在只允许使用仍在保留期内的样本；从未登记过的旧值只会被一次性采纳（寿命有界）。</para>
+        /// </summary>
+        private float? GetNetworkFallback(string key)
+        {
+            float? legacy = null;
+            // 与既有实现一致：抢锁失败时对共享字典做无锁读（此时采集线程不会写它）。
+            if (_lastValidMap.TryGetValue(key, out float lv)) legacy = lv;
+
+            NetworkSample sample = _networkManager.Samples.GetOrAdopt(
+                key,
+                legacy,
+                _networkManager.SelectedDeviceName,
+                _networkManager.DeviceGeneration);
+
+            return sample.HasValue ? sample.Value : (float?)null;
+        }
+
         /// <summary>清空启动期缓存。</summary>
         private void ClearStartupCache()
         {
@@ -547,6 +577,12 @@ namespace LiteMonitor.src.SystemServices
             if (MetricUtils.IsCommittedMemoryKey(key))
             {
                 return CommittedMemoryPublisher.TryGetLoadPercent();
+            }
+
+            // ★ [F03] 网络值不得用通用 _lastValidMap 兜底：旧值必须受"样本时效"约束。
+            if (key.StartsWith("NET"))
+            {
+                return GetNetworkFallback(key);
             }
 
             if (_lastValidMap.TryGetValue(key, out float lastVal)) return lastVal;
@@ -602,6 +638,8 @@ namespace LiteMonitor.src.SystemServices
                     // 所以此时读取是相对安全的（虽然没有锁）。
                     // ★ 设备切换后被标记作废的 Key 不能在这里返回旧卡的值。
                     if (IsStaleValue(key)) return null;
+                    // ★ [F03] 网络值：旧值只能作为"保留期内的样本"出现，不能无限期重发布（#96）。
+                    if (key.StartsWith("NET")) return GetNetworkFallback(key);
                     if (_lastValidMap.TryGetValue(key, out float lastVal)) return lastVal;
                     return null;
                 }
@@ -815,6 +853,11 @@ namespace LiteMonitor.src.SystemServices
                     default:
                         if (key.StartsWith("NET"))
                         {
+                            // ★ [#96 / F03] 网络值**不走**通用 _lastValidMap 兜底。
+                            //   旧值必须受"样本时效"约束：否则网卡停更时，旧值会被当成
+                            //   新样本无限期重发布（面板上的数字卡住不动 = #96）。
+                            skipGenericFallback = true;
+
                             // ★ [#610] IP 排除开启时：**先**消费过滤快照。
                             //   - 有有效快照 → 用过滤后的速率（口径：TCP/UDP 事件源，见界面说明）；
                             //   - 没有有效快照（准备中/失败/降级）→ 显示**缺失**，
@@ -829,7 +872,6 @@ namespace LiteMonitor.src.SystemServices
                                 // 否则自动选网卡永远选不出来，排除后端拿不到归属。
                                 _networkManager.GetBestValue(key, _computer, _cfg, _lastValidMap, _lock);
 
-                                skipGenericFallback = true;
                                 if (_networkExclusion != null &&
                                     _networkExclusion.TryGetFilteredRate(key, out double filteredRate))
                                 {
@@ -842,14 +884,29 @@ namespace LiteMonitor.src.SystemServices
                             }
                             else
                             {
-                                if (_manualSensorCache.TryGetValue(key, out var sNet))
+                                bool sampled = false;
+
+                                // 手动选卡：直接读用户指定网卡的传感器。
+                                // ★ NaN / 读不到都算"失败"，绝不能把 NaN 或缺失当成 0 显示。
+                                if (_manualSensorCache.TryGetValue(key, out var sNet) &&
+                                    sNet.Value is float mv && !float.IsNaN(mv))
                                 {
-                                    result = sNet.Value;
+                                    // ★ 成功采样：登记值与成功时间。
+                                    //   只有新的采样轮次才会刷新寿命 —— 反复读取同一个传感器
+                                    //   不会把旧值一直当成新样本（#96）。
+                                    NetworkSample manual = _networkManager.Samples.MarkSampled(
+                                        key, mv, _cfg.PreferredNetwork ?? "", _networkManager.DeviceGeneration);
+                                    result = manual.HasValue ? manual.Value : (float?)null;
+                                    sampled = true;
                                 }
 
-                                if (result == null)
+                                if (!sampled)
                                 {
-                                    result = _networkManager.GetBestValue(key, _computer, _cfg, _lastValidMap, _lock);
+                                    // 自动模式 / 手动模式的网卡读取：
+                                    //   由 NetworkManager 负责自动选优、失败恢复、有限重选与时效。
+                                    NetworkSample sample = _networkManager.GetBestSample(
+                                        key, _computer, _cfg, _lastValidMap, _lock);
+                                    result = sample.HasValue ? sample.Value : (float?)null;
                                 }
                             }
                         }
