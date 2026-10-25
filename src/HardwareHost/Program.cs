@@ -13,6 +13,7 @@ internal sealed record HostOptions
     public string? SessionToken { get; init; }
     public int ParentPid { get; init; } = -1;
     public int RefreshMs { get; init; } = 1000;
+    public int HeartbeatMs { get; init; } = 2000;
     public bool TestPattern { get; init; }
     public bool StaleFirst { get; init; }
     public string? Fault { get; init; }
@@ -34,6 +35,9 @@ internal sealed record HostOptions
                     break;
                 case "--refresh-ms":
                     if (int.TryParse(Next(), out int ms)) opt = opt with { RefreshMs = ms };
+                    break;
+                case "--heartbeat-ms":
+                    if (int.TryParse(Next(), out int hb)) opt = opt with { HeartbeatMs = Math.Max(100, hb) };
                     break;
                 case "--test-pattern": opt = opt with { TestPattern = true }; break;
                 case "--stale-first": opt = opt with { StaleFirst = true }; break;

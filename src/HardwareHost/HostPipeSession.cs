@@ -137,12 +137,13 @@ internal sealed class HostPipeSession
         }, cts.Token);
 
         // ── 心跳任务：2s 一发。stop-heartbeat 故障静默停发（采样继续）→ 主程序"心跳 2s×3 失联"路径。──
+        int heartbeatMs = Math.Max(100, _options.HeartbeatMs);
         var heartbeatDone = Task.Run(async () =>
         {
             bool frozen = _fault == "stop-heartbeat";
             while (!_stopping)
             {
-                await Task.Delay(HeartbeatIntervalMs).ConfigureAwait(false);
+                await Task.Delay(heartbeatMs).ConfigureAwait(false);
                 if (_stopping || frozen) continue;
                 if (!EnqueueControl(Heartbeat(HardwareState.Ready, null))) break; // 有界队列满：不积压
             }
