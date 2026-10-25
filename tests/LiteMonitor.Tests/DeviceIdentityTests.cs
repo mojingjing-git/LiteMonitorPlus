@@ -33,7 +33,7 @@ namespace LiteMonitor.Tests
 
             public DeviceProbe Create(IHardware hardware, DeviceKind kind)
             {
-                if (_probes.TryGetValue(hardware, out DeviceProbe? probe)) return probe;
+                if (_probes.TryGetValue(hardware, out DeviceProbe probe)) return probe;
                 return new DeviceProbe
                 {
                     Kind = kind,
