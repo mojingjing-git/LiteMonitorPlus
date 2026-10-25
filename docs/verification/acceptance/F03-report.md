@@ -5,11 +5,13 @@
 - 工作包：P-F03
 - 分支：`fix/F03-network-sample-freshness`
 - 基线 SHA（开工时 HEAD）：`d52c0ab`（master）
-- 提交 SHA 列表：
-  - `fix(F03)`: 网络样本带时效/设备身份/设备代次，旧值不再无限期冻结回退（#96）
-  - `test(F03)`: 网络时效全链路、读一万次不刷新 TTL、拔卡恢复、换卡无负流量
-  - `docs(F03)`: 验收记录
-  （逐字 SHA 见 §3 的 `git log --oneline d52c0ab..HEAD`）
+- 提交 SHA 列表（`git log --oneline d52c0ab..HEAD`）：
+  - `e76721e` `fix(F03): 网络样本带时效与设备代次，旧值不再无限期冻结回退 (#96)`
+    （`src/System/HardwareServices/NetworkSampleFreshness.cs` 新建、`NetworkManager.cs`、`HardwareValueProvider.cs`）
+  - `72f3c34` `test(F03): 网络时效全链路、读一万次不刷新 TTL、拔卡恢复、换卡无负流量`
+    （`tests/LiteMonitor.Tests/NetworkSampleFreshnessTests.cs` 新建、`SamplingCacheTests.cs`、`TrafficDeltaTests.cs`）
+  - `8983e97` `docs(F03): 验收记录 —— 网络值时效、失败恢复与自动选卡（#96）`
+    （`docs/verification/acceptance/F03-report.md` 新建）
 - 完成日期：2026-10-25
 - 执行者：worker 会话 `mvs_e49dfeadf93c4de0917086821974bb12`（P-F03 外派单）
 
