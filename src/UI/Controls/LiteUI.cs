@@ -7,6 +7,24 @@ using LiteMonitor.src.UI.SettingsPage;
 
 namespace LiteMonitor.src.UI.Controls
 {
+    /// <summary>
+    /// 设置控件的<b>统一取色表</b>。
+    ///
+    /// <para>★ F14b（issue #437 暗色半项）之前的样子：只有 12 个 <c>public static</c> 色值字段，
+    ///   且写死了一套浅色（证据锚点：本文件当时的第 9-25 行，F00 基线核验未漂移）。
+    ///   于是"暗色"没有任何落脚点：即使把页面背景改成深色，各处散落的
+    ///   <c>Color.White</c> / <c>Color.Gray</c> / <c>Color.LightGray</c> 硬编码
+    ///   会让结果停留在"页面变黑了、输入框还是白的"这种半吊子状态。</para>
+    ///
+    /// <para>★ 现在的做法：<see cref="LiteMonitor.src.UI.SettingsPage.SettingsThemePalette"/>
+    ///   定义了浅色/深色两组<b>同名同义</b>的槽位（含禁用/选中/错误/提示/菜单/预览等边界状态），
+    ///   由 <see cref="LiteMonitor.src.UI.SettingsPage.SettingsThemeManager.PushToUIColors(SettingsThemePalette)"/>
+    ///   把当前那一组推送到本类的静态字段上。控件**一律从这里取色**，不许再写死某个 RGB ——
+    ///   换深浅时只需要推一份新的调色板，不需要改任何一个控件。</para>
+    ///
+    /// <para>★ 字段依旧可变（不是属性），是为了给兼容层与既有绘制代码留最小改动面；
+    ///   唯一合法的写入者是主题管理器。</para>
+    /// </summary>
     public static class UIColors
     {
         public static Color MainBg = Color.FromArgb(243, 243, 243);
@@ -23,6 +41,65 @@ namespace LiteMonitor.src.UI.Controls
 
         public static Color TextWarn = Color.FromArgb(215, 145, 0); 
         public static Color TextCrit = Color.FromArgb(220, 50, 50); 
+
+        // =====================================================================
+        // ★ F14b 补齐的语义槽位（浅色取值沿用修复前的硬编码 ⇒ 现有体验不变，
+        //   深色取值由 SettingsThemePalette.Dark 提供）
+        // =====================================================================
+
+        /// <summary>卡片/面板的次级面（表格内的滚动容器等）。此前各处硬编码 <c>Color.White</c>。</summary>
+        public static Color SurfaceBg = Color.White;
+
+        /// <summary>文本输入框底色。此前 <c>LiteUnderlineInput</c> 硬编码 <c>Color.White</c>。</summary>
+        public static Color InputBg = Color.White;
+
+        /// <summary>文本输入框文字色。此前由 <c>UIColors.TextSub</c> 顶替。</summary>
+        public static Color InputText = Color.FromArgb(32, 32, 32);
+
+        /// <summary>输入框下划线（未聚焦）。此前硬编码 <c>Color.LightGray</c>。</summary>
+        public static Color InputLine = Color.LightGray;
+
+        /// <summary>输入框下划线（聚焦）。此前硬编码 <c>UIColors.Primary</c>。</summary>
+        public static Color InputLineFocused = Color.FromArgb(0, 120, 215);
+
+        /// <summary>禁用文字 —— ★ 边界状态：要还能读清，但不能看着像可执行。</summary>
+        public static Color TextDisabled = Color.FromArgb(150, 150, 150);
+
+        /// <summary>行分隔线（比 <see cref="Border"/> 更淡）。此前硬编码 <c>Color.FromArgb(240,240,240)</c>。</summary>
+        public static Color Separator = Color.FromArgb(240, 240, 240);
+
+        /// <summary>说明行（<see cref="LiteHintRow"/> / <see cref="LiteNote"/>）文字。此前硬编码 <c>Color.Gray</c>。</summary>
+        public static Color Hint = Color.Gray;
+
+        /// <summary>下拉列表/菜单底色 —— ★ 边界状态。此前硬编码 <c>Color.White</c>。</summary>
+        public static Color MenuBg = Color.White;
+
+        /// <summary>下拉列表/菜单文字。</summary>
+        public static Color MenuText = Color.FromArgb(32, 32, 32);
+
+        /// <summary>下拉列表/菜单选中项底色 —— ★ 边界状态（系统默认的深蓝在深色主题下会糊成一片）。</summary>
+        public static Color MenuSelectedBg = Color.FromArgb(0, 120, 215);
+
+        /// <summary>下拉列表/菜单选中项文字 —— ★ 边界状态。</summary>
+        public static Color MenuSelectedText = Color.White;
+
+        /// <summary>主题预览画布底色 —— ★ 边界状态。</summary>
+        public static Color PreviewBg = Color.FromArgb(249, 249, 249);
+
+        /// <summary>告警横幅底色 —— ★ 边界状态（"配置无法保存"提示条）。</summary>
+        public static Color BannerBg = Color.FromArgb(255, 248, 230);
+
+        /// <summary>告警横幅文字（在 <see cref="BannerBg"/> 之上必须读得清）。</summary>
+        public static Color BannerText = Color.FromArgb(215, 145, 0);
+
+        /// <summary>强调色的悬停态（<see cref="LiteLink"/> 的 hover）。</summary>
+        public static Color PrimaryHover = Color.FromArgb(0, 100, 190);
+
+        /// <summary>
+        /// 当前生效的整份调色板（可能为 null —— 主题管理器还没推送过）。
+        /// <para>★ 需要从 paint 里读多个槽位的控件优先读它，避免逐字段漏读。</para>
+        /// </summary>
+        public static LiteMonitor.src.UI.SettingsPage.SettingsThemePalette? CurrentPalette;
     }
 
     public class LiteActionRow : Panel
@@ -121,7 +198,7 @@ namespace LiteMonitor.src.UI.Controls
             var inputWarn = new LiteNumberInput(range.Warn.ToString(), unit, LanguageManager.T("Menu.ValueWarnColor"), 140, UIColors.TextWarn);
             inputWarn.Padding = UIUtils.S(new Padding(0, 5, 0, 1));
             
-            var arrow = new Label { Text = ">", AutoSize = true, ForeColor = Color.LightGray, Font = UIFonts.Regular(9F), Margin = UIUtils.S(new Padding(5, 4, 5, 0)) };
+            var arrow = new Label { Text = ">", AutoSize = true, ForeColor = UIColors.InputLine, Font = UIFonts.Regular(9F), Margin = UIUtils.S(new Padding(5, 4, 5, 0)) };
             
             var inputCrit = new LiteNumberInput(range.Crit.ToString(), unit, LanguageManager.T("Menu.ValueCritColor"), 140, UIColors.TextCrit);
             inputCrit.Padding = UIUtils.S(new Padding(0, 5, 0, 1));
@@ -254,7 +331,7 @@ namespace LiteMonitor.src.UI.Controls
             
             // Separator Line
             this.Paint += (s, e) => {
-                using(var p = new Pen(Color.FromArgb(240, 240, 240))) e.Graphics.DrawLine(p, 0, Height-1, Width, Height-1);
+                using(var p = new Pen(UIColors.Separator)) e.Graphics.DrawLine(p, 0, Height-1, Width, Height-1);
             };
         }
 
@@ -308,7 +385,7 @@ namespace LiteMonitor.src.UI.Controls
                 AutoSize = true, 
                 MaximumSize = new Size(UIUtils.S(500), 0), // Limit width to trigger wrap? Actual width set in Layout
                 Font = UIFonts.Regular(8F), 
-                ForeColor = Color.Gray,
+                ForeColor = UIColors.Hint,
                 Dock = DockStyle.Fill
             };
             this.Controls.Add(lbl);
@@ -361,11 +438,36 @@ namespace LiteMonitor.src.UI.Controls
     // 1. 容器组件
     // =======================================================================
 
-    public class LiteSettingsGroup : Panel
+    public class LiteSettingsGroup : Panel, IThemeRefreshable
     {
         private TableLayoutPanel _layout;
         private Panel _header; // ★★★ 提升为成员变量
         private int _colTracker = 0;
+
+        /// <summary>
+        /// 深浅切换时重新取色（<see cref="IThemeRefreshable"/>）。
+        /// <para>★ 为什么必须自己来：本控件是三层嵌套（边框 / 内容卡片 / 标题栏），
+        ///   浅色下 <c>CardBg</c> 与 <c>SurfaceBg</c>、<c>InputBg</c> **同为白色**，
+        ///   而 <c>GroupHeader</c> 又是极浅的灰 —— 单看 BackColor 的数值
+        ///   无法区分"这层该按卡片取色"还是"这层该按输入框取色"。
+        ///   由控件自己申明每一层的语义，切主题时才不会串。</para>
+        /// </summary>
+        public void ApplyTheme()
+        {
+            this.BackColor = UIColors.Border;      // 外层 = 1px 边框
+            if (_header != null) _header.BackColor = UIColors.GroupHeader;
+            if (_layout != null) _layout.BackColor = UIColors.CardBg;
+
+            if (_header != null)
+            {
+                foreach (Control c in _header.Controls)
+                {
+                    if (c is Label label) label.ForeColor = UIColors.TextMain;
+                }
+            }
+
+            this.Invalidate(true);
+        }
 
         public LiteSettingsGroup(string title)
         {
@@ -376,7 +478,7 @@ namespace LiteMonitor.src.UI.Controls
             // ★★★ 修改：Margin 缩放
             this.Margin = new Padding(0, 0, 0, UIUtils.S(15)); 
 
-            var inner = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, AutoSize = true };
+            var inner = new Panel { Dock = DockStyle.Fill, BackColor = UIColors.CardBg, AutoSize = true };
             
             // ★★★ 修改：Height 缩放
             _header = new Panel { Dock = DockStyle.Top, Height = UIUtils.S(40), BackColor = UIColors.GroupHeader, Padding = new Padding(0, 0, UIUtils.S(10), 0) }; // 增加右侧Padding
@@ -393,7 +495,7 @@ namespace LiteMonitor.src.UI.Controls
             {
                 Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, RowCount = 1,
                 // ★★★ 修改：Padding 缩放
-                Padding = UIUtils.S(new Padding(25, 10, 25, 15)), BackColor = Color.White
+                Padding = UIUtils.S(new Padding(25, 10, 25, 15)), BackColor = UIColors.CardBg
             };
             _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
             _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
@@ -471,7 +573,7 @@ namespace LiteMonitor.src.UI.Controls
                 ctrl.Location = new Point(this.Width - ctrl.Width, mid - ctrl.Height / 2);
             };
             this.Paint += (s, e) => {
-                using(var p = new Pen(Color.FromArgb(240, 240, 240))) 
+                using(var p = new Pen(UIColors.Separator)) 
                     e.Graphics.DrawLine(p, 0, Height-1, Width, Height-1);
             };
         }
@@ -489,11 +591,14 @@ namespace LiteMonitor.src.UI.Controls
     // =======================================================================
 
     // ★★★ [优化版] 下划线输入框：支持前置标签 ★★★
-    public class LiteUnderlineInput : Panel
+    public class LiteUnderlineInput : Panel, IThemeRefreshable
     {
         public TextBox Inner;
         private Label _lblUnit;   // 单位 (右侧)
         private Label _lblLabel;  // 标签 (左侧)
+
+        /// <summary>调用方显式指定的字色（如阈值输入框的告警色/危险色）；null 表示跟随主题。</summary>
+        private Color? _explicitColor;
 
         private const int EM_SETCUEBANNER = 0x1501;
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
@@ -518,12 +623,15 @@ namespace LiteMonitor.src.UI.Controls
             this.Padding = UIUtils.S(new Padding(0, 2, 0, 3)); 
             this.Cursor = Cursors.IBeam;
 
+            // ★ 记下调用方显式指定的字色：深浅切换时它优先于主题色（告警/危险色不该被主题覆盖）。
+            _explicitColor = fontColor;
+
             // 1. 创建并添加输入框 (垫底)
             Inner = new TextBox {
                 Text = text,
                 BorderStyle = BorderStyle.None,
                 Dock = DockStyle.Fill,
-                BackColor = Color.White,
+                BackColor = UIColors.InputBg,
                 Font = UIFonts.Regular(9F),
                 ForeColor = fontColor ?? UIColors.TextSub,
                 TextAlign = align 
@@ -538,7 +646,7 @@ namespace LiteMonitor.src.UI.Controls
                     AutoSize = true, 
                     Dock = DockStyle.Right,
                     Font = UIFonts.Regular(8F), 
-                    ForeColor = Color.Gray, 
+                    ForeColor = UIColors.Hint, 
                     TextAlign = ContentAlignment.BottomRight, 
                     Padding = new Padding(0, 0, 0, 4) 
                 };
@@ -577,9 +685,27 @@ namespace LiteMonitor.src.UI.Controls
         }
 
         public void SetBg(Color c) { Inner.BackColor = c; }
-        
+
+        /// <summary>
+        /// 深浅切换时重新取色（<see cref="IThemeRefreshable"/>）。
+        /// <para>★ 为什么必须自己来：输入框由 <b>三个部分</b>组成（前置标签 / 单位 / 编辑框），
+        ///   浅色下 <c>InputBg</c> 与 <c>CardBg</c>、<c>SurfaceBg</c> **都是白色** ——
+        ///   只按色值重映射分不清"这是个可编辑的输入框"还是"这是张卡片"
+        ///   （两者会落到同一个目标槽位）。由控件自己申明语义才不会串。</para>
+        /// </summary>
+        public void ApplyTheme()
+        {
+            Inner.BackColor = UIColors.InputBg;
+            Inner.ForeColor = _explicitColor ?? UIColors.InputText;
+
+            if (_lblUnit != null) _lblUnit.ForeColor = UIColors.Hint;
+            if (_lblLabel != null) _lblLabel.ForeColor = _explicitColor ?? UIColors.InputText;
+
+            this.Invalidate();
+        }
+
         protected override void OnPaint(PaintEventArgs e) {
-            var c = Inner.Focused ? UIColors.Primary : Color.LightGray; 
+            var c = Inner.Focused ? UIColors.InputLineFocused : UIColors.InputLine; 
             int h = Inner.Focused ? 2 : 1;
 
             // 画线逻辑：如果有左侧标签，线条从标签右侧开始画
@@ -717,11 +843,11 @@ namespace LiteMonitor.src.UI.Controls
         public LiteColorPicker(string initialHex) { SetHex(initialHex); this.Size = new Size(UIUtils.S(24), UIUtils.S(24)); this.Cursor = Cursors.Hand; this.DoubleBuffered = true; this.Click += (s, e) => PickColor(); }
         public void SetHex(string hex) { try { _color = ColorTranslator.FromHtml(hex); Invalidate(); } catch {} }
         private void PickColor() { using (var cd = new ColorDialog()) { cd.Color = _color; cd.FullOpen = true; if (cd.ShowDialog() == DialogResult.OK) { _color = cd.Color; ColorChanged?.Invoke(this, EventArgs.Empty); Invalidate(); } } }
-        protected override void OnPaint(PaintEventArgs e) { using (var b = new SolidBrush(_color)) e.Graphics.FillRectangle(b, 0, 0, Width - 1, Height - 1); using (var p = new Pen(Color.Gray)) e.Graphics.DrawRectangle(p, 0, 0, Width - 1, Height - 1); }
+        protected override void OnPaint(PaintEventArgs e) { using (var b = new SolidBrush(_color)) e.Graphics.FillRectangle(b, 0, 0, Width - 1, Height - 1); using (var p = new Pen(UIColors.Border)) e.Graphics.DrawRectangle(p, 0, 0, Width - 1, Height - 1); }
     }
 
     // 其他原有组件
-    public class LiteNote : Panel { public LiteNote(string text, int indent = 0) { this.Dock = DockStyle.Top; this.Height = UIUtils.S(32); this.Margin = new Padding(0); var lbl = new Label { Text = text, AutoSize = true, Font = UIFonts.Regular(8F), ForeColor = Color.Gray, Location = new Point(UIUtils.S(indent), UIUtils.S(10)) }; this.Controls.Add(lbl); } }
+    public class LiteNote : Panel { public LiteNote(string text, int indent = 0) { this.Dock = DockStyle.Top; this.Height = UIUtils.S(32); this.Margin = new Padding(0); var lbl = new Label { Text = text, AutoSize = true, Font = UIFonts.Regular(8F), ForeColor = UIColors.Hint, Location = new Point(UIUtils.S(indent), UIUtils.S(10)) }; this.Controls.Add(lbl); } }
     public class LiteComboItem 
     { 
         public string Text { get; set; } 
@@ -739,25 +865,25 @@ namespace LiteMonitor.src.UI.Controls
         }
     }
 
-    public class LiteComboBox : Panel 
+    public class LiteComboBox : Panel, IThemeRefreshable
     { 
         public ComboBox Inner; 
         
         public LiteComboBox() 
         { 
             this.Size = new Size(UIUtils.S(110), UIUtils.S(28)); 
-            this.BackColor = Color.White; 
+            this.BackColor = UIColors.InputBg; 
             this.Padding = new Padding(1); 
             
             Inner = new NoScrollComboBox 
             { 
                 DropDownStyle = ComboBoxStyle.DropDownList, 
                 FlatStyle = FlatStyle.Flat, 
-                ForeColor = UIColors.TextSub, 
+                ForeColor = UIColors.InputText, 
                 Font = UIFonts.Regular(9F), 
                 // ★★★ 核心修复：移除 Dock.Fill，改为 None，以便我们可以手动居中它
                 Dock = DockStyle.None, 
-                BackColor = Color.White, 
+                BackColor = UIColors.InputBg, 
                 Margin = new Padding(0) 
             }; 
             this.Controls.Add(Inner); 
@@ -814,11 +940,26 @@ namespace LiteMonitor.src.UI.Controls
         {
             get => (Inner.SelectedItem as LiteComboItem)?.Value ?? "";
         }
+
+        /// <summary>
+        /// 深浅切换时重新取色（<see cref="IThemeRefreshable"/>）。
+        /// <para>★ 为什么不能靠"色值重映射"：下拉框的 <c>BackColor</c> 是**复合**的 ——
+        ///   外层 Panel 是边框、内层 ComboBox 是编辑框与列表项；两者的目标槽位不同
+        ///   （<see cref="UIColors.Border"/> vs <see cref="UIColors.InputBg"/>），
+        ///   而重映射只看得见"当前值落在哪个槽位"，当 Towards 浅色两者恰为同一 ARGB 时就会串。</para>
+        /// </summary>
+        public void ApplyTheme()
+        {
+            this.BackColor = UIColors.InputBg;
+            Inner.BackColor = UIColors.InputBg;
+            Inner.ForeColor = UIColors.InputText;
+            this.Invalidate(true);
+        }
     }
     public class LiteLink : Label
     {
         private Color _normalColor = Color.DodgerBlue;
-        private Color _hoverColor = Color.FromArgb(0, 100, 200);
+        private Color _hoverColor = UIColors.PrimaryHover;
 
         public LiteLink(string text, Action onClick = null)
         {
@@ -849,7 +990,7 @@ namespace LiteMonitor.src.UI.Controls
             { 
                 base.Enabled = value;
                 this.Cursor = value ? Cursors.Hand : Cursors.Default;
-                this.ForeColor = value ? _normalColor : Color.Gray;
+                this.ForeColor = value ? _normalColor : UIColors.TextDisabled;
             } 
         }
     }
@@ -861,23 +1002,36 @@ namespace LiteMonitor.src.UI.Controls
 
     public class LiteCheck : CheckBox { public LiteCheck(bool val, string text = "") { Checked = val; AutoSize = true; Cursor = Cursors.Hand; Text = text; Padding = UIUtils.S(new Padding(2)); ForeColor = UIColors.TextSub; Font = UIFonts.Regular(9F); } }
     
-    public class LiteButton : Button 
+    public class LiteButton : Button, IThemeRefreshable
     { 
         private bool _dashed;
+
+        /// <summary>主按钮（实心强调色）—— ApplyTheme 需要知道当初是哪种样式才能重新取色。</summary>
+        private readonly bool _isPrimary;
         
         public LiteButton(string t, bool p = false, bool dashed = false) 
         { 
             Text = t; 
             _dashed = dashed;
+            _isPrimary = p;
             Size = new Size(UIUtils.S(80), UIUtils.S(32)); 
             FlatStyle = FlatStyle.Flat; 
             Cursor = Cursors.Hand; 
             Font = UIFonts.Regular(9F); 
             
+            ApplyColorScheme(p, dashed); 
+        } 
+
+        /// <summary>
+        /// 按样式重设三处颜色 —— 构造函数与 <see cref="ApplyTheme"/> 共用同一段，
+        /// 避免"新建时一套色、切深浅后换到另一套口径"。
+        /// </summary>
+        private void ApplyColorScheme(bool p, bool dashed)
+        {
             if (p) 
             { 
                 BackColor = UIColors.Primary; 
-                ForeColor = Color.White; 
+                ForeColor = UIColors.MenuSelectedText; 
                 FlatAppearance.BorderSize = 0; 
             } 
             else if (dashed)
@@ -888,26 +1042,97 @@ namespace LiteMonitor.src.UI.Controls
             }
             else 
             { 
-                BackColor = Color.White; 
+                BackColor = UIColors.SurfaceBg; 
                 ForeColor = UIColors.TextMain; 
                 FlatAppearance.BorderColor = UIColors.Border; 
             } 
-        } 
+        }
+
+        /// <summary>
+        /// 深浅切换时重新取色（<see cref="IThemeRefreshable"/>）。
+        /// <para>★ 为什么需要它：普通按钮 <c>BackColor</c> 用的是 <see cref="UIColors.SurfaceBg"/>，
+        ///   浅色下它等于白色 —— 与"本来就该是白色"的输入框底色是<b>同一个 ARGB</b>。
+        ///   只做值的重映射分不清"这是个按钮"还是"这是个输入框"（两者都会映射成 InputBg），
+        ///   必须由控件自己申明语义。</para>
+        /// </summary>
+        public void ApplyTheme()
+        {
+            ApplyColorScheme(_isPrimary, _dashed);
+            this.Invalidate();
+        }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
             if (_dashed)
             {
-                using (var pen = new Pen(Color.LightGray, 1.5f) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+                using (var pen = new Pen(UIColors.Separator, 1.5f) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
                 {
                     e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
                 }
             }
         }
     }
-    public class LiteNavBtn : Button { private bool _isActive; public bool IsActive { get => _isActive; set { _isActive = value; Invalidate(); } } public LiteNavBtn(string text) { Text = "  " + text; Size = new Size(UIUtils.S(150), UIUtils.S(40)); FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; TextAlign = ContentAlignment.MiddleLeft; Font = UIFonts.Regular(10F); Cursor = Cursors.Hand; Margin = UIUtils.S(new Padding(5, 2, 5, 2)); BackColor = UIColors.SidebarBg; ForeColor = UIColors.TextMain; } protected override void OnPaint(PaintEventArgs e) { Color bg = _isActive ? UIColors.NavSelected : (ClientRectangle.Contains(PointToClient(Cursor.Position)) ? UIColors.NavHover : UIColors.SidebarBg); using (var b = new SolidBrush(bg)) e.Graphics.FillRectangle(b, ClientRectangle); if (_isActive) { using (var b = new SolidBrush(UIColors.Primary)) e.Graphics.FillRectangle(b, 0, UIUtils.S(8), UIUtils.S(3), Height - UIUtils.S(16)); } Font = _isActive ? UIFonts.Bold(10F) : UIFonts.Regular(10F); TextRenderer.DrawText(e.Graphics, Text, Font, new Point(UIUtils.S(12), UIUtils.S(9)), UIColors.TextMain); } protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Invalidate(); } protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); Invalidate(); } }
-    public class LiteSortBtn : Button { public LiteSortBtn(string txt) { Text = txt; Size = new Size(UIUtils.S(24), UIUtils.S(24)); FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; BackColor = Color.FromArgb(245, 245, 245); ForeColor = Color.DimGray; Cursor = Cursors.Hand; Font = UIFonts.Bold(7F); Margin = new Padding(0); } }
+    /// <summary>
+    /// 左侧导航按钮。
+    /// <para>★ 自绘（<c>OnPaint</c>）的三个状态色（常态/悬停/选中）是从
+    ///   <see cref="UIColors"/> 现取的 ⇒ 换了配色之后重绘一次即可，不需要"记旧色值"。</para>
+    /// </summary>
+    public class LiteNavBtn : Button, IThemeRefreshable
+    {
+        private bool _isActive;
+
+        public bool IsActive
+        {
+            get => _isActive;
+            set { _isActive = value; Invalidate(); }
+        }
+
+        public LiteNavBtn(string text)
+        {
+            Text = "  " + text;
+            Size = new Size(UIUtils.S(150), UIUtils.S(40));
+            FlatStyle = FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+            TextAlign = ContentAlignment.MiddleLeft;
+            Font = UIFonts.Regular(10F);
+            Cursor = Cursors.Hand;
+            Margin = UIUtils.S(new Padding(5, 2, 5, 2));
+            BackColor = UIColors.SidebarBg;
+            ForeColor = UIColors.TextMain;
+        }
+
+        /// <summary>深浅切换：自绘色彩全部重新从 <see cref="UIColors"/> 取值。</summary>
+        public void ApplyTheme()
+        {
+            BackColor = UIColors.SidebarBg;
+            ForeColor = UIColors.TextMain;
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            // ★ 背景三态（选中 / 悬停 / 常态）在绘制时现取 —— 重绘即生效。
+            Color bg = _isActive
+                ? UIColors.NavSelected
+                : (ClientRectangle.Contains(PointToClient(Cursor.Position)) ? UIColors.NavHover : UIColors.SidebarBg);
+
+            using (var b = new SolidBrush(bg)) e.Graphics.FillRectangle(b, ClientRectangle);
+
+            if (_isActive)
+            {
+                using (var b = new SolidBrush(UIColors.Primary))
+                    e.Graphics.FillRectangle(b, 0, UIUtils.S(8), UIUtils.S(3), Height - UIUtils.S(16));
+            }
+
+            Font = _isActive ? UIFonts.Bold(10F) : UIFonts.Regular(10F);
+            TextRenderer.DrawText(e.Graphics, Text, Font, new Point(UIUtils.S(12), UIUtils.S(9)), UIColors.TextMain);
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); Invalidate(); }
+    }
+    public class LiteSortBtn : Button { public LiteSortBtn(string txt) { Text = txt; Size = new Size(UIUtils.S(24), UIUtils.S(24)); FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; BackColor = UIColors.GroupHeader; ForeColor = UIColors.TextSub; Cursor = Cursors.Hand; Font = UIFonts.Bold(7F); Margin = new Padding(0); } }
     
     // ★★★ New: Header Button (Variable Width) ★★★
     public class LiteHeaderBtn : Button 
@@ -917,8 +1142,8 @@ namespace LiteMonitor.src.UI.Controls
             Text = txt; 
             FlatStyle = FlatStyle.Flat; 
             FlatAppearance.BorderSize = 0; 
-            BackColor = Color.FromArgb(225, 225, 225); 
-            ForeColor = Color.DimGray; 
+            BackColor = UIColors.NavSelected; 
+            ForeColor = UIColors.TextSub; 
             Cursor = Cursors.Hand; 
             Font = UIFonts.Bold(8F); 
             Margin = new Padding(0);
