@@ -9,52 +9,66 @@ using LiteMonitor.src.SystemServices; // HardwareMonitor 与既有 HardwareServi
 namespace LiteMonitor.SystemServices; // 新文件按目标命名空间方案落位（architecture-assert 白名单导向），旧文件由 B5 机械统一
 
 /// <summary>
-/// C1 契约的进程内首版适配器：包装现有 <see cref="HardwareMonitor"/>，不引入额外轮询、
-/// 不改变任何现有行为（P-B1B2 B1 步骤③）。采样入口统一委托既有唯一协调器
-/// <c>UpdateIfDueAsync</c>；设备目录由既有静态枚举组装。
-/// 带注释的「B2 补齐」项（快照单位/样本时效/稳定设备绑定/需求多通道）在消费方迁移时逐项做实，
-/// 在此之前消费方仍走原路径，因此这些占位值不进入任何现有显示或落盘路径。
+/// C1 契约的进程内首版适配器：包装现有 <see cref="HardwareMonitor"/>。
+///
+/// ★ E01-A（生产者发布）：<see cref="GetLatestSnapshot"/> 现在**只返回已发布批次**——
+///   读取**不**推进 BatchId、**不**改变时效字段；批次由采集层在真实采样完成后原子发布。
+///
+/// ★ 目录与需求（E01-B）与命令面（E01-C）在后续提交里补齐。
 /// </summary>
 public sealed class HardwareClientAdapter : IHardwareClient
 {
     private readonly HardwareMonitor _monitor;
-    private readonly IReadOnlyList<string> _snapshotKeys;
-    private long _batchId;
+    private readonly IHardwareCollector _collector;
+    private readonly SnapshotPublisher _fallbackPublisher = new SnapshotPublisher();
     private volatile SamplingDemand? _lastDemand;
     private volatile bool _disposed;
 
     /// <param name="monitor">被包装的采集器（由组合根创建并持有）。</param>
-    /// <param name="snapshotKeys">快照覆盖的指标 Key 集合（组合根从配置取，适配器不读全局 Settings）。</param>
+    /// <param name="snapshotKeys">
+    /// [兼容保留] 旧参数：快照覆盖的指标 Key 集合（组合根从配置取，适配器不读全局 Settings）。
+    /// <para>★ E01-A 起**不再使用**：快照的样本集合改由**生产者**（采集层）决定
+    /// （映射表 Key ∪ 用户配置的监控项 Key），消费方不再自行拼装样本。</para>
+    /// </param>
     public HardwareClientAdapter(HardwareMonitor monitor, IReadOnlyList<string>? snapshotKeys = null)
+        : this((IHardwareCollector)(monitor ?? throw new ArgumentNullException(nameof(monitor))), snapshotKeys)
     {
-        _monitor = monitor ?? throw new ArgumentNullException(nameof(monitor));
-        _snapshotKeys = snapshotKeys ?? Array.Empty<string>();
+        _monitor = monitor;
     }
 
+    /// <summary>
+    /// 测试接缝：以能力面注入采集层（生产实现仍是 <see cref="HardwareMonitor"/>）。
+    /// <para>★ 目的是让快照面能在**不打开真实硬件树**的环境里被断言。</para>
+    /// </summary>
+    internal HardwareClientAdapter(IHardwareCollector collector, IReadOnlyList<string>? snapshotKeys = null)
+    {
+        _collector = collector ?? throw new ArgumentNullException(nameof(collector));
+        // ★ snapshotKeys 兼容保留但**不再使用**（见公开构造函数的说明）。
+        _ = snapshotKeys;
+    }
+
+    /// <summary>
+    /// 读取**已发布**的最新快照。
+    /// <para>★ 读取不推进 BatchId、不改变时效字段：同一批数据读多少次都返回同一份内容。</para>
+    /// <para>★ 采集层尚未发布过任何批次时，返回明确的**空批次**（不伪造成功批次）。</para>
+    /// </summary>
     public HardwareSnapshot GetLatestSnapshot()
     {
         ThrowIfDisposed();
-        var samples = new List<MetricSample>(_snapshotKeys.Count);
-        foreach (var key in _snapshotKeys)
-        {
-            float? value = _monitor.Get(key);
-            samples.Add(new MetricSample(
-                Key: key,
-                StableDeviceId: null,          // B2：由设备绑定解释（F07 稳定身份）
-                Value: value,
-                Unit: null,                    // B2 随消费方迁移填充；显示端当前自行格式化（B4 前行为不变）
-                Quality: value.HasValue ? SampleQuality.Good : SampleQuality.Missing,
-                MissingReason: value.HasValue ? null : "no-value",
-                SampleAgeMs: 0));              // B2：接 SamplingStatistics 的采样计时
-        }
-        return new HardwareSnapshot(
-            BatchId: unchecked(++_batchId),
-            CatalogVersion: _monitor.SamplingGeneration,
-            ConfigRevision: -1,                // B2：对应 ApplyConfig 的生效 revision
-            Samples: samples,
-            SamplingDuration: TimeSpan.Zero,   // B2：接 SamplingStatistics
-            TimestampMonoMs: Environment.TickCount64);
+        return ReadPublishedSnapshot();
     }
+
+    /// <summary>
+    /// 读已发布批次（**不做关闭检查**）：目录构建在关闭期仍需把在途构建自然跑完（R3 关闭边界）。
+    /// </summary>
+    private HardwareSnapshot ReadPublishedSnapshot()
+    {
+        HardwareSnapshot? published = _collector.PublishedSnapshot;
+        return published ?? _fallbackPublisher.Current;
+    }
+
+    /// <summary>当前批次的批次级缺失原因（"initializing" / "collection-failed" / null）。</summary>
+    public string? CurrentMissingReason => _collector.CurrentMissingReason;
 
     // R3：目录构建改到线程池单飞执行——调用线程（UI）只负责拿 Task，不再在返回 Task 前
     // 同步等待 SyncLock（传感器窗口每秒轮询，采样持锁时会把整条 UI 消息循环拖住）。
@@ -69,17 +83,18 @@ public sealed class HardwareClientAdapter : IHardwareClient
     private HardwareCatalog BuildCatalog()
     {
         var entries = new List<HardwareCatalogEntry>();
-        var computer = _monitor.ComputerInstance;
-        if (computer != null && _monitor.IsReady)
+        var monitor = _monitor;
+        var computer = monitor?.ComputerInstance;
+        if (computer != null && monitor!.IsReady)
         {
             // 锁内一次性快照设备/传感器树（含当前值与峰值），消费方不再持有 LHM 活对象。
-            lock (_monitor.SyncLock)
+            lock (monitor.SyncLock)
             {
                 foreach (IHardware hw in computer.Hardware)
                     AddHardwareEntries(entries, hw, parentStableId: null);
             }
         }
-        return new HardwareCatalog(_monitor.SamplingGeneration, entries);
+        return new HardwareCatalog(monitor?.SamplingGeneration ?? 0, entries);
     }
 
     private static void AddHardwareEntries(List<HardwareCatalogEntry> entries, IHardware hw, string? parentStableId)
@@ -120,14 +135,18 @@ public sealed class HardwareClientAdapter : IHardwareClient
             if (config.ControllerProbe.ModeRaw != -1
                 && Enum.IsDefined(typeof(ControllerProbeMode), config.ControllerProbe.ModeRaw))
             {
-                _monitor.ApplyControllerProbeMode((ControllerProbeMode)config.ControllerProbe.ModeRaw);
+                _collector.ApplyControllerProbeMode((ControllerProbeMode)config.ControllerProbe.ModeRaw);
             }
             if (config.DiskProbe.ModeRaw != -1
                 && Enum.IsDefined(typeof(DiskProbeMode), config.DiskProbe.ModeRaw))
             {
-                _monitor.ApplyDiskProbeMode((DiskProbeMode)config.DiskProbe.ModeRaw);
+                _collector.ApplyDiskProbeMode((DiskProbeMode)config.DiskProbe.ModeRaw);
             }
-            _monitor.RefreshHardwareConfig();
+            _collector.RefreshHardwareConfig();
+
+            // ★ E01-A：配置**实际生效**后回写 revision（进快照的 ConfigRevision）。
+            _collector.RecordSamplingConfigRevision(config.Revision);
+
             return new SamplingApplyResult(Applied: true, Revision: config.Revision, FailureReason: null);
         }
         catch (Exception ex)
@@ -150,23 +169,23 @@ public sealed class HardwareClientAdapter : IHardwareClient
     {
         ThrowIfDisposed();
         return new HardwareHealth(
-            State: _monitor.IsReady ? HardwareState.Ready : HardwareState.Starting,
+            State: _collector.IsReady ? HardwareState.Ready : HardwareState.Starting,
             CurrentOperation: null,
-            ProgressSeq: _monitor.SamplingGeneration,
+            ProgressSeq: _collector.SamplingGeneration,
             DiagnosticReason: HardwareMonitor.LastHardwareError);
     }
 
     public string? GetNetworkIP()
     {
         ThrowIfDisposed();
-        return _monitor.GetNetworkIP();
+        return _collector.GetNetworkIP();
     }
 
     public Task<bool> RequestRescanAsync(CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         // 复用唯一采样协调器的限频入口：重复请求天然合并，不另起重扫路径。
-        return _monitor.UpdateIfDueAsync(cancellationToken);
+        return _collector.RequestSamplingAsync(cancellationToken);
     }
 
     public void Dispose()

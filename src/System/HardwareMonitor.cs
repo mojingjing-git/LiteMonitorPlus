@@ -7,12 +7,13 @@ using LibreHardwareMonitor.Hardware;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices.NetworkTraffic; // ★ [#610] IP 流量排除后端
 using LiteMonitor.src.WebServer; // ★ FPS 需求规则的**单一来源**（WebFpsDemand）
+using LiteMonitor.SystemServices; // E01：SnapshotPublisher / CatalogPublisher / IHardwareCollector
 using System.Linq;
 using System.Threading;
 
 namespace LiteMonitor.src.SystemServices
 {
-    public sealed class HardwareMonitor : IDisposable
+    public sealed class HardwareMonitor : IDisposable, LiteMonitor.SystemServices.IHardwareCollector
     {
         /// <summary>界面刷新间隔的默认值（毫秒）。RefreshMs 非法时回退到它。</summary>
         public const int DefaultRefreshMs = 1000;
@@ -108,6 +109,12 @@ namespace LiteMonitor.src.SystemServices
 
         // 上一次生效的电压来源设置（用于检测"用户换了来源"并作废旧解析结果）。
         private string _lastPrefCpuVoltageSensor = "";
+
+        // ★★★★★ E01-A：采样快照的**唯一发布点**（生产者侧）。
+        //   真实采样完成后在协调器的 onCollectionCompleted 回调里原子发布一份不可变快照；
+        //   消费方只读已发布批次（读取不推进 BatchId / 时效）。
+        private readonly SnapshotPublisher _snapshotPublisher = new SnapshotPublisher();
+
         #endregion
 
         #region Public Properties
@@ -339,6 +346,34 @@ namespace LiteMonitor.src.SystemServices
             return _coordinator.RequestCollectionAsync(cancellationToken);
         }
 
+        // ===============================================================
+        // ★★★★★ E01：IHardwareCollector 实现（生产者侧的发布边界 + 命令面）
+        // ===============================================================
+
+        /// <summary>最近一次**已发布**的快照（未发布过 ⇒ null）。</summary>
+        public LiteMonitor.Contracts.HardwareSnapshot? PublishedSnapshot
+        {
+            get
+            {
+                var publisher = _snapshotPublisher;
+                if (publisher == null || !publisher.HasPublished) return null;
+                return publisher.Current;
+            }
+        }
+
+        /// <summary>当前批次的批次级缺失原因（"initializing" / "collection-failed" / null）。</summary>
+        public string? CurrentMissingReason => _snapshotPublisher?.CurrentMissingReason;
+
+        /// <summary>配置**实际生效**后回写 revision（进快照的 ConfigRevision）。</summary>
+        public void RecordSamplingConfigRevision(int revision) => _snapshotPublisher?.RecordConfigRevision(revision);
+
+        /// <summary>请求一次"到期才采"的采样（<see cref="IHardwareCollector"/> 接口面）。</summary>
+        Task<bool> IHardwareCollector.RequestSamplingAsync(CancellationToken cancellationToken)
+            => UpdateIfDueAsync(cancellationToken);
+
+        /// <summary>取当前网络出口 IP（<see cref="IHardwareCollector"/> 接口面）。</summary>
+        string? IHardwareCollector.GetNetworkIP() => GetNetworkIP();
+
         /// <summary>
         /// 通知采集层"当前有合法的 Web 数据需求"。
         ///
@@ -432,10 +467,47 @@ namespace LiteMonitor.src.SystemServices
             _valueProvider.OnCollectionStarted(generation);
         }
 
-        /// <summary>采集结束（目前仅用于诊断）。</summary>
+        /// <summary>
+        /// 采集结束：**原子发布本轮快照**（E01-A 的发布边界）。
+        ///
+        /// ★ 发布点选在这里（而不是"读取时生成"）：
+        ///   批次号只在真实采样完成后递增；读取已发布批次**不**推进批次号、**不**改变时效字段。
+        ///   同一批数据读多少次都返回同一份不可变内容。
+        ///
+        /// ★ 失败语义：采集失败时发布"缺失批次"（已知 Key 全部 Missing + collection-failed），
+        ///   不让上一批的有效值被通用回退层无限保活。
+        /// </summary>
         private void OnCollectionCompleted(int generation, bool success)
         {
             System.Diagnostics.Debug.WriteLine($"[HardwareMonitor] 采集代次 {generation} 结束, 成功={success}");
+
+            try
+            {
+                double durationMs = _samplingStatistics.LastCollectionDurationMs;
+                var duration = TimeSpan.FromMilliseconds(durationMs < 0 ? 0 : durationMs);
+                long catalogVersion = 0;
+
+                if (success)
+                {
+                    // ★ 指标样本在"采集落定"之后组装：取值层缓存刚被清空，本轮**只算一次**
+                    //   （UI / 任务栏 / Web 随后命中同一份缓存，性能计数器的 NextValue 语义不变）。
+                    var samples = BuildMetricSamples();
+
+                    // ★ 样本年龄：进程内发布时样本在采集锁内、发布前一刻生成，
+                    //   发布时刻 - 样本时刻在毫秒级，按 0 记（见 BuildSensorSamples 的说明）。
+                    _snapshotPublisher.Publish(samples, catalogVersion, duration);
+                }
+                else
+                {
+                    _snapshotPublisher.PublishFailure(EnsureSnapshotKeys(), catalogVersion, duration);
+                }
+            }
+
+            catch (Exception ex)
+            {
+                // ★ 发布失败绝不能影响采集循环（协调器的完成信号必须照常发出）。
+                HardwareErrorLog.Write("HardwareMonitor.PublishSnapshot", ex);
+            }
         }
 
         /// <summary>
@@ -448,6 +520,83 @@ namespace LiteMonitor.src.SystemServices
         private void OnCollectionSettled(int generation)
         {
             _valueProvider.OnCollectionSettled(generation);
+        }
+
+        // ===============================================================
+        // ★★★★★ E01-A / E01-B：快照样本组装 + 目录发布（生产者侧）
+        // ===============================================================
+
+        /// <summary>
+        /// 组装本轮快照的**指标样本**（外部指标 Key）。
+        ///
+        /// ★ 值取自取值层（与面板显示同一口径），稳定身份取自映射表背靠传感器所属的硬件
+        ///   （<c>ISensor.Hardware.Identifier.ToString()</c>，与目录里设备条目的 StableId 同口径）。
+        ///
+        /// ★ 采集代次内取值层有缓存：本方法在"采集落定"之后调用（缓存已清），
+        ///   因此本轮**只计算一次**——UI / 任务栏 / Web 随后读到的是同一份缓存，不会重复触发
+        ///   性能计数器的 NextValue。
+        /// </summary>
+        private List<LiteMonitor.Contracts.MetricSample> BuildMetricSamples()
+        {
+            var samples = new List<LiteMonitor.Contracts.MetricSample>();
+
+            foreach (string key in EnsureSnapshotKeys())
+            {
+                float? value = _valueProvider.GetValue(key);
+                LibreHardwareMonitor.Hardware.ISensor? sensor = _sensorMap.GetSensor(key);
+                string? stableDeviceId = sensor?.Hardware.Identifier.ToString();
+
+                // ★ 真实 0 是有效值（Good + 0）；
+                //   但"取值层用 0 兜底、背后传感器其实没有读数"不能冒充有效值 ⇒ Missing + no-value。
+                bool fabricatedZero = value.HasValue
+                                     && value.Value == 0f
+                                     && sensor != null
+                                     && !sensor.Value.HasValue;
+
+                samples.Add(SnapshotSampleFactory.Create(
+                    key,
+                    fabricatedZero ? null : value,
+                    stableDeviceId,
+                    sampleAgeMs: 0));
+            }
+
+            return samples;
+        }
+
+        /// <summary>
+        /// 快照覆盖的指标 Key 集合 = 映射表 Key ∪ 用户配置的监控项 Key。
+        /// </summary>
+        private string[] EnsureSnapshotKeys()
+        {
+            var keys = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (string key in _sensorMap.GetSensorKeys())
+            {
+                if (string.IsNullOrEmpty(key)) continue;
+                if (seen.Add(key)) keys.Add(key);
+            }
+
+            // 设置页可能在并发重建监控项列表：取快照失败时退回"只用映射表 Key"。
+            try
+            {
+                var items = _cfg.MonitorItems;
+                if (items != null)
+                {
+                    for (int i = 0; i < items.Count; i++)
+                    {
+                        string? key = items[i]?.Key;
+                        if (string.IsNullOrEmpty(key)) continue;
+                        if (seen.Add(key)) keys.Add(key);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Snapshot] 监控项 Key 读取失败: {ex.Message}");
+            }
+
+            return keys.ToArray();
         }
 
         /// <summary>
@@ -563,6 +712,7 @@ namespace LiteMonitor.src.SystemServices
                     //   （否则读到的还是上一代的旧值）。候选 → 解析 → 发布都在这里完成，
                     //   UI / Web 只读已发布的结果，绝不旁路采集。
                     PublishCpuVoltageResolution();
+
                 }
 
                 // ★ [#610] IP 流量排除后端：按需创建 / 应用配置 / 推进窗口。
@@ -1211,6 +1361,10 @@ namespace LiteMonitor.src.SystemServices
         {
             bool opened = false;
 
+            // ★ E01-A：采集器重建（进程内）⇒ 会话纪元 +1。
+            //   旧会话的数据不得混入新会话（Host 会话切换的纪元递增属管道路径，归 P-E02）。
+            _snapshotPublisher?.BeginSession();
+
             // ★ 关闭/重开硬件期间不允许真实采集（硬件树正在被整体替换） ★
             _isReady = false;
             _coordinator.SetReady(false);
@@ -1348,6 +1502,9 @@ namespace LiteMonitor.src.SystemServices
 
         private void ReleaseComputerForDriverInstall()
         {
+            // ★ E01-A：采集器被释放（随后会重建）⇒ 会话纪元 +1。
+            _snapshotPublisher?.BeginSession();
+
             try
             {
                 lock (_lock)
