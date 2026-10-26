@@ -12,7 +12,10 @@ namespace LiteMonitor.src.Plugins
         internal static bool TryGetDeclaredHost(string template, out string host)
             => TryUrlHost(template, out host);
 
-        private static bool TryUrlHost(string value, out string host)
+        /// <param name="value">★ 允许为 null —— 函数首行的 string.IsNullOrWhiteSpace
+        /// 已把 null 判为非法地址（返回 false），与原先的运行期行为完全一致。
+        /// 标注为可空可让调用方不必再为"地址可能缺失"单独兜底。</param>
+        private static bool TryUrlHost(string? value, out string host)
         {
             host = "";
             if (string.IsNullOrWhiteSpace(value)) return false;
@@ -50,7 +53,7 @@ namespace LiteMonitor.src.Plugins
             }
 
             string name;
-            string port = null;
+            string? port = null;
             if (hostPort.StartsWith("[", StringComparison.Ordinal))
             {
                 int close = hostPort.IndexOf(']');
