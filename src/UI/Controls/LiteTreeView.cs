@@ -18,7 +18,9 @@ namespace LiteMonitor.src.UI.Controls
         private Font _boldFont;
 
         // ★★★ 新增：用于手动追踪悬停节点，解决“触角效果没生效”的问题 ★★★
-        private TreeNode _hoverNode;
+        // ★ 可空：鼠标不在任何节点上时 GetNodeAt 返回 null（OnMouseMove 直接把它存进本字段），
+        //   OnMouseLeave 又会把本字段清空 ⇒ 运行期确实可能为 null，如实声明为可空。
+        private TreeNode? _hoverNode;
 
         // 布局参数
         public int ColValueWidth { get; set; } = 70;  
@@ -128,6 +130,27 @@ namespace LiteMonitor.src.UI.Controls
             // 1. 基础防呆检查
             if (e.Bounds.Height <= 0 || e.Bounds.Width <= 0) return;
 
+            // ★ .NET 8 起 DrawTreeNodeEventArgs.Node 是 TreeNode?：
+            //   画"树线"伪节点时（ShowLines=true）会收到 Node=null 的绘制事件。
+            //   本控件构造函数里设了 ShowLines=false ⇒ 运行期拿到的都是真实节点；
+            //   但这里仍然用"局部量 + 条件包裹"如实表达，不写 e.Node! 断言，
+            //   也不在绘制回调里提前 return（那会跳过后续绘制语句）。
+            var node = e.Node;
+            if (node is not null)
+            {
+                DrawNodeContent(e, node);
+            }
+        }
+
+        /// <summary>
+        /// 绘制单个树节点。<paramref name="node"/> 已由 <see cref="OnDrawNode"/> 判定为非空。
+        /// </summary>
+        /// <remarks>
+        /// ★ 方法名带 Content 后缀：TreeView 本身已有一个 DrawNode 事件，
+        ///   同名方法会触发 CS0108（隐藏继承成员）警告。
+        /// </remarks>
+        private void DrawNodeContent(DrawTreeNodeEventArgs e, TreeNode node)
+        {
             var g = e.Graphics;
             // 恢复高质量绘图设置
             g.SmoothingMode = SmoothingMode.HighQuality; 
@@ -138,7 +161,7 @@ namespace LiteMonitor.src.UI.Controls
 
             // 2. 绘制背景 (处理选中/悬停)
             bool isSelected = (e.State & TreeNodeStates.Selected) != 0;
-            bool isHot = (e.Node == _hoverNode); 
+            bool isHot = (node == _hoverNode); 
 
             if (isSelected) g.FillRectangle(_selectBgBrush, fullRow);
             else if (isHot) g.FillRectangle(_hoverBrush, fullRow);
@@ -148,7 +171,7 @@ namespace LiteMonitor.src.UI.Controls
                 g.DrawLine(_linePen, 0, fullRow.Bottom - 1, w, fullRow.Bottom - 1);
 
             // 3. 计算关键坐标
-            int baseIndent = e.Node.Level * UIUtils.S(20);
+            int baseIndent = node.Level * UIUtils.S(20);
             Rectangle chevronRect = new Rectangle(baseIndent + UIUtils.S(5), fullRow.Y, UIUtils.S(IconWidth), fullRow.Height);
 
             // --- 定义“右侧禁区” (数值列占用区域) ---
@@ -164,10 +187,10 @@ namespace LiteMonitor.src.UI.Controls
             Rectangle valRect = new Rectangle(xValue, fullRow.Y, UIUtils.S(ColValueWidth), fullRow.Height);
 
             // 4. 绘制折叠图标
-            if (e.Node.Nodes.Count > 0) DrawChevron(g, chevronRect, e.Node.IsExpanded);
+            if (node.Nodes.Count > 0) DrawChevron(g, chevronRect, node.IsExpanded);
 
             // 5. 绘制右侧数值 (仅传感器)
-            if (e.Node.Tag is HardwareCatalogEntry { SensorType: not null } sensor)
+            if (node.Tag is HardwareCatalogEntry { SensorType: not null } sensor)
             {
                 string maxStr = FormatValue(sensor.Max, sensor.SensorType);
                 TextRenderer.DrawText(g, maxStr, _baseFont, maxRect, Color.DimGray, 
@@ -184,8 +207,8 @@ namespace LiteMonitor.src.UI.Controls
             Font font;
 
             // 样式选择（设备条目加粗，传感器条目常规，分组节点加粗）
-            if (e.Node.Tag is HardwareCatalogEntry { SensorType: null }) { font = _boldFont; txtColor = Color.FromArgb(20, 20, 20); }
-            else if (e.Node.Tag is HardwareCatalogEntry) { font = _baseFont; txtColor = Color.Black; }
+            if (node.Tag is HardwareCatalogEntry { SensorType: null }) { font = _boldFont; txtColor = Color.FromArgb(20, 20, 20); }
+            else if (node.Tag is HardwareCatalogEntry) { font = _baseFont; txtColor = Color.Black; }
             else { font = _boldFont; txtColor = Color.FromArgb(30, 30, 30); }
 
             int textStartX = chevronRect.Right + UIUtils.S(5);
@@ -197,7 +220,7 @@ namespace LiteMonitor.src.UI.Controls
             TextFormatFlags flags = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
 
             // 区分处理
-            if (e.Node.Tag is HardwareCatalogEntry { SensorType: not null })
+            if (node.Tag is HardwareCatalogEntry { SensorType: not null })
             {
                 // 传感器：必须避让右侧数值区，并在不够时显示省略号
                 int maxTextWidth = rightZoneStart - textStartX - UIUtils.S(10);
@@ -217,7 +240,7 @@ namespace LiteMonitor.src.UI.Controls
             }
             
             // 使用动态计算的 flags 绘制
-            TextRenderer.DrawText(g, e.Node.Text, font, textRect, txtColor, flags);
+            TextRenderer.DrawText(g, node.Text, font, textRect, txtColor, flags);
             // ★★★ 修复结束 ★★★
         }
         private void DrawChevron(Graphics g, Rectangle rect, bool expanded)

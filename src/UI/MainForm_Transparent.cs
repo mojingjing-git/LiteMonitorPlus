@@ -41,7 +41,9 @@ namespace LiteMonitor
 
         private const int NOTIFY_FOR_THIS_SESSION = 0;
 
-        private CancellationTokenSource _displayChangeCts;
+        // ★ 可空：这个 CTS 只在收到 WM_DISPLAYCHANGE 时才创建（构造函数里并没有），
+        //   原来的用法也是 "_displayChangeCts?.Cancel()" ⇒ 如实声明为可空。
+        private CancellationTokenSource? _displayChangeCts;
 
         private Point _dragOffset;
 
@@ -579,8 +581,11 @@ namespace LiteMonitor
                 // [Fix #288] 分辨率改变后，延迟执行位置恢复，确保 Screen.AllScreens 已完全更新
                 // 增加防抖机制，避免短时间内多次触发
                 _displayChangeCts?.Cancel();
-                _displayChangeCts = new System.Threading.CancellationTokenSource();
-                var token = _displayChangeCts.Token;
+                // ★ 字段声明为可空，这里用局部量承接新实例：取 Token 时保证一定非空
+                //   （不要直接写 _displayChangeCts.Token：字段的 null 状态在方法调用后会退回"可能为空"）。
+                var displayChangeCts = new System.Threading.CancellationTokenSource();
+                _displayChangeCts = displayChangeCts;
+                var token = displayChangeCts.Token;
 
                 // ★ 任务栏侧：拓扑/分辨率变化后必须重新解析目标设备并重挂（#539 / #573 / #583）。
                 _taskbar?.RequestTaskbarRecovery(TaskbarRecoveryReason.DisplayChange);
