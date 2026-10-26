@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using LiteMonitor.Rendering.Configuration;
@@ -134,22 +135,53 @@ namespace LiteMonitor.src.UI.SettingsPage
             }
         }
 
-        /// <summary>同步渲染一张快照（UI 线程调用；测试可用）。失败返回 null。</summary>
-        public static string? RenderSnapshotBlocking(MarketThemeEntry entry)
+        /// <summary>
+        /// 渲染一张快照（**真异步**：下载走 async 路径，不阻塞调用线程）。
+        /// <para>E02 §6.1：原实现用 <c>GetAwaiter().GetResult()</c> 在 UI 线程同步下载
+        /// （实际阻塞消息循环）。现改为 async 下载 + 在 UI 上下文完成渲染；
+        /// 失败返回 null。</para>
+        /// <para>渲染（GDI/GPU 离屏窗体）必须在 UI 线程执行：调用方若带 UI 上下文，
+        /// 渲染被 marshal 回该上下文；无 UI 上下文（如后台线程/测试）则就地渲染。</para>
+        /// </summary>
+        public static async Task<string?> RenderSnapshotAsync(MarketThemeEntry entry,
+            CancellationToken cancellationToken = default)
         {
             if (entry == null) return null;
             string path = CachePath(entry.Id, entry.Sha256);
             if (File.Exists(path)) return path;
 
+            byte[] payload;
             try
             {
-                byte[] payload = ThemeMarket.DownloadThemePayloadAsync(entry).GetAwaiter().GetResult();
-                return RenderFromPayload(entry, payload, path);
+                payload = await ThemeMarket.DownloadThemePayloadAsync(entry, cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch
             {
                 return null;
             }
+
+            SynchronizationContext? context = SynchronizationContext.Current;
+            return await RenderOnContextAsync(context, entry, payload, path).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 在给定同步上下文执行渲染（渲染需 UI 线程）；无上下文时就地执行。
+        /// 上下文已失效（窗体已关闭）时回退为就地渲染，不抛异常。
+        /// </summary>
+        private static Task<string?> RenderOnContextAsync(SynchronizationContext? context,
+            MarketThemeEntry entry, byte[] payload, string path)
+        {
+            if (context is null || ReferenceEquals(SynchronizationContext.Current, context))
+                return Task.FromResult(RenderFromPayload(entry, payload, path));
+
+            var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            context.Post(_ =>
+            {
+                try { tcs.TrySetResult(RenderFromPayload(entry, payload, path)); }
+                catch (Exception ex) { tcs.TrySetException(ex); }
+            }, null);
+            return tcs.Task;
         }
 
         private static string? RenderFromPayload(MarketThemeEntry entry, byte[] payload, string pngPath)

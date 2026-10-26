@@ -70,6 +70,7 @@ public sealed class HardwareHostSupervisor : IDisposable
     private int _sessionCount;      // 完成握手的会话数
     private int _restartCount;      // Ready 之后又失败的次数（成功会话之后再来一次）
     private int _consecutiveFailures;
+    private int _sessionEpoch;      // 会话纪元（E02 §6.7：每次新建会话递增）
 
     /// <summary>消息到达（快照/心跳/响应原信封）；订阅方不得阻塞。</summary>
     public event Action<IpcEnvelope>? MessageReceived;
@@ -91,6 +92,18 @@ public sealed class HardwareHostSupervisor : IDisposable
     public bool IsolationFailed => _isolationFailed;
     public bool IsPaused => _paused;
     public int? CurrentHostPid => _hostProcess?.Id;
+
+    /// <summary>
+    /// 当前会话令牌（E02 §6.7：命令响应校验用）。**先于连接发布**——调用方看到
+    /// "有活动连接"时必然能读到与之匹配的令牌（写序：令牌 → 连接）。
+    /// </summary>
+    public string CurrentSessionToken => _sessionToken;
+
+    /// <summary>
+    /// 当前会话纪元（E02 §6.7）：每次新建会话（Host 重启/重连）递增，并经命令行传给 Host
+    /// 盖在快照上——旧会话快照数据不得混入新会话。
+    /// </summary>
+    public int SessionEpoch => Volatile.Read(ref _sessionEpoch);
 
     public HardwareHostSupervisor(HardwareHostSupervisorOptions? options = null)
     {
@@ -183,7 +196,9 @@ public sealed class HardwareHostSupervisor : IDisposable
             endpoint = PipeServerEndpoint.Create();
             _endpoint = endpoint;
 
-            process = SpawnHost(endpoint);
+            // E02 §6.7：会话纪元在每次新建会话时递增，并传给 Host 盖在快照上。
+            int sessionEpoch = Interlocked.Increment(ref _sessionEpoch);
+            process = SpawnHost(endpoint, sessionEpoch);
             _hostProcess = process;
             _spawnCount++;
         }
@@ -207,8 +222,10 @@ public sealed class HardwareHostSupervisor : IDisposable
                 return new SessionOutcome { Reason = "handshake-timeout", HealthyLongEnough = false };
             }
 
-            _connection = connected;
+            // 写序（E02 §6.7）：**令牌先于连接**发布——调用方看到"有活动连接"时
+            // 必然能读到与之匹配的会话令牌（响应校验依赖这一点）。
             _sessionToken = endpoint.SessionToken;
+            _connection = connected;
             _sessionCount++;
             SetState(HardwareState.Ready, null, process.Id);
             SessionOpened?.Invoke(connected, endpoint.SessionToken, process.Id);
@@ -314,7 +331,7 @@ public sealed class HardwareHostSupervisor : IDisposable
         }
     }
 
-    private Process SpawnHost(PipeServerEndpoint endpoint)
+    private Process SpawnHost(PipeServerEndpoint endpoint, int sessionEpoch)
     {
         string exe = ResolveHostExePath(_options.HostExePathOverride);
         var psi = new ProcessStartInfo(exe)
@@ -330,6 +347,7 @@ public sealed class HardwareHostSupervisor : IDisposable
         psi.ArgumentList.Add("--parent-pid"); psi.ArgumentList.Add(Environment.ProcessId.ToString());
         psi.ArgumentList.Add("--refresh-ms"); psi.ArgumentList.Add(Math.Max(50, _options.RefreshMs).ToString());
         psi.ArgumentList.Add("--heartbeat-ms"); psi.ArgumentList.Add(Math.Max(100, (int)_options.HeartbeatInterval.TotalMilliseconds).ToString());
+        psi.ArgumentList.Add("--session-epoch"); psi.ArgumentList.Add(sessionEpoch.ToString());
         foreach (string extra in _options.HostExtraArguments) psi.ArgumentList.Add(extra);
 
         Process process = Process.Start(psi)

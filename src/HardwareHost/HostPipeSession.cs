@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
 using System.Text.Json;
@@ -14,10 +15,21 @@ namespace LiteMonitor.HardwareHost;
 /// 职责：握手 → 设备初始化（心跳报进度）→ 采样循环（快照槽位新替旧）→
 /// 命令处理（逐命令有应答）→ 受控关闭。发送侧单写线程串行编码：控制响应/心跳优先，
 /// 快照槽位只保留最新一批（§5.1 不无限积压）。测试故障注入由 <see cref="HostOptions.Fault"/> 驱动。
+///
+/// E02（完善计划 §6）新增命令面：
+/// <list type="bullet">
+/// <item><c>sampling-due</c>：到期采样请求（共享唯一采样协调器，同周期合并）。</item>
+/// <item><c>rescan-full-v2</c>：显式全量重扫（独立操作 ID、有界、状态可查）。</item>
+/// <item><c>submit-demand-v2</c> / <c>release-demand</c>：按消费者登记/释放需求。</item>
+/// <item><c>operation-status</c>：查询显式操作状态（超时调用方凭 OperationId 后询）。</item>
+/// </list>
 /// </summary>
 internal sealed class HostPipeSession
 {
     private const int HeartbeatIntervalMs = 2000;
+
+    /// <summary>需求登记表容量（消费者数量上限；超限给出可解释拒绝）。</summary>
+    private const int MaxDemandConsumers = 64;
 
     private readonly HostOptions _options;
     private readonly string _fault;
@@ -34,6 +46,19 @@ internal sealed class HostPipeSession
     private volatile bool _inShutdown;
     private bool _firstSnapshot = true;
     private MinimalHardwareSampler? _sampler;
+
+    // ── E02 命令面状态 ──
+    /// <summary>采样闸门：采样与显式重扫互斥（不并发触碰采集器）。</summary>
+    private readonly object _sampleGate = new();
+    /// <summary>到期采样请求信号（合并：多次请求只触发一轮采样）。</summary>
+    private readonly SemaphoreSlim _sampleSignal = new(0, int.MaxValue);
+    private long _sampleTickets;      // 已受理的到期采样请求票号
+    private long _publishedTickets;   // 最近一次采样发布时覆盖到的票号
+    private readonly HostOperationRegistry _operations = new();
+    private readonly object _rescanGate = new();
+    private string? _activeRescanId;
+    private readonly object _demandGate = new();
+    private readonly Dictionary<string, SamplingDemand> _demands = new(StringComparer.Ordinal);
 
     private HostPipeSession(HostOptions options, int refreshMs)
     {
@@ -129,19 +154,19 @@ internal sealed class HostPipeSession
                 {
                     if (_fault == "hang-sampling" && published >= 2)
                         Thread.Sleep(Timeout.Infinite); // 无限阻塞采样线程（测试注入）
-                    HardwareSnapshot snapshot = sampler.SampleOnce(Volatile.Read(ref _configRevision));
-                    if (_firstSnapshot && _options.StaleFirst)
-                        snapshot = snapshot with { TimestampMonoMs = Environment.TickCount64 - 30_000 };
-                    _firstSnapshot = false;
-                    Interlocked.Increment(ref _progressSeq);
-                    Volatile.Write(ref _slot, new IpcSnapshotMessage(snapshot, Environment.TickCount64));
+                    PublishSample();
                     published++;
-                    ReleaseWriteSignal();
-                    for (int elapsed = 0; !_stopping && elapsed < _refreshMs; elapsed += 100)
-                        await Task.Delay(Math.Min(100, _refreshMs - elapsed)).ConfigureAwait(false);
+                    // 等待下一次：周期到期，或被"到期采样"请求提前唤醒（合并为一轮采样）。
+                    try
+                    {
+                        await _sampleSignal.WaitAsync(Math.Max(50, Volatile.Read(ref _refreshMs)), cts.Token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { break; }
                 }
             }
             catch (ObjectDisposedException) { /* 关闭竞态 */ }
+            catch (OperationCanceledException) { }
         }, cts.Token);
 
         // ── 心跳任务：2s 一发。stop-heartbeat 故障静默停发（采样继续）→ 主程序"心跳 2s×3 失联"路径。──
@@ -151,7 +176,7 @@ internal sealed class HostPipeSession
             bool frozen = _fault == "stop-heartbeat";
             while (!_stopping)
             {
-                await Task.Delay(heartbeatMs).ConfigureAwait(false);
+                await Task.Delay(heartbeatMs, cts.Token).ConfigureAwait(false);
                 if (_stopping || frozen) continue;
                 if (!EnqueueControl(Heartbeat(HardwareState.Ready, null))) break; // 有界队列满：不积压
             }
@@ -211,6 +236,30 @@ internal sealed class HostPipeSession
         return _inShutdown ? 0 : exitCode;
     }
 
+    /// <summary>采样发布（采样闸门内调用；快照带会话纪元与当前生效配置 revision）。</summary>
+    private void PublishSample()
+    {
+        lock (_sampleGate)
+        {
+            PublishSampleLocked();
+        }
+    }
+
+    private void PublishSampleLocked()
+    {
+        MinimalHardwareSampler? sampler = _sampler;
+        if (sampler is null) return;
+        HardwareSnapshot snapshot = sampler.SampleOnce(Volatile.Read(ref _configRevision), _options.SessionEpoch);
+        if (_firstSnapshot && _options.StaleFirst)
+            snapshot = snapshot with { TimestampMonoMs = Environment.TickCount64 - 30_000 };
+        _firstSnapshot = false;
+        Interlocked.Increment(ref _progressSeq);
+        // 覆盖已受理的到期采样票号：等待该票号的调用方由此被唤醒（合并为一轮采样）。
+        Volatile.Write(ref _publishedTickets, Interlocked.Read(ref _sampleTickets));
+        Volatile.Write(ref _slot, new IpcSnapshotMessage(snapshot, Environment.TickCount64));
+        ReleaseWriteSignal();
+    }
+
     private void HandleCommand(IpcCommandMessage command, long requestId)
     {
         string session = _options.SessionToken!;
@@ -252,6 +301,60 @@ internal sealed class HostPipeSession
                 Respond(requestId, new IpcResponseMessage(true, null, JsonSerializer.Serialize(catalog)));
                 break;
             }
+            // ── E02 命令面 ──
+            case IpcProtocol.OpSamplingDue:
+            {
+                bool triggered = RequestSamplingDue(TimeSpan.FromMilliseconds(
+                    Math.Max(500, Math.Min(5000, Volatile.Read(ref _refreshMs) * 3))));
+                Respond(requestId, new IpcResponseMessage(true, null,
+                    JsonSerializer.Serialize(new SamplingDueResult(triggered), HostCommandJson.Options)));
+                break;
+            }
+            case IpcProtocol.OpRescanFull:
+            {
+                HardwareOperationResult result = EnsureRescanOperation();
+                Respond(requestId, new IpcResponseMessage(true, null, JsonSerializer.Serialize(result)));
+                break;
+            }
+            case IpcProtocol.OpSubmitDemandV2:
+            {
+                SubmitDemandArgs? args = TryDeserialize<SubmitDemandArgs>(command.ArgumentJson);
+                if (args is null || string.IsNullOrEmpty(args.ConsumerId))
+                {
+                    Respond(requestId, new IpcResponseMessage(false, "invalid-arguments", null));
+                    break;
+                }
+                bool registered = RegisterDemand(args.ConsumerId, args.Demand);
+                Respond(requestId, new IpcResponseMessage(registered, registered ? null : "demand-capacity-exceeded",
+                    JsonSerializer.Serialize(new DemandRegisterResult(registered), HostCommandJson.Options)));
+                break;
+            }
+            case IpcProtocol.OpReleaseDemand:
+            {
+                ReleaseDemandArgs? args = TryDeserialize<ReleaseDemandArgs>(command.ArgumentJson);
+                if (args is null || string.IsNullOrEmpty(args.ConsumerId))
+                {
+                    Respond(requestId, new IpcResponseMessage(false, "invalid-arguments", null));
+                    break;
+                }
+                bool released = ReleaseDemand(args.ConsumerId);
+                Respond(requestId, new IpcResponseMessage(true, null,
+                    JsonSerializer.Serialize(new DemandReleaseResult(released), HostCommandJson.Options)));
+                break;
+            }
+            case IpcProtocol.OpOperationStatus:
+            {
+                OperationStatusArgs? args = TryDeserialize<OperationStatusArgs>(command.ArgumentJson);
+                if (args is null || string.IsNullOrEmpty(args.OperationId))
+                {
+                    Respond(requestId, new IpcResponseMessage(false, "invalid-arguments", null));
+                    break;
+                }
+                HardwareOperationResult status = _operations.TryGet(args.OperationId)
+                    ?? HardwareOperationResult.Reject("unknown-operation");
+                Respond(requestId, new IpcResponseMessage(true, null, JsonSerializer.Serialize(status)));
+                break;
+            }
             case IpcProtocol.OpShutdown:
                 _inShutdown = true;
                 Respond(requestId, new IpcResponseMessage(true, null, "true"));
@@ -263,6 +366,105 @@ internal sealed class HostPipeSession
             default:
                 Respond(requestId, new IpcResponseMessage(false, $"unknown-operation:{command.Operation}", null));
                 break;
+        }
+    }
+
+    private static T? TryDeserialize<T>(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return default;
+        try
+        {
+            return JsonSerializer.Deserialize<T>(json, HostCommandJson.Options);
+        }
+        catch (JsonException)
+        {
+            return default;
+        }
+    }
+
+    // ── E02 命令面实现 ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 到期采样请求：向唯一采样协调器发信号并等待本票号被覆盖（合并：同周期多请求只采一轮）。
+    /// 返回值 = 是否确实触发了（含合并到的）一轮采样。
+    /// </summary>
+    private bool RequestSamplingDue(TimeSpan waitBudget)
+    {
+        long ticket = Interlocked.Increment(ref _sampleTickets);
+        try { _sampleSignal.Release(); } catch (SemaphoreFullException) { }
+        long deadline = Environment.TickCount64 + (long)waitBudget.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
+        {
+            if (Volatile.Read(ref _publishedTickets) >= ticket) return true;
+            Thread.Sleep(5);
+        }
+        return Volatile.Read(ref _publishedTickets) >= ticket;
+    }
+
+    /// <summary>
+    /// 显式全量重扫：独立操作 ID + 状态机；在途操作可被重复请求加入（**不重复重扫**）；
+    /// 容量超限返回可解释 Rejected。
+    /// </summary>
+    private HardwareOperationResult EnsureRescanOperation()
+    {
+        lock (_rescanGate)
+        {
+            if (_activeRescanId is { } active)
+            {
+                HardwareOperationResult? current = _operations.TryGet(active);
+                if (current is not null
+                    && current.State is HardwareOperationState.Queued or HardwareOperationState.Running)
+                {
+                    return current; // 加入在途操作
+                }
+            }
+            string id = "rescan-" + Guid.NewGuid().ToString("N");
+            if (!_operations.TryCreate(id, out _))
+                return HardwareOperationResult.Reject("operation-capacity-exceeded");
+            _activeRescanId = id;
+            _ = Task.Run(() => RunRescanAsync(id));
+            return _operations.TryGet(id) ?? HardwareOperationResult.Reject("operation-create-failed");
+        }
+    }
+
+    private async Task RunRescanAsync(string id)
+    {
+        try
+        {
+            _operations.TrySetState(id, HardwareOperationState.Running, null);
+            if (_fault == "slow-rescan")
+                await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            lock (_sampleGate)
+            {
+                _sampler?.Rescan();
+                PublishSampleLocked();
+            }
+            _operations.TrySetState(id, HardwareOperationState.Completed, null);
+        }
+        catch (Exception ex)
+        {
+            _operations.TrySetState(id, HardwareOperationState.Failed, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>按消费者登记需求（同消费者覆盖为最新值；不覆盖其他消费者）。</summary>
+    private bool RegisterDemand(string consumerId, SamplingDemand demand)
+    {
+        lock (_demandGate)
+        {
+            if (!_demands.ContainsKey(consumerId) && _demands.Count >= MaxDemandConsumers)
+                return false;
+            _demands[consumerId] = demand;
+            return true;
+        }
+    }
+
+    /// <summary>释放某消费者的需求；返回此前是否存在登记。</summary>
+    private bool ReleaseDemand(string consumerId)
+    {
+        lock (_demandGate)
+        {
+            return _demands.Remove(consumerId);
         }
     }
 
