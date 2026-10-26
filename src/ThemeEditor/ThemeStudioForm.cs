@@ -1005,17 +1005,26 @@ namespace LiteMonitor.ThemeEditor
 
         private void UpdateDocumentUi()
         {
-            bool hasDoc = _session is not null;
-            _docName.Text = hasDoc ? _session!.ThemeName : "—";
-            _dirtyDot.Visible = hasDoc && _session!.IsDirty;
-            _undoButton.Enabled = hasDoc && _session!.UndoCount > 0;
-            _redoButton.Enabled = hasDoc && _session!.RedoCount > 0;
+            // ★ 局部变量单次读取：_session 是可空字段，而 hasDoc 只是布尔推断，
+            //   编译器无法据此收窄 _session —— 原写法混用 `_session!` 与裸 `_session.ThemeName`，
+            //   后者就是 1018 行的 CS8602。这里改为一次取值 + 派生只读量，语义逐条等价。
+            ThemeDocumentSession? session = _session;
+            bool hasDoc = session is not null;
+            string docName = session?.ThemeName ?? "—";
+            bool isDirty = session?.IsDirty ?? false;
+            int undoCount = session?.UndoCount ?? 0;
+            int redoCount = session?.RedoCount ?? 0;
+
+            _docName.Text = docName;
+            _dirtyDot.Visible = isDirty;
+            _undoButton.Enabled = undoCount > 0;
+            _redoButton.Enabled = redoCount > 0;
             _saveButton.Enabled = hasDoc;
-            _statusSaved.Text = hasDoc && _session!.IsDirty ? "未保存的更改" :
+            _statusSaved.Text = isDirty ? "未保存的更改" :
                 hasDoc ? "已保存" : "就绪";
             UpdateRouteStatus();
-            Text = "LiteMonitor 主题工作室" + (hasDoc && _session!.IsDirty ? " — *" : string.Empty) +
-                   (hasDoc ? " — " + _session.ThemeName : string.Empty);
+            Text = "LiteMonitor 主题工作室" + (isDirty ? " — *" : string.Empty) +
+                   (hasDoc ? " — " + docName : string.Empty);
         }
 
         private void RegisterShortcuts()

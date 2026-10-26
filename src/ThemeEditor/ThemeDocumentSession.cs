@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -226,7 +227,10 @@ namespace LiteMonitor.ThemeEditor
         }
 
         /// <summary>大小写不敏感地在对象中定位键（现有读取口径），返回实际键名。</summary>
-        private static bool TryGetKey(JsonObject obj, string name, out string? actualKey, out JsonNode? value)
+        /// <param name="actualKey">★ 命中时返回对象里**实际存在**的键名（大小写可能与传入的 name 不同）；
+        /// 返回 false 时为 null。标注 <see cref="NotNullWhenAttribute"/> 让调用方在 true 分支里
+        /// 无需再判空即可把它当作非空键名使用（消除 3 处 CS8604）。</param>
+        private static bool TryGetKey(JsonObject obj, string name, [NotNullWhen(true)] out string? actualKey, out JsonNode? value)
         {
             foreach (KeyValuePair<string, JsonNode?> pair in obj)
             {

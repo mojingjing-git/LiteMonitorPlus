@@ -104,7 +104,10 @@ namespace LiteMonitor.src.Plugins
             return allowed.Any(a => TryNormalizeHost(a, out var canonical) && canonical == normalized);
         }
 
-        internal static string RequireHttpHost(string url, string reason = PluginSandboxReasons.CredentialTargetNotAllowed)
+        /// <param name="url">★ 允许为 null —— 传 null 等价于"地址非法"，
+        /// 与原先 <c>url?.Trim()</c> 的运行期行为完全一致（TryUrlHost 对 null 返回 false ⇒ 抛策略异常）。
+        /// 标注为可空可让调用方不必再为"地址可能缺失"单独兜底。</param>
+        internal static string RequireHttpHost(string? url, string reason = PluginSandboxReasons.CredentialTargetNotAllowed)
         {
             if (!TryUrlHost(url, out var host) || !Uri.TryCreate(url?.Trim(), UriKind.Absolute, out var uri) ||
                 (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
@@ -133,14 +136,18 @@ namespace LiteMonitor.src.Plugins
 
         internal static void ValidateRequestUrl(string url)
         {
-            if (url?.StartsWith("native://", StringComparison.OrdinalIgnoreCase) == true)
+            // ★ 不用 url?.：条件访问会把 url 的 null-state 置为「可能为 null」，
+            //   之后 RequireHttpHost(url) 就会报 CS8604（见 §4.3 铁律七）。
+            //   改用显式判空，判定结果与原 `url?.StartsWith(...) == true` 逐位等价。
+            if (url != null && url.StartsWith("native://", StringComparison.OrdinalIgnoreCase))
             {
                 foreach (string embedded in EmbeddedHttpUrls(url)) RequireHttpHost(embedded);
             }
             else RequireHttpHost(url);
         }
 
-        internal static void ValidateRedirectLocation(Uri location, Uri current)
+        /// <param name="current">★ 当前地址；可为空（此时回落到 https，与原 `current?.Scheme ?? "https"` 一致）。</param>
+        internal static void ValidateRedirectLocation(Uri? location, Uri? current)
         {
             string raw = location?.OriginalString ?? "";
             if (location?.IsAbsoluteUri == true)
