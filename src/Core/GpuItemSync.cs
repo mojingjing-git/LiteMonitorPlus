@@ -124,7 +124,9 @@ namespace LiteMonitor.src.Core
                         VisibleInPanel = tpl?.VisibleInPanel ?? panel,
                         VisibleInTaskbar = tpl?.VisibleInTaskbar ?? taskbar,
                         // 任务栏自定义名要继承 (UserLabel 是故意不继承的: 两张卡同名没意义)
-                        TaskbarLabel = tpl?.TaskbarLabel,
+                        // ★ null 与 "" 在此处等价（都表示"没有任务栏自定义名"），
+                        //   故用 ?? "" 收敛到 MonitorItemConfig.TaskbarLabel 的非空契约。
+                        TaskbarLabel = tpl?.TaskbarLabel ?? "",
                         UnitPanel = tpl?.UnitPanel,
                         UnitTaskbar = tpl?.UnitTaskbar,
                     });

@@ -257,9 +257,10 @@ namespace LiteMonitor.src.SystemServices
                 string driveLetter = parts[1]; // "C"
                 string root = driveLetter + ":\\";
 
-                DriveInfo di;
                 // ★★★ 优先查缓存 ★★★
-                if (!_driveInfoCache.TryGetValue(root, out di))
+                // ★ 用 out var：TryGetValue 的 out 形参标注了 [MaybeNullWhen(false)]，
+                //   交给编译器接管 null-state，避免把「可能为 null」的值写进非空变量（CS8600）。
+                if (!_driveInfoCache.TryGetValue(root, out var di))
                 {
                     try 
                     { 

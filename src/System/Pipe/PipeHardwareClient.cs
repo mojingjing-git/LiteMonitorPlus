@@ -268,7 +268,7 @@ public sealed class PipeHardwareClient : IHardwareClient
         ScheduleReplay();
     }
 
-    private void OnSessionClosed(string reason)
+    private void OnSessionClosed(string? reason)
     {
         lock (_pendingLock)
         {

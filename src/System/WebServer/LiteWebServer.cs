@@ -31,7 +31,8 @@ namespace LiteMonitor.src.WebServer
         ///   迁移后的明文恒为空串，拿它比较永远发现不了凭据变更。
         ///   判定用 <see cref="CurrentCredentialFingerprint"/>。
         /// </remarks>
-        public string CurrentPassword { get;set; }
+        /// <remarks>★ 构造函数未赋初值（真正取值在 306 行），故此处给出空串默认值以满足非空契约。</remarks>
+        public string CurrentPassword { get; set; } = "";
 
         /// <summary>
         /// 当前运行的**有效凭据指纹**（启动那一刻算出来的）。

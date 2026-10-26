@@ -78,8 +78,9 @@ public sealed class HardwareHostSupervisor : IDisposable
     /// <summary>会话建立（握手通过）。参数：连接、会话令牌、Host PID。</summary>
     public event Action<ConnectedHost, string, int>? SessionOpened;
 
-    /// <summary>会话结束（对端退出/协议违规/监督裁决），带原因。</summary>
-    public event Action<string>? SessionClosed;
+    /// <summary>会话结束（对端退出/协议违规/监督裁决），带原因。
+    /// <para>★ 原因为 null 表示"正常收尾，没有违规原因"，故载荷类型可空。</para></summary>
+    public event Action<string?>? SessionClosed;
 
     /// <summary>状态迁移（含原因与 Host PID，测试观测用）。</summary>
     public event Action<SupervisorTransition>? Transitioned;
@@ -180,7 +181,7 @@ public sealed class HardwareHostSupervisor : IDisposable
 
     private sealed class SessionOutcome
     {
-        public required string Reason { get; init; }
+        public required string? Reason { get; init; }
         public bool HealthyLongEnough { get; init; }
     }
 
@@ -275,7 +276,7 @@ public sealed class HardwareHostSupervisor : IDisposable
                 process.WaitForExit(2000);
 
             SessionClosed?.Invoke(violation);
-            return new SessionOutcome { Reason = violation!, HealthyLongEnough = healthyLongEnough };
+            return new SessionOutcome { Reason = violation, HealthyLongEnough = healthyLongEnough };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -488,7 +489,8 @@ public sealed class HardwareHostSupervisor : IDisposable
         SetState(_isolationFailed ? HardwareState.Degraded : HardwareState.Stopped, "stopped");
     }
 
-    private void TerminateHost(Process process, string reason)
+    /// <param name="reason">终止原因；为 null 表示"没有特定违规原因"（正常收尾）。</param>
+    private void TerminateHost(Process process, string? reason)
     {
         try
         {

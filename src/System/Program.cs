@@ -30,7 +30,8 @@ namespace LiteMonitor
             try
             {
                 // [修正] 使用 Process 获取真实路径，解决单文件发布路径为空的问题
-                string exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                // ★ 可空：MainModule / FileName 在某些宿主下取不到（单文件发布、权限受限等）。
+                string? exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
 
                 if (string.IsNullOrEmpty(exePath))
                 {
@@ -38,9 +39,10 @@ namespace LiteMonitor
                 }
                 else
                 {
-                    string appFolderPath = Path.GetDirectoryName(exePath);
+                    // ★ 可空：Path.GetDirectoryName 对 null / 无目录名的路径返回 null。
+                    string? appFolderPath = Path.GetDirectoryName(exePath);
 
-                    string sanitizedPath = appFolderPath?.ToLower()
+                    string? sanitizedPath = appFolderPath?.ToLower()
                                                         .Replace('\\', '_')
                                                         .Replace(':', '_')
                                                         .Replace('/', '_')

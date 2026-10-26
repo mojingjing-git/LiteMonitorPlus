@@ -374,7 +374,7 @@ namespace LiteMonitor.src.WebServer
         private static WebThemeColorSnapshot? _current;
 
         /// <summary>当前已发布的快照（未发布时为 null）。</summary>
-        public static WebThemeColorSnapshot Current => Volatile.Read(ref _current);
+        public static WebThemeColorSnapshot? Current => Volatile.Read(ref _current);
 
         /// <summary>发布一份新的快照（UI 层换肤时调用）。传 null = 撤销发布。</summary>
         public static void Publish(WebThemeColorSnapshot? snapshot)

@@ -127,7 +127,8 @@ namespace LiteMonitor.src.UI.Controls
             string defUnit = MetricUtils.GetUnitStr(item.Key, 0, unitCtx);
             
             // 2. 获取当前配置值
-            string userConfig = isTaskbarMode ? item.UnitTaskbar : item.UnitPanel;
+            // ★ 可空：UnitPanel / UnitTaskbar 的 null = "自动"、"" = "隐藏"，二者语义不同，不可抹平。
+            string? userConfig = isTaskbarMode ? item.UnitTaskbar : item.UnitPanel;
             
             // 3. 决定显示文本 (null显示默认值, ""显示空格)
             // 注意：如果配置是""(隐藏)，我们给输入框显示一个空格" "，让用户知道这里不是空的(默认)，而是特意留空的。
@@ -201,7 +202,8 @@ namespace LiteMonitor.src.UI.Controls
             // [Fix] 根据模式动态选择上下文
             var unitCtx = isTaskbarMode ? MetricUtils.UnitContext.SettingsTaskbar : MetricUtils.UnitContext.SettingsPanel;
             string defUnit = MetricUtils.GetUnitStr(Config.Key, 0, unitCtx);
-            string userConfig = isTaskbarMode ? Config.UnitTaskbar : Config.UnitPanel;
+            // ★ 可空：UnitPanel / UnitTaskbar 的 null = "自动"、"" = "隐藏"，二者语义不同，不可抹平。
+            string? userConfig = isTaskbarMode ? Config.UnitTaskbar : Config.UnitPanel;
 
             // 更新 Input 状态
             // null -> 默认, "" -> 空格

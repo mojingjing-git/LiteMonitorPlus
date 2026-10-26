@@ -426,7 +426,7 @@ namespace LiteMonitor.src.WebServer
         public readonly Dictionary<string, List<string>> Headers = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>取某个头的**唯一**取值；缺失或重复都返回 null（重复即视为非法）。</summary>
-        public string GetSingleHeader(string name)
+        public string? GetSingleHeader(string name)
         {
             if (!Headers.TryGetValue(name, out var list)) return null;
             if (list.Count != 1) return null;      // 重复头 ⇒ 不猜
@@ -779,7 +779,8 @@ namespace LiteMonitor.src.WebServer
             // ★ 服务级取消令牌：Stop 时取消，在途的采样等待立刻退出
             CancellationToken lifetimeToken = _lifetimeToken;
 
-            byte[] buffer = null;
+            // ★ 可空：缓冲区在 try 内从 ArrayPool 租用，失败路径保持 null（finally 里判空再归还）。
+            byte[]? buffer = null;
             try
             {
                 var stream = client.GetStream();
@@ -1231,7 +1232,8 @@ namespace LiteMonitor.src.WebServer
         }
 
         /// <summary>（调用方必须已持有 _authGate）会话是否仍然有效。</summary>
-        private bool SessionStillValidLocked(string sessionId, string passwordFingerprint)
+        /// <param name="passwordFingerprint">请求携带的口令指纹；为空时按空串比对（见下一行）。</param>
+        private bool SessionStillValidLocked(string sessionId, string? passwordFingerprint)
         {
             if (!_sessions.TryGetValue(sessionId, out var s)) return false;
             if (s.Revoked) return false;
@@ -1246,7 +1248,7 @@ namespace LiteMonitor.src.WebServer
         /// <summary>校验请求头里的 CSRF 令牌（恒时比较）。</summary>
         private static bool CheckCsrfHeader(HttpRequestInfo request, string sessionId)
         {
-            string supplied = request.GetSingleHeader(CsrfHeaderName);
+            string? supplied = request.GetSingleHeader(CsrfHeaderName);
             if (string.IsNullOrEmpty(supplied)) return false;
             string expected = ComputeCsrfToken(sessionId);
             return CryptographicOperations.FixedTimeEquals(
@@ -1764,69 +1766,74 @@ namespace LiteMonitor.src.WebServer
 
         /// <summary>
         /// <c>POST /api/auth/ticket</c>：用主会话换一次性票据（仅可用于 WS 握手）。
+        /// <para>★ 去掉 async：方法体内没有任何 await（CS1998）。它本来就是一段同步的请求处理，
+        ///   保留 <c>Task</c> 返回类型即可维持调用方 <c>await</c> 的写法不变。</para>
         /// </summary>
-        private async Task HandleTicketAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy)
+        private Task HandleTicketAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy)
         {
             if (!string.Equals(info.Method, "POST", StringComparison.OrdinalIgnoreCase))
             {
                 SendErrorResponse(stream, 405, "只接受 POST。", info, policy);
-                return;
+                return Task.CompletedTask;
             }
 
             string? sessionId = GetSessionCookie(info);
             if (sessionId == null)
             {
                 SendErrorResponse(stream, 401, "需要有效的主会话。", info, policy);
-                return;
+                return Task.CompletedTask;
             }
 
             if (!TryGetSession(sessionId, policy.PasswordFingerprint, out WebSessionRecord session))
             {
                 SendErrorResponse(stream, 401, "主会话无效或已过期。", info, policy);
-                return;
+                return Task.CompletedTask;
             }
 
             if (!CheckCsrfHeader(info, session.Id))
             {
                 SendErrorResponse(stream, 403, "CSRF 校验失败。", info, policy);
-                return;
+                return Task.CompletedTask;
             }
 
             // ★ 该端点不接受请求体：这里**不读** body（也省掉一次读期限）
             string ticket = CreateTicket(session.Id, policy.PasswordFingerprint);
             byte[] payload = Encoding.UTF8.GetBytes("{\"ticket\":\"" + ticket + "\"}");
             SendHttpResponse(stream, 200, "application/json; charset=utf-8", payload, payload.Length, info, policy);
+            return Task.CompletedTask;
         }
 
         /// <summary>
         /// <c>POST /api/auth/logout</c>：显式注销当前主会话。
+        /// <para>★ 去掉 async：方法体内没有任何 await（CS1998）。它本来就是一段同步的请求处理，
+        ///   保留 <c>Task</c> 返回类型即可维持调用方 <c>await</c> 的写法不变。</para>
         /// </summary>
-        private async Task HandleLogoutAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy,
+        private Task HandleLogoutAsync(NetworkStream stream, HttpRequestInfo info, WebAccessPolicy policy,
             WebEffectiveAuthority authority)
         {
             if (!string.Equals(info.Method, "POST", StringComparison.OrdinalIgnoreCase))
             {
                 SendErrorResponse(stream, 405, "只接受 POST。", info, policy);
-                return;
+                return Task.CompletedTask;
             }
 
             string? sessionId = GetSessionCookie(info);
             if (sessionId == null)
             {
                 SendErrorResponse(stream, 401, "需要有效的主会话。", info, policy);
-                return;
+                return Task.CompletedTask;
             }
 
             if (!TryGetSession(sessionId, policy.PasswordFingerprint, out WebSessionRecord session))
             {
                 SendErrorResponse(stream, 401, "主会话无效或已过期。", info, policy);
-                return;
+                return Task.CompletedTask;
             }
 
             if (!CheckCsrfHeader(info, session.Id))
             {
                 SendErrorResponse(stream, 403, "CSRF 校验失败。", info, policy);
-                return;
+                return Task.CompletedTask;
             }
 
             RevokeSession(session.Id);
@@ -1841,6 +1848,7 @@ namespace LiteMonitor.src.WebServer
             }
             SendHttpResponse(stream, 204, "application/json; charset=utf-8", Array.Empty<byte>(), 0, info, policy,
                 new List<string> { "Set-Cookie: " + clear });
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -2795,7 +2803,8 @@ namespace LiteMonitor.src.WebServer
                         continue;
                     }
 
-                    byte[] buffer = null;
+                    // ★ 可空：缓冲区在 try 内从 ArrayPool 租用，失败路径保持 null。
+                    byte[]? buffer = null;
                     try
                     {
                         int capacity = 32 * 1024;
@@ -2976,7 +2985,8 @@ namespace LiteMonitor.src.WebServer
 
         private async Task ReceiveLoop(TcpClient client)
         {
-            byte[] buffer = null;
+            // ★ 可空：缓冲区在 try 内从 ArrayPool 租用，失败路径保持 null。
+            byte[]? buffer = null;
             try
             {
                 var stream = client.GetStream();

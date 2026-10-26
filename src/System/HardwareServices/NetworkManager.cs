@@ -134,7 +134,7 @@ namespace LiteMonitor.src.SystemServices
         private const double RematchThrottleSeconds = 10.0;
 
         public NetworkManager(
-            PerformanceCounterManager perfManager = null,
+            PerformanceCounterManager? perfManager = null,
             TimeProvider? timeProvider = null,
             NetworkSampleFreshnessPolicy? freshnessPolicy = null,
             INetworkAdapterSource? adapterSource = null,
@@ -525,7 +525,7 @@ namespace LiteMonitor.src.SystemServices
                         ApplyAdapterInvalidation(kv.Value);
                         if (kv.Value.NativeAdapter != null)
                         {
-                            string ip = GetIPv4FromAdapter(kv.Value.NativeAdapter);
+                            string? ip = GetIPv4FromAdapter(kv.Value.NativeAdapter);
                             if (!string.IsNullOrEmpty(ip))
                             {
                                 foundIP = ip;
@@ -574,7 +574,8 @@ namespace LiteMonitor.src.SystemServices
         /// <para>保留既有语义：[Fix #287] 忽略 APIPA（169.254.x.x）；
         /// [Fix #206] 优先 192.168.x.x 内网地址。</para>
         /// </summary>
-        private string GetIPv4FromAdapter(INetworkAdapterSnapshot nic)
+        /// <returns>该网卡的"最佳"IPv4 地址；找不到时返回 null。</returns>
+        private string? GetIPv4FromAdapter(INetworkAdapterSnapshot nic)
         {
             try
             {

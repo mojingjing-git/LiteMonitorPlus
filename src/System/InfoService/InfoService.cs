@@ -17,7 +17,8 @@ namespace LiteMonitor.src.SystemServices.InfoService
     public class InfoService
     {
         #region Singleton
-        private static InfoService _instance;
+        // ★ 声明为可空：单例是"懒加载"语义，未调用 Instance 前确实为 null。
+        private static InfoService? _instance;
         public static InfoService Instance => _instance ??= new InfoService();
         private InfoService() { Initialize(); }
         #endregion
