@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows.Forms;
+using LiteMonitor.Rendering;
 using LiteMonitor.Rendering.Configuration;
 using LiteMonitor.src.Core;
 
@@ -324,17 +325,23 @@ namespace LiteMonitor.ThemeEditor
                     diagnostics.Add("rendering 校验未通过：" + string.Join(" ", renderingErrors));
                 }
 
-                return RenderClassicImage(theme, fullPath, size, ThemeExportImageRoute.Classic, diagnostics);
+                return RenderClassicImage(theme, fullPath, size, orientation, ThemeExportImageRoute.Classic, diagnostics);
             }
 
             // GPU 主题
             if (preference == ImageRoutePreference.Classic)
             {
                 diagnostics.Add("按偏好导出经典渲染图：本图不是 GPU 渲染结果。");
-                return RenderClassicImage(theme, fullPath, size, ThemeExportImageRoute.Fallback, diagnostics);
+                // ★ B-1 整改（计划 §5.2 B-1）：GPU 主题回退到经典渲染时，
+                //   实际渲染的是**回退样式派生主题**（LegacyFallbackStyleResolver），
+                //   不是主题本体的配色。旧实现传原始主题 ⇒ 导出图用了主效果配色，
+                //   与真实回退画面不一致（市场审图会看到「图和主题对不上」）。
+                return RenderClassicImage(
+                    LegacyFallbackStyleResolver.BuildDerivedTheme(theme),
+                    fullPath, size, orientation, ThemeExportImageRoute.Fallback, diagnostics);
             }
 
-            bool gpuOk = TryRenderGpuImage(theme, fullPath, out string? gpuError);
+            bool gpuOk = TryRenderGpuImage(theme, fullPath, size, orientation, out string? gpuError);
             if (gpuOk)
             {
                 diagnostics.Add("效果图由 GPU 渲染器产出（GpuSceneRenderer 固定输入回读）。");
@@ -357,7 +364,10 @@ namespace LiteMonitor.ThemeEditor
             }
 
             diagnostics.Add("已回退到兼容外观图（经典渲染器）：该图不是 GPU 渲染结果。");
-            return RenderClassicImage(theme, fullPath, size, ThemeExportImageRoute.Fallback, diagnostics);
+            // ★ B-1 整改：回退图必须用回退样式派生主题（与上面的经典偏好分支同源）。
+            return RenderClassicImage(
+                LegacyFallbackStyleResolver.BuildDerivedTheme(theme),
+                fullPath, size, orientation, ThemeExportImageRoute.Fallback, diagnostics);
         }
 
         // ============================================================
@@ -452,6 +462,20 @@ namespace LiteMonitor.ThemeEditor
             if (!preview.Success)
             {
                 reviewRequired.Add("效果图未产出：" + (preview.Error ?? "未知原因"));
+            }
+
+            // ★ B-3 整改（计划 §5.2 B-3，审核意见 M-1 采纳）：
+            //   submission.json 的 route 字段是**主题声明路线**（合同字段，取值 gpu|legacy，
+            //   与主题 rendering.backend 互验，市场侧会校验）—— 一律不改写。
+            //   实际出图路线由既有 previewRoute / previewIsFallback 如实承载。
+            //   两者不一致时（GPU 主题但实际产出的是回退/经典图）写入既有 reviewRequired，
+            //   请人工确认 —— 不新增第三处 route 写入，也不改合同字段结构。
+            if (preview.Success && gpuTheme && preview.Route != ThemeExportImageRoute.Gpu)
+            {
+                reviewRequired.Add(
+                    "效果图与主题声明路线不一致：主题声明 GPU 路线，但效果图实际由" +
+                    (preview.Route == ThemeExportImageRoute.Fallback ? "兼容外观回退渲染" : "经典渲染") +
+                    "产出（previewRoute=" + preview.Route + "），提交前请人工确认是否接受。");
             }
 
             // ⑤ submission.json：素材摘要
@@ -585,11 +609,18 @@ namespace LiteMonitor.ThemeEditor
         /// <summary>
         /// 经典路线渲染：固定 Mock 输入 + 固定样例背景 + 固定画幅 ⇒ 结果可复现。
         /// 绝不抓取真实桌面。
+        /// <para>
+        /// ★ B-2 整改（计划 §5.2 B-2 修法 2）：按画幅分派到**生产同源**的渲染器 ——
+        ///   竖向走 <c>UILayout</c> + <c>ThemePreviewControl.RenderPreview</c>，
+        ///   横向走 <c>HorizontalLayout</c> + <c>HorizontalRenderer</c>（横排主窗口同一套）。
+        ///   旧实现两种画幅都走竖向引擎 ⇒ 横向导出图实际是「竖向内容塞进横向画布」。
+        /// </para>
         /// </summary>
         private static ThemeImageExportResult RenderClassicImage(
             Theme theme,
             string path,
             Size size,
+            ThemeExportImageOrientation orientation,
             ThemeExportImageRoute route,
             List<string> diagnostics)
         {
@@ -598,14 +629,6 @@ namespace LiteMonitor.ThemeEditor
                 string? dir = Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-                // 预览副本：只读借用原主题，绝不改写会话草稿
-                Theme previewTheme = ThemePreviewControl.CreatePreviewTheme(theme, 1.0f);
-
-                // 固定 Mock 分组 + 主题布局（让图里有真实内容，而不是空底板）
-                List<GroupLayoutInfo> groups = ThemePreviewControl.CreateMockGroups();
-                var layout = new UILayout(previewTheme);
-                layout.Build(groups);
-
                 using var bitmap = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppPArgb);
                 using (Graphics g = Graphics.FromImage(bitmap))
                 {
@@ -613,8 +636,14 @@ namespace LiteMonitor.ThemeEditor
                     g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                     g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
-                    // ★ 正式渲染器四参重载：与主窗口同源的背景层 / 组块 / 外框
-                    ThemePreviewControl.RenderPreview(g, groups, previewTheme, new Rectangle(0, 0, size.Width, size.Height));
+                    if (orientation == ThemeExportImageOrientation.Horizontal)
+                    {
+                        RenderClassicHorizontal(g, theme, size);
+                    }
+                    else
+                    {
+                        RenderClassicVertical(g, theme, size);
+                    }
 
                     DrawRouteCaption(g, size, route, diagnostics);
                 }
@@ -637,6 +666,45 @@ namespace LiteMonitor.ThemeEditor
             return DescribeImage(path, route, diagnostics);
         }
 
+        /// <summary>竖向经典渲染（与竖向主窗口同源）。</summary>
+        private static void RenderClassicVertical(Graphics g, Theme theme, Size size)
+        {
+            // 预览副本：只读借用原主题，绝不改写会话草稿
+            Theme previewTheme = ThemePreviewControl.CreatePreviewTheme(theme, 1.0f);
+
+            // 固定 Mock 分组 + 主题布局（让图里有真实内容，而不是空底板）
+            List<GroupLayoutInfo> groups = ThemePreviewControl.CreateMockGroups();
+            var layout = new UILayout(previewTheme);
+            layout.Build(groups);
+
+            // ★ 正式渲染器四参重载：与主窗口同源的背景层 / 组块 / 外框
+            ThemePreviewControl.RenderPreview(g, groups, previewTheme, new Rectangle(0, 0, size.Width, size.Height));
+        }
+
+        /// <summary>
+        /// 横向经典渲染（与横排主窗口同源）。
+        /// <para>
+        /// 直接调用 <c>HorizontalLayout</c> + <c>HorizontalRenderer</c>（<c>HorizontalPreviewControl</c>
+        /// 的内部同一套），不创建控件实例 ⇒ 无句柄、无 DPI 依赖、无线程亲和要求，结果可复现。
+        /// </para>
+        /// </summary>
+        private static void RenderClassicHorizontal(Graphics g, Theme theme, Size size)
+        {
+            Theme previewTheme = ThemePreviewControl.CreatePreviewTheme(theme, 1.0f);
+
+            // ★ 显式 new Settings()：绝不 Settings.Load()（不读用户磁盘配置）。
+            var settings = new Settings { HorizontalSingleLine = false };
+
+            List<Column> columns = ThemePreviewScene.BuildColumns(ThemePreviewScene.CreateMetrics(), singleLine: false);
+
+            // ★ 测量控件传 null ⇒ 无显示上下文 ⇒ 行高按 96 DPI 基线确定性测量。
+            var layout = new HorizontalLayout(previewTheme, Math.Max(1, size.Width), LayoutMode.Horizontal, settings, null);
+            layout.Build(columns);
+
+            // ★ appearance = null ⇒ 走旧路径（无外观层），与横排生产链逐像素同源。
+            HorizontalRenderer.Render(g, previewTheme, columns, layout.PanelWidth, appearance: null);
+        }
+
         /// <summary>
         /// GPU 路线渲染：隐藏宿主 + <see cref="GpuThemePreviewControl"/> 固定输入回读 PNG。
         ///
@@ -650,7 +718,12 @@ namespace LiteMonitor.ThemeEditor
         ///      于是在有 GPU 的机器上也会静默退回经典帧（实测如此）。
         ///   本线按"显式取 Handle"的方式建链，保证 GPU 路线在有 GPU 的机器上真能出图。
         /// </summary>
-        private static bool TryRenderGpuImage(Theme theme, string path, out string? error)
+        private static bool TryRenderGpuImage(
+            Theme theme,
+            string path,
+            Size size,
+            ThemeExportImageOrientation orientation,
+            out string? error)
         {
             error = null;
 
@@ -678,18 +751,32 @@ namespace LiteMonitor.ThemeEditor
                     ShowInTaskbar = false,
                     StartPosition = FormStartPosition.Manual,
                     Location = new Point(-30000, -30000),
-                    Size = new Size(HorizontalImageWidth + 40, VerticalImageHeight + 60),
+                    Size = new Size(size.Width + 40, size.Height + 60),
                     FormBorderStyle = FormBorderStyle.None,
                     Opacity = 0d
                 };
 
-                var host = new GpuThemePreviewControl(
-                    theme,
-                    ThemePreviewControl.CreateMockGroups(),
-                    guard)
-                {
-                    Bounds = new Rectangle(10, 10, VerticalImageWidth, VerticalImageHeight)
-                };
+                // ★ B-2 整改（计划 §5.2 B-2 修法 1）：方向必须经**构造函数**传入 ——
+                //   导出链走 new GpuThemePreviewControl(...)，从不调用 UpdateTheme，
+                //   所以 shape / horizontalCols 只能走构造形参。
+                //   横向还要显式传 width=size.Width：默认列宽 320 会让 400 宽的画幅铺不满。
+                var host = orientation == ThemeExportImageOrientation.Horizontal
+                    ? new GpuThemePreviewControl(
+                        theme,
+                        ThemePreviewControl.CreateMockGroups(),
+                        guard,
+                        PreviewShape.Horizontal,
+                        HorizontalPreviewMock.BuildColumns(theme, singleLine: false, width: size.Width))
+                    {
+                        Bounds = new Rectangle(10, 10, size.Width, size.Height)
+                    }
+                    : new GpuThemePreviewControl(
+                        theme,
+                        ThemePreviewControl.CreateMockGroups(),
+                        guard)
+                    {
+                        Bounds = new Rectangle(10, 10, size.Width, size.Height)
+                    };
                 owner.Controls.Add(host);
 
                 owner.CreateControl();

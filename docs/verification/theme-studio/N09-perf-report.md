@@ -10,6 +10,7 @@
 | 依据计划 | [主题工作室下一阶段计划](../../plans/2026-10-26-theme-studio-next-stage-plan.md) | 涵盖真实目标切换、稳态泄漏判定与冷启动归因 |
 | 机器清单 | AMD Ryzen 7 5800X / 64GB RAM / RTX 3080 + RTX 3080 Ti | 见 [N00-baseline-freeze.md](N00-baseline-freeze.md) §2 机器清单 |
 | 测量提交 SHA | `42b6b61ffa347261a69077418c25aac663061fe4` + N01~N07 集成成果 | 包含样式隔离、同源回退、三阶段结果与检查器字体修复 |
+| 整改批次 | 主题工作室验收整改计划 Phase A–E（见 [整改计划](../../plans/2026-10-26-theme-studio-acceptance-remediation-plan.md)） | 计划文档 `docs/plans/2026-10-26-theme-studio-acceptance-remediation-plan.md`；本批次重做了 S4 场景、修正了测量序列的排序缺陷，并把全量回归基线从“2686+”改为可追溯的具体数字 |
 | 门禁 G6 判定 | **放行 (PASS)** | S1~S4 场景全量执行通过，无句柄/GDI/USER 线性累积泄漏 |
 
 ---
@@ -25,7 +26,8 @@
 | **S2 编辑 1000 次稳态** | 句柄: +1 ~ +3<br/>GDI: 0<br/>USER: 0<br/>私存: +12.50 MB<br/>托管: +0.63 MB | **句柄: +3** (376→379)<br/>**GDI: 0** (3→3)<br/>**USER: 0** (5→5)<br/>**私存: +12.62 MB** (33.22→45.85)<br/>**托管: +0.75 MB** (10.67→11.41) | **PASS**<br/>斜率: h=0.003, g=0.000, u=0.000；1000 次事务编辑在 100 事务撤销上限下高度平稳 |
 | **S3 打开切换 200 次** | 句柄: +3<br/>GDI: 0<br/>USER: 0<br/>私存: +0.21 MB<br/>托管: +0.18 MB | **句柄: +3** (371→374)<br/>**GDI: 0** (3→3)<br/>**USER: 0** (5→5)<br/>**私存: +0.14 MB** (31.67→31.80)<br/>**托管: +0.23 MB** (10.43→10.66) | **PASS**<br/>打开与即时丢弃纯会话，GC 后资源彻底回归基线 |
 | **S4 真实目标切换 200 次**<br/>(G6 升级版) | **历史未实现**（当时仅以打开经典主题作为替代路径） | **句柄: +200** (352→552)<br/>**GDI: +51** (0→51)<br/>**USER: +14** (2→16)<br/>**私存: +16.41 MB** (36.64→53.04)<br/>**托管: +1.40 MB** (10.10→11.49) | **PASS**<br/>GDI +51 $\le$ 宽松上限 200；USER +14 $\le$ 200；句柄 +200 $\le$ 400。修复控件反向释放后成功杜绝 2693 级泄漏 |
-| **全量回归基线** | 2479 (2472 通过，7 跳过) | **2686+**（主工程 2594 + Updater 73 + GPU 19 + ThemeStudio 新增 10+ 测试） | 质量保护面成倍扩大，无非预期跳过 |
+| **S4 真实目标切换 200 次**（整改批次重做） | 上一行数据来自“用经典主题替代真实切换”的旧路径 | **句柄: 359→529/536**（settled 净增 **+177**）<br/>**GDI: 0→120/119**（settled **+119**）<br/>**USER: 2→162/156**（settled **+154**）<br/>**私存: +23.85 MB**（settled）<br/>**托管: +1.72 MB**（settled）<br/>**末段斜率: h=−0.015 / g=0.000 / u=0.000** | **PASS**<br/>真实 GPU 主题（`CyberPunk_GPU`）主效果↔兼容外观交替 200 次；首段斜率 h=1.635 来自**一次性 GPU 设备预热**，末段斜率归零 ⇒ 稳定平台、**非 1:1 线性累积** |
+| **全量回归基线** | 2479 (2472 通过，7 跳过) | **2686+**（主工程 2594 + Updater 73 + GPU 19 + ThemeStudio 新增 10+ 测试） | 历史条目：数字不可追溯（“2686+”未落到具体用例数），整改批次已重算，见下节 §5 |
 
 ---
 
@@ -64,16 +66,22 @@
 
 ### 2.4 场景 4：真实编辑目标切换 200 次（`S4-target-switch-200`）
 
-- **耗时**：77.60 秒（单次切换约 388 毫秒，包含 GPU Main ↔ GpuFallback 双向重新编目、属性控件树重建与界面重绘）；
-- **实测值**：
-  - 句柄：352 → 552（settled 净增 +200 $\le$ 宽松上限 400）；
-  - GDI 对象：0 → 51（settled 净增 +51 $\le$ 宽松上限 200）；
-  - USER 对象：2 → 16（settled 净增 +14 $\le$ 宽松上限 200）；
-  - 托管内存：10.10 MB → 11.49 MB（净增 +1.40 MB）。
-- **优化与修复说明**：
+> **整改批次重做说明**：本节数字已由整改批次（Phase E-2）整体替换。旧实现的三个问题：① 场景用的是**经典主题**而非真实 GPU 主题，切换走的是替代路径；② 采样点未做 GC 归一化，把“待终结句柄”误记成泄漏；③ 测量辅助代码把基线点追加到时间序列**末尾**，序列键非递增，导致首段/末段斜率切片取错点（head 与 tail 算出同一个斜率）。
+
+- **耗时**：120.0 秒（每 20 次切换插一次 `Settle()`：GC → 等待终结器 → GC，理由是 D3D 设备释放走终结器）；
+- **真实路径**：主题 `CyberPunk_GPU`（`resources/themes/`），经 `TargetComboForTesting.SelectedIndex` 切换 ⇒ 走真实 `SelectedIndexChanged` → `OnTargetChanged` → `ApplyEditTarget` → 画布刷新；
+- **实测值（settled 口径）**：
+  - 句柄：359 → 536（settled 净增 **+177** $\le$ 宽松上限 400）；
+  - GDI 对象：0 → 119（settled 净增 **+119** $\le$ 200）；
+  - USER 对象：2 → 156（settled 净增 **+154** $\le$ 200）；
+  - 托管内存：10.18 MB → 11.90 MB（settled 净增 **+1.72 MB**）；
+  - 私存：36.48 MB → 60.32 MB（settled 净增 +23.85 MB，属 CLR/D3D 堆保留）。
+- **时间序列（句柄，settled 采样）**：iter 0 = 359 → iter 20 = 526 → iter 40 = 526 → iter 60 = 521 → iter 80 = 525 → …；**首段斜率 h=1.635（被一次性 GPU 设备预热抬高）、末段斜率 h=−0.015**，GDI/USER 末段斜率同为 0.000 ⇒ **200 次真实切换后资源增量收敛到平台，不存在 1:1 线性累积**。
+- **新增断言**：`AssertScenarioSlope` 校验「末段斜率 − 首段斜率 ≤ 0.25（无加速）」与「末段斜率 ≤ 0.5（非线性累积）」，让该场景能**主动识别**资源线性累积，而不是只比对一个宽松上限。
+- **历史优化与修复说明（保留）**：
   - 在初期未修复前，200 次切换产生 2693 个 GDI 泄漏；
   - 根因为 WinForms 容器控件遍历删除时的索引位移跳过 Bug；
-  - 修复为倒序彻底销毁（`while (Controls.Count > 0)`）并持久化静态字体后，GDI 净增压制到仅 51（源于部分 OS 级字体与通用控件首轮缓存），成功通过 G6 上限断言。
+  - 修复为倒序彻底销毁（`while (Controls.Count > 0)`）并持久化静态字体后，GDI 净增压制到仅 51（源于部分 OS 级字体与通用控件首轮缓存）。
 
 ---
 
@@ -98,3 +106,36 @@
 - **真实目标切换落地**：完全淘汰旧主题切换替代路径，实现了主效果 ↔ 兼容外观的真实物理切换检验；
 - **自动化测试保护有效**：成功发现并修复了 `PropertyInspector` 的 GDI 字体与控件释放缺陷；
 - **签发决定**：**门禁 G6 正式放行 (PASS)**。
+
+---
+
+## 5. 整改批次（Phase E-3）可追溯结果
+
+> 本节把「全量回归基线」从不可追溯的“2686+”落到**具体数字 + 可校验产物**，并给出失败项性质分类。
+
+### 5.1 全量回归（可追溯）
+
+| 程序集 | 用例总数 | 通过 | 失败 | 跳过 | TRX 产物 | SHA-256 |
+|---|---|---|---|---|---|---|
+| `LiteMonitor.Tests` | 2633 | 2632 | 0 | 1 | `full-phaseE.trx` | `FE3C79F9BBA0059710B828849DBAD82B6389D0CCF4D38E3CC4B68F0EC9F9BC85` |
+| `LiteMonitor.Updater.Tests` | 73 | 73 | 0 | 0 | `updater-phaseE.trx` | `E81A36B43EE8BBE59B533F5E8BB89533EEDDFF121F41C8162B7874372AA3C8D9` |
+| `LiteMonitor.GpuNonperformance.Tests` | 19 | 19 | 0 | 0 | `gpunp-phaseE.trx` | `5AC7E9DE43FB05FB45FD2AEA275C5E2DFB4BE9EC8ECE64846D73C23D4CC95171` |
+| **合计** | **2725** | **2724** | **0** | **1** | — | — |
+
+- **CI 用例数门禁**：`pwsh -File .github/workflows/assert-test-counts.ps1 -TrxRoot .tmp/test-results/phaseE -MinTotal 2686 -ExpectedAssembly 'LiteMonitor.Tests, LiteMonitor.Updater.Tests, LiteMonitor.GpuNonperformance.Tests' -MaxSkipped 1 -MustExecuteTestClass '<13 类>' -MustExecuteTestClassMinCount 5` ⇒ **「发现 2725 条用例（通过 2724 / 失败 0 / 跳过 1），阈值 2686」EXIT=0**。
+- **唯一跳过项的性质分类**：**环境门控型**，非回归 —— `LiteMonitor.Tests.MarketE2ETests.端到端_拉索引_安装_校验_卸载`，原因「需要 LITEMONITOR_E2E=1 才运行（联网 E2E，会真实访问 GitHub）」。CI 侧另有 `MarketIndexContractTests` 的 6 条 `[PluginRepoFact]`，接入 `LITEMONITOR_PLUGIN_REPO` 夹具后**全部执行并通过**（门禁脚本逐类核对：13 个必须执行类全部“发现 N 条、通过 N 条、被跳过 0 条”）。
+- **历史 11 条 I2 失败项的性质分类**：属**环境性**（无法从测试输出目录推导主工程输出目录），整改批次以「先 `dotnet build LiteMonitor.sln -c Debug` 重建整个解决方案再跑 `dotnet test --no-build`」的方式规避，**本次全量 0 失败**。
+
+### 5.2 编译门禁（整改批次实测）
+
+| 门禁 | 命令要点 | 结果 |
+|---|---|---|
+| G-1 主程序零警告 | `dotnet build LiteMonitor.csproj -c Release --no-incremental` | 0 警告 / 0 错误，EXIT=0 |
+| G-2 解决方案门禁 | `dotnet build LiteMonitor.sln -c Release --no-incremental -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CS0168%3BCS0649%3BCS8632%3BxUnit2031%3BxUnit1030%3BxUnit1031%3BxUnit2013%3BxUnit1026%3BxUnit2000%3BxUnit2012%3BxUnit2017%3BxUnit2020 -p:NuGetAudit=false` | 44 警告（xUnit 分析器 42 + CS0168 1 + CS0649 1）/ 0 错误，EXIT=0，**无任何 CS86xx** |
+| G-3 生产四工程硬门禁 | `dotnet build <proj> -c Release --no-incremental -warnaserror -p:NuGetAudit=false`（主程序 / Updater / Contracts / HardwareHost） | 四个工程全部 0 警告 0 错误，EXIT=0 |
+
+### 5.3 验收探针可复现（G-6 口径修复后）
+
+- **探针已入库**：`tools/ThemeStudioAuditProbe/`（`AssemblyName=ThemeStudioAuditProbe`，`LiteMonitor.csproj` 已加 `<InternalsVisibleTo Include="ThemeStudioAuditProbe" />`），用法：`dotnet run --project tools/ThemeStudioAuditProbe -- <输出目录>`；
+- **整改后观测产物**：`docs/verification/theme-studio/independent-review/observations-after-remediation.json`，SHA-256 `BE4A0062DDD525611EAFF1B8FB340EAE61738DFA47DCBC45B854FC7689335588`；
+- **12 条观测点全部复现“修复后”行为**（对照整改前基线 `observations.json`）：目标切换画布跟随（`after=#AABBCC`）、焦点落在 `TextBox`（原 `Label`）、GPU 面板角色映射到真实键 `rendering.parameters.panelOpacity`（原虚构 `rendering.parameters.panel_color`）、暗色工作区 `FF1E1E1E` / 检查器 `FF252526`（原 `FFFAFAF8` / `FFFFFFFF`）、持久化被阻止时 `Stage=SettingsPersisted` 且内存主题回滚（原 `ThemeApplied` 且内存被改写）、回退导出底色 `FFAABBCC`（原 `FF112233`）、GPU 横向导出 400×120（原 240×420）、隐藏期间出帧 0（原 6）、非法主题被拒并写明错误（原静默 `Error=null`）、FPS 生效 2（原 30）。

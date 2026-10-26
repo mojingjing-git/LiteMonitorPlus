@@ -127,6 +127,25 @@ public sealed class GpuThemePreviewControl : Control
     public int CaptureSessionsCreated =>
         _renderer?.CaptureSessionsCreated ?? 0;
 
+    /// <summary>
+    /// 已呈现帧数（★ D-1 可观测量，计划 §5.4 D-1）。
+    /// <para>
+    /// 旧实现没有任何对外可读的"实际出帧"计数 —— 验收报告只能靠反射读
+    /// <c>GpuSceneRenderer._presentedFrames</c> 私有字段才能证明"隐藏后仍在出帧"。
+    /// 这里把生产渲染器已有的 <c>PresentedFrameCount</c> 透出，让隐藏停帧可被断言。
+    /// </para>
+    /// </summary>
+    public int PresentedFrameCount => _renderer?.PresentedFrameCount ?? 0;
+
+    /// <summary>
+    /// 当前调度器目标帧率（★ D-2 可观测量，计划 §5.4 D-2）。
+    /// <para>
+    /// 与 <see cref="UpdateTheme"/> 传入的主题 <c>rendering.motion.targetFps</c> 同步；
+    /// 旧实现只在构造函数里定死，主题改帧率后调度器仍是旧值（实测 requested=2 / actual=30）。
+    /// </para>
+    /// </summary>
+    public int TargetFramesPerSecond => _scheduler.TargetFramesPerSecond;
+
     public bool UpdateTheme(
         Theme theme,
         List<GroupLayoutInfo>? groups = null,
@@ -135,17 +154,27 @@ public sealed class GpuThemePreviewControl : Control
     {
         if (_disposed || !IsHandleCreated || Width <= 0 || Height <= 0)
         {
+            // ★ R6 整改（计划 §5.1 A-3）：失败必须留下原因 ——
+            //   旧代码直接 return false 且不写 _error，调用方拿到的只有「false」，
+            //   既无法提示用户，也无法区分「控件没就绪」与「主题非法」。
+            _error = "preview_not_ready";
             return false;
         }
 
         if (theme?.Rendering == null || !theme.Rendering.IsGpuRequested)
         {
+            _error = "theme_rendering_not_gpu";
             return false;
         }
 
         MaterialKind newMaterial = ResolveMaterial(theme);
-        if (newMaterial == MaterialKind.Legacy || theme.Rendering.Validate().Count > 0)
+        IReadOnlyList<string> validationErrors = theme.Rendering.Validate();
+        if (newMaterial == MaterialKind.Legacy || validationErrors.Count > 0)
         {
+            // ★ R6 整改：把校验明细写进 _error，UI 与测试都能看到「为什么没生效」。
+            _error = validationErrors.Count > 0
+                ? "theme_rendering_invalid: " + string.Join("; ", validationErrors)
+                : "theme_material_legacy";
             return false;
         }
 
@@ -164,6 +193,12 @@ public sealed class GpuThemePreviewControl : Control
         }
 
         _runtimeSettings = MaterialRuntimeSettings.Create(theme.Rendering, newMaterial, theme);
+
+        // ★ D-2 整改（计划 §5.4 D-2）：目标帧率必须同步到调度器 ——
+        //   旧实现只在构造函数里把 FPS 定死，UpdateTheme 重建 _runtimeSettings 之后
+        //   调度器仍按旧值出帧（验收实测 requested=2 / actual=30）。
+        //   与生产链（GpuPresentationHostController.UpdateConfiguration）同一写法。
+        _scheduler.UpdateTargetFramesPerSecond(_runtimeSettings.TargetFramesPerSecond);
 
         if (materialChanged || _renderer is null)
         {
@@ -193,6 +228,11 @@ public sealed class GpuThemePreviewControl : Control
             SetPreviewBackground();
             UpdateScene(shape, horizontalCols);
             SessionUpdateCount++;
+
+            // ★ R6 整改配套：本次更新成功 ⇒ 清除上一轮遗留的失败原因。
+            //   A-3 让失败路径写入 _error 之后，若成功路径不清除，
+            //   一次「非法主题」失败就会让预览永久停留在错误态（后续合法主题也不再生效）。
+            _error = null;
             return true;
         }
         catch (Exception ex)
@@ -402,6 +442,15 @@ public sealed class GpuThemePreviewControl : Control
 
     private void OnTick(object? sender, EventArgs e)
     {
+        // ★ D-1 整改（计划 §5.4 D-1）：隐藏时不再出帧 ——
+        //   切到经典外观/兼容外观时 ThemePreviewControl 会把 _gpuPreview.Visible 置 false，
+        //   但定时器仍在跑、GPU 仍在出帧（验收实测隐藏期间 framesWhileHidden=6）。
+        //   这里按"自身与整条祖先链都可见"判定可见性，隐藏即跳过本次帧。
+        if (!IsEffectivelyVisible())
+        {
+            return;
+        }
+
         if (_renderer is null || _scene is null || !_scheduler.TryTakeFrame(out FrameTick tick))
         {
             return;
@@ -421,6 +470,17 @@ public sealed class GpuThemePreviewControl : Control
         {
             Fail(exception.Message);
         }
+    }
+
+    /// <summary>控件自身与整条祖先链都可见才算可见（隐藏的预览不该继续烧 GPU）。</summary>
+    private bool IsEffectivelyVisible()
+    {
+        for (Control? current = this; current is not null; current = current.Parent)
+        {
+            if (!current.Visible) return false;
+        }
+
+        return true;
     }
 
     /// <summary>

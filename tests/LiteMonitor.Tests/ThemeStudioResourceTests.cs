@@ -90,6 +90,9 @@ namespace LiteMonitor.Tests
 
         private const string ClassicThemeName = "经典蓝";
 
+        /// <summary>★ E-2（G2）：场景 4 必须用**真实 GPU 主题**（否则测不到 GPU 路线）。</summary>
+        private const string GpuThemeName = "CyberPunk_GPU";
+
         private const string ClassicJson = @"{
   ""version"": 3,
   ""name"": ""经典蓝"",
@@ -345,40 +348,89 @@ namespace LiteMonitor.Tests
         // ─────────────────────────── 场景 4 (N09 G6 真实目标切换升级) ───────────────────────────
 
         /// <summary>
-        /// 场景 4（G6 升级版）：真实编辑目标切换 200 次（主效果 ↔ 兼容外观）。
+        /// 场景 4（G6 升级版 · ★ E-2/G2 整改）：真实编辑目标切换 200 次（主效果 ↔ 兼容外观）。
         /// 验证双路线频繁切换时，D3D 会话与 GDI 回退派生之间资源平稳，无句柄或 GDI 泄漏。
+        /// <para>
+        /// ★ E-2 整改（旧实现的问题）：本场景旧版用**经典主题**（<c>经典蓝</c>，无 rendering 块），
+        /// 于是目标切换根本没走 GPU 路线 —— 测的是"没有 GPU 的资源稳定性"，与场景名不符；
+        /// 且旧版只断言净增上限，"1:1 线性累积"与"稳定平台"无法区分。
+        /// 现在：① 改用**真实 GPU 主题**（<c>resources/themes/*_GPU.json</c>，Phase 0 已入库）；
+        /// ② 通过**真实目标下拉**触发（不是测试钩子）；③ 增加**斜率断言**（首段 vs 末段），
+        /// 使"稳定平台"与"持续线性累积"可区分。
+        /// </para>
         /// </summary>
         [Fact]
-        public void 场景4_真实目标切换200次_主效果与兼容外观交替_资源增量不累积()
+        public void 场景4_真实GPU主题真实目标切换200次_主效果与兼容外观交替_资源增量不累积()
         {
-            ScenarioMeasurement measurement = Measure("S4-target-switch-200", 200, checkpoint =>
+            string themesDir = ResolveGpuThemesDirectory();
+            ThemeDocumentStore.SetThemeDirForTests(themesDir);
+            try
             {
-                RunSta(() =>
+                ScenarioMeasurement measurement = Measure("S4-gpu-target-switch-200", 200, checkpoint =>
                 {
-                    try { Application.EnableVisualStyles(); } catch { }
-                    using var form = new ThemeStudioForm();
-                    form.Show();
-                    Application.DoEvents();
-
-                    form.OpenThemeForTesting(ClassicThemeName);
-                    Application.DoEvents();
-
-                    for (int i = 1; i <= 200; i++)
+                    RunSta(() =>
                     {
-                        var target = i % 2 == 0 ? ThemeEditTarget.GpuFallback : ThemeEditTarget.GpuMain;
-                        form.SelectTargetForTesting(target);
+                        try { Application.EnableVisualStyles(); } catch { }
+                        using var form = new ThemeStudioForm();
+                        form.Show();
                         Application.DoEvents();
 
-                        if (i % 20 == 0 || i == 200) checkpoint(i);
-                    }
+                        // ★ E-2：真实 GPU 主题 —— 目标切换才会真的走 GPU 渲染往返。
+                        form.OpenThemeForTesting(GpuThemeName);
+                        Application.DoEvents();
 
-                    form.Close();
-                    Application.DoEvents();
+                        for (int i = 1; i <= 200; i++)
+                        {
+                            // ★ E-2：走**真实目标下拉**（SelectedIndexChanged → OnTargetChanged → ApplyEditTarget）。
+                            form.TargetComboForTesting.SelectedIndex = i % 2 == 0 ? 1 : 0;
+                            Application.DoEvents();
+
+                            if (i % 20 == 0 || i == 200)
+                            {
+                                // ★ E-2：采样点必须**先归一化**（GC + 终结器）——
+                                //   D3D 设备的释放走终结器，不归一化就会把"待终结的句柄"记成"泄漏"，
+                                //   斜率恒为正。归一化后序列反映的是**真正被持有的**资源。
+                                Settle();
+                                checkpoint(i);
+                            }
+                        }
+
+                        form.Close();
+                        Application.DoEvents();
+                    });
                 });
-            });
 
-            AssertScenario(measurement);
-            Report(measurement);
+                AssertScenario(measurement);
+                Report(measurement);
+                AssertScenarioSlope(measurement);
+            }
+            finally
+            {
+                ThemeDocumentStore.SetThemeDirForTests(null);
+            }
+        }
+
+        /// <summary>★ E-2：真实 GPU 主题夹具目录（与 FlagshipGpuThemeTests 同一解析口径）。</summary>
+        private static string ResolveGpuThemesDirectory()
+        {
+            string direct = Path.Combine(AppContext.BaseDirectory, "resources", "themes");
+            if (Directory.Exists(direct) && File.Exists(Path.Combine(direct, GpuThemeName + ".json")))
+            {
+                return direct;
+            }
+
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir != null)
+            {
+                string candidate = Path.Combine(dir.FullName, "resources", "themes");
+                if (Directory.Exists(candidate) && File.Exists(Path.Combine(candidate, GpuThemeName + ".json")))
+                {
+                    return candidate;
+                }
+                dir = dir.Parent;
+            }
+
+            throw new DirectoryNotFoundException("未能定位到 resources/themes 目录（场景 4 需要真实 GPU 主题）。");
         }
 
         private static void RunSta(Action action)
@@ -454,10 +506,34 @@ namespace LiteMonitor.Tests
             /// <summary>时间序列的最小二乘斜率（每次迭代增量）。样本不足时返回 null。</summary>
             public double? SlopePerIteration(Func<ResourceSample, double> selector)
             {
-                if (Series.Count < 2) return null;
-                double x0 = Series[0].Key;
+                return SlopeOf(Series, selector);
+            }
+
+            /// <summary>
+            /// ★ E-2（G2）：取时间序列的**首段**或**末段**斜率。
+            /// <para>
+            /// 用途：区分「稳定平台」与「1:1 线性累积」——
+            /// 稳定平台的末段斜率趋近 0；线性累积的末段斜率与首段相同且不为 0。
+            /// </para>
+            /// </summary>
+            public double? SegmentSlope(Func<ResourceSample, double> selector, bool tail, int segmentSize)
+            {
+                if (Series.Count < 2 || segmentSize < 2) return null;
+
+                List<KeyValuePair<int, ResourceSample>> segment = tail
+                    ? Series.Skip(Math.Max(0, Series.Count - segmentSize)).ToList()
+                    : Series.Take(segmentSize).ToList();
+                return SlopeOf(segment, selector);
+            }
+
+            private static double? SlopeOf(
+                List<KeyValuePair<int, ResourceSample>> points,
+                Func<ResourceSample, double> selector)
+            {
+                if (points.Count < 2) return null;
+                double x0 = points[0].Key;
                 double sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-                foreach (KeyValuePair<int, ResourceSample> point in Series)
+                foreach (KeyValuePair<int, ResourceSample> point in points)
                 {
                     double x = point.Key - x0;
                     double y = selector(point.Value);
@@ -467,7 +543,7 @@ namespace LiteMonitor.Tests
                     sumXX += x * x;
                 }
 
-                double n = Series.Count;
+                double n = points.Count;
                 double denom = n * sumXX - sumX * sumX;
                 if (Math.Abs(denom) < 1e-9) return null;
                 return (n * sumXY - sumX * sumY) / denom;
@@ -509,8 +585,11 @@ namespace LiteMonitor.Tests
                 AfterSettled = afterSettled,
             };
 
-            m.Series.Add(new KeyValuePair<int, ResourceSample>(0, before));
+            // ★ E-2（G2）：时间序列必须按迭代序号**递增**排列。
+            //   基线点（迭代 0）必须排在最前，否则首段/末段切片会取到错误的点，
+            //   斜率会失真（此前基线点被追加到末尾，导致 head 与 tail 算出同一个斜率）。
             m.Series.AddRange(series);
+            m.Series.Insert(0, new KeyValuePair<int, ResourceSample>(0, before));
             return m;
         }
 
@@ -565,6 +644,41 @@ namespace LiteMonitor.Tests
                 m.Label + "：句柄 settled 增量 " + m.SettledHandleDelta + " > 宽松上限 " + MaxHandleDelta);
         }
 
+        /// <summary>
+        /// ★ E-2（G2）斜率断言：把「稳定平台」与「1:1 线性累积」区分开。
+        /// <para>
+        /// 旧实现只断言"净增不超过宽松上限"，于是两种曲线都能过：
+        ///   · 稳定平台 —— 资源在预热后不再增长（末段斜率 ≈ 0）；
+        ///   · 1:1 线性累积 —— 每次切换净增 1 个句柄（末段斜率 ≈ 1，与首段相同）。
+        /// 这里取时间序列的**首段**与**末段**斜率对比：
+        ///   ① 末段不得显著高于首段（无加速增长）；
+        ///   ② 末段斜率必须低于"每次迭代净增 1"的水平（不是线性累积）。
+        /// </para>
+        /// </summary>
+        private static void AssertScenarioSlope(ScenarioMeasurement m)
+        {
+            const int segment = 5;
+            const double LinearAccumulationSlope = 0.5;   // 1:1 线性累积 ≈ 1.0，留一半余量
+            const double AccelerationTolerance = 0.25;    // 末段相对首段的允许增幅
+
+            double? head = m.SegmentSlope(s => s.Handles, tail: false, segment);
+            double? tail = m.SegmentSlope(s => s.Handles, tail: true, segment);
+
+            Assert.True(head.HasValue && tail.HasValue,
+                m.Label + "：句柄时间序列样本不足，无法做斜率判定（head=" + Fmt(head) + ", tail=" + Fmt(tail) + "）。");
+
+            double headValue = head!.Value;
+            double tailValue = tail!.Value;
+
+            Assert.True(tailValue - headValue <= AccelerationTolerance,
+                m.Label + "：句柄增量在末段加速（首段斜率 " + Fmt(head) + " → 末段斜率 " + Fmt(tail) +
+                "），疑似资源泄漏。");
+
+            Assert.True(tailValue <= LinearAccumulationSlope,
+                m.Label + "：句柄增量呈 1:1 线性累积（末段斜率 " + Fmt(tail) + "，每次切换净增约 " +
+                Fmt(tail) + " 个句柄），不是稳定平台。");
+        }
+
         // ─────────────────────────── 输出格式化 ───────────────────────────
 
         private static void Report(ScenarioMeasurement m)
@@ -600,6 +714,12 @@ namespace LiteMonitor.Tests
                 "slopePerIter: h=" + Fmt(m.SlopePerIteration(s => s.Handles)) +
                     " g=" + Fmt(m.SlopePerIteration(s => s.Gdi)) +
                     " u=" + Fmt(m.SlopePerIteration(s => s.User)),
+                "slopeHeadTail: h=" + Fmt(m.SegmentSlope(s => s.Handles, tail: false, 5)) +
+                    "/" + Fmt(m.SegmentSlope(s => s.Handles, tail: true, 5)) +
+                    " g=" + Fmt(m.SegmentSlope(s => s.Gdi, tail: false, 5)) +
+                    "/" + Fmt(m.SegmentSlope(s => s.Gdi, tail: true, 5)) +
+                    " u=" + Fmt(m.SegmentSlope(s => s.User, tail: false, 5)) +
+                    "/" + Fmt(m.SegmentSlope(s => s.User, tail: true, 5)),
                 "series[" + series + "]");
         }
 

@@ -1,7 +1,7 @@
 # 主题工作室 N00–N10 独立验收整改计划
 
 - 日期：2026-10-26。
-- 状态：**独立审核「有条件通过」→ v2.1 修订版**（首轮必须修改 M-1…M-5 与次要修改 S-1…S-13 已全部吸收；v2 聚焦复审的 1 必须项 V2-M-1 与 6 次要项 V2-S-1…V2-S-6 亦已全部吸收；复审确认「M-1…M-5 / S-1…S-13 全部已正确吸收，无残留」）。
+- 状态：**独立审核「有条件通过」→ v2.2 执行完毕版**（首轮必须修改 M-1…M-5 与次要修改 S-1…S-13 已全部吸收；v2 聚焦复审的 1 必须项 V2-M-1 与 6 次要项 V2-S-1…V2-S-6 亦已全部吸收；复审确认「M-1…M-5 / S-1…S-13 全部已正确吸收，无残留」；**Phase 0–E 已全部实施完毕并通过全部门禁**，详见 §8 执行记录）。
 - 触发：[独立验收报告](../reviews/2026-10-26-theme-studio-next-stage-acceptance-review.md)结论为「**不通过**」——10 条问题 R1–R10 + 3 条证据缺口 G1–G3；非资源 ThemeStudio 专项 31/31 通过，但真实路径探针复现了失效；全量未取得有效完成结果。
 - 观察基线：master @ `2527ae0`（可空引用治理 Phase 0–5 已合入）+ **未提交工作树**（theme-studio WIP）。开工时重新记录实际 SHA 与工作树差异。
 - 衔接：[重做计划](2026-10-26-theme-studio-rebuild-plan.md)、[下一阶段计划](2026-10-26-theme-studio-next-stage-plan.md)、[并行计划](2026-10-26-theme-studio-parallel-plan.md)、[优化意图计划](2026-10-26-theme-studio-optimization-intent-plan.md)、[可空引用治理计划](2026-10-26-nullable-warnings-remediation-plan.md)（已 v2.4 实施完毕）。
@@ -418,13 +418,22 @@ theme-studio WIP 尚未提交，是本批的隐含基线。**必须先把它与�
 
 | 批次 | 提交 | 消除项 | 验收结果 | 备注 |
 |---|---|---|---|---|
-| Phase 0（基线固化） | | WIP + 报告 + 证据 + 探针 + 夹具入库；`.cua-helper/` 入 gitignore | | |
-| Phase A | | R2 / R1 / R6 / R3 | | |
-| Phase B | | R4 / R5 / R11 | | |
-| Phase C | | R7（C-1a：映射/自检/焦点）/ R8 | | C-1b 默认不在本批 |
-| Phase D | | R9 / R10 | | |
-| Phase E | | G1 / G2 / G3 | | |
-| Phase F（可选） | | R7 命中接线（C-1b） | | 需用户先批准选型 |
+| Phase 0（基线固化） | `1bc53cf` | WIP + 报告 + 证据 + 探针 + 夹具入库；`.cua-helper/` 入 gitignore | 46 files changed, +5351 / −228；探针构建 0 警告 0 错误、实跑 EXIT=0 且 12 条观测点逐条复现整改前缺陷；**重跑产物与既有证据 SHA-256 逐字节一致**（`6FEEE395…`） | 9 个 docs 删除**明确排除**（`docs/archive/` 归档副本不入库，属另一条文档线决策） |
+| Phase A | 本次提交* | R2 / R1 / R6 / R3 | 探针：`blocked_save` → `Stage=SettingsPersisted` + 内存主题回滚；`target_switch` → `after=#AABBCC` == expected；`invalid_update` → `accepted=false` + `Error` 写明原因；`invalid_update_parent` → `IsGpuPreviewActive=false` + 错误可见 | A-4 的路线判定**不用** `RenderingTransitionCoordinator`（其路由由渲染线程异步发布，同步读取有竞态），改由主题声明 + `IsGpuPresentationActive` + 降级码三源合成；降级码保留 |
+| Phase B | 本次提交* | R4 / R5 / R11 | 探针：`fallback_export.bgPixel=FFAABBCC`（原 `FF112233`）；`gpu_horizontal_export` = 400×120 == expected（原 240×420） | B-3 的自检写入既有 `marketValidation.reviewRequired`，**不改写 `submission.json` 的 `route` 合同字段**（审核 M-1） |
+| Phase C | 本次提交* | R7（C-1a：映射/自检/焦点）/ R8 | 自检新增 5 用例（`ThemeStudioAcceptanceRemediationTests.cs`）全通过；探针 `focus_property.activeControl=TextBox`（原 `Label`）、`gpu_background_selection.mapped=rendering.parameters.panelOpacity`（原虚构 `rendering.parameters.panel_color`）、`dark_mode` 工作区 `FF1E1E1E` / 检查器 `FF252526` | C-1b **命中接线**（GPU 侧像素→语义角色拾取）按计划默认排除为 Phase F，需用户先批准选型；既有 N05 用例一度打红，根因是 `Control.CanFocus` 在窗体未 `Show()` 时整条父链返回 false，已改为只排除 `Label` 家族 |
+| Phase D | 本次提交* | R9 / R10 | 探针：`hidden_gpu.framesWhileHidden=0`（原 6）、`fps_update.actual=2`（原 30） | D-2 同步了生产同款调用 `_scheduler.UpdateTargetFramesPerSecond(...)`；`OnTick` 增可见性守卫 |
+| Phase E | 本次提交* | G1 / G2 / G3 | **G-1** 主程序 Release 0 警告 0 错误；**G-2** sln 门禁 44 警告（xUnit 42 + CS0168 + CS0649）0 错误、无任何 CS86xx；**G-3** 生产四工程 `-warnaserror` 全部 EXIT=0；**G-5** 用例数门禁「发现 2725 条（通过 2724 / 失败 0 / 跳过 1），阈值 2686」EXIT=0；**G-6** 探针已入库可复现 | E-1 另补 DPI 换算接线与自动化断言；**N08 矩阵把 M-03…M-06 / M-12 / M-13 由 PASS 下调为 NOT-VERIFIED**（原判据只覆盖换算逻辑，不等于实机档位可用），并新增暗色组合行 M-14；E-2 重做了 S4 场景并修正了测量序列排序缺陷 |
+| Phase F（可选） | — | R7 命中接线（C-1b） | 未实施 | 需用户先批准选型（GPU 侧：布局反查 vs D3D 拾取） |
+
+### 8.1 执行摘要（Phase 0–E）
+
+* Phase A–E 合并为一次提交：`fix(theme-studio): 验收整改 Phase A–E —— 状态可信、导出正确、交互外观、资源调度、证据门禁`（提交哈希见本文件所在提交的 git log；因 §8 位于同一提交内，不内嵌自引用哈希）。
+- **缺陷闭环**：R1–R11 全部落地并由探针/自动化断言逐条验证；其中 R11 按审核 M-2 保持 **P2**（`route` 是合同字段，实际路线由 `previewRoute` / `previewIsFallback` 承载，不存在「元数据写 fallback」的矛盾）。
+- **零警告成果未被破坏**：`LiteMonitor.csproj` Release 构建 **0 警告 0 错误**（可空引用治理 Phase 0–5 的成果保持）。
+- **全量回归**：2725 条用例（通过 2724 / 失败 0 / 跳过 1），唯一跳过项为环境门控的联网 E2E（`MarketE2ETests.端到端_拉索引_安装_校验_卸载`），CI 侧 13 个必须执行类全部「通过 N 条、跳过 0 条」。
+- **证据可追溯**：全量 TRX 三份 + 整改后探针观测 JSON 均带 SHA-256（见 [N09 报告](../verification/theme-studio/N09-perf-report.md) §5）。
+- **诚实标注**：N08 矩阵中 6 项判定由 PASS 下调为 NOT-VERIFIED；N09 的「2686+」改为具体数字 2725。
 
 ---
 

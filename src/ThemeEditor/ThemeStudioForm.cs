@@ -7,6 +7,7 @@ using System.Text.Json.Nodes;
 using System.Windows.Forms;
 using LiteMonitor.Rendering;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.UI.SettingsPage;
 
 namespace LiteMonitor.ThemeEditor
 {
@@ -26,13 +27,27 @@ namespace LiteMonitor.ThemeEditor
         private const int DefaultHeightDip = 760;
 
         private static readonly Color LibraryBack = Color.FromArgb(0xF3, 0xF1, 0xEE);
-        private static readonly Color LibraryItemSelected = Color.FromArgb(0xDC, 0xE7, 0xF8);
         private static readonly Color AccentBlue = Color.FromArgb(0x2F, 0x6F, 0xED);
         private static readonly Color CanvasBack = Color.FromArgb(0xFA, 0xFA, 0xF8);
+
+        /// <summary>
+        /// 预览画布底色 —— ★ **主题产物**，不参与工作区明暗（计划 §5.3 C-2 排除项）：
+        /// 画布显示的是"主题在该主题下的真实观感"，被工作区明暗染色就等于伪造预览。
+        /// </summary>
         private static readonly Color PreviewBack = Color.FromArgb(0xFF, 0xFF, 0xFF);
-        private static readonly Color Hairline = Color.FromArgb(0xE5, 0xE3, 0xDF);
         private static readonly Color TextMuted = Color.FromArgb(0x6B, 0x72, 0x80);
-        private static readonly Color TextStrong = Color.FromArgb(0x2A, 0x2C, 0x30);
+
+        /// <summary>
+        /// ★ C-2（R8）：工作区配色来自**既有明暗引擎**（<see cref="SettingsThemeManager"/>），
+        /// 不再是文件内的硬编码浅色常量。
+        /// <para>
+        /// 旧实现把 8 个浅色值写死成 static readonly Color（文件内 <c>IsDark</c>/<c>Palette</c> 零命中），
+        /// 于是暗色模式下工作区仍是浅色（实测 actualBack=FFFAFAF8、actualInspectorBack=FFFFFFFF）。
+        /// 现在统一读 <c>SettingsThemeManager.CurrentPalette</c>，并订阅 <c>ThemeChanged</c>
+        /// 以便窗口已打开时跟随系统主题切换同步。
+        /// </para>
+        /// </summary>
+        private SettingsThemePalette _palette = SettingsThemePalette.Light;
 
         /// <summary>
         /// 资料库副标题字体（进程内单实例）。
@@ -43,6 +58,15 @@ namespace LiteMonitor.ThemeEditor
 
         private Func<int, int> _dip = v => v;
         private int Dip(int value) => _dip(value);
+
+        /// <summary>★ E-1（G1）：DPI 变化后需要按新 DeviceDpi 重算的固定几何清单。</summary>
+        private readonly List<Action<int>> _dpiResetters = new();
+
+        /// <summary>★ E-1（G1）：最近一次生效的设备 DPI（用于算缩放比）。</summary>
+        private int _lastDeviceDpi = 96;
+
+        private static int ScaleDip(int value, int deviceDpi) =>
+            (int)Math.Round(value * deviceDpi / 96.0);
 
         private readonly List<(string Name, string Subtitle)> _themes = new();
         private ListBox _libraryList = null!;
@@ -75,6 +99,10 @@ namespace LiteMonitor.ThemeEditor
         private string _selectedTheme = string.Empty;
         private readonly System.Windows.Forms.Timer _recoveryTimer;
         private Panel _libraryPanel = null!;
+        private Panel _libraryButtons = null!;
+        private Label _libraryTitle = null!;
+        private Panel _canvasPanel = null!;
+        private ToolStrip _canvasToolbar = null!;
         private bool _suppressSelection;
 
         /// <summary>应用执行阶段（N06 三阶段模型）。</summary>
@@ -118,10 +146,13 @@ namespace LiteMonitor.ThemeEditor
 
             _ = Handle; // 取 DeviceDpi 前先建句柄
             _dip = value => (int)Math.Round(value * DeviceDpi / 96.0);
+            _lastDeviceDpi = DeviceDpi;
             ClientSize = new Size(Dip(DefaultWidthDip), Dip(DefaultHeightDip));
             MinimumSize = new Size(Dip(720), Dip(480));
 
             BuildUi();
+            // ★ E-1（G1）：检查器内部固定像素布局同样按当前 DeviceDpi 换算（计划 §7 DPI 合同）。
+            _inspector.ApplyDpi(DeviceDpi);
             ReloadThemeList();
             RegisterShortcuts();
 
@@ -189,12 +220,14 @@ namespace LiteMonitor.ThemeEditor
                 ForeColor = TextMuted,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold),
             };
+            _libraryTitle = libraryTitle;
             var libraryButtons = new Panel
             {
                 Dock = DockStyle.Bottom,
                 Height = Dip(34),
                 BackColor = LibraryBack,
             };
+            _libraryButtons = libraryButtons;
             var newButton = new Button
             {
                 Text = "新建",
@@ -255,6 +288,7 @@ namespace LiteMonitor.ThemeEditor
 
             // === 画布（中栏）===
             var canvas = new Panel { Dock = DockStyle.Fill, BackColor = CanvasBack, Padding = new Padding(Dip(16)) };
+            _canvasPanel = canvas;
             _previewHost = new Panel
             {
                 Dock = DockStyle.Fill,
@@ -263,7 +297,7 @@ namespace LiteMonitor.ThemeEditor
             };
             _previewHost.Paint += (_, e) =>
             {
-                using var pen = new Pen(Hairline);
+                using var pen = new Pen(_palette.Border);
                 e.Graphics.DrawRectangle(pen, 0, 0, _previewHost.Width - 1, _previewHost.Height - 1);
             };
             _previewPlaceholder = new Label
@@ -314,6 +348,7 @@ namespace LiteMonitor.ThemeEditor
                 [_targetLabel, _targetCombo, new ToolStripSeparator(), routeHint,
                  new ToolStripSeparator(), new ToolStripLabel("预览形态：") { ForeColor = TextMuted },
                  _shapeCombo, _shapeNotice]);
+            _canvasToolbar = canvasToolbar;
             canvas.Controls.Add(canvasToolbar);
 
             // 同源预览（TE04 首批）：复用生产渲染路径的经典/GPU 预览控件。
@@ -370,6 +405,93 @@ namespace LiteMonitor.ThemeEditor
             Controls.Add(_inspector);
             Controls.Add(library);
             Controls.Add(_docToolbar);
+
+            // ★ E-1（G1）：登记 DPI 重算清单。
+            //   本窗体 AutoScaleMode.None（计划 §7 合同），所有固定几何都经 Dip() 换算，
+            //   但换算只在构造时做了一次 —— 窗口跨不同 DPI 的显示器后不会重算。
+            //   这里把所有固定尺寸集中登记，DPI 变化时按新 DeviceDpi 统一重算。
+            RegisterDpiGeometry(library, libraryTitle, libraryButtons, newButton, duplicateButton, deleteButton, canvas);
+
+            // ★ C-2（R8）：工作区配色跟随既有明暗引擎；窗口已打开时随系统主题切换同步。
+            ApplyWorkspacePalette();
+            SettingsThemeManager.ThemeChanged += OnWorkspaceThemeChanged;
+        }
+
+        /// <summary>★ E-1（G1）：登记全部固定尺寸几何（分栏宽度、列表行高、工具栏控件宽、画布内边距）。</summary>
+        private void RegisterDpiGeometry(
+            Panel library,
+            Label libraryTitle,
+            Panel libraryButtons,
+            Button newButton,
+            Button duplicateButton,
+            Button deleteButton,
+            Panel canvas)
+        {
+            _dpiResetters.Clear();
+            _dpiResetters.Add(dpi => library.Width = ScaleDip(220, dpi));
+            _dpiResetters.Add(dpi => library.Padding = new Padding(ScaleDip(8, dpi), ScaleDip(8, dpi), ScaleDip(4, dpi), ScaleDip(4, dpi)));
+            _dpiResetters.Add(dpi => libraryTitle.Height = ScaleDip(28, dpi));
+            _dpiResetters.Add(dpi => libraryButtons.Height = ScaleDip(34, dpi));
+            _dpiResetters.Add(dpi =>
+            {
+                newButton.Width = ScaleDip(56, dpi);
+                duplicateButton.Width = ScaleDip(56, dpi);
+                deleteButton.Width = ScaleDip(56, dpi);
+            });
+            _dpiResetters.Add(dpi => _libraryList.ItemHeight = ScaleDip(40, dpi));
+            _dpiResetters.Add(dpi => _inspector.Width = ScaleDip(300, dpi));
+            _dpiResetters.Add(dpi => canvas.Padding = new Padding(ScaleDip(16, dpi)));
+            _dpiResetters.Add(dpi => _targetCombo.Width = ScaleDip(180, dpi));
+            _dpiResetters.Add(dpi => _shapeCombo.Width = ScaleDip(150, dpi));
+            _dpiResetters.Add(dpi => _docToolbar.Padding = new Padding(ScaleDip(6, dpi), ScaleDip(3, dpi), ScaleDip(6, dpi), ScaleDip(3, dpi)));
+        }
+
+        /// <summary>
+        /// ★ E-1（G1）：DPI 变化后重算固定几何。
+        /// <para>
+        /// 触发源：<c>WM_DPICHANGED</c>（跨显示器）与 <c>DpiChangedAfterParent</c>。
+        /// 两者都会先让 WinForms 更新 <see cref="DeviceDpi"/>，再回调到这里重排。
+        /// </para>
+        /// </summary>
+        internal void ApplyDpiScale(int deviceDpi)
+        {
+            if (deviceDpi <= 0) return;
+            if (_lastDeviceDpi <= 0) _lastDeviceDpi = deviceDpi;
+            if (deviceDpi == _lastDeviceDpi) return;
+
+            _dip = value => ScaleDip(value, deviceDpi);
+            foreach (Action<int> reset in _dpiResetters)
+            {
+                reset(deviceDpi);
+            }
+
+            _inspector.ApplyDpi(deviceDpi);
+            MinimumSize = new Size(ScaleDip(720, deviceDpi), ScaleDip(480, deviceDpi));
+            _lastDeviceDpi = deviceDpi;
+            Invalidate(true);
+        }
+
+        protected override void OnDpiChangedAfterParent(EventArgs e)
+        {
+            base.OnDpiChangedAfterParent(e);
+            ApplyDpiScale(DeviceDpi);
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            // WM_DPICHANGED = 0x02E0：base.WndProc 已更新 DeviceDpi，这里补做几何重算。
+            if (m.Msg == 0x02E0)
+            {
+                ApplyDpiScale(DeviceDpi);
+            }
+        }
+
+        /// <summary>系统/用户主题切换 ⇒ 重刷工作区配色（预览画布不受影响，见 C-2 排除项）。</summary>
+        private void OnWorkspaceThemeChanged(object? sender, EventArgs e)
+        {
+            if (IsDisposed) return;
+            ApplyWorkspacePalette();
         }
 
         private void DrawLibraryItem(object? sender, DrawItemEventArgs e)
@@ -381,25 +503,77 @@ namespace LiteMonitor.ThemeEditor
 
             (string name, string subtitle) = _themes[e.Index];
             bool selected = (e.State & DrawItemState.Selected) != 0;
-            using var backBrush = new SolidBrush(selected ? LibraryItemSelected : list.BackColor);
+            using var backBrush = new SolidBrush(selected ? _palette.NavSelected : list.BackColor);
             e.Graphics.FillRectangle(backBrush, e.Bounds);
             if (selected)
             {
-                using var accentBrush = new SolidBrush(AccentBlue);
+                using var accentBrush = new SolidBrush(_palette.Primary);
                 e.Graphics.FillRectangle(accentBrush, e.Bounds.Left, e.Bounds.Top, Dip(3), e.Bounds.Height);
             }
 
             var nameRect = new Rectangle(e.Bounds.Left + Dip(12), e.Bounds.Top + Dip(5), e.Bounds.Width - Dip(16), Dip(16));
             var subRect = new Rectangle(e.Bounds.Left + Dip(12), e.Bounds.Top + Dip(22), e.Bounds.Width - Dip(16), Dip(14));
-            TextRenderer.DrawText(e.Graphics, name, Font, nameRect, TextStrong);
-            TextRenderer.DrawText(e.Graphics, subtitle, _librarySubtitleFont, subRect, TextMuted);
+            TextRenderer.DrawText(e.Graphics, name, Font, nameRect, _palette.TextMain);
+            TextRenderer.DrawText(e.Graphics, subtitle, _librarySubtitleFont, subRect, _palette.TextSub);
             e.DrawFocusRectangle();
+        }
+
+        /// <summary>
+        /// ★ C-2（R8）：把**工作区**配色对齐到既有明暗引擎的当前配色
+        /// （<see cref="SettingsThemeManager.CurrentPalette"/>）。
+        /// <para>
+        /// 排除项：预览画布（<c>_previewHost</c> 与各预览控件）保持主题产物本色 ——
+        /// 画布显示的是主题真实观感，被工作区明暗染色等于伪造预览。
+        /// </para>
+        /// </summary>
+        private void ApplyWorkspacePalette()
+        {
+            SettingsThemePalette palette = SettingsThemeManager.CurrentPalette;
+            _palette = palette;
+
+            BackColor = palette.MainBg;
+            _canvasPanel.BackColor = palette.MainBg;
+            _canvasToolbar.BackColor = palette.MainBg;
+            _libraryPanel.BackColor = palette.SidebarBg;
+            _libraryButtons.BackColor = palette.SidebarBg;
+            _libraryTitle.ForeColor = palette.TextSub;
+            _libraryList.BackColor = palette.SidebarBg;
+            _status.BackColor = palette.SidebarBg;
+            _statusSaved.ForeColor = palette.TextMain;
+            _statusRoute.ForeColor = palette.TextSub;
+            _inspector.BackColor = palette.CardBg;
+            _inspector.ApplyPalette(palette);
+            _docToolbar.BackColor = palette.CardBg;
+            _previewPlaceholder.BackColor = palette.SurfaceBg;
+            _previewPlaceholder.ForeColor = palette.TextSub;
+            _targetLabel.ForeColor = palette.TextSub;
+            _shapeNotice.ForeColor = palette.TextSub;
+
+            // 工具栏里的说明文字统一走次要文字色；强调点（未保存标记）单独用强调色。
+            foreach (ToolStripItem canvasItem in _canvasToolbar.Items)
+            {
+                if (canvasItem is ToolStripLabel canvasLabel) canvasLabel.ForeColor = palette.TextSub;
+            }
+            foreach (ToolStripItem docItem in _docToolbar.Items)
+            {
+                if (docItem is ToolStripLabel docLabel) docLabel.ForeColor = palette.TextSub;
+            }
+            _docName.ForeColor = palette.TextMain;
+            _dirtyDot.ForeColor = palette.Primary;
+
+            // 预览画布保持主题产物本色（排除项）。
+            _previewHost.BackColor = PreviewBack;
+
+            _libraryList.Invalidate();
+            _previewHost.Invalidate();
+            Invalidate();
         }
 
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
+                SettingsThemeManager.ThemeChanged -= OnWorkspaceThemeChanged;
                 _librarySubtitleFont.Dispose();
                 _previewDebounce?.Dispose();
                 _recoveryTimer?.Dispose();
@@ -1099,7 +1273,17 @@ namespace LiteMonitor.ThemeEditor
         /// <summary>按语义角色点选定位到检查器对应的属性字段（N05）。</summary>
         public bool SelectPropertyByRole(ThemePropertyCatalog.SemanticElementRole role)
         {
-            string path = ThemePropertyCatalog.ResolvePropertyPath(role, _inspector.Target);
+            // ★ C-1a：按**当前草稿**解析 —— GPU 主效果的可编辑字段随材质不同，
+            //   只有草稿感知的解析才会给出该目标下真实存在的描述符路径。
+            Theme? draft = _session?.Draft;
+            string path = ThemePropertyCatalog.ResolvePropertyPath(draft, role, _inspector.Target);
+            if (path.Length == 0)
+            {
+                // 诚实告知"没有可编辑字段"，而不是指一个不存在的路径。
+                _statusSaved.Text = "该编辑目标下没有与该语义元素对应的可编辑字段。";
+                return false;
+            }
+
             bool focused = _inspector.FocusProperty(path);
             if (focused)
             {
@@ -1153,9 +1337,30 @@ namespace LiteMonitor.ThemeEditor
                 ? ThemeEditTarget.GpuFallback
                 : (_session.Draft.Rendering?.IsGpuRequested == true ? ThemeEditTarget.GpuMain : ThemeEditTarget.Classic);
 
+            ApplyEditTarget(target, syncSelector: false);
+        }
+
+        /// <summary>
+        /// 切换编辑目标的**唯一入口**（真实下拉与测试钩子共用）。
+        /// <para>
+        /// ★ R1 整改（计划 §5.1 A-2）：画布渲染目标由 <c>_inspector.Target</c> 决定
+        /// （见 <see cref="RefreshPreviewNow"/> 的 default 分支），因此目标切换后
+        /// **必须刷新画布** —— 旧实现只重绑检查器与状态栏，画布仍显示上一个目标的主题，
+        /// 用户看到的是「改了没反应」。目标切换是低频离散操作，直接同步刷新（不做防抖）。
+        /// </para>
+        /// </summary>
+        private void ApplyEditTarget(ThemeEditTarget target, bool syncSelector)
+        {
+            if (_session is null) return;
+
             // 只切换文档视图：不修改 rendering.backend，不触发换肤。
             _inspector.Bind(_session, target);
+            if (syncSelector)
+            {
+                ConfigureTargetSelector();
+            }
             UpdateRouteStatus();
+            RefreshPreviewNow();
         }
 
         private void UpdateDocumentUi()
@@ -1221,17 +1426,51 @@ namespace LiteMonitor.ThemeEditor
 
         internal void OpenThemeForTesting(string themeName) => OpenTheme(themeName);
 
+        /// <summary>★ E-1（G1）：模拟 DPI 变化，触发固定几何重算（测试可观测）。</summary>
+        internal void ApplyDpiScaleForTesting(int deviceDpi) => ApplyDpiScale(deviceDpi);
+
+        /// <summary>★ E-1（G1）：资料库分栏宽度（测试可观测）。</summary>
+        internal int LibraryPanelWidthForTesting => _libraryPanel.Width;
+
+        /// <summary>★ E-1（G1）：检查器分栏宽度（测试可观测）。</summary>
+        internal int InspectorWidthForTesting => _inspector.Width;
+
+        /// <summary>★ E-1（G1）：资料库列表行高（测试可观测）。</summary>
+        internal int LibraryItemHeightForTesting => _libraryList.ItemHeight;
+
+        /// <summary>★ E-2（G2）：真实编辑目标下拉（测试用它触发**真实**目标事件，而非测试钩子）。</summary>
+        internal ToolStripComboBox TargetComboForTesting => _targetCombo;
+
         internal void RefreshPreviewForTesting() => RefreshPreviewNow();
 
         internal PropertyInspector InspectorForTesting => _inspector;
 
+        /// <summary>
+        /// 测试/诊断钩子：画布当前**实际渲染**的编辑目标（R1 整改新增可观测量）。
+        /// 与检查器当前绑定的 Target 不同 —— R1 修复前两者会长期不一致
+        /// （检查器切了，画布没切）。
+        /// </summary>
+        internal ThemeEditTarget? RenderedTargetForTesting => _preview?.RenderedTarget;
+
+        /// <summary>
+        /// 测试/诊断钩子：画布当前渲染主题的背景色（R1 整改新增可观测量）。
+        /// 回退目标下画布渲染的是派生主题 ⇒ 此处是派生主题的背景色，
+        /// 与草稿主题的背景色不同，可直接作为「目标切换是否真的作用到画布」的证据。
+        /// </summary>
+        internal string? RenderedBackgroundForTesting => _preview?.RenderedTheme?.Color.Background;
+
+        /// <summary>测试/诊断钩子：GPU 预览会话代次（R6 整改新增可观测量）。</summary>
+        internal long PreviewGenerationForTesting => _preview?.CurrentGeneration ?? 0;
+
+        /// <summary>测试/诊断钩子：GPU 预览错误信息（R6 整改：UpdateTheme 失败必须可诊断）。</summary>
+        internal string? PreviewErrorForTesting => _preview?.GpuPreviewError;
+
         /// <summary>测试钩子：按编辑目标重绑检查器（等价于画布工具栏切换）。</summary>
         internal void SelectTargetForTesting(ThemeEditTarget target)
         {
-            if (_session is null) return;
-            _inspector.Bind(_session, target);
-            ConfigureTargetSelector();
-            UpdateRouteStatus();
+            // ★ R1 整改：测试钩子必须与真实下拉走同一条路径（含画布刷新），
+            //   否则测试永远测不到「目标切换不刷新画布」这个缺陷。
+            ApplyEditTarget(target, syncSelector: true);
         }
 
         /// <summary>测试钩子：切换预览形态（0=竖向, 1=横向, 2=任务栏）。</summary>

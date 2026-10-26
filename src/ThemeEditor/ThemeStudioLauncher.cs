@@ -37,17 +37,35 @@ public static class ThemeStudioLauncher
         public ThemeStudioForm.ThemeApplyResult ApplySavedTheme(string themeName, long revision)
         {
             // 阶段 1：Settings 持久化
+            // ★ R2 整改（计划 §5.1 A-1）：Save() 故意静默（丢弃 TrySave 的 bool），
+            //   失败既不抛也不返回 ⇒ 这里必须直接消费 TrySave 的结果，
+            //   否则「保存失败」会被谎报成「已保存并应用」。
+            string previousSkin = _cfg.Skin;
+            bool persisted;
             try
             {
                 _cfg.Skin = themeName;
-                _cfg.Save();
+                persisted = _cfg.TrySave();
             }
             catch (Exception ex)
             {
+                _cfg.Skin = previousSkin;
                 return new ThemeStudioForm.ThemeApplyResult(
                     Success: false,
                     Stage: ThemeStudioForm.ThemeApplyStage.SettingsPersisted,
                     Error: "配置持久化失败：" + ex.Message,
+                    Revision: revision
+                );
+            }
+
+            if (!persisted)
+            {
+                // 持久化未落盘：回滚内存值，绝不进入 ThemeApplied 阶段。
+                _cfg.Skin = previousSkin;
+                return new ThemeStudioForm.ThemeApplyResult(
+                    Success: false,
+                    Stage: ThemeStudioForm.ThemeApplyStage.SettingsPersisted,
+                    Error: "配置持久化失败（可能被安全策略或磁盘写入阻止）。",
                     Revision: revision
                 );
             }
@@ -57,28 +75,109 @@ public static class ThemeStudioLauncher
             {
                 AppActions.ApplyThemeAndLayout(_cfg, _ui, _form);
 
-                string route = _cfg.GpuThemeEffectsEnabled && !Program.SafeMode
-                    ? "GPU 场景生效"
-                    : "常规绘制生效";
+                if (_ui is null)
+                {
+                    // 没有运行时宿主 ⇒ 主题没有被真正应用，不能报「已生效」。
+                    return new ThemeStudioForm.ThemeApplyResult(
+                        Success: false,
+                        Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
+                        Error: "未应用（无运行时宿主）：主题已保存，但没有可渲染的运行时宿主。",
+                        EffectiveTheme: _cfg.Skin,
+                        EffectiveRoute: "未应用（无运行时宿主）",
+                        Revision: revision
+                    );
+                }
 
                 return new ThemeStudioForm.ThemeApplyResult(
                     Success: true,
                     Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
-                    EffectiveTheme: themeName,
-                    EffectiveRoute: route,
+                    EffectiveTheme: _cfg.Skin,
+                    EffectiveRoute: ResolveEffectiveRoute(themeName),
                     Revision: revision
                 );
             }
             catch (Exception ex)
             {
+                // ★ R3 整改（计划 §5.1 A-4 修法 3）：运行时应用失败 ⇒ 新主题并未生效，
+                //   仍然生效的是旧主题。回滚内存值并尽力把磁盘拉回一致，
+                //   报告的生效主题必须是「实际仍在生效」的那个，而不是被改写过的请求值。
+                _cfg.Skin = previousSkin;
+                _ = _cfg.TrySave();
                 return new ThemeStudioForm.ThemeApplyResult(
                     Success: false,
                     Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
                     Error: "运行时应用失败：" + ex.Message,
-                    EffectiveTheme: _cfg.Skin,
+                    EffectiveTheme: previousSkin,
                     Revision: revision
                 );
             }
+        }
+
+        /// <summary>
+        /// 解析「实际生效路线」（R3 整改 · 计划 §5.1 A-4）。
+        /// <para>判定顺序：</para>
+        /// <list type="number">
+        ///   <item>主题本身是否请求 GPU —— 不请求则一律经典渲染，<b>与全局开关无关</b>
+        ///     （旧规则只看开关，经典主题 + GPU 开关开启时会谎报「GPU 场景生效」）。</item>
+        ///   <item>运行时是否真的在跑 GPU —— <c>IsGpuPresentationActive</c> 为真才是主效果路线。</item>
+        ///   <item>降级标注 —— <c>GpuFallbackCode</c> / <c>GpuRuntimeFailure</c> 非空时在文案里带上码；
+        ///     降级码只用于<b>标注</b>，不得用来反推路线。</item>
+        /// </list>
+        /// <para>
+        /// 关于单一事实源：协调器 <c>RenderingTransitionCoordinator.ExpectedRoute/EffectiveRoute</c>
+        /// 确实更权威，但它的 <c>PublishStable/PublishLegacyFallback</c> 是由 GPU 宿主在渲染线程
+        /// 异步发布的（见 <c>UIController</c> 内的 Publish 调用点），本方法紧随
+        /// <c>ApplyThemeAndLayout</c> 同步返回，此刻读取存在竞态 ⇒ 本批不采用（见计划 §8 执行记录）。
+        /// </para>
+        /// </summary>
+        private string ResolveEffectiveRoute(string themeName)
+        {
+            if (_ui is null)
+            {
+                return "未应用（无运行时宿主）";
+            }
+
+            // ① 主题是否请求 GPU：读「运行时实际应用的那个主题对象」。
+            //    主题文件位于工作室的主题目录（生产恒等于 ThemeManager.ThemeDir）。
+            bool themeRequestsGpu = false;
+            try
+            {
+                Theme theme = ThemeFileService.LoadTheme(ThemeDocumentStore.ThemeDir, themeName);
+                themeRequestsGpu = theme.Rendering?.IsGpuRequested == true;
+            }
+            catch (Exception)
+            {
+                // 主题文件缺失或解析失败：按「不请求 GPU」处理 —— 路线不得声称 GPU 生效。
+                themeRequestsGpu = false;
+            }
+
+            string route;
+            if (!themeRequestsGpu)
+            {
+                route = "经典渲染生效";
+            }
+            else if (_ui.IsGpuPresentationActive)
+            {
+                route = "GPU 场景生效";
+            }
+            else
+            {
+                route = "GPU 未生效（当前为经典渲染）";
+            }
+
+            // ③ 降级标注：只标注，不参与路线判定。
+            string? fallbackCode = _ui.GpuFallbackCode;
+            string? runtimeFailure = _ui.GpuRuntimeFailure;
+            if (!string.IsNullOrEmpty(fallbackCode))
+            {
+                route += "（回退绘制：" + fallbackCode + "）";
+            }
+            else if (!string.IsNullOrEmpty(runtimeFailure))
+            {
+                route += "（" + runtimeFailure + "）";
+            }
+
+            return route;
         }
     }
 }

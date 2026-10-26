@@ -121,6 +121,16 @@ namespace LiteMonitor.ThemeEditor
         public string? GpuPreviewError => _gpuPreview?.Error;
 
         /// <summary>
+        /// 当前画布**实际渲染**的主题副本（R1 整改新增可观测量）。
+        /// 回退目标下是 <c>LegacyFallbackStyleResolver.BuildDerivedTheme</c> 的派生主题，
+        /// 与 <c>_rawTheme</c> 不同 —— 这正是「目标切换后画布没跟着变」的可观测证据。
+        /// </summary>
+        internal Theme? RenderedTheme => _theme;
+
+        /// <summary>当前画布实际渲染的编辑目标（R1 整改新增可观测量）。</summary>
+        internal ThemeEditTarget RenderedTarget => _target;
+
+        /// <summary>
         /// 编辑器传入主题
         /// </summary>
         public void SetTheme(
@@ -234,7 +244,16 @@ namespace LiteMonitor.ThemeEditor
                 else
                 {
                     _gpuPreview.Bounds = targetBounds;
-                    _gpuPreview.UpdateTheme(_rawTheme, _groups, _shape);
+
+                    // ★ R6 整改（计划 §5.1 A-3）：必须消费 UpdateTheme 的返回值 ——
+                    //   旧代码丢弃 bool 并继续把预览设为可见 ⇒ 主题非法时画布仍显示
+                    //   上一个主题（用户看到「改了没反应」），且错误被彻底吞掉。
+                    //   失败时隐藏 GPU 预览并保留 GpuThemePreviewControl.Error 以便 UI 提示。
+                    if (!_gpuPreview.UpdateTheme(_rawTheme, _groups, _shape))
+                    {
+                        _gpuPreview.Visible = false;
+                        return;
+                    }
                 }
 
                 _gpuPreview.Visible = true;

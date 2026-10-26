@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.UI.SettingsPage;
 
 namespace LiteMonitor.ThemeEditor
 {
@@ -23,6 +24,30 @@ namespace LiteMonitor.ThemeEditor
         private readonly Dictionary<string, List<Control>> _rowsByPath = new(StringComparer.Ordinal);
         private readonly ToolTip _toolTip = new();
 
+        /// <summary>★ C-2（R8）：检查器配色来源（既有明暗引擎的当前配色）。</summary>
+        private SettingsThemePalette _palette = SettingsThemePalette.Light;
+
+        /// <summary>★ E-1（G1）：当前设备 DPI（用于把固定像素布局换算到新 DPI）。</summary>
+        private int _dpi = 96;
+
+        private int Scale(int value) => (int)Math.Round(value * _dpi / 96.0);
+
+        /// <summary>
+        /// ★ E-1（G1）：DPI 变化后重算检查器内部固定像素布局。
+        /// <para>
+        /// 检查器的行是**绝对定位**的（行首显示名固定 96 像素列宽、组标题 24 像素高等），
+        /// DPI 变化后必须整体重算，否则会与旁栏宽度错位。
+        /// </para>
+        /// </summary>
+        public void ApplyDpi(int deviceDpi)
+        {
+            if (deviceDpi <= 0) return;
+
+            _dpi = deviceDpi;
+            Padding = new Padding(Scale(12), Scale(8), Scale(12), Scale(8));
+            Rebuild();
+        }
+
         /// <summary>字段被用户编辑（已提交到会话），参数为失效级别。</summary>
         public event EventHandler<ThemePropertyInvalidation>? PropertyEdited;
 
@@ -34,6 +59,45 @@ namespace LiteMonitor.ThemeEditor
             AutoScroll = true;
             BackColor = Color.White;
             Padding = new Padding(12, 8, 12, 8);
+        }
+
+        /// <summary>
+        /// ★ C-2（R8）：检查器配色跟随既有明暗引擎。
+        /// <para>
+        /// 编辑器控件（TextBox/CheckBox/ComboBox）**保持原生样式** ——
+        /// 计划 §5.3 C-2 明确「高对比度走原生控件样式」，强行自绘会破坏系统高对比度。
+        /// 这里只统一检查器自身底色与行内文字色。
+        /// </para>
+        /// </summary>
+        public void ApplyPalette(SettingsThemePalette palette)
+        {
+            if (palette == null) throw new ArgumentNullException(nameof(palette));
+
+            _palette = palette;
+            BackColor = palette.CardBg;
+            ApplyRowColors();
+        }
+
+        private void ApplyRowColors()
+        {
+            foreach (Control child in Controls)
+            {
+                switch (child)
+                {
+                    case LinkLabel link:
+                        link.ForeColor = _palette.Primary;
+                        break;
+                    case Label label when label.Tag as string == "group":
+                        label.ForeColor = _palette.TextSub;
+                        break;
+                    case Label label when label.Tag as string == "shared":
+                        label.ForeColor = _palette.Primary;
+                        break;
+                    case Label label when label.Tag as string == "name":
+                        label.ForeColor = _palette.TextMain;
+                        break;
+                }
+            }
         }
 
         /// <summary>当前编辑目标（视图状态，不写主题、不制造脏状态）。</summary>
@@ -82,14 +146,44 @@ namespace LiteMonitor.ThemeEditor
 
             if (_rowsByPath.TryGetValue(jsonPath, out List<Control>? rows) && rows.Count > 0)
             {
-                Control targetRow = rows[0];
-                ScrollControlIntoView(targetRow);
-                targetRow.Focus();
+                // ★ C-2 整改（计划 §5.3 C-2）：焦点必须落在**可编辑控件**上。
+                //   旧实现取 rows[0] —— 那是行首的显示名 Label，Label 不可聚焦，
+                //   于是"点选定位"返回 true 但焦点根本没进编辑框（实测 ActiveControl = Label）。
+                Control? editor = FindEditableTarget(rows);
+                if (editor is null) return false;
+
+                ScrollControlIntoView(editor);
+                editor.Focus();
+                LastFocusedEditor = editor;
                 return true;
             }
 
             return false;
         }
+
+        /// <summary>
+        /// 行内可编辑控件（排除行首显示名 Label 与"恢复默认"LinkLabel —— 后者继承自 Label）。
+        /// <para>
+        /// ★ 不用 <see cref="Control.CanFocus"/> 作判据：CanFocus 依赖父链的可聚焦性，
+        ///   窗体未 Show 时整条父链返回 false，会把真正的编辑框误判成"没有可编辑控件"
+        ///   （N05 回归：窗体未显示时点选定位直接失败）。
+        ///   这里只排除展示型控件（Label 家族），编辑控件本身由构建器保证。
+        /// </para>
+        /// </summary>
+        private static Control? FindEditableTarget(List<Control> rows)
+        {
+            foreach (Control row in rows)
+            {
+                // Label 家族 = 行首显示名 + "恢复默认"链接（LinkLabel 继承自 Label），都不是编辑控件。
+                if (row is Label) continue;
+                return row;
+            }
+
+            return null;
+        }
+
+        /// <summary>最近一次点选定位聚焦到的可编辑控件（测试可观测；未定位过则为 null）。</summary>
+        internal Control? LastFocusedEditor { get; private set; }
 
         protected override void Dispose(bool disposing)
         {
@@ -132,14 +226,15 @@ namespace LiteMonitor.ThemeEditor
                         {
                             Text = p.Group,
                             Location = new Point(Padding.Left, y),
-                            Size = new Size(Width - Padding.Horizontal, 24),
-                            ForeColor = Color.FromArgb(0x6B, 0x72, 0x80),
+                            Size = new Size(Width - Padding.Horizontal, Scale(24)),
+                            ForeColor = _palette.TextSub,
                             Font = s_groupFont,
+                            Tag = "group",
                         };
-                        groupLabel.Margin = new Padding(0, y == Padding.Top ? 0 : 10, 0, 2);
+                        groupLabel.Margin = new Padding(0, y == Padding.Top ? 0 : Scale(10), 0, Scale(2));
                         Controls.Add(groupLabel);
                         _rowsByPath["#group:" + p.Group] = new List<Control> { groupLabel };
-                        y += 30;
+                        y += Scale(30);
                         lastGroup = p.Group;
                     }
 
@@ -147,27 +242,29 @@ namespace LiteMonitor.ThemeEditor
                     var nameLabel = new Label
                     {
                         Text = p.DisplayName,
-                        Location = new Point(Padding.Left, rowY + 3),
-                        Size = new Size(92, 22),
+                        Location = new Point(Padding.Left, rowY + Scale(3)),
+                        Size = new Size(Scale(92), Scale(22)),
                         TextAlign = ContentAlignment.MiddleLeft,
+                        ForeColor = _palette.TextMain,
+                        Tag = "name",
                     };
                     Controls.Add(nameLabel);
                     var rows = new List<Control> { nameLabel };
 
                     Control editor = BuildEditor(p);
-                    editor.Location = new Point(Padding.Left + 96, rowY);
-                    editor.Width = Math.Max(80, Width - Padding.Horizontal - 96);
+                    editor.Location = new Point(Padding.Left + Scale(96), rowY);
+                    editor.Width = Math.Max(Scale(80), Width - Padding.Horizontal - Scale(96));
                     editor.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
                     Controls.Add(editor);
                     rows.Add(editor);
-                    y += editor.Height + 4;
+                    y += editor.Height + Scale(4);
 
                     // 恢复默认按钮（有显式覆盖时才显示）
                     var resetLink = new LinkLabel
                     {
                         Text = "恢复默认",
-                        Location = new Point(Padding.Left + 96, y),
-                        Size = new Size(64, 18),
+                        Location = new Point(Padding.Left + Scale(96), y),
+                        Size = new Size(Scale(64), Scale(18)),
                         AutoSize = false,
                         Font = s_smallFont,
                         Tag = p,
@@ -177,7 +274,7 @@ namespace LiteMonitor.ThemeEditor
                     Controls.Add(resetLink);
                     rows.Add(resetLink);
                     _rowsByPath[p.JsonPath] = rows;
-                    y += resetLink.Height + 6;
+                    y += resetLink.Height + Scale(6);
 
                     // GPU 目标下的共享设置显式标注（不假装独立）——TE00 §2.5
                     if (Target != ThemeEditTarget.Classic && p.Scope.HasFlag(ThemePropertyScope.Shared))
@@ -185,14 +282,15 @@ namespace LiteMonitor.ThemeEditor
                         var sharedLabel = new Label
                         {
                             Text = "共享设置 — 同时影响主效果与兼容外观",
-                            Location = new Point(Padding.Left + 96, y),
-                            Size = new Size(Width - Padding.Horizontal - 96, 16),
-                            ForeColor = Color.FromArgb(0x2F, 0x6F, 0xED),
+                            Location = new Point(Padding.Left + Scale(96), y),
+                            Size = new Size(Width - Padding.Horizontal - Scale(96), Scale(16)),
+                            ForeColor = _palette.Primary,
                             Font = s_smallFont,
+                            Tag = "shared",
                         };
                         Controls.Add(sharedLabel);
                         rows.Add(sharedLabel);
-                        y += sharedLabel.Height + 4;
+                        y += sharedLabel.Height + Scale(4);
                     }
                 }
 

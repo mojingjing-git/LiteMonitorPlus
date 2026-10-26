@@ -323,42 +323,111 @@ namespace LiteMonitor.ThemeEditor
             Title
         }
 
-        /// <summary>按角色与当前编辑目标解析实际绑定的 JSON 路径（N05）。</summary>
-        public static string ResolvePropertyPath(SemanticElementRole role, ThemeEditTarget target)
+        /// <summary>
+        /// 按角色与当前编辑目标解析实际绑定的 JSON 路径（N05）。
+        /// <para>
+        /// ★ 不带草稿的入口：返回该角色在该目标下的**首选**路径。
+        ///   材质相关的路径（GPU 主效果）请用
+        ///   <see cref="ResolvePropertyPath(Theme?, SemanticElementRole, ThemeEditTarget)"/>，
+        ///   它会按当前草稿的实际描述符集校验。
+        /// </para>
+        /// </summary>
+        public static string ResolvePropertyPath(SemanticElementRole role, ThemeEditTarget target) =>
+            ResolvePropertyPath(null, role, target);
+
+        /// <summary>
+        /// 按角色、编辑目标与**当前草稿**解析实际绑定的 JSON 路径（N05）。
+        /// <para>
+        /// ★ C-1a 整改（计划 §5.3 C-1a，审核意见 M-4 采纳）：
+        ///   GPU 主效果下**没有任何 <c>color.*</c> 描述符** —— 配色项全部来自
+        ///   <c>BuildClassic()</c> 且 <c>Scope = ThemePropertyScope.Classic</c>（非 Shared），
+        ///   而 GPU 目标只附加 shared 项（字体等）与材质参数。
+        ///   旧实现却返回 <c>rendering.parameters.panel_color</c> / <c>card_color</c>：
+        ///   这两个路径在主题模型里**根本不存在**（虚构路径），GPU 两个目标下同样指不到
+        ///   <c>color.barLow</c>（经典作用域）。
+        ///   本实现只返回该目标**真实存在**的描述符路径；
+        ///   该角色确实没有可编辑字段时返回空串（= 不可定位），绝不返回虚构路径。
+        /// </para>
+        /// </summary>
+        public static string ResolvePropertyPath(Theme? theme, SemanticElementRole role, ThemeEditTarget target)
         {
-            return target switch
+            foreach (string candidate in CandidatePropertyPaths(role, target))
+            {
+                if (candidate.Length == 0) continue;
+                if (theme is null) return candidate;
+                if (HasDescriptor(theme, candidate, target)) return candidate;
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>该 JSON 路径在指定编辑目标下是否有可编辑描述符。</summary>
+        public static bool HasDescriptor(Theme theme, string jsonPath, ThemeEditTarget target)
+        {
+            if (string.IsNullOrWhiteSpace(jsonPath)) return false;
+
+            foreach (ThemePropertyDescriptor p in GetProperties(theme, target))
+            {
+                if (string.Equals(p.JsonPath, jsonPath, StringComparison.Ordinal)) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 角色的候选路径（按优先级）：第一个在目标描述符集里真实存在的胜出。
+        /// <para>
+        /// ★ GPU 主效果的候选全部取自 <c>ThemePropertyCatalog.Gpu.cs</c> 的真实材质参数：
+        ///   cyber_punk 面板不透明度 <c>panelOpacity</c> / liquid_glass 表面不透明度
+        ///   <c>surfaceOpacity</c>；圆角半径 <c>cornerRadius</c> / 辉光强度 <c>glow</c>；
+        ///   字体 <c>font.title</c> / <c>font.item</c> / <c>font.value</c>。
+        ///   兼容外观只有六槽（background/panelBackground/border/text/mutedText/accent），
+        ///   没有进度条颜色字段 ⇒ ProgressBar 在该目标下**无可编辑字段**。
+        /// </para>
+        /// </summary>
+        private static IReadOnlyList<string> CandidatePropertyPaths(SemanticElementRole role, ThemeEditTarget target) =>
+            target switch
             {
                 ThemeEditTarget.GpuFallback => role switch
                 {
-                    SemanticElementRole.PanelBackground => "rendering.fallbackStyle.background",
-                    SemanticElementRole.GroupHeader => "rendering.fallbackStyle.panelBackground",
-                    SemanticElementRole.Title => "rendering.fallbackStyle.accent",
-                    SemanticElementRole.ItemLabel => "rendering.fallbackStyle.mutedText",
-                    SemanticElementRole.ItemValue => "rendering.fallbackStyle.text",
-                    SemanticElementRole.ProgressBar => "color.barLow",
-                    _ => "rendering.fallbackStyle.background"
+                    SemanticElementRole.PanelBackground => new[] { "rendering.fallbackStyle.background" },
+                    SemanticElementRole.GroupHeader => new[] { "rendering.fallbackStyle.panelBackground" },
+                    SemanticElementRole.Title => new[] { "rendering.fallbackStyle.accent" },
+                    SemanticElementRole.ItemLabel => new[] { "rendering.fallbackStyle.mutedText" },
+                    SemanticElementRole.ItemValue => new[] { "rendering.fallbackStyle.text" },
+                    // 兼容外观六槽里没有进度条颜色字段 ⇒ 无可编辑字段（不指虚构路径）。
+                    SemanticElementRole.ProgressBar => Array.Empty<string>(),
+                    _ => Array.Empty<string>()
                 },
                 ThemeEditTarget.GpuMain => role switch
                 {
-                    SemanticElementRole.PanelBackground => "rendering.parameters.panel_color",
-                    SemanticElementRole.GroupHeader => "rendering.parameters.card_color",
-                    SemanticElementRole.Title => "font.title",
-                    SemanticElementRole.ItemLabel => "font.item",
-                    SemanticElementRole.ItemValue => "font.value",
-                    SemanticElementRole.ProgressBar => "color.barLow",
-                    _ => "rendering.parameters.panel_color"
+                    SemanticElementRole.PanelBackground => new[]
+                    {
+                        "rendering.parameters.panelOpacity",
+                        "rendering.parameters.surfaceOpacity"
+                    },
+                    SemanticElementRole.GroupHeader => new[]
+                    {
+                        "rendering.parameters.cornerRadius",
+                        "rendering.parameters.glow"
+                    },
+                    SemanticElementRole.Title => new[] { "font.title" },
+                    SemanticElementRole.ItemLabel => new[] { "font.item" },
+                    SemanticElementRole.ItemValue => new[] { "font.value" },
+                    // GPU 主效果的进度条颜色由材质着色器决定，无可编辑字段。
+                    SemanticElementRole.ProgressBar => Array.Empty<string>(),
+                    _ => Array.Empty<string>()
                 },
                 _ => role switch
                 {
-                    SemanticElementRole.PanelBackground => "color.background",
-                    SemanticElementRole.GroupHeader => "color.groupBackground",
-                    SemanticElementRole.Title => "color.textTitle",
-                    SemanticElementRole.ItemLabel => "color.textSecondary",
-                    SemanticElementRole.ItemValue => "color.textPrimary",
-                    SemanticElementRole.ProgressBar => "color.barLow",
-                    _ => "color.background"
+                    SemanticElementRole.PanelBackground => new[] { "color.background" },
+                    SemanticElementRole.GroupHeader => new[] { "color.groupBackground" },
+                    SemanticElementRole.Title => new[] { "color.textTitle" },
+                    SemanticElementRole.ItemLabel => new[] { "color.textSecondary" },
+                    SemanticElementRole.ItemValue => new[] { "color.textPrimary" },
+                    SemanticElementRole.ProgressBar => new[] { "color.barLow" },
+                    _ => Array.Empty<string>()
                 }
             };
-        }
     }
 }
