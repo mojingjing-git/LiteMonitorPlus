@@ -16,7 +16,7 @@ public static class ThemeStudioLauncher
     public static void Open(MainForm form, Settings cfg, UIController? ui)
     {
         var gateway = new AppActionsThemeApplyGateway(cfg, ui, form);
-        var studio = new ThemeStudioForm(gateway);
+        var studio = new ThemeStudioForm(gateway, cfg);
         studio.Show(form);
     }
 

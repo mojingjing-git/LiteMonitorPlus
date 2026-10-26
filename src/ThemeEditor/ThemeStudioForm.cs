@@ -53,8 +53,17 @@ namespace LiteMonitor.ThemeEditor
         private System.Windows.Forms.Timer? _previewDebounce;
         private ToolStripComboBox _targetCombo = null!;
         private ToolStripLabel _targetLabel = null!;
+        private ToolStripComboBox _shapeCombo = null!;
+        private ToolStripLabel _shapeNotice = null!;
         private bool _suppressTargetChange;
         private PropertyInspector _inspector = null!;
+        private HorizontalPreviewControl? _horizontalPreview;
+        private TaskbarPreviewControl? _taskbarPreview;
+        private PreviewShape _previewShape = PreviewShape.Vertical;
+        private bool _taskbarPreviewUsed;
+        private readonly Settings? _appSettings;
+
+        private enum PreviewShape { Vertical = 0, Horizontal = 1, Taskbar = 2 }
 
         private ThemeDocumentSession? _session;
         private string _selectedTheme = string.Empty;
@@ -71,9 +80,10 @@ namespace LiteMonitor.ThemeEditor
 
         private IThemeApplyGateway? _applyGateway;
 
-        public ThemeStudioForm(IThemeApplyGateway? applyGateway = null)
+        public ThemeStudioForm(IThemeApplyGateway? applyGateway = null, Settings? appSettings = null)
         {
             _applyGateway = applyGateway;
+            _appSettings = appSettings;
 
             Text = "LiteMonitor 主题工作室";
             AutoScaleMode = AutoScaleMode.None;
@@ -106,6 +116,13 @@ namespace LiteMonitor.ThemeEditor
                 {
                     e.Cancel = true;
                 }
+            };
+
+            // 任务栏预览会改写 TaskbarRenderer 的进程级静态样式；离开工作室时恢复生产样式
+            FormClosed += (_, _) =>
+            {
+                if (!_taskbarPreviewUsed) return;
+                try { TaskbarRenderer.ReloadStyle(_appSettings ?? Settings.Load()); } catch { }
             };
         }
 
@@ -262,7 +279,23 @@ namespace LiteMonitor.ThemeEditor
                 ForeColor = TextMuted,
                 Font = new Font("Segoe UI", 7.5F),
             };
-            canvasToolbar.Items.AddRange([_targetLabel, _targetCombo, new ToolStripSeparator(), routeHint]);
+            _shapeCombo = new ToolStripComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = Dip(150),
+            };
+            _shapeCombo.Items.AddRange(["竖向", "横向", "任务栏"]);
+            _shapeCombo.SelectedIndex = 0;
+            _shapeCombo.SelectedIndexChanged += (_, _) => OnPreviewShapeChanged();
+            _shapeNotice = new ToolStripLabel(string.Empty)
+            {
+                ForeColor = TextMuted,
+                Font = new Font("Segoe UI", 7.5F),
+            };
+            canvasToolbar.Items.AddRange(
+                [_targetLabel, _targetCombo, new ToolStripSeparator(), routeHint,
+                 new ToolStripSeparator(), new ToolStripLabel("预览形态：") { ForeColor = TextMuted },
+                 _shapeCombo, _shapeNotice]);
             canvas.Controls.Add(canvasToolbar);
 
             // 同源预览（TE04 首批）：复用生产渲染路径的经典/GPU 预览控件。
@@ -758,7 +791,7 @@ namespace LiteMonitor.ThemeEditor
             _previewDebounce?.Start();
         }
 
-        /// <summary>立即把草稿交给同源预览控件。</summary>
+        /// <summary>立即把草稿交给同源预览控件（按预览形态路由）。</summary>
         private void RefreshPreviewNow()
         {
             if (_session is null)
@@ -768,19 +801,56 @@ namespace LiteMonitor.ThemeEditor
                 return;
             }
 
-            if (_preview is null)
-            {
-                _preview = new ThemePreviewControl
-                {
-                    Dock = DockStyle.Fill,
-                    BackColor = PreviewBack,
-                };
-                _previewHost.Controls.Add(_preview);
-            }
-
             try
             {
-                _preview.SetTheme(_session.Draft);
+                switch (_previewShape)
+                {
+                    case PreviewShape.Horizontal:
+                        if (_horizontalPreview is null)
+                        {
+                            _horizontalPreview = new HorizontalPreviewControl
+                            {
+                                Dock = DockStyle.Fill,
+                                BackColor = PreviewBack,
+                            };
+                            _previewHost.Controls.Add(_horizontalPreview);
+                        }
+
+                        _horizontalPreview.SetTheme(_session.Draft);
+                        ShowPreviewControl(_horizontalPreview);
+                        break;
+
+                    case PreviewShape.Taskbar:
+                        if (_taskbarPreview is null)
+                        {
+                            _taskbarPreview = new TaskbarPreviewControl
+                            {
+                                Dock = DockStyle.Fill,
+                                BackColor = PreviewBack,
+                            };
+                            _previewHost.Controls.Add(_taskbarPreview);
+                        }
+
+                        _taskbarPreview.SetTheme(_session.Draft);
+                        _taskbarPreviewUsed = true; // 关闭时恢复生产任务栏样式
+                        ShowPreviewControl(_taskbarPreview);
+                        break;
+
+                    default:
+                        if (_preview is null)
+                        {
+                            _preview = new ThemePreviewControl
+                            {
+                                Dock = DockStyle.Fill,
+                                BackColor = PreviewBack,
+                            };
+                            _previewHost.Controls.Add(_preview);
+                        }
+
+                        _preview.SetTheme(_session.Draft);
+                        ShowPreviewControl(_preview);
+                        break;
+                }
             }
             catch (Exception ex)
             {
@@ -788,10 +858,38 @@ namespace LiteMonitor.ThemeEditor
                 return;
             }
 
-            _preview.Visible = true;
-            _preview.BringToFront();
             _previewPlaceholder.Visible = false;
             UpdateRouteStatus();
+        }
+
+        private void ShowPreviewControl(Control active)
+        {
+            if (_preview is not null) _preview.Visible = ReferenceEquals(_preview, active);
+            if (_horizontalPreview is not null) _horizontalPreview.Visible = ReferenceEquals(_horizontalPreview, active);
+            if (_taskbarPreview is not null) _taskbarPreview.Visible = ReferenceEquals(_taskbarPreview, active);
+            active.Visible = true;
+            active.BringToFront();
+        }
+
+        private void OnPreviewShapeChanged()
+        {
+            PreviewShape shape = _shapeCombo.SelectedIndex switch
+            {
+                1 => PreviewShape.Horizontal,
+                2 => PreviewShape.Taskbar,
+                _ => PreviewShape.Vertical
+            };
+            if (shape == _previewShape) return;
+            _previewShape = shape;
+
+            _shapeNotice.Text = shape switch
+            {
+                PreviewShape.Horizontal => "固定模拟数据 · 生产横排渲染",
+                PreviewShape.Taskbar => "颜色由设置驱动，主题只影响布局",
+                _ => string.Empty
+            };
+
+            RefreshPreviewNow();
         }
 
         private void UpdateRouteStatus()
@@ -799,6 +897,18 @@ namespace LiteMonitor.ThemeEditor
             if (_session is null)
             {
                 _statusRoute.Text = "预览路线：—";
+                return;
+            }
+
+            if (_previewShape == PreviewShape.Horizontal)
+            {
+                _statusRoute.Text = "预览形态：横向 · 常规绘制（生产同源）｜ GPU 横向预览待 TE04";
+                return;
+            }
+
+            if (_previewShape == PreviewShape.Taskbar)
+            {
+                _statusRoute.Text = "预览形态：任务栏 · 常规绘制（颜色由设置驱动，布局随主题）";
                 return;
             }
 
@@ -940,6 +1050,16 @@ namespace LiteMonitor.ThemeEditor
             ConfigureTargetSelector();
             UpdateRouteStatus();
         }
+
+        /// <summary>测试钩子：切换预览形态（0=竖向, 1=横向, 2=任务栏）。</summary>
+        internal void SelectPreviewShapeForTesting(int index)
+        {
+            _shapeCombo.SelectedIndex = index;
+        }
+
+        internal HorizontalPreviewControl? HorizontalPreviewForTesting => _horizontalPreview;
+
+        internal TaskbarPreviewControl? TaskbarPreviewForTesting => _taskbarPreview;
 
         private string? PromptName(string title, string initial)
         {

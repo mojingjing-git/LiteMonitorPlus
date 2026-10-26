@@ -187,6 +187,57 @@ namespace LiteMonitor.Tests
             Assert.Equal(gpu, saved);
         }
 
+        [Fact]
+        public void 工作室_预览形态切换_横向与任务栏可用()
+        {
+            Application.EnableVisualStyles();
+            File.WriteAllText(Path.Combine(_dir, "经典蓝.json"), ClassicJson, new UTF8Encoding(false));
+
+            Exception? failure = null;
+            var thread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    using var form = new ThemeStudioForm();
+                    form.Show();
+                    Application.DoEvents();
+                    form.OpenThemeForTesting("经典蓝");
+                    form.RefreshPreviewForTesting();
+                    Application.DoEvents();
+
+                    // 横向：同源控件已建立、有列、有内容宽度
+                    form.SelectPreviewShapeForTesting(1);
+                    Application.DoEvents();
+                    Assert.NotNull(form.HorizontalPreviewForTesting);
+                    Assert.True(form.HorizontalPreviewForTesting!.Visible);
+                    Assert.NotEmpty(form.HorizontalPreviewForTesting.PreviewColumns);
+                    Assert.True(form.HorizontalPreviewForTesting.ContentWidth > 0);
+
+                    // 任务栏：事实标注存在（颜色由设置驱动）
+                    form.SelectPreviewShapeForTesting(2);
+                    Application.DoEvents();
+                    Assert.NotNull(form.TaskbarPreviewForTesting);
+                    Assert.True(form.TaskbarPreviewForTesting!.Visible);
+                    Assert.Contains("颜色由设置驱动", TaskbarPreviewControl.ColorSourceNotice);
+
+                    // 切回竖向：横向隐藏
+                    form.SelectPreviewShapeForTesting(0);
+                    Application.DoEvents();
+                    Assert.False(form.HorizontalPreviewForTesting!.Visible);
+                    form.Close();
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.Start();
+            thread.Join(TimeSpan.FromSeconds(30));
+
+            Assert.Null(failure);
+        }
+
         private static ThemePropertyDescriptor Find(string path) =>
             System.Linq.Enumerable.Single(
                 ThemePropertyCatalog.ClassicProperties,
