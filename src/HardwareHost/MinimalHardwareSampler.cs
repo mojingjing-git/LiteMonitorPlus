@@ -42,7 +42,9 @@ public sealed class MinimalHardwareSampler : IDisposable
     public long Generation => _generation;
 
     /// <summary>执行一轮采集并组装完整快照（原子批次：值与批次号同源，不混代次）。</summary>
-    public HardwareSnapshot SampleOnce(int configRevision)
+    /// <param name="configRevision">当前生效的配置 revision（盖在快照上供调用方判定"实际生效版本"）。</param>
+    /// <param name="sessionEpoch">会话纪元（E02 §6.7：Host 重启/重连时递增，旧会话快照不得混入新会话）。</param>
+    public HardwareSnapshot SampleOnce(int configRevision, int sessionEpoch = 0)
     {
         ThrowIfDisposed();
         long batch = unchecked(++_batchId);
@@ -76,7 +78,22 @@ public sealed class MinimalHardwareSampler : IDisposable
             ConfigRevision: configRevision,
             Samples: samples,
             SamplingDuration: sw.Elapsed,
-            TimestampMonoMs: timestamp);
+            TimestampMonoMs: timestamp,
+            SessionEpoch: sessionEpoch);
+    }
+
+    /// <summary>
+    /// 显式重扫（E02 §6「显式硬件重扫」）：重建设备/传感器目录并递增目录代次。
+    /// <para>最小 Host 的重扫语义 = **目录重建 + 代次递增**（CatalogVersion 变化可观测，
+    /// 目录与读数不混代次）；真实设备重开（<c>Computer.Close/Open</c>）属 I3/E09 的
+    /// 采集器迁移范围，不在最小 Host 内实施（已知边界，见 E02 验收报告）。</para>
+    /// <para>调用方须保证与采样互斥（Host 侧用采样闸门串行化）。</para>
+    /// </summary>
+    public HardwareCatalog Rescan()
+    {
+        ThrowIfDisposed();
+        _generation++;
+        return BuildCatalog();
     }
 
     /// <summary>设备/传感器目录（供 catalog 命令；结构与 HardwareClientAdapter 的锁内遍历一致）。</summary>

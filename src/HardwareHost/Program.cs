@@ -18,6 +18,11 @@ internal sealed record HostOptions
     public bool StaleFirst { get; init; }
     public string? Fault { get; init; }
     public int? SelftestRounds { get; init; }
+    /// <summary>
+    /// 会话纪元（E02 §6.7）：由主程序监督器在每次新会话时递增并经命令行传入；
+    /// Host 把该纪元盖在快照上——旧会话快照数据不得混入新会话。
+    /// </summary>
+    public int SessionEpoch { get; init; }
 
     public static HostOptions? Parse(string[] args)
     {
@@ -38,6 +43,9 @@ internal sealed record HostOptions
                     break;
                 case "--heartbeat-ms":
                     if (int.TryParse(Next(), out int hb)) opt = opt with { HeartbeatMs = Math.Max(100, hb) };
+                    break;
+                case "--session-epoch":
+                    if (int.TryParse(Next(), out int epoch)) opt = opt with { SessionEpoch = Math.Max(0, epoch) };
                     break;
                 case "--test-pattern": opt = opt with { TestPattern = true }; break;
                 case "--stale-first": opt = opt with { StaleFirst = true }; break;
@@ -67,7 +75,8 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "usage: LiteMonitor.HardwareHost --pipe <name> --session <token> [--parent-pid <pid>] [--refresh-ms <n>]" +
-                " [--test-pattern] [--stale-first] [--fault <fail-fast|crash-after-handshake|hang-sampling|stop-heartbeat|delay-handshake|bad-version|bad-session|late-response>]" +
+                " [--session-epoch <n>]" +
+                " [--test-pattern] [--stale-first] [--fault <fail-fast|crash-after-handshake|hang-sampling|stop-heartbeat|delay-handshake|bad-version|bad-session|late-response|slow-rescan>]" +
                 " | --selftest <rounds>");
             return ExitArgError;
         }
