@@ -188,11 +188,21 @@ namespace LiteMonitor.src.UI.SettingsPage
         }
 
         /// <summary>
-        /// GPU 快照（D5 spike 落点）：不可见离屏窗体 + <see cref="GpuThemePreviewControl"/>，
-        /// HandleCreated 后同步渲一帧并从 GPU 帧缓冲回读 PNG；用完即释放。
+        /// GPU 快照：离屏窗体 + <see cref="GpuThemePreviewControl"/>，
+        /// 强制建立顶层与子控件 HWND 后同步渲一帧并从 GPU 帧缓冲回读 PNG；用完即释放。
+        ///
+        /// ★ 句柄合同（Lane B 复现并修复）：<see cref="Control.CreateControl"/> 对
+        ///   **未显示的窗体**不创建 HWND，控件的 HandleCreated 钩子不触发 ⇒ 渲染器从未启动，
+        ///   方法静默回退经典帧。这里改为访问 <c>owner.Handle</c> 强制建顶层窗口（不 Show，
+        ///   避免抢焦点/闪窗），再建子控件句柄。
+        /// ★ 保护隔离：快照使用**一次性临时目录**的 GpuStartupGuard，
+        ///   不污染生产/预览的持久状态；释放时删除临时目录。
         /// </summary>
         internal static bool TryRenderGpuSnapshot(Theme theme, string pngPath)
         {
+            string guardDir = Path.Combine(
+                Path.GetTempPath(),
+                "LiteMonitor++-snapshot-" + Guid.NewGuid().ToString("N"));
             try
             {
                 using var owner = new Form
@@ -204,14 +214,18 @@ namespace LiteMonitor.src.UI.SettingsPage
                     FormBorderStyle = FormBorderStyle.None,
                     Opacity = 0d
                 };
-                var host = new GpuThemePreviewControl(theme, ThemePreviewControl.CreateMockGroups())
+                var guard = new GpuStartupGuard(guardDir, AppContext.BaseDirectory);
+                var host = new GpuThemePreviewControl(theme, ThemePreviewControl.CreateMockGroups(), guard)
                 {
                     Bounds = new Rectangle(10, 10, SnapshotWidth, SnapshotHeight)
                 };
                 owner.Controls.Add(host);
 
-                owner.CreateControl();
-                if (!host.IsHandleCreated) host.CreateControl();
+                // 关键：强制建立顶层与子控件 HWND（不 Show）。
+                // CreateControl() 对不可见控件是空操作，必须访问 Handle 属性强制建句柄，
+                // 子控件 HandleCreated 才会触发 GPU 渲染器启动。
+                _ = owner.Handle;
+                _ = host.Handle;
                 if (!host.IsHandleCreated) return false;
 
                 bool ok = host.TryCaptureOnce(pngPath);
@@ -220,6 +234,17 @@ namespace LiteMonitor.src.UI.SettingsPage
             catch
             {
                 return false;
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(guardDir)) Directory.Delete(guardDir, recursive: true);
+                }
+                catch
+                {
+                    // 临时目录清理失败不影响快照结果
+                }
             }
         }
 
