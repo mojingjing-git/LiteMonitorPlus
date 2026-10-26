@@ -191,7 +191,7 @@ namespace LiteMonitor.src.UI.SettingsPage
         /// GPU 快照（D5 spike 落点）：不可见离屏窗体 + <see cref="GpuThemePreviewControl"/>，
         /// HandleCreated 后同步渲一帧并从 GPU 帧缓冲回读 PNG；用完即释放。
         /// </summary>
-        private static bool TryRenderGpuSnapshot(Theme theme, string pngPath)
+        internal static bool TryRenderGpuSnapshot(Theme theme, string pngPath)
         {
             try
             {

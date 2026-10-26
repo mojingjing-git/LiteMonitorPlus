@@ -92,7 +92,7 @@ namespace LiteMonitor.ThemeEditor
     /// 首批冻结经典主题字段闭环（TE03 第一批）：配色、字体、布局、阈值。
     /// GPU 字段（parameters/fallbackStyle）按 TE00 矩阵在 M2 批次补充。
     /// </summary>
-    public static class ThemePropertyCatalog
+    public static partial class ThemePropertyCatalog
     {
         private static readonly List<ThemePropertyDescriptor> _classic = BuildClassic();
 

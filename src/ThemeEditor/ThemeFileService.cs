@@ -191,6 +191,22 @@ namespace LiteMonitor.ThemeEditor
         }
 
         /// <summary>
+        /// 按**完整路径**写入主题 JSON（导出与投稿资料，重做计划 §5.2 共用原子写入）。
+        /// 与 <see cref="SaveTheme"/> 走同一 SafeWrite 核心：不先删目标、失败保留原文件。
+        /// </summary>
+        public static void WriteThemeJsonToPath(string path, string json)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+            string fullPath = Path.GetFullPath(path);
+            string? dir = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+
+            SafeWrite(fullPath, Utf8NoBom.GetBytes(json));
+        }
+
+        /// <summary>
         /// 在指定目录下新建主题（复制模板）
         /// </summary>
         public static void CreateTheme(string dir, string name)
