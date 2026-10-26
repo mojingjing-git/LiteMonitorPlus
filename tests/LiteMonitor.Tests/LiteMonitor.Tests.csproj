@@ -7,6 +7,15 @@
     <Nullable>disable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>LiteMonitor.Tests</RootNamespace>
+    <!--
+      ★ CS8632 = 「可空引用类型标注只能用在 #nullable 注解上下文中」。
+      本工程整体 Nullable=disable，但部分测试文件为了表达意图写了 `?` 标注，
+      编译器因此报出 263 条 CS8632 噪音 —— 它们不携带任何可空性信息（上下文未启用），
+      纯属"遮光板"警告，直接抑制；真正需要治理的是在 Nullable=enable 下暴露的
+      真实可空缺陷（627 条），已登记为独立 Phase 6，不在本次范围内。
+      根治方案（Phase 6）：在测试工程开启 <Nullable>enable</Nullable> 并逐条治理。
+    -->
+    <NoWarn>$(NoWarn);CS8632</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

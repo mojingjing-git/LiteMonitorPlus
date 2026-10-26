@@ -495,7 +495,9 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
         return "no unobstructed candidate position found";
     }
 
-    private async Task StartGpuAsync(string phase, CancellationToken cancellationToken)
+    // 本方法体内没有任何 await：GPU 宿主的启停必须在 UI 线程同步完成，
+    // 因此保持「同步实现 + 返回已完成 Task」，而不是挂一个空 async 修饰符。
+    private Task StartGpuAsync(string phase, CancellationToken cancellationToken)
     {
         _host = new GpuPresentationHostController(
             _form,
@@ -512,6 +514,7 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
         _host.UpdateScene(BuildScene(_host.Generations));
         _host.RenderNow();
         _steps.Add(new { step = "gpu-start", phase, accepted = true, errorCode, errorMessage });
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -585,7 +588,8 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
         throw new InvalidOperationException($"No successful Present was observed in {phase} within 20000 ms.");
     }
 
-    private async Task<GpuPhaseRecord> CaptureGpuDesktopAsync(string phase, CancellationToken cancellationToken)
+    // 同 StartGpuAsync：体内无 await，保持同步实现并返回已完成 Task。
+    private Task<GpuPhaseRecord> CaptureGpuDesktopAsync(string phase, CancellationToken cancellationToken)
     {
         string scenePath = Path.Combine(_output, $"{phase}-scene.png");
         try
@@ -621,7 +625,7 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
             screenshot
         });
 
-        return new GpuPhaseRecord(
+        return Task.FromResult(new GpuPhaseRecord(
             phase,
             true,
             null,
@@ -630,7 +634,7 @@ internal sealed class GdiRecoveryExperiment : IGdiFrameHost
             diagnostics?.AdapterName,
             File.Exists(scenePath) ? scenePath : null,
             match.ObservedCenter,
-            diagnostics is null ? null : System.Text.Json.JsonSerializer.Serialize(diagnostics));
+            diagnostics is null ? null : System.Text.Json.JsonSerializer.Serialize(diagnostics)));
     }
 
     private void StopGpu()

@@ -363,8 +363,11 @@ public sealed class UpdaterLegacyBridgeTests : IDisposable
             out int bytesRead);
 
         Assert.True(bytesRead > 0);
-        Assert.Equal(32, ecdsa.ExportParameters(false).Q.X.Length);
-        Assert.Equal(32, ecdsa.ExportParameters(false).Q.Y.Length);
+        ECPoint publicKeyPoint = ecdsa.ExportParameters(false).Q;
+        Assert.NotNull(publicKeyPoint.X);
+        Assert.NotNull(publicKeyPoint.Y);
+        Assert.Equal(32, publicKeyPoint.X.Length);
+        Assert.Equal(32, publicKeyPoint.Y.Length);
     }
 
     // ================================================================
