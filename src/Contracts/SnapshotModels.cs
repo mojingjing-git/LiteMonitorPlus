@@ -20,4 +20,5 @@ public sealed record HardwareSnapshot(
     int ConfigRevision,
     IReadOnlyList<MetricSample> Samples,
     TimeSpan SamplingDuration,
-    double TimestampMonoMs);
+    double TimestampMonoMs,
+    int SessionEpoch = 0);   // E01-A：会话纪元（Host 重启/采集器重建时递增；旧会话数据不得混入新会话）
