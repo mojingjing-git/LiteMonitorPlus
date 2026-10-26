@@ -139,6 +139,17 @@ namespace LiteMonitor.src.UI.Helpers
             _tray = new NotifyIcon();
         }
 
+        /// <summary>
+        /// E00/R5 测试接缝：免 UIController 构造（泊出态状态迁移测试专用）。
+        /// ★ 只加注入口、不改行为：状态迁移路径（CheckAutoHide/RestorePos/DisableAutoHide/
+        /// RestoreFromParkIfParked）不触碰 <c>_ui</c>；需要 UIController 的路径
+        /// （RebuildMenus/布局切换/设置窗）不得用本构造。
+        /// </summary>
+        internal MainFormBizHelper(Form form, Settings cfg, MainFormWinHelper winHelper)
+            : this(form, cfg, null!, winHelper)
+        {
+        }
+
         public void Initialize()
         {
             InitTray();

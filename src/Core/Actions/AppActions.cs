@@ -53,15 +53,26 @@ namespace LiteMonitor.src.Core.Actions
         }
 
         /// <summary>
+        /// E00/R7 测试接缝：保存编排的「差异 + 凭据比对 → 应用计划」决策（<see cref="ApplySettingsSelectively"/>
+        /// 的前缀原样抽出，行为零变化）。ApplySettingsSelectively 需要 MainForm/UIController 实例、
+        /// 单测不可构造 ⇒ 测试在 CloneForDiff→Merge 之后调用本方法，验证完整保存编排的四态判定。
+        /// </summary>
+        internal static (ApplyPlan Plan, List<LiteMonitor.Core.Actions.Services.SettingsFieldDiff> Diffs)
+            ResolveSaveApplyPlan(Settings before, Settings cfg)
+        {
+            var diffs = LiteMonitor.src.Core.Actions.SettingsChanger.ComputeDiff(before, cfg);
+            bool credentialChanged = !string.Equals(before.WebServerPassword, cfg.WebServerPassword, StringComparison.Ordinal);
+            return (ResolveApplyPlan(diffs, credentialChanged), diffs);
+        }
+
+        /// <summary>
         /// B3：按 live/draft 差异选择性应用设置副作用。
         /// 空差异不应用；纯 Web/插件变更只动对应模块（不重建界面）；其余走与
         /// <see cref="ApplyAllSettings"/> 同序的界面重建组。返回应用摘要（诊断/日志用）。
         /// </summary>
         public static string ApplySettingsSelectively(Settings before, Settings cfg, MainForm mainForm, UIController ui, bool applyAutoStart)
         {
-            var diffs = LiteMonitor.src.Core.Actions.SettingsChanger.ComputeDiff(before, cfg);
-            bool credentialChanged = !string.Equals(before.WebServerPassword, cfg.WebServerPassword, StringComparison.Ordinal);
-            var plan = ResolveApplyPlan(diffs, credentialChanged);
+            var (plan, _) = ResolveSaveApplyPlan(before, cfg);
             if (!plan.Any) return "no-change";
 
             if (plan.UiGroup)
