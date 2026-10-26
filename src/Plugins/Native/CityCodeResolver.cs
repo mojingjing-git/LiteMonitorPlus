@@ -26,7 +26,9 @@ namespace LiteMonitor.src.Plugins.Native
         private const string JSON_DB_URL = "https://raw.githubusercontent.com/mojingjing-git/LiteMonitorPlus/master/resources/assets/CityCode.json";
         
         // Memory Cache
-        private static Dictionary<string, List<List<string>>> _db = null;
+        // ★ 城市库在 EnsureDbLoadedAsync 成功之前就是 null（"未加载"是正常中间态，
+        //   不是错误），因此字段本身必须声明为可空。
+        private static Dictionary<string, List<List<string>>>? _db = null;
         private static bool _isLoading = false;
         private static readonly object _lock = new object();
 
@@ -49,7 +51,10 @@ namespace LiteMonitor.src.Plugins.Native
         {
             await EnsureDbLoadedAsync(token, maxResponseBytes).ConfigureAwait(false);
 
-            if (_db == null) throw new Exception("CityCode DB failed to load");
+            // ★ 取局部变量：静态字段的 null-state 无法跨语句收窄，
+            //   后续查找一律使用这个已判空的局部变量（不再直接解引用 _db）。
+            var db = _db;
+            if (db == null) throw new Exception("CityCode DB failed to load");
 
             // 1. 参数清洗
             province = (province ?? "").Replace("省", "").Replace("市", "").Replace("自治区", "").Replace("壮族", "").Replace("回族", "").Replace("维吾尔", "");
@@ -64,20 +69,21 @@ namespace LiteMonitor.src.Plugins.Native
             }
 
             // 2. 查找逻辑
-            List<List<string>> candidates = null;
+            // ★ 未命中是正常结果（下面用 KeyNotFoundException 走重试路径）⇒ 候选可空。
+            List<List<string>>? candidates = null;
             string targetName = "";
 
             // 3.1 优先查 District
             if (!string.IsNullOrEmpty(district))
             {
-                candidates = Lookup(district);
+                candidates = Lookup(db, district);
                 targetName = district;
             }
 
             // 3.2 降级查 City
             if (candidates == null && !string.IsNullOrEmpty(city))
             {
-                candidates = Lookup(city);
+                candidates = Lookup(db, city);
                 targetName = city;
             }
 
@@ -121,16 +127,18 @@ namespace LiteMonitor.src.Plugins.Native
             });
         }
 
-        private static List<List<string>> Lookup(string key)
+        // ★ 未命中返回 null（正常语义，调用方据此降级/抛 KeyNotFoundException）；
+        //   db 由调用方以非空形式传入，避免在静态字段上做跨语句解引用。
+        private static List<List<string>>? Lookup(Dictionary<string, List<List<string>>> db, string key)
         {
             if (string.IsNullOrEmpty(key)) return null;
-            if (_db.TryGetValue(key, out var res)) return res;
+            if (db.TryGetValue(key, out var res)) return res;
 
             // 处理后缀
             string root = System.Text.RegularExpressions.Regex.Replace(key, "(自治州|自治县|地区|盟|市|区|县|旗)$", "");
             if (root.Length < 2 && key.Length > 1) root = key;
 
-            if (_db.TryGetValue(root, out var resRoot)) return resRoot;
+            if (db.TryGetValue(root, out var resRoot)) return resRoot;
 
             return null;
         }
@@ -156,7 +164,9 @@ namespace LiteMonitor.src.Plugins.Native
             try
             {
                 // 1) 优先读取随包分发的本地城市库（离线可用，不依赖任何外部服务）
-                string json = null;
+                // ★ json 在本地读取成功前确实为 null（本地文件可能不存在）⇒ 声明为可空；
+                //   下面的 string.IsNullOrEmpty 带 [NotNullWhen(false)]，可把「非空路径」收窄。
+                string? json = null;
                 try
                 {
                     foreach (var candidate in LocalJsonCandidates)
@@ -230,29 +240,53 @@ namespace LiteMonitor.src.Plugins.Native
                     }
                 }
 
-                var rawDb = JsonSerializer.Deserialize<Dictionary<string, List<List<string>>>>(json);
-
-                // [Optimization] Intern strings in the DB to reduce memory usage
-                // Many cities share the same province name, and many districts share the same city name
-                _db = new Dictionary<string, List<List<string>>>(rawDb.Count);
-                
-                foreach (var kvp in rawDb)
+                // ★ 反序列化有三种失败形态，必须分别处理：
+                //   ① 抛 JsonException（响应为空 / 非法 JSON）—— 原实现让它冒泡到外层
+                //      catch(Exception)，把真实原因降级成一句 "Load DB Failed"，诊断信息丢失；
+                //   ② 返回 null（JSON 字面量 null）—— 原实现会在 rawDb.Count 上抛 NRE，
+                //      同样被外层 catch 吞掉；
+                //   ③ 正常字典。
+                //   这里统一保持「未加载」语义（_db 仍为 null ⇒ 允许下次重试），
+                //   并给出各自可读的诊断，不再让异常冒泡丢失上下文。
+                Dictionary<string, List<List<string>>>? rawDb = null;
+                try
                 {
-                    // Key (district name) can also be interned
-                    string key = UIUtils.Intern(kvp.Key);
-                    var lists = new List<List<string>>(kvp.Value.Count);
+                    rawDb = JsonSerializer.Deserialize<Dictionary<string, List<List<string>>>>(json);
+                }
+                catch (JsonException ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[CityCodeResolver] CityCode DB JSON invalid: {ex.Message}");
+                }
 
-                    foreach (var item in kvp.Value)
+                if (rawDb == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("[CityCodeResolver] CityCode DB deserialized to null (empty or invalid JSON)");
+                }
+                else
+                {
+                    // [Optimization] Intern strings in the DB to reduce memory usage
+                    // Many cities share the same province name, and many districts share the same city name
+                    var db = new Dictionary<string, List<List<string>>>(rawDb.Count);
+                    _db = db;
+
+                    foreach (var kvp in rawDb)
                     {
-                        // item: [code, name, province]
-                        var newItem = new List<string>(item.Count);
-                        foreach (var str in item)
+                        // Key (district name) can also be interned
+                        string key = UIUtils.Intern(kvp.Key);
+                        var lists = new List<List<string>>(kvp.Value.Count);
+
+                        foreach (var item in kvp.Value)
                         {
-                            newItem.Add(UIUtils.Intern(str));
+                            // item: [code, name, province]
+                            var newItem = new List<string>(item.Count);
+                            foreach (var str in item)
+                            {
+                                newItem.Add(UIUtils.Intern(str));
+                            }
+                            lists.Add(newItem);
                         }
-                        lists.Add(newItem);
+                        db[key] = lists;
                     }
-                    _db[key] = lists;
                 }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)

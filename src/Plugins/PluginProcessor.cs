@@ -349,7 +349,10 @@ namespace LiteMonitor.src.Plugins
                     string truePart = content.Substring(qIdx + 1, cIdx - (qIdx + 1)).Trim();
                     string falsePart = content.Substring(cIdx + 1).Trim();
 
-                    bool isTrue = context.TryGetValue(condKey, out string val) && !string.IsNullOrEmpty(val);
+                    // ★ Dictionary.TryGetValue 的 out 形参带 [MaybeNullWhen(false)]：
+                    //   键不存在时 val 会被置为 null ⇒ 形参必须显式声明为 string?。
+                    //   string.IsNullOrEmpty 带 [NotNullWhen(false)]，取反后 val 收窄为非空。
+                    bool isTrue = context.TryGetValue(condKey, out string? val) && !string.IsNullOrEmpty(val);
                     string target = isTrue ? truePart : falsePart;
 
                     // Remove quotes if present
@@ -359,7 +362,9 @@ namespace LiteMonitor.src.Plugins
                     }
 
                     // Treat as variable if not quoted
-                    return context.TryGetValue(target, out string tVal) ? tVal : "";
+                    // ★ 键不存在（或值为 null）时统一返回空串：原实现返回 null，
+                    //   由 Regex.Replace 落成空串替换 ⇒ 运行期结果一致。
+                    return context.TryGetValue(target, out string? tVal) && tVal != null ? tVal : "";
                 }
 
                 // Handle Fallback Syntax: "var ?? fallback"
@@ -376,7 +381,9 @@ namespace LiteMonitor.src.Plugins
                             return key.Substring(1, key.Length - 2);
                         }
 
-                        if (context.TryGetValue(key, out string val) && !string.IsNullOrEmpty(val))
+                        // ★ 同上：out 形参键不存在时为 null ⇒ 声明 string?；
+                        //   !string.IsNullOrEmpty 带 [NotNullWhen(false)]，会把 val 收窄为非空。
+                        if (context.TryGetValue(key, out string? val) && !string.IsNullOrEmpty(val))
                         {
                             return val;
                         }
@@ -385,7 +392,9 @@ namespace LiteMonitor.src.Plugins
                 }
 
                 // Standard Lookup
-                if (context.TryGetValue(content, out string value))
+                // ★ 键不存在时 out 形参为 null ⇒ 声明 string?；值为 null 时原实现返回 null，
+                //   由 Regex.Replace 落成空串替换 ⇒ 这里统一返回空串，运行期结果一致。
+                if (context.TryGetValue(content, out string? value) && value != null)
                 {
                     return value;
                 }
@@ -423,9 +432,13 @@ namespace LiteMonitor.src.Plugins
         /// [LM-080] authority 的**终止符**：路径分隔符、查询串起始、片段起始。
         /// <para>主机名**不可能**包含 <c>?</c> 或 <c>#</c> ⇒ 它们出现即表示 authority 已经结束。</para>
         /// </summary>
-        private static void AddDeclaredHost(HashSet<string> hosts, string urlTemplate)
+        private static void AddDeclaredHost(HashSet<string> hosts, string? urlTemplate)
         {
-            if (PluginHostPolicy.TryGetDeclaredHost(urlTemplate, out var host)) hosts.Add(host);
+            // ★ 步骤/根 URL 可能缺失（调用点用 tmpl.Execution?.Url、step?.Url 取值）：
+            //   PluginHostPolicy.TryGetDeclaredHost → TryUrlHost 内部对 null / 空白一律
+            //   返回 false（IsNullOrWhiteSpace 容忍 null）⇒ 运行期行为完全一致，
+            //   这里只把形参如实标注为可空并显式判空，不改变结果。
+            if (urlTemplate != null && PluginHostPolicy.TryGetDeclaredHost(urlTemplate, out var host)) hosts.Add(host);
         }
 
     }
@@ -560,7 +573,9 @@ namespace LiteMonitor.src.Plugins
         private readonly DateTime _deadlineUtc;
 
         /// <summary>实例级作用域（非 null ⇒ 本作用域是目标级作用域，owner 为实例级作用域）。</summary>
-        private readonly PluginSandboxScope _owner;
+        // ★ 实例级作用域（公共构造）没有 owner，字段天然为 null ⇒ 声明为可空；
+        //   目标级作用域由私有构造赋值（owner 非空，构造里已做 ArgumentNullException 守卫）。
+        private readonly PluginSandboxScope? _owner;
 
         private int _stepCount;
         private int _targetCount;
@@ -668,7 +683,8 @@ namespace LiteMonitor.src.Plugins
         public int TargetCount => _owner != null ? _owner.TargetCount : Volatile.Read(ref _targetCount);
 
         /// <summary>实例级作用域（非 null ⇒ 本作用域是目标级作用域）。</summary>
-        public PluginSandboxScope Owner => _owner;
+        // ★ 与字段同步：实例级作用域没有 owner ⇒ 返回值可空。
+        public PluginSandboxScope? Owner => _owner;
 
         /// <summary>作用域令牌：与外部取消联动，并在总时长到期时自动取消（网络等待因此可被中止）。</summary>
         public CancellationToken Token => _cts.Token;
