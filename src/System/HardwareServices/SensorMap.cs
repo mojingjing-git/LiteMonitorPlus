@@ -117,6 +117,33 @@ namespace LiteMonitor.src.SystemServices
         }
 
         /// <summary>
+        /// E01-A：取某个 Key 背靠的传感器（**不复制整张映射表**）。
+        /// <para>★ 快照组装时用它把"外部指标 Key"落到具体的传感器上，
+        /// 再由传感器拿到所属硬件的稳定身份（<c>ISensor.Hardware.Identifier</c>）。</para>
+        /// </summary>
+        public ISensor? GetSensor(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+            lock (_lock)
+            {
+                return _map.TryGetValue(key, out ISensor? sensor) ? sensor : null;
+            }
+        }
+
+        /// <summary>
+        /// E01-A：映射表里全部 Key 的副本（快照的指标 Key 集合来源）。
+        /// </summary>
+        public string[] GetSensorKeys()
+        {
+            lock (_lock)
+            {
+                var keys = new string[_map.Count];
+                _map.Keys.CopyTo(keys, 0);
+                return keys;
+            }
+        }
+
+        /// <summary>
         /// [F07] 槽位解析器 —— 把"展示槽位"绑到"稳定设备身份"。
         /// <para>★ 可注入：测试要能模拟"枚举顺序互换""设备消失""驱动更新导致标识变化"。</para>
         /// </summary>
