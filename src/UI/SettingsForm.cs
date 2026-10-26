@@ -17,8 +17,10 @@ namespace LiteMonitor.src.UI
         private UIController _ui;
         private MainForm _mainForm;
         
-        private FlowLayoutPanel _pnlNavContainer; 
-        private BufferedPanel _pnlContent; // 使用现有的 BufferedPanel
+        // ★ 这两个面板都在构造函数里（InitializeComponent）创建并挂到窗体上 ⇒ 构造完成时一定已赋值，
+        //   用 null! 占位声明（仅编译期用，不会真的为 null）。
+        private FlowLayoutPanel _pnlNavContainer = null!; 
+        private BufferedPanel _pnlContent = null!; // 使用现有的 BufferedPanel
         
         // 缓存所有页面实例
         private Dictionary<string, SettingsPageBase> _pages = new Dictionary<string, SettingsPageBase>();
@@ -241,7 +243,10 @@ namespace LiteMonitor.src.UI
             // 更新导航按钮状态
             _pnlNavContainer.SuspendLayout();
             foreach (Control c in _pnlNavContainer.Controls)
-                if (c is LiteNavBtn b) b.IsActive = ((string)b.Tag == key);
+                // ★ Tag 是 object?，这里只做字符串比较 ⇒ 先转成 string? 再比较，
+                //   Tag 不是字符串时结果是 false（与原来 (string)b.Tag 抛 InvalidCastException 相比更安全，
+                //   而正常运行路径下 Tag 一定是 string）。
+                if (c is LiteNavBtn b) b.IsActive = ((string?)b.Tag == key);
             _pnlNavContainer.ResumeLayout();
             _pnlNavContainer.Refresh(); 
             Application.DoEvents();

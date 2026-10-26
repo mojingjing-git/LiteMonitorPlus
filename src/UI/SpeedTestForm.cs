@@ -273,7 +273,8 @@ namespace LiteMonitor
         }
 
         // 重试点击事件处理
-        private void BtnRetry_Click(object sender, EventArgs e)
+        // ★ EventHandler 委托的 sender 形参按 .NET 约定可空，这里如实声明（方法体不使用 sender）。
+        private void BtnRetry_Click(object? sender, EventArgs e)
         {
             // 批量重置 UI 状态
             Invoke(new Action(() =>
@@ -298,7 +299,8 @@ namespace LiteMonitor
         }
 
         // 网卡数据更新逻辑 (保持不变)
-        private void UpdateLocalNetworkData(object sender, EventArgs e)
+        // ★ 同上：sender 声明为可空。
+        private void UpdateLocalNetworkData(object? sender, EventArgs e)
         {
             try
             {

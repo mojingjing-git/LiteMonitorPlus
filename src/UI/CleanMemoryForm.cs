@@ -11,15 +11,19 @@ namespace LiteMonitor.src.UI
 {
     public class CleanMemoryForm : Form
     {
-        private Label _lblTitle;
-        private Label _lblPercent;
-        private CustomProgressBar _bar; // Reusing CustomProgressBar from SpeedTestForm
+        // ★ 这三个控件都在构造函数里（InitializeUI）创建并挂到窗体上 ⇒ 构造完成时一定已赋值，
+        //   用 null! 占位声明（仅编译期用，不会真的为 null）。
+        private Label _lblTitle = null!;
+        private Label _lblPercent = null!;
+        private CustomProgressBar _bar = null!; // Reusing CustomProgressBar from SpeedTestForm
         private Theme _currentTheme;
         private Point _dragOffset;
         
         // GDI+ Resources to dispose
-        private Font _fontTitle;
-        private Font _fontPercent;
+        // ★ 可空：Dispose 里本来就用 _fontTitle?.Dispose() 判空，
+        //   说明"窗体还没建完就被 Dispose"是可能的（如构造中途抛异常）⇒ 如实声明为可空。
+        private Font? _fontTitle;
+        private Font? _fontPercent;
 
         public CleanMemoryForm()
         {
@@ -79,8 +83,12 @@ namespace LiteMonitor.src.UI
             int currentY = padding;
 
             // 预创建字体
-            _fontTitle = new Font(_currentTheme.Font.Family, 11f, FontStyle.Bold);
-            _fontPercent = new Font(_currentTheme.Font.Family, 28f, FontStyle.Bold);
+            // ★ 先建局部量再写回字段：字段声明为 Font?（Dispose 要判空），
+            //   局部量则保证下面 Label.Font = ... 一定拿到非 null 的字体。
+            var fontTitle = new Font(_currentTheme.Font.Family, 11f, FontStyle.Bold);
+            var fontPercent = new Font(_currentTheme.Font.Family, 28f, FontStyle.Bold);
+            _fontTitle = fontTitle;
+            _fontPercent = fontPercent;
 
             // 标题
             _lblTitle = new Label
@@ -90,7 +98,7 @@ namespace LiteMonitor.src.UI
                 Width = this.Width,
                 Height = ScaleDPI(24),
                 TextAlign = ContentAlignment.MiddleCenter,
-                Font = _fontTitle,
+                Font = fontTitle,
                 ForeColor = ThemeManager.ParseColor(_currentTheme.Color.TextGroup),
                 Top = currentY,
                 Left = 0
@@ -107,7 +115,7 @@ namespace LiteMonitor.src.UI
                 Height = ScaleDPI(50),
                 TextAlign = ContentAlignment.MiddleCenter,
                 // 使用超大字体
-                Font = _fontPercent,
+                Font = fontPercent,
                 ForeColor = ThemeManager.ParseColor(_currentTheme.Color.ValueSafe), // 使用绿色/安全色
                 Top = currentY,
                 Left = 0

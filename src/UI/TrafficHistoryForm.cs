@@ -11,10 +11,12 @@ namespace LiteMonitor
         private readonly Settings _cfg;
         private readonly System.Windows.Forms.Timer _timer;
 
-        private Label _lblSessionUp, _lblSessionDown;
-        private Label _lblTodayUp, _lblTodayDown;
-        private Label _lblListSummary;
-        private DataGridView _grid;
+        // ★ 这 6 个控件都在构造函数里（InitializeUI）创建并挂到窗体上，
+        //   构造函数返回时一定已赋值 ⇒ 用 null! 占位声明（仅用于编译期，不会真的为 null）。
+        private Label _lblSessionUp = null!, _lblSessionDown = null!;
+        private Label _lblTodayUp = null!, _lblTodayDown = null!;
+        private Label _lblListSummary = null!;
+        private DataGridView _grid = null!;
         private Dictionary<HistoryViewMode, Button> _viewButtons = new Dictionary<HistoryViewMode, Button>();
 
         private float _scale = 1.0f;
@@ -212,7 +214,9 @@ namespace LiteMonitor
         }
 
         // ★★★ 新增：自定义排序方法 ★★★
-        private void Grid_SortCompare(object sender, DataGridViewSortCompareEventArgs e)
+        // ★ 事件处理器的 sender 形参按 .NET 约定声明为可空（DataGridViewSortCompareEventHandler 委托签名如此），
+        //   本方法体不使用 sender，语义不变。
+        private void Grid_SortCompare(object? sender, DataGridViewSortCompareEventArgs e)
         {
             // 1. 获取两行的 Tag 数据 (long数组)
             // Tag: [0]=Total, [1]=Max, [2]=Up, [3]=Down
@@ -365,7 +369,8 @@ namespace LiteMonitor
             _lblListSummary.Text = $"{modeName}视图总计 (View Total):  ↑ {MetricUtils.FormatDataSize(sumUp)}    ↓ {MetricUtils.FormatDataSize(sumDown)}    (Σ {MetricUtils.FormatDataSize(sumUp + sumDown)})";
         }
 
-        private void Grid_CellPainting(object sender, DataGridViewCellPaintingEventArgs e)
+        // ★ 同上：sender 声明为可空，与 DataGridViewCellPaintingEventHandler 委托签名一致。
+        private void Grid_CellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
         {
             if (e.ColumnIndex == 4 && e.RowIndex >= 0)
             {
@@ -378,22 +383,29 @@ namespace LiteMonitor
                     {
                         Rectangle r = e.CellBounds;
                         r.Inflate(-10, -10);
-                        using (var brushBg = new SolidBrush(C_BarBg)) e.Graphics.FillRectangle(brushBg, r);
-
-                        double sqrtTotal = Math.Sqrt(total);
-                        double sqrtMax = Math.Sqrt(max);
-                        float pctTotal = (float)(sqrtTotal / sqrtMax);
-
-                        int wTotal = (int)(r.Width * pctTotal);
-                        if (wTotal < 4 && pctTotal > 0) wTotal = 4;
-
-                        if (wTotal > 0)
+                        // ★ .NET 8 起 DataGridViewCellPaintingEventArgs.Graphics 本身是 Graphics?：
+                        //   这里用"局部量 + 条件包裹"如实表达，既不写 e.Graphics! 断言，
+                        //   也不在绘制回调里提前 return（那会跳过后面的 e.Handled = true 与柱状分段绘制）。
+                        var g = e.Graphics;
+                        if (g is not null)
                         {
-                            float pctUp = total > 0 ? (float)up / total : 0;
-                            int wUp = (int)(wTotal * pctUp);
-                            int wDown = wTotal - wUp;
-                            if (wUp > 0) using (var brushUp = new SolidBrush(C_Up)) e.Graphics.FillRectangle(brushUp, new Rectangle(r.X, r.Y, wUp, r.Height));
-                            if (wDown > 0) using (var brushDown = new SolidBrush(C_Down)) e.Graphics.FillRectangle(brushDown, new Rectangle(r.X + wUp, r.Y, wDown, r.Height));
+                            using (var brushBg = new SolidBrush(C_BarBg)) g.FillRectangle(brushBg, r);
+
+                            double sqrtTotal = Math.Sqrt(total);
+                            double sqrtMax = Math.Sqrt(max);
+                            float pctTotal = (float)(sqrtTotal / sqrtMax);
+
+                            int wTotal = (int)(r.Width * pctTotal);
+                            if (wTotal < 4 && pctTotal > 0) wTotal = 4;
+
+                            if (wTotal > 0)
+                            {
+                                float pctUp = total > 0 ? (float)up / total : 0;
+                                int wUp = (int)(wTotal * pctUp);
+                                int wDown = wTotal - wUp;
+                                if (wUp > 0) using (var brushUp = new SolidBrush(C_Up)) g.FillRectangle(brushUp, new Rectangle(r.X, r.Y, wUp, r.Height));
+                                if (wDown > 0) using (var brushDown = new SolidBrush(C_Down)) g.FillRectangle(brushDown, new Rectangle(r.X + wUp, r.Y, wDown, r.Height));
+                            }
                         }
                     }
                 }
@@ -425,7 +437,9 @@ namespace LiteMonitor
             _ => d.ToString("yyyy-MM-dd")
         };
 
-        private class DisplayItem { public string DateLabel; public DateTime SortDate; public long Upload; public long Download; public long Total => Upload + Download; }
+        // ★ 运行期事实：DateLabel 唯一赋值点是上面 AggregateData 里的 DateLabel = g.Key（GetKey 一定返回非 null 字符串），
+        //   这里给个空串初值只为满足编译器的"离开构造函数时必须非空"检查，不会产生新的空值路径。
+        private class DisplayItem { public string DateLabel = ""; public DateTime SortDate; public long Upload; public long Download; public long Total => Upload + Download; }
 
         protected override void OnFormClosed(FormClosedEventArgs e) 
         { 
