@@ -12,7 +12,8 @@ namespace LiteMonitor.src.Plugins
     /// </summary>
     public class PluginMonitorSyncService
     {
-        private static PluginMonitorSyncService _instance;
+        // ★ 单例是"懒加载"语义：未调用 Instance 前确实为 null。
+        private static PluginMonitorSyncService? _instance;
         public static PluginMonitorSyncService Instance => _instance ??= new PluginMonitorSyncService();
 
         private PluginMonitorSyncService() { }
