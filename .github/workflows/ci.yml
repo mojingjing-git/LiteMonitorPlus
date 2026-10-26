@@ -401,7 +401,14 @@ jobs:
           )
           foreach ($p in $projects) {
             Write-Host "==> 门禁 1：$p"
-            dotnet build $p -c Release --no-incremental --nologo -warnaserror
+            # NU1900 = NuGet 拉取漏洞数据失败（源不可达/离线/缓存过期），属网络环境类告警，
+            #   与代码质量无关，会被 -warnaserror 升级为 error 导致门禁「假红」。
+            #   用 -p:NuGetAudit=false 关闭本次构建的漏洞审计来消除 NU1900：
+            #   · 不能用 -p:WarningsNotAsErrors=NU1900 —— NuGet 只认 NoWarn / WarningsAsErrors；
+            #   · 也不能用 -p:NoWarn=NU1900 —— 它是 MSBuild 全局属性，会覆盖测试工程 csproj 内的
+            #     <NoWarn>$(NoWarn);CS8632</NoWarn>，导致 CS8632 × 263 重新冒头（实测 44 → 307）。
+            #   · 本作业的「还原依赖」步骤仍开着审计，真实漏洞（NU1902/NU1903）照常可见。
+            dotnet build $p -c Release --no-incremental --nologo -warnaserror '-p:NuGetAudit=false'
             if ($LASTEXITCODE -ne 0) {
               throw "门禁 1 失败：$p（退出码 $LASTEXITCODE）—— 生产工程在 Release 下出现编译警告，已按 TreatWarningsAsErrors 升级为错误。可空债务清零是本次治理的验收底线，不允许降级放行。"
             }
@@ -424,7 +431,8 @@ jobs:
           $legacy = 'CS0168%3BCS0649%3BCS8632%3BxUnit2031%3BxUnit1030%3BxUnit1031%3BxUnit2013%3BxUnit1026%3BxUnit2000%3BxUnit2012%3BxUnit2017%3BxUnit2020'
           dotnet build LiteMonitor.sln -c Release --no-incremental --nologo `
             -p:TreatWarningsAsErrors=true `
-            -p:WarningsNotAsErrors=$legacy
+            -p:WarningsNotAsErrors=$legacy 
+            -p:NuGetAudit=false
           if ($LASTEXITCODE -ne 0) {
             throw "门禁 2 失败（退出码 $LASTEXITCODE）—— 全解决方案出现了**不在历史抑制清单内**的新警告码，已升级为错误。请修正代码，或在确属历史债务时把对应码登记进本步骤的抑制清单（并同步更新计划文档的燃尽表）。"
           }

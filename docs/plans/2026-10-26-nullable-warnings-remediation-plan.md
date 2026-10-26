@@ -1,7 +1,12 @@
 # LiteMonitor 编译警告与 Nullable 可空引用全面治理实施计划
 
 - **制定日期**：2026-10-26
-- **计划状态**：**v2.4 修订版 —— Phase 0–5 全部实施完毕** —— 主程序 `LiteMonitor.csproj` 实测 **0 警告 / 0 错误**；全解决方案剩余 **44 条**警告**全部位于 `tests/LiteMonitor.Tests/`**（xUnit 分析器 42 + CS0168 1 + CS0649 1），**无任何 CS86xx 可空警告**，`src/`、`tools/`、`LiteMonitor.Updater/`、`LiteMonitor.HardwareHost` 全部 **0 警告**；**门禁 1（生产工程 `-warnaserror`）与门禁 2（防回退 `WarningsNotAsErrors`）均实测 EXIT=0**；测试 **2686 条全绿**（通过 2685 / 跳过 1 / 失败 0），CI 断言脚本通过。执行在独立 worktree `G:\TOOL\LiteMonitor-fork\.agents\worktrees\remediation-phase-0`（基线 `master @ 42b6b61`），共 **17 个治理提交**（13 个主干可见 + 4 个并行分支提交经 merge 合入）+ 计划文档同步提交，**72 个文件**（治理 71 + 计划文档 1）、**+2938 / −441**（纯治理改动 **71 个文件、+1278 / −441**；计划文档本身 **+1660 行**）。**「生产可空警告清零」目标已达成。**
+- **计划状态**：**v2.5 修订版 —— Phase 0–5 全部实施完毕并已合入 master** —— 主程序 `LiteMonitor.csproj` 实测 **0 警告 / 0 错误**；全解决方案剩余 **44 条**警告**全部位于 `tests/LiteMonitor.Tests/`**（xUnit 分析器 42 + CS0168 1 + CS0649 1），**无任何 CS86xx 可空警告**，`src/`、`tools/`、`LiteMonitor.Updater/`、`LiteMonitor.HardwareHost` 全部 **0 警告**；**门禁 1（生产工程 `-warnaserror`）与门禁 2（防回退 `WarningsNotAsErrors`）均实测 EXIT=0**；测试 **2686 条全绿**（通过 2685 / 跳过 1 / 失败 0），CI 断言脚本通过。执行在独立 worktree `G:\TOOL\LiteMonitor-fork\.agents\worktrees\remediation-phase-0`（基线 `master @ 42b6b61`），共 **17 个治理提交**（13 个主干可见 + 4 个并行分支提交经 merge 合入）+ 计划文档同步提交，**72 个文件**（治理 71 + 计划文档 1）、**+2938 / −441**（纯治理改动 **71 个文件、+1278 / −441**；计划文档本身 **+1660 行**）。**「生产可空警告清零」目标已达成**；治理成果已通过 merge commit **`2527ae0`** 合入 `master`。
+- **修订记录（v2.5 · 门禁抗网络抖动 + 合入 master）**：
+  1. **门禁 1 / 门禁 2 补 `-p:NuGetAudit=false`**（§5.6 任务 2）。**触发原因**：合并后的复测中发现，`-warnaserror` / `TreatWarningsAsErrors=true` 会把 **NU1900**（NuGet 拉取包漏洞数据失败 —— `无法加载源 https://api.nuget.org/v3/index.json 的服务索引`）升级为 **error**，导致门禁在**离线环境或 nuget.org 缓存过期**时**假红**（实测：`LiteMonitor.csproj` / `LiteMonitor.Updater` / `HardwareHost` 三工程 EXIT=1，错误行全部是 `error NU1900`，而编译警告数本身为 **0**）。**NU1900 属网络环境类告警，与代码质量无关**；本门禁构建关闭漏洞审计来消除它，而 CI 的**「还原依赖」步骤仍开着审计**，**真实漏洞 NU1902 / NU1903 照常可见**。
+  2. **踩坑记录（三选一，只能选第三种）**：① `-p:WarningsNotAsErrors=NU1900` 对 NuGet 告警**无效**（实测仍 EXIT=1）—— NuGet 只认 `NoWarn` / `WarningsAsErrors`；② `-p:NoWarn=NU1900` 虽然能消除 NU1900（实测 EXIT=0），但它是 MSBuild **全局属性**，会**覆盖**测试工程 csproj 内的 `<NoWarn>$(NoWarn);CS8632</NoWarn>`，导致 **CS8632 × 263** 重新冒头（Release 全解决方案警告从 **44 条暴涨到 307 条**）；③ **最终采用 `-p:NuGetAudit=false`** —— 关闭本次门禁构建的漏洞审计，**不动 NoWarn**，项目级抑制语义完整保留。实测 `dotnet build LiteMonitor.csproj -c Release --no-incremental -warnaserror -p:NuGetAudit=false` → **EXIT=0 / 0 警告 0 错误**；`dotnet build LiteMonitor.sln -c Release --no-incremental -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=<收紧清单> -p:NuGetAudit=false` → **EXIT=0 / 44 警告 0 错误**（与 Debug 基线一致，CS8632 未复现）。
+  3. **治理成果合入 master**：merge commit **`2527ae0`**（`merge(nullable): 可空引用治理 Phase 0–5 成果合入 master`，71 文件 +1278 / −441）。合并前已用 `git stash push -u` 完整备份另一任务线（theme-studio）的未提交改动，合并后 `git stash pop` **无冲突**原样恢复。
+  4. **合并后复测发现并代修 2 条 CS8603**：`src/ThemeEditor/ThemeStudioForm.cs` 的 `RouteStatusTextForTesting` / `SavedStatusTextForTesting` 两个测试钩子读取 `ToolStripItem.Text`（该属性标注为可空）后直接返回 → CS8603。**对照实验证实这 2 条是 theme-studio 未提交代码自带的**（合并前基线 `07124d7` + 同一份 WIP 构建同样报这 2 条，行号 1242/1244），**不是合并引入**；修法为 `?? ""` 兜底（WinForms 保证 `Text` 永不为 null，语义等价）。
 - **修订记录（v2.4 · 全量实施完成与实测回填）**：
   1. **§5.4 / §5.5 / §5.6 标记为「已完成」**并回填各自 commit：Phase 3 = `2fa0118` / `48035ee` / `12bbae8`（另有后置修正 `c373d36`）、Phase 4 = `1652ed3` / `725873d` / `f65787b`、Phase 5 = `acdae23` / `b293185` / `e37020a`；三节的「预期成果 / 验收标准」改写为**实测事实**。
   2. **§6.1 燃尽表按实测链重排**：**293 → 292 → 233 → 213 → 189 → 161 → 101 → 100 → 38 → 0**；与**计划刻度**（295 → 294 → 233 → 217 → 128 → 40 → 0）自 **Phase 2 之后**出现偏离 —— 计划按**文件清单推算**，实测含「**上游签名放宽带来的连带消除**」，因此 **Phase 3 的实际消除量由计划的 89 变为 85**（计划刻度 213 → 128，实测 213 → 100）。⚠️ **口径提示**：此处沿用的「**85**」是 v2.3 时期的**跨提交口径**推算值（其对照的「213 → 100」实际跨越 Phase 3 与 Phase 4 的四个提交），**不可与逐提交数字直接相减**；**权威值以 §6.1「v2.4 逐提交实测链」为准**（Phase 3 三提交合计 **−90**、Phase 4 三提交合计 **−123**）。
@@ -1257,10 +1262,19 @@ flowchart TD
   ```pwsh
   # ── 门禁 1（硬门禁）：生产代码零警告，Phase 5 生效
   #   ★ v2.4：覆盖四个生产工程（补 LiteMonitor.Updater，commit b293185）
-  dotnet build LiteMonitor.csproj -c Release --no-incremental -warnaserror
-  dotnet build LiteMonitor.Updater\LiteMonitor.Updater.csproj -c Release --no-incremental -warnaserror
-  dotnet build src\HardwareHost\LiteMonitor.HardwareHost.csproj -c Release --no-incremental -warnaserror
-  dotnet build src\Contracts\LiteMonitor.Contracts.csproj -c Release --no-incremental -warnaserror
+  #   ★ v2.5：补 -p:NuGetAudit=false —— NU1900 是 NuGet 拉取漏洞数据失败（源不可达 /
+  #     离线 / 缓存过期）导致的**网络环境类告警**，与代码质量无关；-warnaserror 会把
+  #     它升级为 error，使门禁在离线或 nuget.org 抖动时**假红**。
+  #     ⚠️ 三选一，只能选 NuGetAudit=false：
+  #       · `-p:WarningsNotAsErrors=NU1900` **无效**（NuGet 只认 NoWarn / WarningsAsErrors）；
+  #       · `-p:NoWarn=NU1900` 虽能消除 NU1900，但它是 MSBuild **全局属性**，会覆盖测试
+  #         工程 csproj 的 <NoWarn>$(NoWarn);CS8632</NoWarn>，使 CS8632 × 263 复现；
+  #       · `-p:NuGetAudit=false` 关闭本次构建的漏洞审计，不动 NoWarn，抑制语义完整。
+  #         CI 的「还原依赖」步骤仍开着审计，真实漏洞（NU1902 / NU1903）照常可见。
+  dotnet build LiteMonitor.csproj -c Release --no-incremental -warnaserror -p:NuGetAudit=false
+  dotnet build LiteMonitor.Updater\LiteMonitor.Updater.csproj -c Release --no-incremental -warnaserror -p:NuGetAudit=false
+  dotnet build src\HardwareHost\LiteMonitor.HardwareHost.csproj -c Release --no-incremental -warnaserror -p:NuGetAudit=false
+  dotnet build src\Contracts\LiteMonitor.Contracts.csproj -c Release --no-incremental -warnaserror -p:NuGetAudit=false
 
   # ── 门禁 2（防回退）：全解决方案零新增警告，历史债务按基线放行
   #   ★ 分号必须写成 %3B：MSBuild 用 ";" 分隔多个属性，直接传 ";" 会报
@@ -1273,8 +1287,10 @@ flowchart TD
   #     csproj NoWarn 屏蔽）+ 9 个 xUnit 码。实测 EXIT=0 / 44 警告 0 错误。
   dotnet build LiteMonitor.sln -c Release --no-incremental `
     -p:TreatWarningsAsErrors=true `
-    -p:WarningsNotAsErrors="CS0168%3BCS0649%3BCS8632%3BxUnit2031%3BxUnit1030%3BxUnit1031%3BxUnit2013%3BxUnit1026%3BxUnit2000%3BxUnit2012%3BxUnit2017%3BxUnit2020"
+    -p:WarningsNotAsErrors="CS0168%3BCS0649%3BCS8632%3BxUnit2031%3BxUnit1030%3BxUnit1031%3BxUnit2013%3BxUnit1026%3BxUnit2000%3BxUnit2012%3BxUnit2017%3BxUnit2020" `
+    -p:NuGetAudit=false
   ```
+  > ★ **v2.5**：门禁 2 同步补 `-p:NuGetAudit=false`（理由同门禁 1：NU1900 属网络环境类 NuGet 告警，会被 `TreatWarningsAsErrors=true` 升级为 error 造成假红）。**刻意不采用 `-p:NoWarn=NU1900`** —— 命令行 `NoWarn` 是 MSBuild 全局属性，会覆盖测试工程 csproj 内的 `<NoWarn>$(NoWarn);CS8632</NoWarn>`，使 CS8632 × 263 复现（实测 44 → 307）；`NuGetAudit=false` 不触碰 NoWarn，项目级抑制语义完整保留。
   - **机制说明**：`TreatWarningsAsErrors=true` + `WarningsNotAsErrors=<历史警告码清单>` 是 MSBuild 的正确组合 —— 历史债务降级为「警告」但**仍然可见**（便于持续跟踪），**任何新增警告码一律升级为 error 导致构建失败**。
   - **实测验证（2026-10-26，Release + `--no-incremental`）**：
     - ⚠️ **v2.2 修正**：v2 初稿把「构建失败于 `HostPipeSession.cs(194,49) error CS8604`」解读为「机制生效」，**该解读不成立** —— 失败的真实原因是**该码不在抑制清单里**（清单只覆盖测试/工具工程的历史码，漏了主程序的 14 个历史码），而非「故意让它失败」。
