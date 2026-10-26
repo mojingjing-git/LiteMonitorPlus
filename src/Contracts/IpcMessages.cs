@@ -10,7 +10,7 @@ namespace LiteMonitor.Contracts;
 public static class IpcProtocol
 {
     public const int MajorVersion = 1;
-    public const int MinorVersion = 0;
+    public const int MinorVersion = 1;   // E02：新增 keyed-demand/release/操作状态类操作（纯增量，旧消息含义不变）
 
     /// <summary>单条消息（含头）上限：接收长度先校验再分配内存。</summary>
     public const int MaxMessageBytes = 1024 * 1024;
@@ -32,6 +32,20 @@ public static class IpcProtocol
     public const string OpRescan = "rescan";
     public const string OpGetCatalog = "get-catalog";
     public const string OpShutdown = "shutdown";
+
+    // ── E02 命令面 v2 操作（纯增量；ArgumentJson/ResultJson 的 DTO JSON 形状如下，集成人预落）──
+    /// <summary>到期采样（共享协调器合并；对应 IHardwareClient.RequestSamplingAsync）。参数：无。结果：{ "triggered": bool }。</summary>
+    public const string OpSamplingDue = "sampling-due";
+    /// <summary>显式全量重扫（独立操作 ID/有界/状态可查；对应 RequestFullRescanAsync）。参数：无。
+    /// 结果：HardwareOperationResult 的 JSON（Accepted/OperationId/State/FailureReason）。</summary>
+    public const string OpRescanFull = "rescan-full-v2";
+    /// <summary>按消费者登记需求。参数：{ "consumerId": string, "demand": SamplingDemand }。结果：{ "registered": bool }。</summary>
+    public const string OpSubmitDemandV2 = "submit-demand-v2";
+    /// <summary>释放消费者需求。参数：{ "consumerId": string }。结果：{ "released": bool }。</summary>
+    public const string OpReleaseDemand = "release-demand";
+    /// <summary>查询操作状态（超时调用方凭 OperationId 后询，不重发非幂等操作）。参数：{ "operationId": string }。
+    /// 结果：HardwareOperationResult 的 JSON；未知 ID 返回 Ok=true + State=Rejected("unknown-operation")。</summary>
+    public const string OpOperationStatus = "operation-status";
 
     /// <summary>命令默认应答期限（调用方超时不等于底层操作已取消，不得立即重开相同操作）。</summary>
     public static readonly TimeSpan DefaultCommandTimeout = TimeSpan.FromSeconds(5);
