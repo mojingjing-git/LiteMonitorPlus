@@ -8,7 +8,7 @@ namespace LiteMonitor.src.Core
         /// 统一解析监控项的主标签 (Name)
         /// 优先级：UserLabel > InfoService(Runtime) > DynamicLabel(Config)
         /// </summary>
-        public static string ResolveLabel(MonitorItemConfig config)
+        public static string ResolveLabel(MonitorItemConfig? config)
         {
             if (config == null) return "";
 
@@ -72,7 +72,7 @@ namespace LiteMonitor.src.Core
         /// 统一解析监控项的简略标签 (Taskbar)
         /// 优先级：TaskbarLabel > InfoService(Runtime) > DynamicTaskbarLabel(Config)
         /// </summary>
-        public static string ResolveShortLabel(MonitorItemConfig config)
+        public static string ResolveShortLabel(MonitorItemConfig? config)
         {
             if (config == null) return "";
 

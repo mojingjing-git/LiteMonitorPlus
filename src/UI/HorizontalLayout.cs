@@ -312,7 +312,10 @@ namespace LiteMonitor
             return padV * 2 + ((isTaskbarSingle || isHorizontalSingle) ? _rowH : _rowH * 2);
         }
 
-        private int MeasureMetricItem(Graphics g, MetricItem item, Settings.TBStyle s)
+        // ★ 运行期事实：调用方传的是 Column.Top / Column.Bottom（两者都是 MetricItem?），
+        //   而本方法体第一行就有既存的 null 守卫（item == null → 返回 0）⇒ 形参如实声明为可空，
+        //   守卫从"多余检查"变成"真正的契约"，行为不变。
+        private int MeasureMetricItem(Graphics g, MetricItem? item, Settings.TBStyle s)
         {
             if (item == null) return 0;
 
@@ -429,7 +432,9 @@ namespace LiteMonitor
             }
 
             // 2. 处理显示单位 (叠加用户配置)
-            string userFmt = item.BoundConfig?.UnitTaskbar;
+            // ★ BoundConfig 可空、UnitTaskbar 本身就是 string?（src/Core/Settings.cs:971-972），
+            //   且 MetricUtils.GetDisplayUnit 的第三形参本来就接受 null（"没有用户自定义单位"）⇒ 如实声明为可空。
+            string? userFmt = item.BoundConfig?.UnitTaskbar;
             string unit = MetricUtils.GetDisplayUnit(item.Key, rawUnit, userFmt);
 
             // 3. 拼接并生成样本 (将所有数字替换为 '0')

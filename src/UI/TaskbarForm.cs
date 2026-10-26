@@ -119,7 +119,12 @@ namespace LiteMonitor
             TopMost = false;
             DoubleBuffered = true;
 
-            ReloadLayout();
+            // ★ 运行期事实：_layout 唯一的赋值点在 ReloadLayoutCore 里（每次都新建一个 HorizontalLayout），
+            //   而构造函数紧接着就会调用它 ⇒ 构造完成时 _layout 一定已赋值。
+            //   这里显式建好实例再交给 ReloadLayoutCore：实例数量、创建顺序、后续逻辑与原来完全一致，
+            //   只是让编译器看见"构造函数里 _layout 被赋值过"（消 CS8618），不用 null! 兜底。
+            _layout = new HorizontalLayout(ThemeManager.Current, 300, LayoutMode.Taskbar, _cfg);
+            ReloadLayoutCore(_layout);
 
             _bizHelper.CheckTheme(true);
 
@@ -239,7 +244,20 @@ namespace LiteMonitor
 
         public void ReloadLayout()
         {
-            _layout = new HorizontalLayout(ThemeManager.Current, 300, LayoutMode.Taskbar, _cfg);
+            ReloadLayoutCore(new HorizontalLayout(ThemeManager.Current, 300, LayoutMode.Taskbar, _cfg));
+        }
+
+        /// <summary>
+        /// 重建任务栏布局。<paramref name="layout"/> 是本次使用的新布局实例。
+        /// </summary>
+        /// <remarks>
+        /// ★ 单独拆出来是为了让构造函数能"先建实例、再走同一套逻辑"，
+        ///   这样 _layout 在构造函数结束前一定已被赋值（消除 CS8618），
+        ///   同时每次 ReloadLayout() 依旧会新建一个 HorizontalLayout（行为不变）。
+        /// </remarks>
+        private void ReloadLayoutCore(HorizontalLayout layout)
+        {
+            _layout = layout;
             _lastLayoutSignature = ""; // 重置签名，强制重算
             _winHelper.ApplyLayeredStyle(_bizHelper.TransparentKey, _cfg.TaskbarClickThrough);
             _bizHelper.CheckTheme(true);

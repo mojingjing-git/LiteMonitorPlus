@@ -19,14 +19,17 @@ namespace LiteMonitor.src.WebServer
                 {
                     using var ms = new System.IO.MemoryStream();
                     icon.ToBitmap().Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                    _cachedFaviconBase64 = Convert.ToBase64String(ms.ToArray());
-                    return _cachedFaviconBase64;
+                    // ★ 用局部变量承接：静态字段在方法调用后 null-state 会被重置，
+                    //   直接 return _cachedFaviconBase64 会触发 CS8603。
+                    string encoded = Convert.ToBase64String(ms.ToArray());
+                    _cachedFaviconBase64 = encoded;
+                    return encoded;
                 }
             }
             catch { }
-            return ""; 
+            return "";
         }
-        private static string _cachedFaviconBase64 = null;
+        private static string? _cachedFaviconBase64 = null;
 
         public const string IndexHtml = @"
 <!DOCTYPE html>

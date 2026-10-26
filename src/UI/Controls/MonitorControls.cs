@@ -60,8 +60,10 @@ namespace LiteMonitor.src.UI.Controls
         /// </summary>
         private readonly string _initialName;
 
-        public event EventHandler MoveUp;
-        public event EventHandler MoveDown;
+        // ★ 这两个事件由外部（Settings/MonitorPage.cs）订阅，是否订阅取决于调用方 ⇒ 可空声明。
+        //   触发处本来就用 MoveUp?.Invoke(...) 做了空检查，语义不变。
+        public event EventHandler? MoveUp;
+        public event EventHandler? MoveDown;
 
         // ★★★ 修改构造函数：增加 isTaskbarMode 参数 ★★★
         public MonitorItemRow(MonitorItemConfig item, bool isTaskbarMode)
@@ -127,7 +129,8 @@ namespace LiteMonitor.src.UI.Controls
             string defUnit = MetricUtils.GetUnitStr(item.Key, 0, unitCtx);
             
             // 2. 获取当前配置值
-            string userConfig = isTaskbarMode ? item.UnitTaskbar : item.UnitPanel;
+            // ★ 可空：UnitPanel / UnitTaskbar 的 null = "自动"、"" = "隐藏"，二者语义不同，不可抹平。
+            string? userConfig = isTaskbarMode ? item.UnitTaskbar : item.UnitPanel;
             
             // 3. 决定显示文本 (null显示默认值, ""显示空格)
             // 注意：如果配置是""(隐藏)，我们给输入框显示一个空格" "，让用户知道这里不是空的(默认)，而是特意留空的。
@@ -201,7 +204,8 @@ namespace LiteMonitor.src.UI.Controls
             // [Fix] 根据模式动态选择上下文
             var unitCtx = isTaskbarMode ? MetricUtils.UnitContext.SettingsTaskbar : MetricUtils.UnitContext.SettingsPanel;
             string defUnit = MetricUtils.GetUnitStr(Config.Key, 0, unitCtx);
-            string userConfig = isTaskbarMode ? Config.UnitTaskbar : Config.UnitPanel;
+            // ★ 可空：UnitPanel / UnitTaskbar 的 null = "自动"、"" = "隐藏"，二者语义不同，不可抹平。
+            string? userConfig = isTaskbarMode ? Config.UnitTaskbar : Config.UnitPanel;
 
             // 更新 Input 状态
             // null -> 默认, "" -> 空格
@@ -314,7 +318,10 @@ namespace LiteMonitor.src.UI.Controls
             // 保存时同样需要对比 Settings 上下文下的默认值 (因为输入框显示的是 Settings 格式)
             var unitCtx = _isTaskbarMode ? MetricUtils.UnitContext.SettingsTaskbar : MetricUtils.UnitContext.SettingsPanel;
             string defUnit = MetricUtils.GetUnitStr(Config.Key, 0, unitCtx);
-            string finalVal;
+            // ★ 运行期事实：下面三个分支分别会赋 null（恢复默认）、""（强制不显示）、val（用户输入），
+            //   而 Config.UnitPanel / Config.UnitTaskbar 本身就是 string?（src/Core/Settings.cs:971-972），
+            //   所以这里如实声明为可空 —— 原代码赋 null 属于合法语义，不是漏赋值。
+            string? finalVal;
 
             if (string.IsNullOrEmpty(rawUnit)) 
             {
@@ -361,9 +368,10 @@ namespace LiteMonitor.src.UI.Controls
         /// </summary>
         public string InputInitial { get; private set; } = "";
         private LiteCheck _chkAll; // [需求2] 增加组开关
-        public event EventHandler MoveUp;
-        public event EventHandler MoveDown;
-        public event EventHandler<bool> ToggleGroup; // [需求2] 组开关事件
+        // ★ 同上：外部订阅型事件，声明为可空；触发处已用 ?.Invoke 做空检查。
+        public event EventHandler? MoveUp;
+        public event EventHandler? MoveDown;
+        public event EventHandler<bool>? ToggleGroup; // [需求2] 组开关事件
 
         public MonitorGroupHeader(string groupKey, string alias)
         {

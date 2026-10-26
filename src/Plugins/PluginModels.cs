@@ -249,10 +249,12 @@ namespace LiteMonitor.src.Plugins
     // [Optimization] Cache keys to avoid string concatenation in hot loops
     public class PluginOutputKeys
     {
-        public string InjectKey;
-        public string InjectColorKey;
-        public string InjectUnitKey;
-        public string PropLabelKey;
-        public string PropShortKey;
+        // ★ 给安全默认值：这些键由 PluginExecutor 的输出预处理器一次性填好，
+        //   但 DTO 本身可能被别处 new 出来，给默认空串可避免"未初始化即被读取"。
+        public string InjectKey = "";
+        public string InjectColorKey = "";
+        public string InjectUnitKey = "";
+        public string PropLabelKey = "";
+        public string PropShortKey = "";
     }
 }

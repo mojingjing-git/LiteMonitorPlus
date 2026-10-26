@@ -1240,7 +1240,10 @@ namespace LiteMonitor.src.SystemServices
 
         private void InitializeAsync()
         {
-            Task.Run(async () =>
+            // ★ 去掉 async：此 lambda 体内没有任何 await（CS1998）。
+            //   它本来就只是"抛到线程池上跑一段同步初始化"，去掉 async 后语义完全一致，
+            //   且不再为此生成多余的 async 状态机。
+            Task.Run(() =>
             {
                 _isOpening = true;
                 try

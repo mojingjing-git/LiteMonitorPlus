@@ -44,6 +44,26 @@
     <FileVersion>1.0.0.0</FileVersion><!-- 文件属性显示 -->
   </PropertyGroup>
 
+  <!--
+    ★ Phase 5 · 强类型编译门禁（仅 Release）。
+
+    语义：Release 构建下，本工程内的**任何**编译警告一律升级为**错误**，
+    使「可空引用治理」从一次性清理变成**持续可验证的工程不变量**。
+
+    为何只限 Release：
+      · Debug 保留警告可读性，便于开发期定位；
+      · CI 的「门禁 1（生产零警告）」以 -c Release 执行，故门禁实际生效。
+
+    为何写在**本 csproj** 而不是根级 Directory.Build.props：
+      根级 props 会被 tests/ 与 tools/ 隐式导入，那里仍有 627 条真实可空债务
+      与 42 条 xUnit 分析器规则警告（分属独立 Phase 6 / Phase 7），
+      一并提升为错误会让门禁永久红灯。详见
+      docs/plans/2026-10-26-nullable-warnings-remediation-plan.md §5.6。
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
 
 	<ItemGroup>
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />

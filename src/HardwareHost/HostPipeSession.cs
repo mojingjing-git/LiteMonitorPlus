@@ -191,7 +191,10 @@ internal sealed class HostPipeSession
                 {
                     await _writeSignal.WaitAsync(100, cts.Token).ConfigureAwait(false);
                     while (_control.TryTake(out IpcEnvelope? env))
+                    {
+                        if (env is null) continue; // 队列中不应出现空信封；显式防御，避免把 null 写入管道
                         await writer.WriteAsync(env, cts.Token).ConfigureAwait(false);
+                    }
                     IpcSnapshotMessage? pending = Interlocked.Exchange(ref _slot, null);
                     if (pending is not null)
                         await writer.WriteAsync(SnapshotEnvelope(pending), cts.Token).ConfigureAwait(false);

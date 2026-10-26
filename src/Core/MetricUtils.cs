@@ -420,7 +420,9 @@ namespace LiteMonitor.src.Core
             return CommittedMemoryCapacityUnit;
         }
 
-        public static string GetDisplayUnit(string key, string calculatedUnit, string userFormat)
+        /// <param name="userFormat">用户自定义单位格式。★ null 与 "" 语义不同：
+        /// <c>null</c> = 用默认单位（calculatedUnit），<c>""</c> = 隐藏单位。不可用 ?? "" 抹平。</param>
+        public static string GetDisplayUnit(string key, string calculatedUnit, string? userFormat)
         {
             string result;
             if (string.IsNullOrEmpty(userFormat))

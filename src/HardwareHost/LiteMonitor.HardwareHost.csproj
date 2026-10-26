@@ -25,6 +25,15 @@
     <Description>LiteMonitor++ 硬件采集宿主进程（P-I2 原型：最小真实采样器 + 命名管道）</Description>
   </PropertyGroup>
 
+  <!--
+    ★ Phase 5 · 强类型编译门禁（仅 Release）。
+    语义与理由见仓库根 LiteMonitor.csproj 的同名 PropertyGroup 注释；
+    本工程是「门禁 1」的三个生产工程之一（零警告硬门禁）。
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
   </ItemGroup>

@@ -426,7 +426,8 @@ namespace LiteMonitor
         }
 
         // ★★★ 优化 2：全局单例引用 ★★★
-        private static Settings _instance;
+        // 未调用 Load() 之前为 null（单例是"懒加载"语义，不是"构造即有"）。
+        private static Settings? _instance;
 
         // ★★★ 优化 3：改造 Load 方法为单例模式 ★★★
         public static Settings Load(bool forceReload = false)
@@ -435,33 +436,35 @@ namespace LiteMonitor
             if (_instance != null && !forceReload) return _instance;
 
             // 委托给 SettingsHelper 加载
-            _instance = SettingsHelper.Load(forceReload);
-            
+            // ★ 用局部变量承载，避免后续对可空字段 _instance 的重复解引用（CS8602）
+            Settings loaded = SettingsHelper.Load(forceReload);
+            _instance = loaded;
+
             // 兼容旧配置：如果 WebServerPassword 为 null，初始化为空字符串
-            if (_instance.WebServerPassword == null)
+            if (loaded.WebServerPassword == null)
             {
-                _instance.WebServerPassword = "";
+                loaded.WebServerPassword = "";
             }
 
             // 兼容旧配置：如果 MarketPlugins 为 null，初始化为空列表
-            if (_instance.MarketPlugins == null)
+            if (loaded.MarketPlugins == null)
             {
-                _instance.MarketPlugins = new List<MarketPluginRecord>();
+                loaded.MarketPlugins = new List<MarketPluginRecord>();
             }
 
             // 兼容旧配置：如果 Themes（主题市场安装记录）为 null，初始化为空列表
-            if (_instance.Themes == null)
+            if (loaded.Themes == null)
             {
-                _instance.Themes = new List<MarketPluginRecord>();
+                loaded.Themes = new List<MarketPluginRecord>();
             }
 
             // ★ W12：解析监听范围（存量配置保持旧行为，新装默认仅环回）
-            _instance.ResolveWebServerBindMode();
+            loaded.ResolveWebServerBindMode();
 
             // ★ W9：插件凭据解密失败的显式处理（禁用受影响实例 + 记录错误，绝不静默变空）
-            _instance.ApplyPluginCredentialState();
+            loaded.ApplyPluginCredentialState();
 
-            return _instance;
+            return loaded;
         }
 
         /// <summary>
@@ -717,7 +720,7 @@ namespace LiteMonitor
                 string text = File.ReadAllText(path);
                 if (!text.Contains("WebServerPassword")) return true;     // 没有该字段 ⇒ 无需处理
 
-                JsonNode root = JsonNode.Parse(text);
+                JsonNode? root = JsonNode.Parse(text);
                 if (root is JsonObject obj)
                 {
                     if (obj.ContainsKey("WebServerPassword")) obj.Remove("WebServerPassword");
@@ -964,8 +967,9 @@ namespace LiteMonitor
 
         // ★★★ [新增] 自定义单位配置 ★★★
         // null/"Auto" = 自动(默认), "" = 不显示, "{u}/s" = 自定义格式
-        public string UnitPanel { get; set; } = null; 
-        public string UnitTaskbar { get; set; } = null;
+        // ★ 声明为可空：null 与 "" 语义不同（null=自动、""=隐藏），不可改成 = ""。
+        public string? UnitPanel { get; set; } = null;
+        public string? UnitTaskbar { get; set; } = null;
         public bool VisibleInPanel { get; set; } = true;
         public bool VisibleInTaskbar { get; set; } = false;
         

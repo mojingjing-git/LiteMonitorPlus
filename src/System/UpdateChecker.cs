@@ -341,7 +341,9 @@ namespace LiteMonitor
                     var sortedUrls = await GetSortedZipUrls(latest);
 
                     // ---- 加载设置并弹出更新窗口 ----
-                    bool isZh = settings?.Language?.ToLower() == "zh";
+                    // ★ 不用 settings?.：settings 是非空的 Settings，对非空变量写条件访问会污染它的
+                    //   null-state，导致下面 new UpdateDialog(context, settings) 报 CS8604。
+                    bool isZh = settings.Language?.ToLower() == "zh";
 
                     var context = new DownloadContext
                     {

@@ -535,9 +535,19 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
         long renderStartedTimestamp = Stopwatch.GetTimestamp();
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(scene);
+
+        // ★ 局部变量承接 + 守卫（计划 §5.3 变体 B）。
+        //   局部变量**不会**收窄字段的 null-state，所以「守卫」与「后续一律改用局部变量」
+        //   必须成对实施，只做前者等于没做（§4.3 铁律六）。
+        //   _swapChain / _emptyView 仅在构造函数里赋值一次、此后无置 null 路径
+        //   （Dispose 只释放不置空），运行时必非空 —— 这里把该不变量显式化，
+        //   而不是用 `?.` 静默降级（会把"设备已丢失"伪装成"这一帧没画出来"，违反铁律五）。
+        var swapChain = _swapChain;
+        var emptyView = _emptyView;
         if (!scene.IsValid ||
             _sceneRenderTargetView is null || _foregroundPainter is null ||
-            _foregroundView is null || _constants is null)
+            _foregroundView is null || _constants is null ||
+            swapChain is null || emptyView is null)
         {
             throw new InvalidOperationException("The GPU scene renderer is not ready to draw.");
         }
@@ -564,7 +574,7 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
             _deviceService.Context.ClearRenderTargetView(_foregroundRenderTargetView!, new Color4(0, 0, 0, 0));
 
         GpuDesktopFrameLease? liveLease = null;
-        ID3D11ShaderResourceView backgroundView = _emptyView.Value;
+        ID3D11ShaderResourceView backgroundView = emptyView.Value;
         Rectangle captureRectangle = new(0, 0, _width, _height);
         bool hasLiveBackground = false;
         if (_fixedInput is not null && _fixedView is not null)
@@ -649,7 +659,7 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
             }
 
             using ID3D11Texture2D backBuffer =
-                _swapChain.GetBuffer<ID3D11Texture2D>(0);
+                swapChain.GetBuffer<ID3D11Texture2D>(0);
             _deviceService.Context.CopyResource(backBuffer, _sceneTexture!.Value);
             // Present(0) only records submission cadence. Synchronize the
             // production frame to the compositor so present timing, frame
@@ -658,7 +668,7 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
             // 【诊断】呈现历史计数：尝试数在提交前自增，成功数在合成器接受后自增。
             // 宿主据此上报合同 §2 维度 6 的呈现历史与 §2 维度 8 的首帧结果。
             _presentAttempts++;
-            _swapChain.Present(1, PresentFlags.None).CheckError();
+            swapChain.Present(1, PresentFlags.None).CheckError();
             _presentedFrames++;
             RecordPresentTiming(renderStartedTimestamp);
         }
@@ -682,6 +692,14 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
             return;
         }
 
+        // ★ 局部变量承接 + 守卫（计划 §5.3 变体 B）：守卫与「后续改用局部变量」必须成对实施。
+        //   放在尺寸未变化的提前返回**之后**，以免把"无事可做"变成异常。
+        var swapChain = _swapChain;
+        if (swapChain is null)
+        {
+            throw new InvalidOperationException("The GPU scene renderer is not ready to resize.");
+        }
+
         _deviceService.Context.ClearState();
         _deviceService.Context.Flush();
         _foregroundPainter?.Dispose();
@@ -697,7 +715,7 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
         _sceneTexture?.Dispose();
         _sceneTexture = null;
 
-        _swapChain.ResizeBuffers(
+        swapChain.ResizeBuffers(
             2,
             (uint)physicalWidth,
             (uint)physicalHeight,
@@ -868,6 +886,15 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
 
     private void RecordPresentTiming(long renderStartedTimestamp)
     {
+        // ★ 局部变量承接 + 守卫（计划 §5.3 变体 B）。
+        //   ⚠️ 本方法与 Render / Resize 是**并列**的方法体，字段状态不跨方法传递，
+        //     前两处入口的守卫覆盖不到这里，必须单独同样处理。
+        var swapChain = _swapChain;
+        if (swapChain is null)
+        {
+            throw new InvalidOperationException("The GPU scene renderer is not ready to record present timing.");
+        }
+
         long presentedTimestamp = Stopwatch.GetTimestamp();
         if (_lastPresentTimestamp != 0)
         {
@@ -882,7 +909,7 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
             Stopwatch.Frequency);
         _lastPresentTimestamp = presentedTimestamp;
 
-        Result statisticsResult = _swapChain.GetFrameStatistics(
+        Result statisticsResult = swapChain.GetFrameStatistics(
             out FrameStatistics statistics);
         if (statisticsResult.Failure)
         {

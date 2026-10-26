@@ -34,7 +34,10 @@ namespace LiteMonitor.src.UI
         private string T(string en, string zh) => _settings.Language.ToLower().StartsWith("zh") ? zh : en;
 
         // B3:客户端必传(组合根经网关注入,MenuManager 构造);不再默认就地组装
-        public HardwareInfoForm(IHardwareClient hardwareClient)
+        // ★ 形参声明为可空：调用方（MenuManager）拿到的是 HardwareGateway.Client（可能为 null），
+        //   但构造函数内部依旧用 ?? throw ArgumentNullException 拒绝 null ——
+        //   异常类型、参数名、抛出位置全部不变，运行期行为完全一致。
+        public HardwareInfoForm(IHardwareClient? hardwareClient)
         {
             _client = hardwareClient ?? throw new ArgumentNullException(nameof(hardwareClient));
             this.Text = T("LiteMonitor++ - Hardware Info", "LiteMonitor++ - 系统硬件详情");
@@ -150,7 +153,9 @@ namespace LiteMonitor.src.UI
             }
         }
 
-        private void HeaderPanel_Paint(object sender, PaintEventArgs e)
+        // ★ PaintEventHandler 委托的 sender 形参按 .NET 约定就是可空的，
+        //   这里如实声明（方法体不使用 sender）。
+        private void HeaderPanel_Paint(object? sender, PaintEventArgs e)
         {
             var g = e.Graphics;
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
@@ -407,7 +412,11 @@ namespace LiteMonitor.src.UI
                 default: return $"[{type}]";
             }
         }
-        private string GetSensorTypeString(string type)
+        // ★ 运行期事实：调用方是 GroupBy(s => s.SensorType) 的分组键，而 SensorType 本身是 string?；
+        //   上面已用 Where(e => e.SensorType != null) 过滤过 ⇒ 运行期这里不会拿到 null。
+        //   但类型上确实是 string?，如实声明为可空：null 会落到 default 分支输出 "[null]"，
+        //   不会引入新的异常路径。
+        private string GetSensorTypeString(string? type)
         {
             switch (type) {
                 case "Temperature": return T("[Temperature]", "[温度]");

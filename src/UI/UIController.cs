@@ -495,7 +495,11 @@ namespace LiteMonitor
         private GpuPresentationHostController CreateGpuPresentationHost(
             MaterialKind material,
             bool captureRequested,
-            ThemeRenderingConfig rendering,
+            // ★ 运行期事实：Theme.Rendering 本身就是可空的（src/Core/ThemeManager.cs:363，
+            //   缺失时表示"这套主题没有渲染配置"），而下游 GpuPresentationHostController 的
+            //   renderingConfig 形参本来就是 ThemeRenderingConfig? ⇒ 这里如实声明为可空，
+            //   纯注解改动，零运行期变化。
+            ThemeRenderingConfig? rendering,
             Theme theme)
         {
             GpuPresentationHostController host = new(
@@ -1124,7 +1128,10 @@ namespace LiteMonitor
                 // ② 更新横版 / 任务栏 (清理了冗余代码)
                 void UpdateCol(Column col)
                 {
-                    void UpdateItem(MetricItem it) 
+                    // ★ 运行期事实：调用处传的是 Column.Top / Column.Bottom，两者都是 MetricItem?，
+                    //   而函数体第一行就有既存的 null 守卫 ⇒ 形参如实声明为可空，
+                    //   这个守卫从"多余检查"变成真正的契约，行为不变。
+                    void UpdateItem(MetricItem? it) 
                     {
                         if (it == null) return;
                         
@@ -1441,13 +1448,22 @@ namespace LiteMonitor
 
             if (reconfigured)
             {
+                // ★ 运行期事实：reconfigured 只可能在 canReconfigure 为真时被置真，而 canReconfigure
+                //   要求 _gpuPresentation 非空；这中间也没有任何地方会把它置空
+                //   （置空只发生在 StopGpuPresentation() / Dispose() 里）⇒ 这里它必定非空。
+                //   取局部量使用：字段的 null 状态会在方法调用之后被重置（所以直接写
+                //   _gpuPresentation.XXX 会被误报"可能为空"），局部量则不会。
+                //   守卫在运行期不可达；保留它是为了将来判定逻辑变化时不要退化成 NRE。
+                var gpu = _gpuPresentation;
+                if (gpu is null) return;
+
                 _gpuRoute = decision;
                 _gpuFallbackCode =
                     decision.CaptureRequested &&
-                    !_gpuPresentation.IsLiveCaptureStarted
-                        ? _gpuPresentation.LastErrorCode
+                    !gpu.IsLiveCaptureStarted
+                        ? gpu.LastErrorCode
                         : decision.FallbackCode;
-                _gpuPresentation.ResetPerformanceWindows();
+                gpu.ResetPerformanceWindows();
                 UpdateGpuScene();
                 // ★ GPU 路线就绪 ⇒ 发布稳定状态（否则协调器会一直停在 Stopping，
                 //   §8.4 的启动守卫会永远为假 ⇒ Tick 兜底失效）。
@@ -1622,6 +1638,13 @@ namespace LiteMonitor
                     // 合同 §4 步 2 失败语义：Phase=Failed，**不重建**。
                     return;
                 }
+
+                // ★ 运行期事实：TryCaptureWindowState 对 null 快照会记失败并返回 false
+                //   （见 RenderingTransitionCoordinator.TryCaptureWindowState），
+                //   所以走到这里时 snapshot 必非空；该方法没有 [NotNullWhen(true)] 标注，
+                //   这里显式收窄一次，后面把它传给非空形参时就不会再报警告。
+                //   守卫在运行期不可达，不改变任何行为。
+                if (snapshot is null) return;
 
                 // 停呈现调度（GPU 帧绘制栈内不得递归执行后续步骤 ⇒ 先停调度）。
                 _gpuPresentation?.Suspend();
@@ -2089,7 +2112,9 @@ namespace LiteMonitor
                  // 避免异步等待导致的 "?"
                  if (dashKey == "IP")
                  {
-                      string cachedIP = _hwClient.GetNetworkIP();
+                      // ★ GetNetworkIP() 可能返回 null（拿不到 IP 时），
+                      //   而下面本来就是用 IsNullOrEmpty 判空的 ⇒ 如实声明为可空，行为不变。
+                      string? cachedIP = _hwClient.GetNetworkIP();
                       if (!string.IsNullOrEmpty(cachedIP) && cachedIP != "?")
                       {
                            InfoService.Instance.InjectIP(cachedIP);

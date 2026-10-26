@@ -16,7 +16,7 @@ namespace LiteMonitor.Core
     public sealed record MetricFormatResolvers(
         Func<string, float?, bool, string?, string> GetValueStr,
         Func<string, float?, MetricFormatContext, string> GetUnitStr,
-        Func<string, string, string, string> GetDisplayUnit,
+        Func<string, string, string?, string> GetDisplayUnit,
         Func<string, double, int> GetState,
         Func<string, double, double> GetProgressValue);
 
@@ -60,7 +60,9 @@ namespace LiteMonitor.Core
             if (r == null) throw new ArgumentNullException(nameof(r));
             key ??= "";
 
-            string userFormat = isHorizontal ? userFormatTaskbar : userFormatPanel;
+            // ★ userFormat 允许为 null：null 与 "" 语义不同（null=用默认单位、""=隐藏单位），
+            //   见 MetricUtils.GetDisplayUnit。因此这里必须保留可空，不能用 ?? "" 抹平。
+            string? userFormat = isHorizontal ? userFormatTaskbar : userFormatPanel;
             bool hasCustomUnit = !string.IsNullOrEmpty(userFormat);
 
             // ── TextValue 路径（插件/仪表盘项）：不做缓存数值刷新，只补单位 ─────────────

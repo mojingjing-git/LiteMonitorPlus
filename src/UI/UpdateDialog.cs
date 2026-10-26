@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -62,7 +63,13 @@ namespace LiteMonitor
         /// <summary>
         /// 期望摘要形态是否合法（64 位十六进制）。空值/畸形值一律不合法。
         /// </summary>
-        public static bool IsWellFormedDigest(string? value)
+        /// <remarks>
+        /// ★ [NotNullWhen(true)]：返回 true 时 value 必然是非 null 且非空白，
+        ///   这一点在方法体里成立（IsNullOrWhiteSpace 为 false ⇒ value 非 null），
+        ///   标注出来之后调用方"先判断 IsWellFormedDigest(x) 再使用 x"的写法
+        ///   就不再需要 null-forgiving 断言。
+        /// </remarks>
+        public static bool IsWellFormedDigest([NotNullWhen(true)] string? value)
         {
             if (string.IsNullOrWhiteSpace(value)) return false;
 
@@ -150,7 +157,10 @@ namespace LiteMonitor
         private string _verifiedSha256 = "";
 
         private CancellationTokenSource? _cts;
-        private Stopwatch _speedWatch;
+        // ★ 运行期事实：秒表在"开始下载"时用 Stopwatch.StartNew() 重新赋值（见 btnUpdate_Click），
+        //   在那之前只会被读取一次（ElapsedMilliseconds）—— 未启动的秒表 Elapsed 恒为 0，
+        //   与"还没开始计时"语义一致 ⇒ 直接给个初值实例，零行为变化。
+        private Stopwatch _speedWatch = new Stopwatch();
         private bool IsChinese => _settings?.Language?.ToLower() == "zh";
 
         public UpdateDialog(DownloadContext context, Settings settings)
@@ -480,7 +490,9 @@ namespace LiteMonitor
                                 : $"Could not read the downloaded package: {ex.Message}");
                     }
 
-                    if (!UpdatePackageBinder.Matches(actual, expected!))
+                    // ★ 上面的 IsWellFormedDigest(expected) 守卫已经保证 expected 非 null，
+                    //   这里不再需要 null-forgiving 断言。
+                    if (!UpdatePackageBinder.Matches(actual, expected))
                     {
                         pinned.Dispose();
                         throw new UpdateIntegrityException(

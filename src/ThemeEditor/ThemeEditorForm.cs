@@ -16,24 +16,27 @@ namespace LiteMonitor.ThemeEditor
     public class ThemeEditorForm : Form
     {
         // 左栏：主题管理
-        private ListBox? lstThemes;
-        private Button? btnNew;
-        private Button? btnRename;
-        private Button? btnCopy;
-        private Button? btnDelete;
-        private Button? btnCancel;
+        // ★ WinForms 标准范式：控件字段一律声明为非空并用 `= null!;` 占位。
+        //   这些控件全部在构造函数里创建（115-201 行），编译器无法跨方法追踪赋值，
+        //   若声明为可空则每个使用点都会报 CS8602 —— 那是**声明失误**，不是真实空引用风险。
+        private ListBox lstThemes = null!;
+        private Button btnNew = null!;
+        private Button btnRename = null!;
+        private Button btnCopy = null!;
+        private Button btnDelete = null!;
+        private Button btnCancel = null!;
 
         // 中间：TabControl + 编辑页
-        private TabControl? tab;
-        private Panel? pageLayout;
-        private Panel? pageFont;
-        private Panel? pageColors;
+        private TabControl tab = null!;
+        private Panel pageLayout = null!;
+        private Panel pageFont = null!;
+        private Panel pageColors = null!;
 
         // 外观字段页（机能风 / 液态玻璃的新字段，外观改造计划 A10）
-        private AppearanceFields? appearanceFields;
+        private AppearanceFields appearanceFields = null!;
 
         // 右栏：预览
-        private ThemePreviewControl? preview;
+        private ThemePreviewControl preview = null!;
 
         private Theme? _theme;
 

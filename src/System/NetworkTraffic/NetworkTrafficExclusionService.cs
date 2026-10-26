@@ -392,20 +392,25 @@ public sealed class NetworkTrafficExclusionService : IDisposable
         }
 
         FilteredNetworkSnapshot? snap = _published;
-        bool effective = snap != null && snap.IsValid;
-        long unattributed = snap?.UnattributedEvents ?? 0;
 
-        if (!effective)
+        // ★ 显式早退取代「bool effective 中转变量」：
+        //   旧写法把「快照为空 / 快照无效」压缩进 effective 这个 bool，编译器在后续行
+        //   无法证明 snap 非空，于是 415 行报 CS8602（流分析误报，并非真实 NRE）。
+        //   这里把两种情况一次判掉并直接返回，之后 snap 必非空，可直接解引用。
+        if (snap == null || !snap.IsValid)
         {
+            long unattributedPreparing = snap?.UnattributedEvents ?? 0;
             return new NetworkTrafficExclusionStatus(NetworkTrafficExclusionState.Preparing, false,
                 snap?.InvalidReason != null && snap.InvalidReason.Contains("warm", StringComparison.OrdinalIgnoreCase)
                     ? "Menu.IpExclusionStateWarmingUp"
                     : "Menu.IpExclusionStatePreparing",
                 snap?.InvalidReason, rulesVersion, ruleCount, generation,
-                _source.EventsLost, _source.EventsUndecodable, snap?.EventsApplied ?? 0, unattributed, errors);
+                _source.EventsLost, _source.EventsUndecodable, snap?.EventsApplied ?? 0, unattributedPreparing, errors);
         }
 
-        bool degraded = _source.EventsLost > 0 || unattributed > 0 || snap!.AdapterAmbiguous;
+        // ★ 此处 snap 必非空（早退已滤掉 null / 无效）：直接解引用，不做 ?. 静默降级（§4.3 铁律五）。
+        long unattributed = snap.UnattributedEvents;
+        bool degraded = _source.EventsLost > 0 || unattributed > 0 || snap.AdapterAmbiguous;
         return new NetworkTrafficExclusionStatus(
             degraded ? NetworkTrafficExclusionState.Degraded : NetworkTrafficExclusionState.Running,
             true,

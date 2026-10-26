@@ -15,7 +15,10 @@ namespace LiteMonitor
     public class MetricItem
     {
         // [新增] 绑定原始配置对象，实现动态 Label
-        public MonitorItemConfig BoundConfig { get; set; }
+        // ★ 声明为可空：ThemeEditor 预览项 / 未接线项本就没有绑定配置
+        //   （见 ThemePreviewViews 的类注释与 ThemeStudioPreviewFormsTests 的 Assert.Null(m.BoundConfig)）。
+        //   运行时确为 null，不是"类型声明撒了谎"。
+        public MonitorItemConfig? BoundConfig { get; set; }
 
         // ── B4-1：组合根接线点（应用层持有全局查询，MetricItem 自身不再引用 InfoService/Settings）──
         /// <summary>插件色解析（组合根设置，如 k =&gt; InfoService.Instance.GetValue(k)）；ThemeEditor 等场景自动继承。</summary>
@@ -85,7 +88,10 @@ namespace LiteMonitor
         
         public float? Value { get; set; } = null;
         public float DisplayValue { get; set; } = 0f;
-        public string TextValue { get; set; } = null;
+        // ★ 声明为可空：Dashboard 文本项才有值，数值项恒为 null。
+        //   ★ null 与 "" 语义不同 —— MetricItemFormatter 用 `textValue != null` 区分
+        //   「文本项」与「数值项」，改成 `= string.Empty` 会让所有数值项走进文本分支（行为回归）。
+        public string? TextValue { get; set; } = null;
 
         // =============================
         // 格式化缓存（B4-1：纯数据状态委托给 MetricFormatterState；UI 独有状态仍在下方）
@@ -108,7 +114,7 @@ namespace LiteMonitor
         {
             if (_dashColorKey == null) return null;
             var resolver = PluginColorResolver ?? DefaultPluginColorResolver;
-            string colorVal = resolver?.Invoke(_dashColorKey);
+            string? colorVal = resolver?.Invoke(_dashColorKey);
             if (!string.IsNullOrEmpty(colorVal) && int.TryParse(colorVal, out int state))
             {
                 return state;

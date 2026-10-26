@@ -164,9 +164,14 @@ namespace LiteMonitor
             // 1. Check if new install
             if (s.MonitorItems == null || s.MonitorItems.Count == 0)
             {
+                // ★ 先用局部变量承接 s：InitDefaultItems() 是扩展方法调用，编译器会重置 s 的 null-state，
+                //   之后再读 s.MonitorItems 就会触发 CS8602（解引用可能出现空引用）。
+                Settings cfg = s;
                 s.InitDefaultItems();
                 // Ensure TaskbarSortIndex has initial value
-                foreach (var item in s.MonitorItems)
+                // ★ 同时对 MonitorItems 本身做可空防守：它来自 JSON 反序列化，理论上真可能为 null。
+                List<MonitorItemConfig> defaultItems = cfg.MonitorItems ?? new List<MonitorItemConfig>();
+                foreach (var item in defaultItems)
                 {
                     if (item.TaskbarSortIndex == 0)
                         item.TaskbarSortIndex = item.SortIndex;

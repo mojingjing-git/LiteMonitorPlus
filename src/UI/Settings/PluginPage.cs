@@ -71,7 +71,16 @@ namespace LiteMonitor.src.UI.SettingsPage
                 {
                     var inst = instances.FirstOrDefault(x => x.Id == id);
                     // Pass the in-memory instance to avoid reading stale config from disk
-                    PluginManager.Instance.RestartInstance(id, inst);
+                    // ★ inst 可能为 null（该实例已经被删掉了）。RestartInstance 的第二个形参
+                    //   虽然声明为非空，但它的默认值就是 null，而且插件管理器内部对 null 的处理是
+                    //   「实例不存在 ⇒ 清理对应的监控项」（见 src/Plugins/PluginManager.cs 的
+                    //   RestartInstance，以及本文件 Save() 末尾「cleanup」那条注释）。
+                    //   所以这里按「找得到 / 找不到」分两次调用：重载的默认实参同样是 null，
+                    //   运行期行为与原来完全一致，也不需要用 `!` 去压制编译器。
+                    if (inst == null)
+                        PluginManager.Instance.RestartInstance(id);
+                    else
+                        PluginManager.Instance.RestartInstance(id, inst);
                 }
 
                 _modifiedInstanceIds.Clear();
@@ -90,9 +99,18 @@ namespace LiteMonitor.src.UI.SettingsPage
         {
             // 1. Save State
             int savedScroll = 0;
-            if (_container != null && !_container.IsDisposed)
+            // ★ _container 在构造函数里就赋了值、之后从未被置空，运行时必定非 null。
+            //   原先这里写的是 `_container != null && !_container.IsDisposed`，
+            //   那个 null 判定反而把编译器的字段空值状态降级成「可能为 null」，
+            //   于是下面 110 行 `_container.SuspendLayout()` 报 CS8602
+            //   （空值检查自己制造出了空值警告）。
+            //   改成先取到局部变量、只判真正要防的 IsDisposed：判定内容等价，
+            //   运行期行为不变；并且本方法后续一律使用这个局部变量，
+            //   局部变量不会污染字段的空值状态。
+            var container = _container;
+            if (!container.IsDisposed)
             {
-                savedScroll = _container.VerticalScroll.Value;
+                savedScroll = container.VerticalScroll.Value;
             }
 
             // Save Checkbox States
@@ -107,21 +125,21 @@ namespace LiteMonitor.src.UI.SettingsPage
             _toggles.Clear();
 
             // 2. Suspend Layout & Clear Controls (Reuse container)
-            _container.SuspendLayout();
+            container.SuspendLayout();
             
             // Clear pending actions
             _refreshActions.Clear();
 
             // Dispose old controls
-            while (_container.Controls.Count > 0)
+            while (container.Controls.Count > 0)
             {
-                var ctrl = _container.Controls[0];
-                _container.Controls.RemoveAt(0);
+                var ctrl = container.Controls[0];
+                container.Controls.RemoveAt(0);
                 ctrl.Dispose();
             }
             
             // Fix: Reset AutoScrollMinSize to prevent ghost whitespace at bottom
-            _container.AutoScrollMinSize = new Size(0, 0);
+            container.AutoScrollMinSize = new Size(0, 0);
             
             var templates = PluginManager.Instance.GetAllTemplates();
             // Use Config instead of Settings.Load() to ensure consistency with SettingsForm context
@@ -137,10 +155,10 @@ namespace LiteMonitor.src.UI.SettingsPage
             var hintRow = new LiteActionRow(LanguageManager.T("Menu.PluginHint"), linkDoc);
 
             hintRow.Dock = DockStyle.Top;
-            _container.Controls.Add(hintRow);
+            container.Controls.Add(hintRow);
             
             var hintSpacer = new Panel { Dock = DockStyle.Top, Height = 5, BackColor = Color.Transparent };
-            _container.Controls.Add(hintSpacer);
+            container.Controls.Add(hintSpacer);
             
             if (instances == null || instances.Count == 0)
             {
@@ -150,7 +168,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                     ForeColor = UIColors.TextSub, 
                     Location = new Point(UIUtils.S(20), UIUtils.S(60)) 
                 };
-                _container.Controls.Add(lbl);
+                container.Controls.Add(lbl);
             }
             else
             {
@@ -179,20 +197,20 @@ namespace LiteMonitor.src.UI.SettingsPage
                 Height = 40, 
                 BackColor = Color.Transparent 
             };
-            _container.Controls.Add(spacer);
-            _container.Controls.SetChildIndex(spacer, 0); // Force to be the last docked item (Bottom)
+            container.Controls.Add(spacer);
+            container.Controls.SetChildIndex(spacer, 0); // Force to be the last docked item (Bottom)
 
             // 3. Resume Layout & Restore Scroll
-            _container.ResumeLayout(true);
+            container.ResumeLayout(true);
 
             // [Fix] Reset AutoScroll to recalculate scrollable area and remove ghost whitespace
-            _container.AutoScroll = false;
-            _container.PerformLayout();
-            _container.AutoScroll = true;
+            container.AutoScroll = false;
+            container.PerformLayout();
+            container.AutoScroll = true;
 
             if (savedScroll > 0)
             {
-                _container.AutoScrollPosition = new Point(0, savedScroll);
+                container.AutoScrollPosition = new Point(0, savedScroll);
             }
         }
 
@@ -360,8 +378,15 @@ namespace LiteMonitor.src.UI.SettingsPage
                                 var pLabel = t.GetProperty("Label");
                                 var pValue = t.GetProperty("Value");
                                 
-                                if (pLabel != null) label = pLabel.GetValue(opt)?.ToString();
-                                if (pValue != null) vOpt = pValue.GetValue(opt)?.ToString();
+                                // ★ 反射取 Label/Value：这两个属性在 PluginInputOption 里都是
+                                //   非空 string（`public string Label { get; set; } = "";`），
+                                //   正常情况下 ToString() 不会返回 null。
+                                //   ★ 但 ComboBox.AddItem 的两个形参都要求非空 string，
+                                //   这里用 `?? ""` 兜住「反射拿到 null」这一理论情况：
+                                //   原代码把 null 传进去，下拉项显示成空白、选中值也是 null；
+                                //   兜成空串后显示效果完全一致（还是空标签），只是不再把 null 带进配置。
+                                if (pLabel != null) label = pLabel.GetValue(opt)?.ToString() ?? "";
+                                if (pValue != null) vOpt = pValue.GetValue(opt)?.ToString() ?? "";
                                 
                                 cmb.AddItem(label, vOpt);
                             }
@@ -376,14 +401,20 @@ namespace LiteMonitor.src.UI.SettingsPage
                             
                             // AttachAutoWidth logic inline
                             cmb.Inner.DropDown += (s, e) => {
-                                var box = (ComboBox)s;
-                                int maxWidth = box.Width;
-                                foreach (var item in box.Items) {
-                                    if (item == null) continue;
-                                    int w = TextRenderer.MeasureText(item.ToString(), box.Font).Width + SystemInformation.VerticalScrollBarWidth + 10;
-                                    if (w > maxWidth) maxWidth = w;
+                                // ★ DropDown 事件的 sender 按 WinForms 约定声明为 object?，
+                                //   这里用模式匹配收窄成 ComboBox（而不是强制转换 + 直接解引用），
+                                //   这样 sender 为 null 时不会抛 NullReferenceException。
+                                //   ★ 实际运行时 sender 一定是内嵌的 ComboBox，行为不变。
+                                if (s is ComboBox box)
+                                {
+                                    int maxWidth = box.Width;
+                                    foreach (var item in box.Items) {
+                                        if (item == null) continue;
+                                        int w = TextRenderer.MeasureText(item.ToString(), box.Font).Width + SystemInformation.VerticalScrollBarWidth + 10;
+                                        if (w > maxWidth) maxWidth = w;
+                                    }
+                                    box.DropDownWidth = maxWidth;
                                 }
-                                box.DropDownWidth = maxWidth;
                             };
 
                             var item = new LiteSettingsItem("  " + input.Label, cmb);

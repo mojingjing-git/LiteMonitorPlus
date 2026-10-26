@@ -21,7 +21,13 @@ namespace LiteMonitor.src.Plugins
         };
 
         internal static PluginTemplate Copy(PluginTemplate source)
-            => JsonSerializer.Deserialize<PluginTemplate>(JsonSerializer.Serialize(source));
+        {
+            // 往返序列化（同一个类型 + 同一套转换器）实际不可能失败；真失败说明序列化管线坏了，
+            // 此时抛明确异常，优于把 null 传给调用方（那会在更远处炸成难定位的 NRE）。
+            string json = JsonSerializer.Serialize(source);
+            PluginTemplate? copy = JsonSerializer.Deserialize<PluginTemplate>(json);
+            return copy ?? throw new InvalidOperationException("PluginTemplate 往返序列化失败：反序列化结果为 null。");
+        }
 
         internal static string Fingerprint(PluginInstanceConfig instance, PluginTemplate template)
         {

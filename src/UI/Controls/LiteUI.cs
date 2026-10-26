@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Drawing;
 using System.Windows.Forms;
 using LiteMonitor.src.Core; // 确保引用了 UIUtils
@@ -594,8 +595,11 @@ namespace LiteMonitor.src.UI.Controls
     public class LiteUnderlineInput : Panel, IThemeRefreshable
     {
         public TextBox Inner;
-        private Label _lblUnit;   // 单位 (右侧)
-        private Label _lblLabel;  // 标签 (左侧)
+        // ★ 可空：单位标签/前置标签**只在调用方传了非空文本时才会被创建**（见构造函数 642/658 行），
+        //   为空时这两个字段运行期就是 null —— ApplyTheme / OnPaint 里本来就有 null 判断。
+        //   所以这里如实声明为可空，而不是用 null! 掩盖。
+        private Label? _lblUnit;   // 单位 (右侧)
+        private Label? _lblLabel;  // 标签 (左侧)
 
         /// <summary>调用方显式指定的字色（如阈值输入框的告警色/危险色）；null 表示跟随主题。</summary>
         private Color? _explicitColor;
@@ -641,7 +645,9 @@ namespace LiteMonitor.src.UI.Controls
             // 2. 添加单位 (Dock Right, 浮在右边)
             if (!string.IsNullOrEmpty(unit))
             {
-                _lblUnit = new Label {
+                // ★ 先建局部量再写回字段：字段本身是可为空的，用局部量保证下面几行一定非空，
+                //   免得依赖"字段刚被赋过值"这种会被方法调用重置的推断。
+                var lblUnit = new Label {
                     Text = unit,
                     AutoSize = true, 
                     Dock = DockStyle.Right,
@@ -650,14 +656,16 @@ namespace LiteMonitor.src.UI.Controls
                     TextAlign = ContentAlignment.BottomRight, 
                     Padding = new Padding(0, 0, 0, 4) 
                 };
-                this.Controls.Add(_lblUnit); 
-                _lblUnit.Click += (s, e) => Inner.Focus();
+                _lblUnit = lblUnit;
+                this.Controls.Add(lblUnit); 
+                lblUnit.Click += (s, e) => Inner.Focus();
             }
 
             // 3. 添加前置标签 (Dock Left, 浮在左边)
             if (!string.IsNullOrEmpty(labelPrefix))
             {
-                _lblLabel = new Label {
+                // ★ 同上：局部量 + 字段，字段可空、局部量保证非空。
+                var lblLabel = new Label {
                     Text = labelPrefix, 
                     AutoSize = true, 
                     Dock = DockStyle.Left,
@@ -666,8 +674,9 @@ namespace LiteMonitor.src.UI.Controls
                     TextAlign = ContentAlignment.BottomLeft, 
                     Padding = new Padding(0, 0, 4, 3) 
                 };
-                this.Controls.Add(_lblLabel); 
-                _lblLabel.Click += (s, e) => Inner.Focus();
+                _lblLabel = lblLabel;
+                this.Controls.Add(lblLabel); 
+                lblLabel.Click += (s, e) => Inner.Focus();
             }
 
             // Add Inner last so it is at the Front of Z-Order (Index 0),
@@ -850,8 +859,11 @@ namespace LiteMonitor.src.UI.Controls
     public class LiteNote : Panel { public LiteNote(string text, int indent = 0) { this.Dock = DockStyle.Top; this.Height = UIUtils.S(32); this.Margin = new Padding(0); var lbl = new Label { Text = text, AutoSize = true, Font = UIFonts.Regular(8F), ForeColor = UIColors.Hint, Location = new Point(UIUtils.S(indent), UIUtils.S(10)) }; this.Controls.Add(lbl); } }
     public class LiteComboItem 
     { 
-        public string Text { get; set; } 
-        public string Value { get; set; } 
+        // ★ 运行时事实：全仓只有 LiteComboBox.AddItem 一处构造它，且必定同时给 Text/Value 赋值
+        //   （见下方 AddItem）⇒ 用空串兜底不会改变任何显示结果；
+        //   但不给初值编译器会报 CS8618（离开构造函数时属性必须非空）。
+        public string Text { get; set; } = ""; 
+        public string Value { get; set; } = ""; 
         public override string ToString() => Text;
     }
 
@@ -900,9 +912,14 @@ namespace LiteMonitor.src.UI.Controls
             }; 
         } 
         
-        public object SelectedItem { get => Inner.SelectedItem; set => Inner.SelectedItem = value; } 
+        // ★ ComboBox.SelectedItem 本身就是 object?（未选中时为 null）⇒ 这里如实声明为可空，
+        //   否则 getter 会报 CS8603（可能返回 null 引用）。
+        public object? SelectedItem { get => Inner.SelectedItem; set => Inner.SelectedItem = value; } 
         public int SelectedIndex { get => Inner.SelectedIndex; set => Inner.SelectedIndex = value; } 
         public ComboBox.ObjectCollection Items => Inner.Items; 
+        // ★ 基类 Control.Text 的 setter 带 [AllowNull]（允许写入 null），
+        //   覆写时必须保持同样的可空性，否则报 CS8765。
+        [AllowNull]
         public override string Text { get => Inner.Text; set => Inner.Text = value; } 
 
         // Helper methods for Key-Value pairs
@@ -961,7 +978,8 @@ namespace LiteMonitor.src.UI.Controls
         private Color _normalColor = Color.DodgerBlue;
         private Color _hoverColor = UIColors.PrimaryHover;
 
-        public LiteLink(string text, Action onClick = null)
+        // ★ onClick 是可选回调：调用方不传就是 null，构造函数里本来就有 null 判断。
+        public LiteLink(string text, Action? onClick = null)
         {
             this.Text = text;
             this.AutoSize = true;

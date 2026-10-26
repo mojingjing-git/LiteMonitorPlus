@@ -69,7 +69,8 @@ namespace LiteMonitor.src.Plugins
     /// </summary>
     public class PluginManager
     {
-        private static PluginManager _instance;
+        // ★ 单例是"懒加载"语义：未调用 Instance 前确实为 null。
+        private static PluginManager? _instance;
         public static PluginManager Instance => _instance ??= new PluginManager();
 
         private List<PluginTemplate> _templates = new();
@@ -90,26 +91,54 @@ namespace LiteMonitor.src.Plugins
 
         private sealed class Runtime
         {
+            /// <summary>
+            /// 运行态快照。
+            /// <para>★ 用**初始化构造函数**而不是对象初始化器赋值：对象初始化器在构造函数
+            /// **之后**才生效，编译器在构造函数出口看到的仍然是 null，于是每个字段都会报
+            /// CS8618（Roslyn 的已知行为）。</para>
+            /// </summary>
+            internal Runtime(
+                PluginInstanceConfig source,
+                PluginInstanceConfig instance,
+                PluginTemplate template,
+                PluginPublicationLease lease,
+                System.Threading.CancellationTokenSource cancellation,
+                int intervalSeconds,
+                HashSet<string> dataKeys)
+            {
+                Source = source;
+                Instance = instance;
+                Template = template;
+                Lease = lease;
+                Cancellation = cancellation;
+                Token = cancellation.Token;
+                IntervalSeconds = intervalSeconds;
+                DataKeys = dataKeys;
+            }
+
             internal PluginInstanceConfig Source;
             internal PluginInstanceConfig Instance;
             internal PluginTemplate Template;
             internal PluginPublicationLease Lease;
             internal System.Threading.CancellationTokenSource Cancellation;
             internal System.Threading.CancellationToken Token;
-            internal IPluginTimer Timer;
+            /// <summary>定时器：在 <see cref="PluginManager.ArmRuntime"/> 装订成功之前为 null（还没装上就没有定时器）。</summary>
+            internal IPluginTimer? Timer;
             internal int IntervalSeconds;
             internal HashSet<string> DataKeys;
         }
 
         internal const int InitialTickDelayMs = 50;
         internal int InvisibleRetryIntervalMs { get; set; } = 2000;
-        internal Func<string, bool> VisibilityProbe { get; set; }
-        internal Func<PluginInstanceConfig, PluginTemplate, System.Threading.CancellationToken, Task<bool>> ExecutionProbe { get; set; }
-        internal Func<double, Func<IPluginTimer, Task>, IPluginTimer> TimerFactory { get; set; }
-        internal Action<string> NetworkResetObserver { get; set; }
-        internal Func<string, Task> BeforeScheduleCommitAsync { get; set; }
+        // ★ 以下 5 个都是**可选钩子**：由外部（测试 / 上层装配）按需注入，不注入就是 null。
+        //   使用点本来就是 `?.` 或取局部变量判空，测试里也显式赋 null。
+        internal Func<string, bool>? VisibilityProbe { get; set; }
+        internal Func<PluginInstanceConfig, PluginTemplate, System.Threading.CancellationToken, Task<bool>>? ExecutionProbe { get; set; }
+        internal Func<double, Func<IPluginTimer, Task>, IPluginTimer>? TimerFactory { get; set; }
+        internal Action<string>? NetworkResetObserver { get; set; }
+        internal Func<string, Task>? BeforeScheduleCommitAsync { get; set; }
 
-        internal PluginManager(PluginExecutor executor = null)
+        internal PluginManager(PluginExecutor? executor = null)
         {
             _executor = executor ?? new PluginExecutor();
         }
@@ -259,17 +288,15 @@ namespace LiteMonitor.src.Plugins
             var instanceSnapshot = PluginRuntimeSnapshot.Copy(source);
             var templateSnapshot = PluginRuntimeSnapshot.Copy(template);
             var cancellation = new System.Threading.CancellationTokenSource();
-            return new Runtime
-            {
-                Source = source,
-                Instance = instanceSnapshot,
-                Template = templateSnapshot,
-                Cancellation = cancellation,
-                Token = cancellation.Token,
-                Lease = new PluginPublicationLease(_scheduleLock, cancellation.Token),
-                IntervalSeconds = GetEffectiveInterval(instanceSnapshot, templateSnapshot),
-                DataKeys = PluginKeyOwnership.PublicDataKeys(instanceSnapshot, templateSnapshot)
-            };
+            // ★ 走初始化构造函数（对象初始化器无法消除 CS8618，理由见 Runtime 的注释）。
+            return new Runtime(
+                source,
+                instanceSnapshot,
+                templateSnapshot,
+                new PluginPublicationLease(_scheduleLock, cancellation.Token),
+                cancellation,
+                GetEffectiveInterval(instanceSnapshot, templateSnapshot),
+                PluginKeyOwnership.PublicDataKeys(instanceSnapshot, templateSnapshot));
         }
 
         private void ReserveLocked(Runtime runtime, string fingerprint)
@@ -315,7 +342,8 @@ namespace LiteMonitor.src.Plugins
 
         private void ArmRuntime(Runtime runtime)
         {
-            IPluginTimer timer = null;
+            // ★ 可空：CreateTimer 抛异常时 timer 保持 null（下面的 catch 会回滚并重抛）。
+            IPluginTimer? timer = null;
             bool installed = false;
             try
             {
@@ -378,7 +406,7 @@ namespace LiteMonitor.src.Plugins
             if (changed) settings.Save();
         }
 
-        public void RestartInstance(string instanceId, PluginInstanceConfig configOverride = null)
+        public void RestartInstance(string instanceId, PluginInstanceConfig? configOverride = null)
         {
             var retired = new List<Runtime>();
             var added = new List<Runtime>();

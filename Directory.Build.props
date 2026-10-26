@@ -1,0 +1,48 @@
+<Project>
+
+  <!--
+    ★ 仓库级公共属性（Phase 5 · 可空警告治理引入，2026-10-26）。
+
+    ⚠️ 本文件**只承载公共属性**，**严禁**在此开启 TreatWarningsAsErrors：
+       根级 Directory.Build.props 会被仓库内**所有**工程（含 tests/ 与 tools/）
+       隐式导入。一旦在此开启 TreatWarningsAsErrors：
+         · tests/LiteMonitor.Tests 的 627 条真实可空债务（Nullable=enable 后暴露）
+         · tests/LiteMonitor.Tests 的 42 条 xUnit 分析器规则警告
+         · tools/GpuHostLifecycleProbe 的历史告警
+       会直接把整条 CI 顶红，与「三条债务赛道分列、互不混算」的计划决策冲突。
+
+       生产三工程的强类型门禁写在**各自 csproj 内**（仅 Release 条件）：
+         · LiteMonitor.csproj（仓库根，主 WinExe）
+         · src/HardwareHost/LiteMonitor.HardwareHost.csproj
+         · src/Contracts/LiteMonitor.Contracts.csproj
+
+       分层门禁的完整口径见
+       docs/plans/2026-10-26-nullable-warnings-remediation-plan.md §5.6。
+  -->
+
+  <PropertyGroup>
+    <!--
+      确定性构建：.NET SDK 默认即为 true，此处显式声明以**固化契约**——
+      发布流水线的产物 SHA-256 清单比对依赖构建的可复现性。
+    -->
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <!--
+    ★ 统一的 NoWarn 追加点。
+
+    工程自身的 <NoWarn> 写在 Directory.Build.props **之后**（项目文件主体），
+    会整体覆盖此处的取值。因此这里必须写成 `$(NoWarn);<清单>` 的追加形式，
+    并且**任何工程要新增抑制码，都必须沿用 `$(NoWarn);` 前缀**，
+    否则会把本文件里已有的清单冲掉。
+
+    默认留空：**不在此处登记任何抑制码**。
+    可空治理的立场是「消除真缺陷」而不是「静默豁免」，
+    所有历史抑制码都必须在工程自己的 csproj 里**就近、可见**地登记。
+  -->
+  <PropertyGroup>
+    <LiteMonitorSharedNoWarn></LiteMonitorSharedNoWarn>
+    <NoWarn>$(NoWarn);$(LiteMonitorSharedNoWarn)</NoWarn>
+  </PropertyGroup>
+
+</Project>

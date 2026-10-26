@@ -221,7 +221,9 @@ namespace LiteMonitor.src.SystemServices
             _onDeviceSelectionChanged = onDeviceSelectionChanged;
 
             // ★ [#166] 记录初始的 CPU 电压来源（构造时还没有"切换"，不需要作废任何东西）
-            _lastPrefCpuVoltageSensor = s?.PreferredCpuVoltageSensor ?? "";
+            // ★ 不用 s?.：s 是非空参数，对非空变量写条件访问会污染它的 null-state，
+            //   导致下面 new ComponentProcessor(c, s, map) 报 CS8604。
+            _lastPrefCpuVoltageSensor = s.PreferredCpuVoltageSensor ?? "";
 
             // 初始化子服务
             _componentProcessor = new ComponentProcessor(c, s, map);

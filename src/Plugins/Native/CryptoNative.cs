@@ -108,12 +108,15 @@ namespace LiteMonitor.src.Plugins.Native
         /// <param name="inflightScopeKey">在途去重的作用域键（**执行作用域标识**）：<b>不同作用域不共享</b>在途请求，
         /// 避免"一个作用域到期"连带打断另一个作用域正在复用的同一请求。</param>
         public static async Task<string> FetchAsync(string symbol, string fallbackUrl, CancellationToken token,
-            int maxResponseBytes, IReadOnlyCollection<string> allowedHosts, string inflightScopeKey)
+            int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts, string inflightScopeKey)
+            // ★ publication 传 null = 无发布租约（直接写缓存）⇒ 形参必须可空。
             => await FetchLeasedAsync(symbol, fallbackUrl, token, maxResponseBytes, allowedHosts,
                 inflightScopeKey, null).ConfigureAwait(false);
 
+        // ★ allowedHosts 为 null = 无声明上下文（不做目标校验，见 XML 文档）；
+        //   publication 为 null = 无发布租约（直接写缓存）⇒ 两者都必须可空。
         internal static async Task<string> FetchLeasedAsync(string symbol, string fallbackUrl, CancellationToken token,
-            int maxResponseBytes, IReadOnlyCollection<string> allowedHosts, string inflightScopeKey, PluginPublicationLease publication)
+            int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts, string inflightScopeKey, PluginPublicationLease? publication)
         {
             // [LM-039] 回退目标校验：必须在任何请求发出之前（否则用户填的任意 URL 会被取回）。
             EnsureFallbackTargetAllowed(fallbackUrl, allowedHosts);
@@ -267,7 +270,8 @@ namespace LiteMonitor.src.Plugins.Native
         /// <summary>
         /// [LM-039] 回退（fallback）目标校验：主机必须落在插件**显式声明**的允许集合内。
         /// </summary>
-        private static void EnsureFallbackTargetAllowed(string fallbackUrl, IReadOnlyCollection<string> allowedHosts)
+        // ★ allowedHosts 为 null 表示无声明上下文（下方已显式 `if (allowedHosts == null) return;`）⇒ 可空。
+        private static void EnsureFallbackTargetAllowed(string fallbackUrl, IReadOnlyCollection<string>? allowedHosts)
         {
             if (string.IsNullOrWhiteSpace(fallbackUrl)) return;
             PluginHostPolicy.RequireHttpHost(fallbackUrl);
@@ -294,8 +298,9 @@ namespace LiteMonitor.src.Plugins.Native
         private static bool IsHostAllowed(string host, IEnumerable<string> allowedHosts)
             => PluginHostPolicy.HostInSet(host, allowedHosts);
 
+        // ★ allowedHosts / publication 的 null 语义同 FetchLeasedAsync（无声明上下文 / 无发布租约）。
         private static async Task<string> FetchFreshAsync(SymbolInfo info, string fallbackUrl, string cacheKey,
-            CancellationToken token, int maxResponseBytes, IReadOnlyCollection<string> allowedHosts, PluginPublicationLease publication)
+            CancellationToken token, int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts, PluginPublicationLease? publication)
         {
             foreach (var source in GetOfficialSources(info))
             {
@@ -415,7 +420,8 @@ namespace LiteMonitor.src.Plugins.Native
         /// <para>默认 null ⇒ 使用内置 URL。<b>仅供回归用例把公网源替换为本地回环服务器</b>，
         /// 生产路径永不设置（设置后仍是同一套闸门：并发槽位 / 字节上限 / 令牌中止）。</para>
         /// </summary>
-        internal static Dictionary<string, string> SourceUrlOverrides;
+        // ★ 默认 null = 不覆盖（用内置 URL），见上方文档；生产路径永不设置 ⇒ 字段可空。
+        internal static Dictionary<string, string>? SourceUrlOverrides;
 
         private static string ResolveSourceUrl(string name, string builtinUrl, string symbol)
         {
@@ -436,7 +442,7 @@ namespace LiteMonitor.src.Plugins.Native
         /// </summary>
         /// <param name="allowedHosts">该次请求的**允许目标主机集合**（逐跳复核用；null ⇒ 不做复核）。</param>
         private static async Task<string> GetStringAsync(string url, TimeSpan timeout, CancellationToken token,
-            int maxResponseBytes, IReadOnlyCollection<string> allowedHosts)
+            int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts)
         {
             PluginHostPolicy.RequireHttpHost(url);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -449,7 +455,9 @@ namespace LiteMonitor.src.Plugins.Native
             var client = GetClient();
 
             // [LM-045] 逐跳跟随重定向（与 HTTP 步骤路径同一口径）。
-            Uri current = null;
+            // ★ 初始 URL 解析失败时 current 就是 null（此时若 Location 是相对 URI ⇒ 无基准，
+            //   抛策略异常；若是绝对 URI ⇒ 走绝对跳转）⇒ current 天然可空。
+            Uri? current = null;
             Uri.TryCreate(url, UriKind.Absolute, out current);
             string requestTarget = url;
 
@@ -557,7 +565,7 @@ namespace LiteMonitor.src.Plugins.Native
         /// [LM-045] 回退源的允许目标集合 = **native 允许目标集合** ∪ {回退目标主机}。
         /// </summary>
         private static IReadOnlyCollection<string> BuildFallbackAllowedHosts(string fallbackUrl,
-            IReadOnlyCollection<string> allowedHosts)
+            IReadOnlyCollection<string>? allowedHosts)
         {
             var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (allowedHosts != null)
@@ -577,9 +585,12 @@ namespace LiteMonitor.src.Plugins.Native
         /// <summary>
         /// [LM-045] **逐跳**复核重定向目标主机。不通过 ⇒ **该跳请求根本不发出**。
         /// </summary>
-        private static void EnsureRedirectTargetAllowed(Uri target, IReadOnlyCollection<string> allowedHosts)
+        // ★ allowedHosts 为 null = 无允许集合（下方显式 `if (allowedHosts == null) return;`）⇒ 可空。
+        private static void EnsureRedirectTargetAllowed(Uri target, IReadOnlyCollection<string>? allowedHosts)
         {
-            string host = PluginHostPolicy.RequireHttpHost(target?.OriginalString, PluginSandboxReasons.RedirectTargetNotAllowed);
+            // ★ target 由调用点保证非空（`if (current != null) EnsureRedirectTargetAllowed(...)`），
+            //   不需要 `?.`；对非空参数写 `?.` 反而会让编译器把它的 null-state 置为「可能为 null」。
+            string host = PluginHostPolicy.RequireHttpHost(target.OriginalString, PluginSandboxReasons.RedirectTargetNotAllowed);
             if (allowedHosts == null) return;   // 无允许集合 ⇒ 不做复核（与 HTTP 路径同一口径）
 
             if (string.IsNullOrEmpty(host) || !IsHostAllowed(host, allowedHosts))
@@ -593,9 +604,11 @@ namespace LiteMonitor.src.Plugins.Native
         /// <summary>
         /// [LM-045] 重定向目标的**协议**复核：必须仍是 http/https，且**不允许 https → http 降级**。
         /// </summary>
-        private static void EnsureRedirectSchemeAllowed(Uri current, Uri next)
+        // ★ current 可能为 null（初始 URL 解析失败、且 Location 是绝对 URI 的那一跳）⇒ 可空；
+        //   next 由调用点保证非空（绝对 Location 或 new Uri(current, location)）。
+        private static void EnsureRedirectSchemeAllowed(Uri? current, Uri next)
         {
-            string scheme = next?.Scheme ?? "";
+            string scheme = next.Scheme;
             bool isHttp = string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase);
             bool isHttps = string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
 
@@ -648,7 +661,8 @@ namespace LiteMonitor.src.Plugins.Native
             return true;
         }
 
-        private static void CommitNative(PluginPublicationLease publication, Action commit)
+        // ★ publication 为 null = 无发布租约（直接提交）⇒ 可空。
+        private static void CommitNative(PluginPublicationLease? publication, Action commit)
         {
             if (publication != null) publication.TryCommit(commit);
             else commit();

@@ -12,7 +12,6 @@ namespace LiteMonitor.src.SystemServices
     {
         private static List<string>? _cachedFanList = null;
         private static List<string>? _cachedNetworkList = null;
-        private static List<string>? _cachedDiskList = null;
         private static List<GpuOption>? _cachedGpuOptions = null;
         private static List<DeviceOption>? _cachedDiskOptions = null;
         private static List<string>? _cachedMoboTempList = null;
@@ -42,7 +41,6 @@ namespace LiteMonitor.src.SystemServices
         {
             _cachedFanList = null;
             _cachedNetworkList = null;
-            _cachedDiskList = null;
             _cachedGpuOptions = null;
             _cachedDiskOptions = null;
             _cachedMoboTempList = null;

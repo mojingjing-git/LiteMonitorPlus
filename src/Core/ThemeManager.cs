@@ -367,11 +367,11 @@ namespace LiteMonitor.src.Core
         public Dictionary<string, JsonElement> ExtensionData { get; set; } = new();
 
         // 运行期字体（Json 忽略）
-        [JsonIgnore] public Font FontTitle = SystemFonts.CaptionFont;
-        [JsonIgnore] public Font FontGroup = SystemFonts.CaptionFont;
-        [JsonIgnore] public Font FontItem = SystemFonts.CaptionFont;
-        [JsonIgnore] public Font FontValue = SystemFonts.CaptionFont;
-        [JsonIgnore] public Font FontTaskbar = SystemFonts.CaptionFont;
+        [JsonIgnore] public Font FontTitle = ThemeManager.CaptionFontOrDefault;
+        [JsonIgnore] public Font FontGroup = ThemeManager.CaptionFontOrDefault;
+        [JsonIgnore] public Font FontItem = ThemeManager.CaptionFontOrDefault;
+        [JsonIgnore] public Font FontValue = ThemeManager.CaptionFontOrDefault;
+        [JsonIgnore] public Font FontTaskbar = ThemeManager.CaptionFontOrDefault;
 
         // ===== 任务栏字体(写死硬编码，用来被调用) =====
 
@@ -392,7 +392,7 @@ namespace LiteMonitor.src.Core
             }
             catch
             {
-                FontTitle = FontGroup = FontItem = FontValue = SystemFonts.CaptionFont;
+                FontTitle = FontGroup = FontItem = FontValue = ThemeManager.CaptionFontOrDefault;
             }
         }
         public void Scale(float dpiScale, float userScale)
@@ -431,6 +431,15 @@ namespace LiteMonitor.src.Core
     /// </summary>
     public static class ThemeManager
     {
+        /// <summary>
+        /// 系统题注字体。
+        /// <para>★ <see cref="SystemFonts.CaptionFont"/> 在缺少对应系统字体的环境
+        /// （精简系统 / 容器 / 部分服务端会话）下会返回 <c>null</c>，直接赋给非空
+        /// <see cref="Font"/> 字段会产生 CS8601 并在后续解引用处炸掉。此处统一回退到
+        /// <see cref="SystemFonts.DefaultFont"/>（.NET 8 标注为非空）。</para>
+        /// </summary>
+        public static Font CaptionFontOrDefault => SystemFonts.CaptionFont ?? SystemFonts.DefaultFont;
+
         public static Theme Current { get; private set; } = new Theme();
 
         // ★★★ 修改：移除 _stringPool，只保留 _colorCache ★★★
@@ -456,7 +465,7 @@ namespace LiteMonitor.src.Core
             try
             {
                 return Directory.EnumerateFiles(ThemeDir, "*.json")
-                                .Select(Path.GetFileNameWithoutExtension)
+                                .Select(p => Path.GetFileNameWithoutExtension(p) ?? string.Empty)
                                 .OrderBy(n => n)
                                 .ToArray();
             }
@@ -637,7 +646,9 @@ namespace LiteMonitor.src.Core
                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
 
-        public static Color ParseColor(string colorStr)
+        /// <param name="colorStr">颜色字面量。★ 允许为 null —— 主题 DTO 的 Border / Shadow / TextSecondary
+        /// 本身就可空，null 与空白一律回落为 <see cref="Color.Transparent"/>（下方 IsNullOrWhiteSpace 已覆盖）。</param>
+        public static Color ParseColor(string? colorStr)
         {
             if (string.IsNullOrWhiteSpace(colorStr))
                 return Color.Transparent;

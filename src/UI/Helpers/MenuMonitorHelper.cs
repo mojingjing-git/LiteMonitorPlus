@@ -15,7 +15,14 @@ namespace LiteMonitor.src.UI.Helpers
     /// </summary>
     public static class MenuMonitorHelper
     {
-        public static ToolStripMenuItem Build(MainForm form, Settings cfg, UIController? ui, bool isTaskbarMode)
+        /// <summary>
+        /// 构建"监控项显示"子菜单。
+        /// </summary>
+        /// <remarks>
+        /// ★ ui 收紧为非空：唯一调用方 MenuManager.Build 传进来的就是非空 UIController，
+        ///   而本方法内部两处都要 new SettingsForm(cfg, ui, form)（要求非空 UIController）。
+        /// </remarks>
+        public static ToolStripMenuItem Build(MainForm form, Settings cfg, UIController ui, bool isTaskbarMode)
         {
             var monitorRoot = new ToolStripMenuItem(LanguageManager.T("Menu.MonitorItemDisplay"));
 

@@ -15,7 +15,8 @@ namespace LiteMonitor.src.Core
         private static volatile GpuInfo[] _entries = new GpuInfo[GpuKey.MaxGpuCount];
 
         /// <summary>整体替换注册表 (原子操作, 读侧不会看到半更新状态)</summary>
-        public static void ReplaceAll(GpuInfo[] entries)
+        /// <param name="entries">可为 null —— 表示"清空注册表"（<see cref="Clear"/> 传 null）。</param>
+        public static void ReplaceAll(GpuInfo[]? entries)
         {
             var copy = new GpuInfo[GpuKey.MaxGpuCount];
             if (entries != null)

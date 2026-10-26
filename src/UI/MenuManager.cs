@@ -49,7 +49,14 @@ namespace LiteMonitor
         /// <summary>
         /// 构建 LiteMonitor++ 主菜单（右键菜单 + 托盘菜单）
         /// </summary>
-        public static ContextMenuStrip Build(MainForm form, Settings cfg, UIController? ui, string targetPage = null)
+        /// <remarks>
+        /// ★ ui / targetPage 的可空性说明：
+        ///   - ui：两个调用方（TaskbarForm、MainFormBizHelper）持有的都是非空 UIController，
+        ///     而本方法内部需要把它交给要求非空 UIController 的 SettingsForm ⇒ 形参收紧为非空。
+        ///   - targetPage：默认 null，null 表示"不是任务栏模式"（第 56 行只与 "Taskbar" 比较，
+        ///     第 501 行用 IsNullOrEmpty 判空后才 SwitchPage）⇒ 如实声明为可空。
+        /// </remarks>
+        public static ContextMenuStrip Build(MainForm form, Settings cfg, UIController ui, string? targetPage = null)
         {
             var menu = new ContextMenuStrip();
             // 标记是否为任务栏模式 (影响监控项的勾选逻辑)
