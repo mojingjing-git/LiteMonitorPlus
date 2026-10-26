@@ -15,9 +15,19 @@ namespace LiteMonitor.src.UI.SettingsPage
 
     public class SettingsPageBase : UserControl, ISettingsPage
     {
-        protected Settings Config;
-        protected MainForm MainForm;
-        protected UIController UI;
+        // ★★★ 这三个依赖由 SettingsForm 在**页面构造之后**通过 SetContext 注入
+        //   （见 src/UI/SettingsForm.cs 里对每个设置页的 SetContext 调用）。
+        //   ★ 构造函数出口时它们确实还是 null —— TaskbarPage 构造函数里的注释也写明了
+        //     「此时 Config 为 null，必须安全访问」，所以页面内所有读取点都必须用
+        //     `Config?.` / `Config == null` 守卫（现有代码已经是这么写的）。
+        //   ★ 但字段类型保持**非空**：MainPanelPage / ThresholdPage 等页面有上百处
+        //     直接解引用 `Config.XXX`，改成可空会新增上百条 CS8602 并且波及其它设置页
+        //     （ThresholdPage 不在本次治理范围内），属于另一个量级的改造。
+        //     因此这里用 `= null!` 只压制「构造函数未赋值」这一条误报：
+        //     不改变任何运行期行为，也不改变编译器的空值流分析（字段仍按非空处理）。
+        protected Settings Config = null!;
+        protected MainForm MainForm = null!;
+        protected UIController UI = null!;
         
         // ★★★ Refresh Mechanism for Deferred Load ★★★
         protected List<Action> _refreshActions = new List<Action>();
@@ -172,7 +182,14 @@ namespace LiteMonitor.src.UI.SettingsPage
             }
         }
 
-        protected void EnsureSafeVisibility(LiteCheck chkHideMain, LiteCheck chkHideTray, LiteCheck chkShowTaskbar)
+        /// <summary>
+        /// 保证「主界面 / 托盘 / 任务栏」三者不会被同时隐藏（否则程序无法唤出）。
+        /// <para>★ 三个形参都允许传 null：调用方（MainPanelPage / TaskbarPage /
+        /// SystemHardwarPage）只关心其中一两个复选框，其余位置一律传 null，
+        /// 方法体内部本来就对三者逐个判空。形参声明为可空只是把既有的调用事实
+        /// 写进类型，**运行期逻辑一行未改**。</para>
+        /// </summary>
+        protected void EnsureSafeVisibility(LiteCheck? chkHideMain, LiteCheck? chkHideTray, LiteCheck? chkShowTaskbar)
         {
             bool hideMain = chkHideMain != null ? chkHideMain.Checked : Config.HideMainForm;
             bool hideTray = chkHideTray != null ? chkHideTray.Checked : Config.HideTrayIcon;

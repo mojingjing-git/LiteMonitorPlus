@@ -17,13 +17,19 @@ namespace LiteMonitor.src.UI.SettingsPage
         private bool _isTaskbarTab = false;
         private string _lastDataSignature = ""; // ★★★ 性能优化：数据指纹
 
-        private Panel _tabPanel;    
-        private Panel _headerPanel; 
+        // ★★★ 下面这批控件字段在构造函数里由 InitHeader() 创建（构造函数 56 行调用），
+        //   编译器看不到「构造函数 → InitHeader() → 赋值」这条赋值链，所以在构造函数出口
+        //   统一报 CS8618（未初始化非空字段）。
+        //   ★ 运行时它们在构造函数返回前一定已经赋值（InitHeader 是构造函数里同步调用的），
+        //     这里用 `= null!` 只是占位声明，不改变任何运行期行为。
+        //   ★ 与 src/UI/Settings/SystemHardwarPage.cs 里 _cbGpuCount 的既有写法一致。
+        private Panel _tabPanel = null!;
+        private Panel _headerPanel = null!;
 
-        private Button _btnTabMain;
-        private Button _btnTabBar;
-        private LiteCheck _chkLinkHorizontal;
-        private LiteCheck _chkOnlyVisible;
+        private Button _btnTabMain = null!;
+        private Button _btnTabBar = null!;
+        private LiteCheck _chkLinkHorizontal = null!;
+        private LiteCheck _chkOnlyVisible = null!;
 
         // ★ W3：用户是否**真的**改过「跟随任务栏」。
         //   加载时的程序化同步不算改动 —— 那个复选框在主标签页上根本不可见，
@@ -31,13 +37,20 @@ namespace LiteMonitor.src.UI.SettingsPage
         //   用户原本的 true 会被静默改成 false。
         private bool _linkHorizontalEdited = false;
         
-        private Label _lblCol1; 
-        private Label _lblCol2; 
-        private Label _lblColUnit;
-        private Label _lblCol3; 
-        private Label _lblCol4; 
+        private Label _lblCol1 = null!;
+        private Label _lblCol2 = null!;
+        private Label _lblColUnit = null!;
+        private Label _lblCol3 = null!;
+        private Label _lblCol4 = null!;
 
-        private List<MonitorItemConfig> _workingList;
+        // ★ 待编辑的监控项列表：在 OnShow 里从配置反序列化得到（成功走 200 行，
+        //   解析失败走 214 行的空列表兜底），在 OnShow 之前确实是 null。
+        //   ★ 这里不能用 `= new List<...>()` 初始化：ReloadList / SaveMonitorList 等处
+        //     靠 `if (_workingList == null) return;` 判断「列表还没加载」，
+        //     提前初始化会让这些守卫失效、改变运行期行为。
+        //   ★ 所以只做「声明占位」：非空类型 + `= null!`，让编译器停止报 CS8618，
+        //     而读取点仍按原有 null 守卫处理（运行时语义完全不变）。
+        private List<MonitorItemConfig> _workingList = null!;
 
         public MonitorPage()
         {
@@ -428,10 +441,16 @@ namespace LiteMonitor.src.UI.SettingsPage
             return block;
         }
 
-        private void GroupHeader_MoveUp(object sender, EventArgs e) { if (sender is MonitorGroupHeader h && h.Tag is GroupBlock b) MoveControl(b, -1); }
-        private void GroupHeader_MoveDown(object sender, EventArgs e) { if (sender is MonitorGroupHeader h && h.Tag is GroupBlock b) MoveControl(b, 1); }
-        private void Row_MoveUp(object sender, EventArgs e) { if (sender is Control r) MoveControl(r, -1); }
-        private void Row_MoveDown(object sender, EventArgs e) { if (sender is Control r) MoveControl(r, 1); }
+        // ★ 这四个处理器订阅的是自定义事件（MonitorGroupHeader.MoveUp / MonitorItemRow.MoveUp 等），
+        //   事件委托的 sender 形参在 .NET 里本来就可以是 null（EventHandler 的约定）。
+        //   改成 `object? sender` 与 .NET 事件签名一致：既能匹配委托类型消除 CS8622，
+        //   也不会因为「非空形参」而新增 CS8604（sender 不往下传）。
+        //   ★ 处理器内部依旧用模式匹配收窄（`sender is Control r`），null 时自然不做事，
+        //     运行期行为不变。
+        private void GroupHeader_MoveUp(object? sender, EventArgs e) { if (sender is MonitorGroupHeader h && h.Tag is GroupBlock b) MoveControl(b, -1); }
+        private void GroupHeader_MoveDown(object? sender, EventArgs e) { if (sender is MonitorGroupHeader h && h.Tag is GroupBlock b) MoveControl(b, 1); }
+        private void Row_MoveUp(object? sender, EventArgs e) { if (sender is Control r) MoveControl(r, -1); }
+        private void Row_MoveDown(object? sender, EventArgs e) { if (sender is Control r) MoveControl(r, 1); }
         
         private void MoveControl(Control c, int dir)
         {

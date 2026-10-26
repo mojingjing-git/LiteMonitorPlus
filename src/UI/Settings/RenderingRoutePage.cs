@@ -33,7 +33,11 @@ namespace LiteMonitor.src.UI.SettingsPage
         private bool Chinese => (Config.Language ?? string.Empty)
             .StartsWith("zh", StringComparison.OrdinalIgnoreCase);
 
-        private string Text(string zh, string en) => Chinese ? zh : en;
+        // ★ 原名是 Text(...)，它把基类 Control.Text **属性**藏了起来（CS0108 警告），
+        //   而且名字和「控件标题」完全撞车，调用点里 `Text("启用", "Enable")` 很容易看错。
+        //   改名为 GetText(...)，语义更清楚，也不再隐藏基类成员。
+        //   ★ 纯重命名：方法体与全部调用点同步修改，运行期行为不变。
+        private string GetText(string zh, string en) => Chinese ? zh : en;
 
         public RenderingRoutePage()
         {
@@ -63,7 +67,7 @@ namespace LiteMonitor.src.UI.SettingsPage
         // ================================================================
         private void CreateRouteOverviewCard()
         {
-            var group = new LiteSettingsGroup(Text("路线总览", "Route overview"));
+            var group = new LiteSettingsGroup(GetText("路线总览", "Route overview"));
 
             // ★ 布局约束（初版错位的根因）：LiteSettingsItem 是**固定 40px 单行、控件右对齐**的
             //   两列交替布局（AddItem 按 _colTracker 左右轮流）；多行标签会竖直溢出压到相邻行，
@@ -72,19 +76,19 @@ namespace LiteMonitor.src.UI.SettingsPage
             _themeRouteLabel = MakeValueLabel();
             _themeRouteLabel.Text = ThemeRouteText();
             group.AddFullItem(new LiteSettingsItem(
-                Text("主题声明路线", "Theme declared route"),
+                GetText("主题声明路线", "Theme declared route"),
                 _themeRouteLabel));
 
             _statusSummaryLabel = MakeValueLabel();
             _statusSummaryLabel.Text = ComposeStatusSummary();
             group.AddFullItem(new LiteSettingsItem(
-                Text("实际状态", "Actual state"),
+                GetText("实际状态", "Actual state"),
                 _statusSummaryLabel));
 
             _statusDetailRow = new FullWidthDetailRow(ComposeStatusDetail());
             group.AddFullItem(_statusDetailRow);
 
-            group.AddHint(Text(
+            group.AddHint(GetText(
                 "方括号内是真实原因码（如 safe_mode / gpu_effects_opt_in_required），用于排障；不显示原因的\"已回退\"一律不出现。",
                 "Bracketed codes are real reason codes (e.g. safe_mode / gpu_effects_opt_in_required) for diagnostics; regressions are never shown without a reason."));
 
@@ -103,11 +107,11 @@ namespace LiteMonitor.src.UI.SettingsPage
         // ================================================================
         private void CreateGpuRouteCard()
         {
-            var group = new LiteSettingsGroup(Text("GPU 路线（DirectX 11）", "GPU route (DirectX 11)"));
+            var group = new LiteSettingsGroup(GetText("GPU 路线（DirectX 11）", "GPU route (DirectX 11)"));
 
             group.AddToggle(
                 this,
-                Text("GPU 材质渲染", "GPU material rendering"),
+                GetText("GPU 材质渲染", "GPU material rendering"),
                 () => Config.GpuThemeEffectsEnabled,
                 value =>
                 {
@@ -117,13 +121,13 @@ namespace LiteMonitor.src.UI.SettingsPage
                         GpuStartupRetryRequested = true;
                     }
                 });
-            group.AddHint(Text(
+            group.AddHint(GetText(
                 "只对带有 rendering.backend=gpu 的新主题生效；旧主题继续使用原 GDI+ 路径。",
                 "Only new themes with rendering.backend=gpu are affected; legacy themes keep the original GDI+ path."));
 
             var liveBackground = new LiteCheck(
                 Config.GpuLiveBackgroundEnabled,
-                Text("启用", "Enable"));
+                GetText("启用", "Enable"));
             liveBackground.CheckedChanged += (_, _) =>
             {
                 if (IsWriteBackSuppressed)
@@ -136,10 +140,10 @@ namespace LiteMonitor.src.UI.SettingsPage
                 {
                     DialogResult accepted = MessageBox.Show(
                         FindForm(),
-                        Text(
+                        GetText(
                             "实时玻璃需要使用 Desktop Duplication，并通过 WDA_EXCLUDEFROMCAPTURE 排除整个顶层窗口。\n\n开启后，受支持的系统截图和录屏会看不到 LiteMonitor++。旧主题和固定输入模式不受影响。\n\n是否接受并开启实时背景？",
                             "Live glass uses Desktop Duplication and excludes the entire top-level window with WDA_EXCLUDEFROMCAPTURE.\n\nWhile active, supported screenshots and recordings will not show LiteMonitor++. Legacy themes and fixed-input mode are unaffected.\n\nAccept and enable live background?"),
-                        Text("实时玻璃捕获说明", "Live glass capture policy"),
+                        GetText("实时玻璃捕获说明", "Live glass capture policy"),
                         MessageBoxButtons.OKCancel,
                         MessageBoxIcon.Warning);
                     if (accepted != DialogResult.OK)
@@ -161,11 +165,11 @@ namespace LiteMonitor.src.UI.SettingsPage
                 }
             };
             group.AddItem(new LiteSettingsItem(
-                Text("实时桌面背景", "Live desktop background"),
+                GetText("实时桌面背景", "Live desktop background"),
                 liveBackground));
             RegisterRefresh(() => liveBackground.Checked =
                 Config.GpuLiveBackgroundEnabled);
-            group.AddHint(Text(
+            group.AddHint(GetText(
                 "实时背景与旧 LiveGlassEnabled 完全独立；赛博朋克主题始终为零抓屏。",
                 "Live background is independent from legacy LiveGlassEnabled; cyberpunk always performs zero desktop capture."));
 
@@ -186,12 +190,12 @@ namespace LiteMonitor.src.UI.SettingsPage
             ThemeRenderingConfig? rendering = ThemeManager.Current.Rendering;
             if (!IsGpuTheme(rendering))
             {
-                return Text("GDI+ 旧路线（主题未声明 GPU 材质）",
+                return GetText("GDI+ 旧路线（主题未声明 GPU 材质）",
                     "GDI+ legacy (theme declares no GPU material)");
             }
 
             string material = rendering!.Material ?? string.Empty;
-            return Text($"GPU 材质（{material}）", $"GPU material ({material})");
+            return GetText($"GPU 材质（{material}）", $"GPU material ({material})");
         }
 
         private IReadOnlyList<string> ComposeStatusLines()
@@ -229,14 +233,14 @@ namespace LiteMonitor.src.UI.SettingsPage
 
         /// <summary>单行摘要（表格行用）：取第一条状态行。</summary>
         private string ComposeStatusSummary() =>
-            ComposeStatusLines().FirstOrDefault() ?? Text("（无状态）", "(no status)");
+            ComposeStatusLines().FirstOrDefault() ?? GetText("（无状态）", "(no status)");
 
         /// <summary>多行详情（全行块用）：全部状态行。</summary>
         private string ComposeStatusDetail()
         {
             var lines = ComposeStatusLines();
             return lines.Count == 0
-                ? Text("（无状态）", "(no status)")
+                ? GetText("（无状态）", "(no status)")
                 : string.Join(Environment.NewLine, lines);
         }
 

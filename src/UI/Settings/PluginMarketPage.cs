@@ -898,7 +898,11 @@ namespace LiteMonitor.src.UI.SettingsPage
             btn.SetColor(ActionColor(state));
             btn.Click += async (s, e) =>
             {
-                if (state == MarketInstallState.Installed) UninstallThemeAsync(entry);
+                // ★ UninstallThemeAsync 内部其实是同步实现（异常已经被它自己 try/catch 掉了），
+                //   这里补上 await：既消除 CS4014「调用结果未等待」的警告，
+                //   也避免将来它变成真正的异步方法后出现「异常无人观察」的静默失败。
+                //   ★ 运行期行为不变：它返回的是已完成的 Task，await 之后立刻同步往下走。
+                if (state == MarketInstallState.Installed) await UninstallThemeAsync(entry);
                 else await InstallThemeAsync(entry);
             };
             group.AddHeaderAction(btn);
