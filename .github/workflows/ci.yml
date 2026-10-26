@@ -104,7 +104,11 @@ jobs:
       #    → 2504（+58 = P-I2 监督/协议/原子性/百次启停 +33 与 B3 模块服务/选择性应用 +25；
       #      I2+B3 双包合并后 Debug 实测主工程发现数 2412（2405 执行全通 + 7 跳过）
       #      + Updater 73 + GPU 19 = 2504）。
-      MIN_TEST_TOTAL: 2504
+      #    → 2571（+67 = W1 三路：E05 主题接线 5 + E08a 定位器 12 + E00 独立复验 22 + R4 跨帧等
+      #      既有补强；I2+B3 双包合并后实测主工程发现数 2479（2472 执行全通 + 7 跳过）
+      #      + Updater 73 + GPU 19 = 2571）。MUST 清单采纳 E08a 建议（新增 8 类，MIN_COUNT 6→5：
+      #      E05 护栏/原子性各 5 例）。
+      MIN_TEST_TOTAL: 2571
       # ★ 必须出现的测试程序集。少任何一个都会让断言失败
       #   （防止某个测试工程悄悄没被测到）。
       EXPECTED_TEST_ASSEMBLIES: 'LiteMonitor.Tests, LiteMonitor.Updater.Tests, LiteMonitor.GpuNonperformance.Tests'
@@ -124,8 +128,8 @@ jobs:
       #   曾被误归因为"环境抖动"——钉进来后任何静默跳过/漏跑都会让门禁直接红。
       # ★ 主题市场（M6）：ThemeMarketContractTests / ThemeMarketPolicyTests 均为
       #   夹具驱动常跑（不依赖环境变量门控），各 7 条 ≥ 6 ✓——钉进硬门禁防静默漏跑。
-      MUST_EXECUTE_TEST_CLASS: 'MarketIndexContractTests, ReviewMarketPersistenceRegressionTests, ReviewMarketInstallRaceRegressionTests, ThemeMarketContractTests, ThemeMarketPolicyTests'
-      MUST_EXECUTE_TEST_CLASS_MIN_COUNT: 6
+      MUST_EXECUTE_TEST_CLASS: 'MarketIndexContractTests, ReviewMarketPersistenceRegressionTests, ReviewMarketInstallRaceRegressionTests, ThemeMarketContractTests, ThemeMarketPolicyTests, ReviewFix20261026Tests, E00Verification20261026Tests, I2HostSupervisionTests, I2PipeProtocolTests, I2SnapshotAtomicityTests, SettingsProjectionTests, SettingsModuleServicesTests, E05ThemeWiringGuardTests'
+      MUST_EXECUTE_TEST_CLASS_MIN_COUNT: 5
 
       # ★ 插件市场契约夹具路径（S4.1 引入，仓库内固定路径）。
       #    tests/fixtures/plugin-repo 是 awesome-litemonitor-plugins 的最小本地副本，
