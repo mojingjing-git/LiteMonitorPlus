@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Drawing;
 using System.Windows.Forms;
 using LiteMonitor.Rendering.Configuration;
 using LiteMonitor.ThemeEditor;
@@ -88,6 +89,50 @@ namespace LiteMonitor.Tests
         {
             // 预览与生产必须是两个 guard 实例：预览不写生产 pending、不消耗生产保守状态
             Assert.NotSame(GpuStartupGuard.Shared, GpuThemePreviewControl.PreviewGuard);
+        }
+
+        [Fact]
+        public void 工作室_打开经典主题_画布产出同源预览证据图()
+        {
+            Application.EnableVisualStyles();
+            File.WriteAllText(Path.Combine(_dir, "经典蓝.json"), ClassicJson, new UTF8Encoding(false));
+
+            string evidenceDir = Path.Combine(Path.GetTempPath(), "LiteMonitor.Tests", "M1-studio-evidence");
+            Directory.CreateDirectory(evidenceDir);
+            string png = Path.Combine(evidenceDir, "theme-studio-classic.png");
+
+            Exception? failure = null;
+            var thread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    using var form = new ThemeStudioForm();
+                    form.Show();
+                    Application.DoEvents();
+                    form.OpenThemeForTesting("经典蓝");
+                    form.RefreshPreviewForTesting();
+                    Application.DoEvents();
+
+                    Assert.Contains("经典蓝", form.Text);
+                    Assert.True(form.InspectorForTesting.Controls.Count > 0);
+
+                    using var bitmap = new Bitmap(form.Width, form.Height);
+                    form.DrawToBitmap(bitmap, new Rectangle(0, 0, form.Width, form.Height));
+                    bitmap.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+                    form.Close();
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.Start();
+            thread.Join(TimeSpan.FromSeconds(30));
+
+            Assert.Null(failure);
+            Assert.True(new FileInfo(png).Length > 0);
+            Console.WriteLine("[M1] 工作室证据图：" + png);
         }
 
         private static ThemePropertyDescriptor Find(string path) =>

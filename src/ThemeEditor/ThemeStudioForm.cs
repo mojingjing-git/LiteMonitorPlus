@@ -57,6 +57,7 @@ namespace LiteMonitor.ThemeEditor
         private string _selectedTheme = string.Empty;
         private readonly System.Windows.Forms.Timer _recoveryTimer;
         private Panel _libraryPanel = null!;
+        private bool _suppressSelection;
 
         /// <summary>应用依赖注入（重做计划 §8）：保存完成后的应用动作由宿主提供，编辑器不反射。</summary>
         public interface IThemeApplyGateway
@@ -317,10 +318,34 @@ namespace LiteMonitor.ThemeEditor
                 _themes.Add((name, DescribeTheme(name)));
             }
 
-            _libraryList.BeginUpdate();
-            _libraryList.Items.Clear();
-            foreach (var t in _themes) _libraryList.Items.Add(t.Name);
-            _libraryList.EndUpdate();
+            // 重建列表项会触发 SelectedIndexChanged：抑制它，避免误开/误提示
+            _suppressSelection = true;
+            try
+            {
+                _libraryList.BeginUpdate();
+                _libraryList.Items.Clear();
+                foreach (var t in _themes) _libraryList.Items.Add(t.Name);
+                _libraryList.EndUpdate();
+                SyncSelectionToList();
+            }
+            finally
+            {
+                _suppressSelection = false;
+            }
+        }
+
+        /// <summary>把当前文档的选中状态同步到列表（不触发打开流程）。</summary>
+        private void SyncSelectionToList()
+        {
+            int index = _themes.FindIndex(t => string.Equals(t.Name, _selectedTheme, StringComparison.Ordinal));
+            if (index >= 0)
+            {
+                _libraryList.SelectedIndex = index;
+            }
+            else if (_libraryList.SelectedIndex >= 0)
+            {
+                _libraryList.ClearSelected();
+            }
         }
 
         private static string DescribeTheme(string name)
@@ -346,6 +371,7 @@ namespace LiteMonitor.ThemeEditor
 
         private void OnThemeSelected()
         {
+            if (_suppressSelection) return;
             if (_libraryList.SelectedIndex < 0 || _libraryList.SelectedIndex >= _themes.Count)
             {
                 return;
@@ -354,10 +380,8 @@ namespace LiteMonitor.ThemeEditor
             string name = _themes[_libraryList.SelectedIndex].Name;
             if (string.Equals(name, _selectedTheme, StringComparison.Ordinal)) return;
 
-            if (!ConfirmCloseCurrentDocument()) return;
-
-            // 用户取消了切换：恢复选中项
-            if (_session is not null && !string.Equals(name, _session.ThemeName, StringComparison.Ordinal))
+            // 未保存修改：保存／放弃继续，取消则恢复列表选中项
+            if (!ConfirmCloseCurrentDocument())
             {
                 ReselectList(_selectedTheme);
                 return;
@@ -368,9 +392,16 @@ namespace LiteMonitor.ThemeEditor
 
         private void ReselectList(string name)
         {
-            int index = _themes.FindIndex(t => string.Equals(t.Name, name, StringComparison.Ordinal));
-            _selectedTheme = string.Empty; // 允许重新触发
-            _libraryList.SelectedIndex = index;
+            _suppressSelection = true;
+            try
+            {
+                int index = _themes.FindIndex(t => string.Equals(t.Name, name, StringComparison.Ordinal));
+                _libraryList.SelectedIndex = index >= 0 ? index : -1;
+            }
+            finally
+            {
+                _suppressSelection = false;
+            }
         }
 
         private void OpenTheme(string name)
@@ -418,6 +449,16 @@ namespace LiteMonitor.ThemeEditor
             _session = session;
             _selectedTheme = name;
             _inspector.Bind(_session);
+            // 代码路径（新建/复制/打开）同步列表选中项，不触发打开流程
+            _suppressSelection = true;
+            try
+            {
+                SyncSelectionToList();
+            }
+            finally
+            {
+                _suppressSelection = false;
+            }
             UpdateDocumentUi();
             RefreshPreviewNow();
         }
@@ -797,6 +838,16 @@ namespace LiteMonitor.ThemeEditor
                 }
             };
         }
+
+        // ============================================================
+        // 测试钩子（仅供单元测试驱动 UI，生产代码不调用）
+        // ============================================================
+
+        internal void OpenThemeForTesting(string themeName) => OpenTheme(themeName);
+
+        internal void RefreshPreviewForTesting() => RefreshPreviewNow();
+
+        internal PropertyInspector InspectorForTesting => _inspector;
 
         private string? PromptName(string title, string initial)
         {
