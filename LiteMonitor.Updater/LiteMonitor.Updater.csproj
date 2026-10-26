@@ -31,6 +31,18 @@
 		<StartupObject>LiteMonitor.Updater.Program</StartupObject>
 	</PropertyGroup>
 
+	<!--
+		可空引用编译门禁（Phase 5）· 2026-10-26
+		自动更新器随主程序一同发布，其可空债务与主程序同级，故与另外三个生产工程
+		（LiteMonitor / HardwareHost / Contracts）采用同一口径：
+		Release 构建下**任何编译警告一律升级为错误**。
+		仅限 Release —— Debug 下保留警告可见性，避免本地调试被无关告警打断。
+		详见 docs/plans/2026-10-26-nullable-warnings-remediation-plan.md §5.6。
+	-->
+	<PropertyGroup Condition="'$(Configuration)' == 'Release'">
+		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+	</PropertyGroup>
+
 	<ItemGroup>
 		<InternalsVisibleTo Include="LiteMonitor.Updater.Tests" />
 	</ItemGroup>
