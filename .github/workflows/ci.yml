@@ -353,7 +353,8 @@ jobs:
   #
   # 目的：把「可空引用警告清零」从一次性清理变成**持续可验证的工程不变量**。
   # 分层设计（详见 docs/plans/2026-10-26-nullable-warnings-remediation-plan.md §5.6）：
-  #   门禁 1（硬门禁）生产三工程 Release 构建**零警告**
+  #   门禁 1（硬门禁）生产四工程 Release 构建**零警告**
+  #             （LiteMonitor / LiteMonitor.Updater / HardwareHost / Contracts）
   #             → 由各 csproj 的 TreatWarningsAsErrors（Release 条件）实现。
   #   门禁 2（防回退）全解决方案**不新增**警告码
   #             → TreatWarningsAsErrors=true + WarningsNotAsErrors=<历史码清单>：
@@ -394,6 +395,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $projects = @(
             'LiteMonitor.csproj',
+            'LiteMonitor.Updater\LiteMonitor.Updater.csproj',
             'src\HardwareHost\LiteMonitor.HardwareHost.csproj',
             'src\Contracts\LiteMonitor.Contracts.csproj'
           )
@@ -404,7 +406,7 @@ jobs:
               throw "门禁 1 失败：$p（退出码 $LASTEXITCODE）—— 生产工程在 Release 下出现编译警告，已按 TreatWarningsAsErrors 升级为错误。可空债务清零是本次治理的验收底线，不允许降级放行。"
             }
           }
-          Write-Host '门禁 1 通过：三个生产工程 Release 构建 0 警告 0 错误。'
+          Write-Host '门禁 1 通过：四个生产工程 Release 构建 0 警告 0 错误。'
 
       # ── 门禁 2：全解决方案不新增警告码（防回退）─────────────────────
       - name: 门禁 2 · 全解决方案不新增警告码
