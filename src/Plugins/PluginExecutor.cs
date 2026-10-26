@@ -25,6 +25,9 @@ namespace LiteMonitor.src.Plugins
     /// </summary>
     public class PluginExecutor : IDisposable
     {
+        // ★ 默认 HttpClient：构造函数里**直接**赋值（原实现把赋值放在 InitializeDefaultClient() 里，
+        //   编译器无法证明"构造函数结束时该字段已赋值" ⇒ CS8618）。
+        //   重建客户端的路径不变：ResetNetworkClients() 仍调用 InitializeDefaultClient()。
         private HttpClient _http;
 
         /// <summary>
@@ -41,12 +44,15 @@ namespace LiteMonitor.src.Plugins
         // Key = 实例ID | 目标索引 | 步骤ID | 请求身份摘要
         private class CacheItem
         {
-            public string RawResponse { get; set; } 
+            // ★ 缓存条目写入时总会带上正文（唯一创建点 726 行显式赋值）⇒ 给一个安全默认值，
+            //   既消除"未在构造函数赋值"的 CS8618，也让读取处（617 行）拿到确定的非空字符串。
+            public string RawResponse { get; set; } = string.Empty;
             public DateTime Timestamp { get; set; }
         }
 
         private readonly ConcurrentDictionary<string, CacheItem> _stepCache = new();
-        private readonly AsyncLocal<PluginPublicationLease> _publication = new();
+        // ★ 租约槽：运行期允许"当前没有租约"（standalone 路径先判空再回填）⇒ 值类型必须可空。
+        private readonly AsyncLocal<PluginPublicationLease?> _publication = new();
         private readonly object _standalonePublicationGate = new();
 
         /// <summary>
@@ -59,7 +65,9 @@ namespace LiteMonitor.src.Plugins
         internal TimeProvider Clock { get; set; } = TimeProvider.System;
 
         // Test barriers run before the gate. Identity validation and writes stay together.
-        internal Func<string, string, Task> BeforePublicationAsync { get; set; }
+        // ★ 可选钩子：构造函数不赋值、由外部（测试屏障）注入 ⇒ 声明为可空；
+        //   使用点（PreparePublicationAsync）本来就用 `?.` 判空，语义不变。
+        internal Func<string, string, Task>? BeforePublicationAsync { get; set; }
 
         private Task PreparePublicationAsync(string instanceId, string kind)
             => BeforePublicationAsync?.Invoke(instanceId, kind) ?? Task.CompletedTask;
@@ -72,7 +80,8 @@ namespace LiteMonitor.src.Plugins
         }
 
 
-        private IDisposable EnterStandalonePublication(CancellationToken token)
+        // ★ 返回值可空：已经有租约时**不接管**（返回 null，调用方 `using var` 直接跳过）⇒ 真实的"无租约"状态。
+        private IDisposable? EnterStandalonePublication(CancellationToken token)
         {
             if (_publication.Value != null) return null;
             _publication.Value = new PluginPublicationLease(_standalonePublicationGate, token);
@@ -81,15 +90,18 @@ namespace LiteMonitor.src.Plugins
 
         private sealed class PublicationContext : IDisposable
         {
-            private readonly AsyncLocal<PluginPublicationLease> _context;
-            internal PublicationContext(AsyncLocal<PluginPublicationLease> context) => _context = context;
+            // ★ 槽位类型可空：Dispose() 的语义就是把槽位**清空**（= 没有租约）⇒ 槽位必须允许 null。
+            private readonly AsyncLocal<PluginPublicationLease?> _context;
+            internal PublicationContext(AsyncLocal<PluginPublicationLease?> context) => _context = context;
             public void Dispose() => _context.Value = null;
         }
 
         public PluginExecutor()
         {
-            InitializeDefaultClient();
-            
+            // ★ 构造函数里**直接**给 _http 赋值（否则编译器无法证明字段已初始化 ⇒ CS8618）。
+            //   客户端参数与 InitializeDefaultClient() 完全一致（同一个工厂方法），行为不变。
+            _http = CreateDefaultClient();
+
             System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
         }
 
@@ -108,25 +120,32 @@ namespace LiteMonitor.src.Plugins
         {
             lock (_httpLock)
             {
-                _http = new HttpClient(new SocketsHttpHandler
-                {
-                    // 关键修复：允许 HttpClient 自动识别并解压 GZip 或 Deflate 数据
-                    AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                    // 【安全】[LM-045] 关闭自动重定向：自动跳转会在**来不及复核目标主机**的情况下
-                    // 把请求发到下一跳（凭据头、Cookie 会随跳转外泄，未声明主机的响应也会进入流水线）。
-                    // 重定向必须由 FetchRawAsync 逐跳处理、逐跳复核。
-                    AllowAutoRedirect = false,
-                    // 【安全】不设置自定义证书校验回调：TLS 校验按系统信任链进行。
-                    // 插件内容随取随执行，关闭校验等于允许中间人下发任意插件脚本。
-                    // 企业 TLS 拦截/自签代理环境应引导用户导入根证书，而不是关闭校验。
-                    // [Fix] Reduce pooled connection lifetime to ensure timely DNS updates and socket release
-                    PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-                    // [Fix] Limit connections per server to prevent ephemeral port exhaustion
-                    MaxConnectionsPerServer = 20
-                });
-                _http.Timeout = TimeSpan.FromSeconds(10); 
-                _http.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor++/1.0");
+                _http = CreateDefaultClient();
             }
+        }
+
+        // ★ 默认客户端的唯一构造点（构造函数与 ResetNetworkClients 共用）⇒ 参数只此一份，不会走偏。
+        private static HttpClient CreateDefaultClient()
+        {
+            var client = new HttpClient(new SocketsHttpHandler
+            {
+                // 关键修复：允许 HttpClient 自动识别并解压 GZip 或 Deflate 数据
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                // 【安全】[LM-045] 关闭自动重定向：自动跳转会在**来不及复核目标主机**的情况下
+                // 把请求发到下一跳（凭据头、Cookie 会随跳转外泄，未声明主机的响应也会进入流水线）。
+                // 重定向必须由 FetchRawAsync 逐跳处理、逐跳复核。
+                AllowAutoRedirect = false,
+                // 【安全】不设置自定义证书校验回调：TLS 校验按系统信任链进行。
+                // 插件内容随取随执行，关闭校验等于允许中间人下发任意插件脚本。
+                // 企业 TLS 拦截/自签代理环境应引导用户导入根证书，而不是关闭校验。
+                // [Fix] Reduce pooled connection lifetime to ensure timely DNS updates and socket release
+                PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                // [Fix] Limit connections per server to prevent ephemeral port exhaustion
+                MaxConnectionsPerServer = 20
+            });
+            client.Timeout = TimeSpan.FromSeconds(10);
+            client.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor++/1.0");
+            return client;
         }
 
         /// <summary>[C5 #4] 全局重置冷却窗口：同一窗口内至多执行一次**真正**的客户端重置。</summary>
@@ -213,7 +232,9 @@ namespace LiteMonitor.src.Plugins
             _stepCache.Clear();
         }
 
-        public void ClearCache(string instanceId = null)
+        // ★ instanceId 可空：调用方允许"不传"（= 清全部缓存）⇒ 默认值 null 必须如实标注；
+        //   函数体用 string.IsNullOrEmpty 判空，对 null 与 "" 的处理逐字相同，行为不变。
+        public void ClearCache(string? instanceId = null)
         {
             if (string.IsNullOrEmpty(instanceId))
             {
@@ -351,8 +372,11 @@ namespace LiteMonitor.src.Plugins
                         Url = url,
                         Body = body,
                         Method = tmpl.Execution.Method,
-                        Headers = tmpl.Execution.Headers,
-                        ResponseEncoding = null 
+                        Headers = tmpl.Execution.Headers
+                        // ★ 不再显式写 ResponseEncoding = null：模型里该属性是非空 string（默认 "utf-8"），
+                        //   写 null 既是 CS8625，也会让读取点被判定为"可能为 null"。
+                        //   行为等价：FetchRawAsync 体内 `encoding?.ToLower() == "gbk"` 对 null 与 "utf-8"
+                        //   判定完全相同（都不是 gbk）⇒ 都走 UTF8 解码。
                     };
 
                     // [LM-009] legacy 直接取数路径也算**一步**（步骤数在**该目标内**累计）。
@@ -389,7 +413,14 @@ namespace LiteMonitor.src.Plugins
                     }
 
                     // [LM-009] 变换循环必须能被总时长上限打断（改用带 CancellationToken 的重载）。
-                    PluginProcessor.ApplyTransforms(tmpl.Execution.Process, inputs, scope.Token);
+                    // ★ ApplyTransforms 的形参在 PluginProcessor.cs 里声明为非空，但函数体首行
+                    //   就是 `if (transforms == null) return;`（运行期本就容忍 null）。
+                    //   本文件不能改那个文件 ⇒ 这里先取到局部变量再判空，语义与原调用逐字一致。
+                    var legacyTransforms = tmpl.Execution.Process;
+                    if (legacyTransforms != null)
+                    {
+                        PluginProcessor.ApplyTransforms(legacyTransforms, inputs, scope.Token);
+                    }
                     
                     if (tmpl.Outputs != null)
                     {
@@ -442,7 +473,9 @@ namespace LiteMonitor.src.Plugins
             {
                 Execution = new PluginExecution
                 {
-                    Url = step?.Url ?? "",
+                    // ★ 不用 `step?.Url`：step 形参声明为非空，条件访问会把它的 null-state
+                    //   置为"可能为 null"，紧接着 446 行的 List.Add(step) 就会报 CS8604。
+                    Url = step.Url,
                     Steps = new List<PluginExecutionStep> { step }
                 }
             });
@@ -588,7 +621,12 @@ namespace LiteMonitor.src.Plugins
                     foreach (var target in ParseNativeArgs(new Uri(url)).Values)
                         if (IsAbsoluteHttpUrl(target)) EnsureNativeTargetAllowed(target, resolvedHeaders, nativeAllowed, declaredHosts);
                 }
-                else if (declaredHosts != null)
+                else
+                    // ★ 不再判 `declaredHosts != null`：该集合的唯一来源是
+                    //   PluginProcessor.GetDeclaredHosts(tmpl)（恒返回非 null 集合），
+                    //   测试反射调用也全部传非 null ⇒ 这个判空是死代码。
+                    //   而且它会把 declaredHosts 的 null-state 置为"可能为 null"，
+                    //   连带把下游 635/663 行的传参变成 CS8604 误报。
                     PluginSandbox.EnsureCredentialTargetAllowed(url, resolvedHeaders, declaredHosts);
 
                 // [C1] 请求身份：实例ID / 目标索引 / 步骤ID 沿用现行键里的三个维度，
@@ -654,10 +692,8 @@ namespace LiteMonitor.src.Plugins
                         // 每个等待者各自履责，共享任务本体不变（S1.0 契约 C3.4）。
                         // 契约 C1/C2/C4 与 PluginRequestIdentityTests.I7 锁死"在途键逐字等于摘要"，
                         // 因此**不得**把允许目标/凭据策略塞进在途键或摘要里。
-                        if (declaredHosts != null)
-                        {
-                            PluginSandbox.EnsureCredentialTargetAllowed(url, resolvedHeaders, declaredHosts);
-                        }
+                        // ★ 同上：declaredHosts 恒非 null（GetDeclaredHosts 保证），不再判空。
+                        PluginSandbox.EnsureCredentialTargetAllowed(url, resolvedHeaders, declaredHosts);
 
                         var task = GetOrStartInflight(inflightKey, () =>
                             FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, System.Threading.CancellationToken.None, proxy, scope, declaredHosts, scopeCancelsRequest: false));
@@ -697,7 +733,14 @@ namespace LiteMonitor.src.Plugins
                 
                 // Process
                 // [LM-009] 变换循环必须能被总时长上限打断（改用带 CancellationToken 的重载）。
-                PluginProcessor.ApplyTransforms(step.Process, context, scope.Token);
+                // ★ ApplyTransforms 的形参在 PluginProcessor.cs 里声明为非空，但函数体首行
+                //   就是 `if (transforms == null) return;`（运行期本就容忍 null）。
+                //   本文件不能改那个文件 ⇒ 这里先取到局部变量再判空，语义与原调用逐字一致。
+                var stepTransforms = step.Process;
+                if (stepTransforms != null)
+                {
+                    PluginProcessor.ApplyTransforms(stepTransforms, context, scope.Token);
+                }
 
                 // [Fix] Validate extracted data before caching
                 // If critical data is missing (Unknown/Error), THROW exception to prevent downstream steps from executing with bad data
@@ -705,7 +748,9 @@ namespace LiteMonitor.src.Plugins
                 {
                     foreach (var kv in step.Extract)
                     {
-                        if (context.TryGetValue(kv.Key, out string val))
+                        // ★ out 形参声明为可空：Dictionary.TryGetValue 的 out 带 [MaybeNullWhen(false)]，
+                        //   命中分支内值确定非空（下面的比较与抛异常都用它），未命中时为 null。
+                        if (context.TryGetValue(kv.Key, out string? val))
                         {
                             if (val == PluginConstants.STATUS_UNKNOWN || val == PluginConstants.STATUS_ERROR)
                             {
@@ -721,7 +766,10 @@ namespace LiteMonitor.src.Plugins
 
                 // [Fix] Update Cache AFTER successful parsing and processing
                 // This ensures we don't cache invalid data (e.g. HTML error pages that passed HTTP check but failed JSON parse)
-                if (!hit && step.CacheMinutes != 0 && (resultRaw == null || resultRaw.Length <= 500 * 1024))
+                // ★ 用 string.IsNullOrEmpty(resultRaw) 取代 `resultRaw == null`：
+                //   判定逐字等价（null 与 "" 都算"可缓存"），但 `== null` 会把 resultRaw 的
+                //   null-state 置为"可能为 null"，紧接着的 CacheItem.RawResponse 赋值就报 CS8601。
+                if (!hit && step.CacheMinutes != 0 && (string.IsNullOrEmpty(resultRaw) || resultRaw.Length <= 500 * 1024))
                 {
                     var candidate = new CacheItem { RawResponse = resultRaw, Timestamp = DateTime.Now };
                     await PreparePublicationAsync(inst.Id, "cache-write").ConfigureAwait(false);
@@ -817,14 +865,16 @@ namespace LiteMonitor.src.Plugins
             var args = ParseNativeArgs(uri);
 
             // [LM-039] 允许目标主机集合：插件**显式声明**的主机（口径同 HTTP 步骤路径）。
-            var allowedHosts = GetNativeAllowedHosts(step?.Url, declaredHosts);
+            // ★ 不用 `step?.Url` / `step?.Headers`：step 形参声明为非空（唯一调用方传的是非空步骤），
+            //   条件访问会把 step 的 null-state 置为"可能为 null"，让下面的传参变成 CS8604 误报。
+            var allowedHosts = GetNativeAllowedHosts(step.Url, declaredHosts);
 
             // [LM-039] 用户可控目标（fallback 等绝对 URL 参数）必须在**请求发出之前**校验。
             foreach (var kv in args)
             {
                 if (IsAbsoluteHttpUrl(kv.Value))
                 {
-                    EnsureNativeTargetAllowed(kv.Value, step?.Headers, allowedHosts, declaredHosts);
+                    EnsureNativeTargetAllowed(kv.Value, step.Headers, allowedHosts, declaredHosts);
                 }
             }
 
@@ -843,8 +893,14 @@ namespace LiteMonitor.src.Plugins
             {
                 string s = args.TryGetValue("symbol", out var sv) ? sv : "BTC";
                 string fb = args.TryGetValue("fallback", out var fv) ? fv : "";
+                // ★ 发布租约：原生步骤一定跑在 ExecuteStepWithScopeAsync 的作用域内，
+                //   那里已用 EnterStandalonePublication 装好租约（外层已有租约时沿用外层的）⇒ 这里必然非空。
+                //   显式守卫而不是 `!`：真为空说明执行上下文被破坏，必须立刻失败，
+                //   不能像 null 那样静默跳过"缓存落盘提交"。
+                var publication = _publication.Value
+                    ?? throw new InvalidOperationException("插件执行缺少发布租约，原生步骤无法落盘。");
                 return await CryptoNative.FetchLeasedAsync(s, fb, nativeToken, maxResponseBytes, allowedHosts,
-                    inflightScopeKey, _publication.Value).ConfigureAwait(false);
+                    inflightScopeKey, publication).ConfigureAwait(false);
             }
             else if (uri.Host.Equals("newyear", StringComparison.OrdinalIgnoreCase))
             {
@@ -934,7 +990,9 @@ namespace LiteMonitor.src.Plugins
         /// <para>与 HTTP 步骤路径同一口径：目标主机必须在插件**显式声明**的允许集合内；
         /// 带凭据头的步骤额外走 <see cref="PluginSandbox.EnsureCredentialTargetAllowed"/>。</para>
         /// </summary>
-        private static void EnsureNativeTargetAllowed(string targetUrl, Dictionary<string, string> headers,
+        // ★ headers 可空：步骤级请求头（PluginExecutionStep.Headers）本身可空，
+        //   函数体里 `headers != null` 就是为此准备的判空（无请求头 = 不带凭据）。
+        private static void EnsureNativeTargetAllowed(string targetUrl, Dictionary<string, string>? headers,
             HashSet<string> allowedHosts, HashSet<string> declaredHosts)
         {
             string host = PluginHostPolicy.RequireHttpHost(targetUrl);
@@ -982,7 +1040,12 @@ namespace LiteMonitor.src.Plugins
         /// <param name="allowedHosts">插件显式声明的目标主机集合；为 null 表示无声明上下文（不做凭据校验）。</param>
         /// <param name="scopeCancelsRequest">是否让作用域令牌中止本请求。
         /// 共享在途请求必须传 false（C1 契约：取消一个等待者不得取消共享任务）。</param>
-        private async Task<string> FetchRawAsync(string methodStr, string url, string body, Dictionary<string, string> headers, string encoding, System.Threading.CancellationToken token, string proxy = null, PluginSandboxScope scope = null, HashSet<string> allowedHosts = null, bool scopeCancelsRequest = true)
+        // ★ proxy / scope / allowedHosts 是**可选参数**（默认值就是 null）：
+        //   如实标成可空，调用侧与函数体都已按"可能没有"处理（proxy 空串=无代理；
+        //   scope 为空=不绑作用域令牌；allowedHosts 为空=无声明上下文，不做凭据校验）。
+        // ★ encoding 可空：来源是插件 JSON 里的 "response_encoding"，JSON 显式写 null 时
+        //   反序列化会真的给出 null ⇒ 函数体的 `encoding?.ToLower() == "gbk"` 是必要的空值保护。
+        private async Task<string> FetchRawAsync(string methodStr, string url, string body, Dictionary<string, string> headers, string? encoding, System.Threading.CancellationToken token, string? proxy = null, PluginSandboxScope? scope = null, HashSet<string>? allowedHosts = null, bool scopeCancelsRequest = true)
         {
             PluginHostPolicy.RequireHttpHost(url);
             // 方法解析：**只支持 GET / POST / HEAD**，其余一律回落 GET（既有行为，逐字不变）。
@@ -1008,7 +1071,9 @@ namespace LiteMonitor.src.Plugins
             bool hasCredential = PluginSandbox.HasCredentialHeader(headers);
             HashSet<string> hopAllowedHosts = BuildHopAllowedHosts(allowedHosts, url, hasCredential);
 
-            var client = GetClient(proxy);
+            // ★ proxy 可空（可选参数）：无代理时用空串交给 GetClient ——
+            //   GetClient 体内用 string.IsNullOrEmpty 判空，对 null 与 "" 的处理逐字相同。
+            var client = GetClient(proxy ?? string.Empty);
             int generation = GetClientGeneration();
             try
             {
@@ -1027,7 +1092,8 @@ namespace LiteMonitor.src.Plugins
 
                 // [LM-009] 并发槽位：只占**一个**槽位（作用域内的闸门），不在外层重复占用。
                 // [LM-045] 槽位覆盖**整条重定向链**：循环**前**获取一次、链结束后释放（不逐跳获取/释放）。
-                IDisposable slot = null;
+                // ★ 槽位可空：没有作用域时**不占**槽位（不获取）⇒ 变量必须允许 null。
+                IDisposable? slot = null;
                 try
                 {
                     if (scope != null)
@@ -1038,7 +1104,9 @@ namespace LiteMonitor.src.Plugins
 
                     // [LM-045] 逐跳跟随重定向（镜像 PluginMarket.DownloadBytesAsync 这个仓内同构先例）：
                     // 自动重定向已关闭 ⇒ 每一跳都由本循环显式发起、显式复核目标主机。
-                    Uri current = null;
+                    // ★ current 可空：URL 解析失败时就是 null（此时按"没有基址"处理，
+                    //   相对 Location 会在下面被拒绝）。
+                    Uri? current = null;
                     Uri.TryCreate(url, UriKind.Absolute, out current);
                     string requestTarget = url;          // 首跳用原始字符串（与既有行为一致）
                     HttpMethod currentMethod = method;
@@ -1058,10 +1126,11 @@ namespace LiteMonitor.src.Plugins
                         {
                             request.Content = new StringContent(currentBody, Encoding.UTF8, "application/json");
                         }
-                        if (headers != null)
-                        {
-                            foreach (var h in headers) request.Headers.TryAddWithoutValidation(h.Key, h.Value);
-                        }
+                        // ★ 不再判 `headers != null`：headers 形参声明为非空，
+                        //   两个调用点传的都是 ResolveHeaders 的结果（恒非 null 集合）⇒ 该判空是死代码。
+                        //   而且它位于**循环体内**，循环回边合并会把 headers 的 null-state
+                        //   置为"可能为 null"，导致上一行 EnsureHopTargetAllowed 的传参变成 CS8604 误报。
+                        foreach (var h in headers) request.Headers.TryAddWithoutValidation(h.Key, h.Value);
 
                         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linked.Token);
                         // Log($"[End] {url} Status:{response.StatusCode}");
@@ -1123,7 +1192,9 @@ namespace LiteMonitor.src.Plugins
                         if (RewritesMethodOnRedirect(response.StatusCode, currentMethod))
                         {
                             currentMethod = HttpMethod.Get;
-                            currentBody = null;
+                            // ★ 丢弃正文用空串表示：currentBody 的唯一消费点是
+                            //   `!string.IsNullOrEmpty(currentBody)` —— null 与 "" 在那里逐字等价（都表示"没有正文"）。
+                            currentBody = string.Empty;
                         }
 
                         current = next;
@@ -1226,7 +1297,9 @@ namespace LiteMonitor.src.Plugins
         /// <para>· <b>不带凭据</b>：声明主机集合 ∪ {原始直连目标主机} ——
         /// 后者让**同主机**重定向（换路径 / 换查询串 / http→https 升级）继续可用。</para>
         /// </summary>
-        private static HashSet<string> BuildHopAllowedHosts(HashSet<string> declaredHosts, string directUrl, bool hasCredential)
+        // ★ declaredHosts 可空：函数体第一件事就是 `if (declaredHosts != null)`（无声明上下文即不额外收紧），
+        //   而调用方传的 allowedHosts 允许为 null（= 无声明上下文）⇒ 如实标成可空。
+        private static HashSet<string> BuildHopAllowedHosts(HashSet<string>? declaredHosts, string directUrl, bool hasCredential)
         {
             var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -1260,7 +1333,9 @@ namespace LiteMonitor.src.Plugins
         /// <para>无声明上下文（<paramref name="declaredHosts"/> 为 null）时不做主机复核
         /// —— 与既有"无声明上下文即不做凭据校验"的口径保持一致。</para>
         /// </summary>
-        private static void EnsureHopTargetAllowed(Uri target, HashSet<string> declaredHosts, HashSet<string> hopAllowedHosts,
+        // ★ target / declaredHosts 可空：函数体开头就是 `if (target == null) return;`
+        //   与 `if (declaredHosts == null) return;`（无声明上下文即不做主机复核）⇒ 如实标成可空。
+        private static void EnsureHopTargetAllowed(Uri? target, HashSet<string>? declaredHosts, HashSet<string> hopAllowedHosts,
             Dictionary<string, string> headers, bool hasCredential)
         {
             if (target == null) return;
@@ -1287,7 +1362,9 @@ namespace LiteMonitor.src.Plugins
         /// [LM-045] 重定向目标的**协议**复核：必须仍是 http/https，且**不允许 https → http 降级**。
         /// <para>降级意味着凭据 / 正文会从加密信道掉到明文信道 ⇒ 直接终止重定向链。</para>
         /// </summary>
-        private static void EnsureRedirectSchemeAllowed(Uri current, Uri next)
+        // ★ current / next 可空：函数体本来就用 `next?.Scheme ?? ""` 与 `current != null` 判空
+        //   （缺基址 / 缺目标 URI 都要能安全处理）⇒ 如实标成可空，行为不变。
+        private static void EnsureRedirectSchemeAllowed(Uri? current, Uri? next)
         {
             string scheme = next?.Scheme ?? "";
             bool isHttp = string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase);
@@ -1338,9 +1415,14 @@ namespace LiteMonitor.src.Plugins
         private async Task<byte[]> ReadBodyWithLimitAsync(HttpResponseMessage response, CancellationToken token)
         {
             int limit = EffectiveMaxResponseBytes;
-            string url = response?.RequestMessage?.RequestUri?.ToString();
+            // ★ 不再用 `response?.`：HttpResponseMessage.Content 在 .NET 8 引用程序集里是**非可空**的
+            //   （getter 永不返回 null）。原来的 `response?.Content?.Headers?.ContentLength` 里
+            //   Content 之后那个多余的 `?.` 会把 response 的 null-state 污染成"可能为 null"，
+            //   连带让下一行的 response.Content.ReadAsStreamAsync 报 CS8602（解引用可能为 null）—— 纯误报。
+            //   RequestMessage 本身**是可空**的（HttpClient 不保证回填），那里的 `?.` 保留。
+            string? url = response.RequestMessage?.RequestUri?.ToString();
 
-            long? declared = response?.Content?.Headers?.ContentLength;
+            long? declared = response.Content.Headers.ContentLength;
             if (declared.HasValue && declared.Value > limit)
             {
                 throw new PluginResponseTooLargeException(url, declared.Value, limit);
@@ -1479,9 +1561,14 @@ namespace LiteMonitor.src.Plugins
             System.Diagnostics.Debug.WriteLine($"Plugin exec error ({inst.Id}): {error.Message}");
         }
 
-        private Dictionary<string, string> ResolveHeaders(Dictionary<string, string> headers, Dictionary<string, string> context)
+        // ★ headers 可空（步骤级请求头本身可空）；**返回非 null**：
+        //   没有请求头时返回空集合而不是 null —— 下游对"null 头"与"空头"的处理逐字相同
+        //   （HasCredentialHeader / EnsureCredentialTargetAllowed / EnsureNativeTargetAllowed /
+        //   FetchRawAsync 的逐跳复核 / SortHeaders 的摘要输入：null 与空集合都表示"没有请求头"），
+        //   归一化成空集合后，下游那些声明为非空的形参不必再加判空，行为与摘要都不变。
+        private Dictionary<string, string> ResolveHeaders(Dictionary<string, string>? headers, Dictionary<string, string> context)
         {
-            if (headers == null || headers.Count == 0) return null;
+            if (headers == null || headers.Count == 0) return new Dictionary<string, string>();
             var resolved = new Dictionary<string, string>();
             foreach (var kv in headers)
             {
@@ -1518,8 +1605,10 @@ namespace LiteMonitor.src.Plugins
             public string ResponseEncoding { get; }
             public string Digest { get; }
 
+            // ★ headers 可空："没有请求头"在摘要口径上就是空集合（SortHeaders 对 null 与空集合
+            //   产出同样的空列表）⇒ 摘要不变。调用方本来就可能传 null（无请求头的步骤）。
             public RequestIdentity(string instanceId, string targetIndex, string stepId, string method,
-                                   string url, string body, Dictionary<string, string> headers,
+                                   string url, string body, Dictionary<string, string>? headers,
                                    string proxy, string responseEncoding)
             {
                 InstanceId = instanceId ?? "";
@@ -1567,7 +1656,9 @@ namespace LiteMonitor.src.Plugins
         /// 比合并机会减少严重得多）。名统一小写（HTTP 头名大小写无关），
         /// 按 (名, 值) 排序，保证拼接顺序确定。
         /// </summary>
-        private static List<KeyValuePair<string, string>> SortHeaders(Dictionary<string, string> headers)
+        // ★ headers 可空：函数体首行 `if (headers == null) return list;` 就是"没有请求头"的处理
+        //   （与空集合产出同样的空列表 ⇒ 摘要不变）。
+        private static List<KeyValuePair<string, string>> SortHeaders(Dictionary<string, string>? headers)
         {
             var list = new List<KeyValuePair<string, string>>();
             if (headers == null) return list;
@@ -1590,8 +1681,9 @@ namespace LiteMonitor.src.Plugins
         /// <para>**禁止**使用 <c>GetHashCode()</c>：它是进程内加盐的 32 位弱摘要，
         /// 不同进程/不同次运行结果不同，且碰撞概率不可忽略。</para>
         /// </summary>
+        // ★ headers 可空：与 SortHeaders 的口径一致（null 与空集合 ⇒ 同样的摘要）。
         private static string ComputeRequestDigest(string method, string canonicalUrl, string body,
-            Dictionary<string, string> headers, string proxy, string responseEncoding)
+            Dictionary<string, string>? headers, string proxy, string responseEncoding)
         {
             var sorted = SortHeaders(headers);
             var sb = new StringBuilder(256);
@@ -1633,7 +1725,10 @@ namespace LiteMonitor.src.Plugins
         /// </summary>
         private Task<string> GetOrStartInflight(string key, Func<Task<string>> factory)
         {
-            Lazy<Task<string>> mine = null;
+            // ★ mine 先置 null 再赋值：工厂委托里要引用**它自己**（把同一把 Lazy 交给
+            //   ReleaseInflight 做"比较后原子移除"），C# 不允许在初始化器里自引用 ⇒ 必须两段式。
+            //   类型标成可空：此刻 mine 确实还没有值。
+            Lazy<Task<string>>? mine = null;
             mine = new Lazy<Task<string>>(() =>
             {
                 Task<string> task;
@@ -1658,7 +1753,9 @@ namespace LiteMonitor.src.Plugins
         /// [C3 #2] **比较后**原子移除：只有字典中该键当前映射的值**仍是本条目**时才删除。
         /// 这样旧任务的收尾不会误删同键的新条目。禁止无条件 <c>TryRemove(key, out _)</c>。
         /// </summary>
-        private void ReleaseInflight(string key, Lazy<Task<string>> entry)
+        // ★ entry 可空：函数体首行 `if (entry == null) return;` 就是"没有条目就不移除"的处理
+        //   （工厂委托里自引用的 mine 在被调用时已确定非空，但形参本身必须接受 null）。
+        private void ReleaseInflight(string key, Lazy<Task<string>>? entry)
         {
             if (entry == null) return;
             _inflightRequests.TryRemove(new KeyValuePair<string, Lazy<Task<string>>>(key, entry));
@@ -1680,7 +1777,10 @@ namespace LiteMonitor.src.Plugins
         /// <summary>本次生效的上限（字节）。</summary>
         public int Limit { get; }
 
-        public PluginResponseTooLargeException(string url, long? declaredLength, int limit)
+        // ★ url 可空：url 只出现在诊断文本里（"url={url}"）；而 url 来自
+        //   `response.RequestMessage?.RequestUri?.ToString()` —— RequestMessage / RequestUri 都可空
+        //   ⇒ 拿不到时就是 null。如实标成可空，诊断文本在 null 时照旧输出 "url=" （行为不变）。
+        public PluginResponseTooLargeException(string? url, long? declaredLength, int limit)
             : base(PluginSandboxReasons.ResponseTooLarge,
                    $"Plugin response exceeded the {limit} byte limit (declared={declaredLength?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}, url={url})")
         {
