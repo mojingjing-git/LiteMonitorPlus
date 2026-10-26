@@ -347,3 +347,83 @@ jobs:
           path: dist/LiteMonitorPlus_v${{ steps.version.outputs.version }}-win-x64.zip
           if-no-files-found: error
           retention-days: 14
+
+  # ══════════════════════════════════════════════════════════════════════
+  # 可空引用门禁（nullable-gate）· 2026-10-26 新增
+  #
+  # 目的：把「可空引用警告清零」从一次性清理变成**持续可验证的工程不变量**。
+  # 分层设计（详见 docs/plans/2026-10-26-nullable-warnings-remediation-plan.md §5.6）：
+  #   门禁 1（硬门禁）生产三工程 Release 构建**零警告**
+  #             → 由各 csproj 的 TreatWarningsAsErrors（Release 条件）实现。
+  #   门禁 2（防回退）全解决方案**不新增**警告码
+  #             → TreatWarningsAsErrors=true + WarningsNotAsErrors=<历史码清单>：
+  #               历史债务降级为「警告但仍可见」，任何**新增**警告码一律升级为错误。
+  #
+  # ⚠️ 假绿禁令（沿用本仓库 G3 口径）：
+  #   · 两条门禁都用 `dotnet build` 的**真实退出码**判定，禁止只看日志里有没有 "warning" 字样；
+  #   · 门禁 2 禁止使用无差别全局 /warnaserror（会误伤历史债务导致门禁永久红灯）；
+  #   · 禁止使用 `warnaserror:<code>` 写法 —— 编译器语义是「把这些码当作错误」，
+  #     **不是**「豁免这些码」，语义完全相反。
+  # ══════════════════════════════════════════════════════════════════════
+  nullable-gate:
+    name: 可空引用门禁（生产零警告）
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: 还原依赖
+        run: dotnet restore LiteMonitor.sln
+
+      # ── 门禁 1：生产工程零警告（硬门禁）─────────────────────────────
+      - name: 门禁 1 · 生产工程零警告（Release · warnings-as-errors）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $projects = @(
+            'LiteMonitor.csproj',
+            'src\HardwareHost\LiteMonitor.HardwareHost.csproj',
+            'src\Contracts\LiteMonitor.Contracts.csproj'
+          )
+          foreach ($p in $projects) {
+            Write-Host "==> 门禁 1：$p"
+            dotnet build $p -c Release --no-incremental --nologo -warnaserror
+            if ($LASTEXITCODE -ne 0) {
+              throw "门禁 1 失败：$p（退出码 $LASTEXITCODE）—— 生产工程在 Release 下出现编译警告，已按 TreatWarningsAsErrors 升级为错误。可空债务清零是本次治理的验收底线，不允许降级放行。"
+            }
+          }
+          Write-Host '门禁 1 通过：三个生产工程 Release 构建 0 警告 0 错误。'
+
+      # ── 门禁 2：全解决方案不新增警告码（防回退）─────────────────────
+      - name: 门禁 2 · 全解决方案不新增警告码
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # ★ 历史债务抑制清单：只登记**确实还存在**的警告码。
+          #   每完成一个 Phase 就从这里移除对应码，门禁 2 随之逐步收紧。
+          #   · CS0168 / CS0649：测试工程未使用变量 / 未赋值字段（测试代码风格，非可空缺陷）
+          #   · CS8632：测试工程 Nullable=disable 下的标注噪音（已在测试 csproj 内 NoWarn）
+          #   · xUnit****：xUnit 分析器规则警告，与可空治理无因果关系
+          #     （登记为独立 Phase 7 技术债，不在本次治理范围内）
+          # ⚠️ 分号必须写成 %3B：MSBuild 用 ";" 分隔多个属性，直接传 ";" 会报
+          #    MSB1006（属性无效），实测确认。
+          $legacy = 'CS0168%3BCS0649%3BCS8632%3BxUnit2031%3BxUnit1030%3BxUnit1031%3BxUnit2013%3BxUnit1026%3BxUnit2000%3BxUnit2012%3BxUnit2017%3BxUnit2020'
+          dotnet build LiteMonitor.sln -c Release --no-incremental --nologo `
+            -p:TreatWarningsAsErrors=true `
+            -p:WarningsNotAsErrors=$legacy
+          if ($LASTEXITCODE -ne 0) {
+            throw "门禁 2 失败（退出码 $LASTEXITCODE）—— 全解决方案出现了**不在历史抑制清单内**的新警告码，已升级为错误。请修正代码，或在确属历史债务时把对应码登记进本步骤的抑制清单（并同步更新计划文档的燃尽表）。"
+          }
+          Write-Host '门禁 2 通过：全解决方案未出现新增警告码。'
