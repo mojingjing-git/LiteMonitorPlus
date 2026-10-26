@@ -1,7 +1,7 @@
 # 审查后工程完善计划：数据闭环、生命周期与交付验证
 
 - 日期：2026-10-26。
-- 状态：评估通过（四点修订并入）。**W1/M0 已完成并集成**（2026-10-26）：E05（`18e63c9`）+ E08a（`035ccdf`）+ E00（独立复验 R1~R9 坏状态不可再现，22 例新回归）——门禁 2504→**2571**，MUST 清单采纳 E08a 建议新增 8 类（MIN_COUNT 6→5）。E00 新发现归账：F1（`WebServerPasswordHash` 归 Other ⇒ 只改口令触发界面重建）→ E03 字段归属表；F2（会话切换不重置 `_lastBatchId`）→ E01/E02 快照合同。下一步 W2（E01/E02 并行），开工前由集成人钉死契约演进方案。
+- 状态：评估通过（四点修订并入）。**W1/M0 已完成并集成**（2026-10-26）：E05（`18e63c9`）+ E08a（`035ccdf`）+ E00（独立复验 R1~R9 坏状态不可再现，22 例新回归）——门禁 2504→**2571**，MUST 清单采纳 E08a 建议新增 8 类（MIN_COUNT 6→5）。E00 新发现归账：F1（`WebServerPasswordHash` 归 Other ⇒ 只改口令触发界面重建）→ E03 字段归属表；F2（会话切换不重置 `_lastBatchId`）→ E01/E02 快照合同。**W2 已完成并集成**（契约 v2 基座 `8e2de2f`；E01 `1eea7ea`、E02 合入）：真实快照生产发布（读取不推进代次/时效、SessionEpoch/ConfigRevision 做实、质量语义）、目录版本化+需求租约、命令面双端（异步配置/显式重扫状态机/有界记录/重连重放）、ThemePreviewService 异步化；合并后单次串行全量 2594/2587 全过，门禁 2571→**2686**。遗留归账：I2 整机进程数断言的多 lane 并发抖动→小修（改按会话 PID 集合核对）；`SampleQuality.Stale` 生产者未产出→E01-C 消费侧按 TimestampMonoMs 判过期；Web 需求直写与 "web" 桶并存→E01-C 迁移时二选一；管道 ReleaseDemand 本地注销+异步下发的形态差异→E03/E04。**运维约束（新）：多 lane 不可同机并发跑 LHM 测试套件（testhost 崩溃/进程数断言抖动均为争抢），测试执行须串行。** 下一步 W3（E03/E04，同文件密集建议串行；先 E03 配置生效反馈，再 E04 运行时与生命周期）。
 - 观察基线：`4a529dc2afa642d7b737b902160fb0430b3abcd8`。
 - 前置修复：`5ef523b`，R1～R9回归包；归档提交`4a529dc`。
 - 依据：[完整审查报告](../reviews/2026-10-26-post-plan-full-review.md)、[Plan A](2026-10-26-hardware-process-isolation-plan.md)、[Plan B](2026-10-26-architecture-decoupling-plan.md)。
