@@ -98,6 +98,15 @@ namespace LiteMonitor.ThemeEditor
         public float DpiScale => GetDpiScale();
 
         /// <summary>
+        /// 当前预览是否走 GPU 真实渲染（供状态区显示"实际路线"而非声明路线）。
+        /// GPU 不可用 / 关闭特效 / 安全模式时恒为 false。
+        /// </summary>
+        public bool IsGpuPreviewActive => _gpuPreview?.IsActive == true;
+
+        /// <summary>GPU 预览不可用原因（未尝试或可用时为 null）。</summary>
+        public string? GpuPreviewError => _gpuPreview?.Error;
+
+        /// <summary>
         /// 编辑器传入主题
         /// </summary>
         public void SetTheme(Theme theme)

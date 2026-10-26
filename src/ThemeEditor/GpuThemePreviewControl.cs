@@ -16,6 +16,22 @@ namespace LiteMonitor.ThemeEditor;
 /// </summary>
 public sealed class GpuThemePreviewControl : Control
 {
+    /// <summary>
+    /// 预览专用的 GPU 启动保护（重做计划 §6.3 / TE00 第 5 节结论）：
+    /// 使用独立状态目录，**不读写生产崩溃标记**、不消耗生产保守状态。
+    /// 预览异常退出只会让预览自身进入保守模式，不会把主窗体下次启动打入 GDI。
+    /// </summary>
+    private static readonly Lazy<GpuStartupGuard> PreviewGuardFactory = new(() =>
+        new GpuStartupGuard(
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LiteMonitor++",
+                "gpu-startup-preview"),
+            AppContext.BaseDirectory));
+
+    public static GpuStartupGuard PreviewGuard => PreviewGuardFactory.Value;
+
+    private readonly GpuStartupGuard _startupGuard;
     private readonly Theme _theme;
     private readonly List<GroupLayoutInfo> _groups;
     private readonly MaterialRuntimeSettings _runtimeSettings;
@@ -33,10 +49,12 @@ public sealed class GpuThemePreviewControl : Control
 
     public GpuThemePreviewControl(
         Theme theme,
-        List<GroupLayoutInfo> groups)
+        List<GroupLayoutInfo> groups,
+        GpuStartupGuard? startupGuard = null)
     {
         _theme = theme;
         _groups = groups;
+        _startupGuard = startupGuard ?? PreviewGuard;
         MaterialKind material = theme.Rendering?.Material switch
         {
             ThemeRenderingConfig.LiquidGlassMaterial => MaterialKind.LiquidGlass,
@@ -104,7 +122,7 @@ public sealed class GpuThemePreviewControl : Control
         }
 
         _generations = new RenderGenerations(1, 1, 1, 1, 1);
-        if (!GpuStartupGuard.Shared.TryBeginAttempt(
+        if (!_startupGuard.TryBeginAttempt(
                 out GpuStartupAttempt? startupAttempt,
                 out string? guardCode,
                 out string? guardMessage))

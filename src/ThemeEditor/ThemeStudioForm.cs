@@ -49,10 +49,14 @@ namespace LiteMonitor.ThemeEditor
         private ToolStripStatusLabel _statusRoute = null!;
         private Panel _previewHost = null!;
         private Label _previewPlaceholder = null!;
+        private ThemePreviewControl? _preview;
+        private System.Windows.Forms.Timer? _previewDebounce;
         private PropertyInspector _inspector = null!;
 
         private ThemeDocumentSession? _session;
         private string _selectedTheme = string.Empty;
+        private readonly System.Windows.Forms.Timer _recoveryTimer;
+        private Panel _libraryPanel = null!;
 
         /// <summary>应用依赖注入（重做计划 §8）：保存完成后的应用动作由宿主提供，编辑器不反射。</summary>
         public interface IThemeApplyGateway
@@ -82,7 +86,36 @@ namespace LiteMonitor.ThemeEditor
             BuildUi();
             ReloadThemeList();
             RegisterShortcuts();
-            FormClosed += (_, _) => PropertyInspectorSessionBridge.Release();
+
+            // 恢复草稿：空闲 2 秒持久化（重做计划 §5.1）
+            _recoveryTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+            _recoveryTimer.Tick += (_, _) =>
+            {
+                _recoveryTimer.Stop();
+                PersistRecovery();
+            };
+
+            // 关闭 / Alt+F4：有未保存修改时提供保存／放弃／取消
+            FormClosing += (_, e) =>
+            {
+                if (!ConfirmCloseCurrentDocument())
+                {
+                    e.Cancel = true;
+                }
+            };
+        }
+
+        private void PersistRecovery()
+        {
+            if (_session is null || !_session.IsDirty) return;
+            try
+            {
+                ThemeDocumentStore.PersistRecovery(_session.CaptureSnapshot());
+            }
+            catch
+            {
+                // 恢复草稿写失败不阻塞编辑（正式保存仍是唯一可靠路径）
+            }
         }
 
         // ============================================================
@@ -107,6 +140,7 @@ namespace LiteMonitor.ThemeEditor
                 BackColor = LibraryBack,
                 Padding = new Padding(Dip(8), Dip(8), Dip(4), Dip(4)),
             };
+            _libraryPanel = library;
             var libraryTitle = new Label
             {
                 Text = "资料库",
@@ -170,7 +204,15 @@ namespace LiteMonitor.ThemeEditor
                 Width = Dip(300),
                 BackColor = PreviewBack,
             };
-            _inspector.PropertyEdited += (_, _) => OnSessionChanged();
+            _inspector.PropertyEdited += (_, invalidation) =>
+            {
+                OnSessionChanged();
+                if (invalidation == ThemePropertyInvalidation.Font)
+                {
+                    // 字体对象已重建：预览必须同步重新借用新 Font 实例
+                    RefreshPreviewNow();
+                }
+            };
 
             // === 画布（中栏）===
             var canvas = new Panel { Dock = DockStyle.Fill, BackColor = CanvasBack, Padding = new Padding(Dip(16)) };
@@ -194,6 +236,15 @@ namespace LiteMonitor.ThemeEditor
                 BackColor = PreviewBack,
             };
             _previewHost.Controls.Add(_previewPlaceholder);
+
+            // 同源预览（TE04 首批）：复用生产渲染路径的经典/GPU 预览控件。
+            // 每次编辑经 150ms 防抖刷新，避免连续输入触发 GPU 控件反复重建。
+            _previewDebounce = new System.Windows.Forms.Timer { Interval = 150 };
+            _previewDebounce.Tick += (_, _) =>
+            {
+                _previewDebounce!.Stop();
+                RefreshPreviewNow();
+            };
             canvas.Controls.Add(_previewHost);
 
             // === 文档工具栏（顶部）===
@@ -216,9 +267,12 @@ namespace LiteMonitor.ThemeEditor
             saveAsButton.Click += (_, _) => SaveSessionAs();
             var applyButton = new ToolStripButton("应用") { Enabled = false };
             applyButton.Click += (_, _) => ApplySession();
+            var libraryToggle = new ToolStripButton("资料库");
+            libraryToggle.Click += (_, _) => _libraryPanel.Visible = !_libraryPanel.Visible;
             _docToolbar.Items.AddRange(
                 [_docName, _dirtyDot, new ToolStripSeparator(), _undoButton, _redoButton,
-                 new ToolStripSeparator(), _saveButton, saveAsButton, applyButton]);
+                 new ToolStripSeparator(), _saveButton, saveAsButton, applyButton,
+                 new ToolStripSeparator(), libraryToggle]);
 
             // Dock 优先级与探针一致：后加入者优先。
             Controls.Add(canvas);
@@ -321,9 +375,38 @@ namespace LiteMonitor.ThemeEditor
 
         private void OpenTheme(string name)
         {
+            ThemeDocumentSession session;
             try
             {
-                _session = ThemeDocumentSession.Open(name);
+                if (ThemeDocumentStore.TryLoadRecovery(name, out ThemeDraftSnapshot? snapshot) &&
+                    snapshot is not null && snapshot.Revision > snapshot.SavedRevision)
+                {
+                    DialogResult choice = MessageBox.Show(
+                        this,
+                        $"检测到主题“{name}”的未保存恢复草稿。\n\n" +
+                        "“是”= 恢复草稿；“否”= 丢弃草稿并打开磁盘版本。\n" +
+                        "若源文件已被外部修改，恢复会打开独立副本，保存前需另存为新主题。",
+                        "恢复草稿",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question);
+                    if (choice == DialogResult.Yes)
+                    {
+                        (session, bool conflictCopied) = ThemeDocumentSession.Restore(snapshot);
+                        if (conflictCopied)
+                        {
+                            _statusSaved.Text = "源文件已变化：已打开恢复副本，保存前请另存为新主题。";
+                        }
+                    }
+                    else
+                    {
+                        ThemeDocumentStore.DeleteRecovery(name);
+                        session = ThemeDocumentSession.Open(name);
+                    }
+                }
+                else
+                {
+                    session = ThemeDocumentSession.Open(name);
+                }
             }
             catch (Exception ex)
             {
@@ -332,10 +415,11 @@ namespace LiteMonitor.ThemeEditor
                 return;
             }
 
+            _session = session;
             _selectedTheme = name;
             _inspector.Bind(_session);
-            PropertyInspectorSessionBridge.Set(_session);
             UpdateDocumentUi();
+            RefreshPreviewNow();
         }
 
         private bool ConfirmCloseCurrentDocument()
@@ -441,7 +525,6 @@ namespace LiteMonitor.ThemeEditor
                 {
                     _session = null;
                     _selectedTheme = string.Empty;
-                    PropertyInspectorSessionBridge.Set(null);
                 }
 
                 ThemeFileService.DeleteTheme(name);
@@ -467,6 +550,7 @@ namespace LiteMonitor.ThemeEditor
             ReportSaveResult(result, saveAction: "保存");
             if (result.Success)
             {
+                _recoveryTimer.Stop();
                 ReloadThemeList();
                 UpdateDocumentUi();
             }
@@ -485,6 +569,7 @@ namespace LiteMonitor.ThemeEditor
             ReportSaveResult(result, saveAction: "另存为");
             if (result.Success)
             {
+                _recoveryTimer.Stop();
                 ReloadThemeList();
                 UpdateDocumentUi();
             }
@@ -586,6 +671,83 @@ namespace LiteMonitor.ThemeEditor
         {
             // 视图状态不制造脏状态：这里只反映会话事实。
             UpdateDocumentUi();
+            SchedulePreviewRefresh();
+
+            // 空闲 2 秒持久化恢复草稿
+            _recoveryTimer.Stop();
+            if (_session?.IsDirty == true)
+            {
+                _recoveryTimer.Start();
+            }
+        }
+
+        /// <summary>防抖刷新预览（连续编辑合并到一次渲染）。</summary>
+        private void SchedulePreviewRefresh()
+        {
+            _previewDebounce?.Stop();
+            _previewDebounce?.Start();
+        }
+
+        /// <summary>立即把草稿交给同源预览控件。</summary>
+        private void RefreshPreviewNow()
+        {
+            if (_session is null)
+            {
+                _previewPlaceholder.Visible = true;
+                _previewPlaceholder.BringToFront();
+                return;
+            }
+
+            if (_preview is null)
+            {
+                _preview = new ThemePreviewControl
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = PreviewBack,
+                };
+                _previewHost.Controls.Add(_preview);
+            }
+
+            try
+            {
+                _preview.SetTheme(_session.Draft);
+            }
+            catch (Exception ex)
+            {
+                _statusSaved.Text = "预览失败：" + ex.Message;
+                return;
+            }
+
+            _preview.Visible = true;
+            _preview.BringToFront();
+            _previewPlaceholder.Visible = false;
+            UpdateRouteStatus();
+        }
+
+        private void UpdateRouteStatus()
+        {
+            if (_session is null)
+            {
+                _statusRoute.Text = "预览路线：—";
+                return;
+            }
+
+            bool gpuRequested = _session.Draft.Rendering?.IsGpuRequested == true;
+            if (!gpuRequested)
+            {
+                _statusRoute.Text = "预览路线：经典渲染（同源）";
+                return;
+            }
+
+            if (_preview?.IsGpuPreviewActive == true)
+            {
+                _statusRoute.Text = "预览路线：GPU 场景（同源）";
+            }
+            else
+            {
+                string reason = _preview?.GpuPreviewError ?? "未启动";
+                _statusRoute.Text = "预览路线：GPU 不可用 → 兼容外观（常规绘制）— " + reason;
+            }
         }
 
         private void UpdateDocumentUi()
@@ -598,9 +760,7 @@ namespace LiteMonitor.ThemeEditor
             _saveButton.Enabled = hasDoc;
             _statusSaved.Text = hasDoc && _session!.IsDirty ? "未保存的更改" :
                 hasDoc ? "已保存" : "就绪";
-            _statusRoute.Text = "预览路线：" + (hasDoc
-                ? (_session!.Draft.Rendering?.IsGpuRequested == true ? "GPU 场景（TE04 接入）" : "经典渲染（TE04 接入）")
-                : "—");
+            UpdateRouteStatus();
             Text = "LiteMonitor 主题工作室" + (hasDoc && _session!.IsDirty ? " — *" : string.Empty) +
                    (hasDoc ? " — " + _session.ThemeName : string.Empty);
         }
@@ -694,15 +854,4 @@ namespace LiteMonitor.ThemeEditor
         }
     }
 
-    /// <summary>空会话（占位绑定用）：未打开文档时保持检查器可显示空态。</summary>
-    internal static class PropertyInspectorSessionBridge
-    {
-        private static ThemeDocumentSession? _current;
-
-        public static void Set(ThemeDocumentSession? session) => _current = session;
-
-        public static void Release() => _current = null;
-
-        public static ThemeDocumentSession? Current => _current;
-    }
 }

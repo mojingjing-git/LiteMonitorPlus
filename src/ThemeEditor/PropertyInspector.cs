@@ -19,8 +19,8 @@ namespace LiteMonitor.ThemeEditor
         private readonly Dictionary<string, List<Control>> _rowsByPath = new(StringComparer.Ordinal);
         private readonly ToolTip _toolTip = new();
 
-        /// <summary>字段被用户编辑（已提交到会话）。</summary>
-        public event EventHandler? PropertyEdited;
+        /// <summary>字段被用户编辑（已提交到会话），参数为失效级别。</summary>
+        public event EventHandler<ThemePropertyInvalidation>? PropertyEdited;
 
         /// <summary>当前会话的草稿对象。</summary>
         public Theme? Draft => _session?.Draft;
@@ -156,7 +156,7 @@ namespace LiteMonitor.ThemeEditor
                     {
                         Font = new Font("Consolas", 9F),
                     };
-                    var state = new RowState(p, box, _session);
+                    var state = new RowState(p, box, _session, OnRowCommitted);
                     box.Tag = state;
                     box.TextChanged += (_, _) => state.CommitText();
                     return box;
@@ -164,7 +164,7 @@ namespace LiteMonitor.ThemeEditor
                 case ThemePropertyEditorKind.Number:
                 {
                     var box = new TextBox { Font = new Font("Consolas", 9F) };
-                    var state = new RowState(p, box, _session);
+                    var state = new RowState(p, box, _session, OnRowCommitted);
                     if (p.Minimum is double min) _toolTip.SetToolTip(box, $"范围 [{min}, {p.Maximum}]");
                     box.Tag = state;
                     box.TextChanged += (_, _) => state.CommitText();
@@ -173,7 +173,7 @@ namespace LiteMonitor.ThemeEditor
                 case ThemePropertyEditorKind.Boolean:
                 {
                     var check = new CheckBox { Height = 24, Text = string.Empty };
-                    var state = new RowState(p, check, _session);
+                    var state = new RowState(p, check, _session, OnRowCommitted);
                     check.Tag = state;
                     check.CheckedChanged += (_, _) => state.CommitCheck();
                     return check;
@@ -186,7 +186,7 @@ namespace LiteMonitor.ThemeEditor
                         foreach (string choice in p.Choices) combo.Items.Add(choice);
                     }
 
-                    var state = new RowState(p, combo, _session);
+                    var state = new RowState(p, combo, _session, OnRowCommitted);
                     combo.Tag = state;
                     combo.SelectedIndexChanged += (_, _) => state.CommitChoice();
                     return combo;
@@ -194,7 +194,7 @@ namespace LiteMonitor.ThemeEditor
                 default:
                 {
                     var box = new TextBox();
-                    var state = new RowState(p, box, _session);
+                    var state = new RowState(p, box, _session, OnRowCommitted);
                     box.Tag = state;
                     box.TextChanged += (_, _) => state.CommitText();
                     return box;
@@ -214,7 +214,22 @@ namespace LiteMonitor.ThemeEditor
                 (System.Text.Json.Nodes.JsonNode?)null,
                 theme => p.Setter(theme, modelDefault)));
             RefreshValues();
-            PropertyEdited?.Invoke(this, EventArgs.Empty);
+            OnRowCommitted(p);
+        }
+
+        /// <summary>行提交统一出口：字体失效先重建运行期字体，再通知宿主刷新预览。</summary>
+        private void OnRowCommitted(ThemePropertyDescriptor p)
+        {
+            if (_session is not null && p.Invalidation == ThemePropertyInvalidation.Font)
+            {
+                // 先释放旧运行期字体再重建，避免每帧/每次输入泄漏 GDI 字体句柄；
+                // 预览只借用字体，宿主收到 Font 失效后会同步 SetTheme 重新借用新实例。
+                _session.Draft.DisposeFonts();
+                _session.Draft.BuildFonts();
+            }
+
+            RefreshOverrideBadges();
+            PropertyEdited?.Invoke(this, p.Invalidation);
         }
 
         private void RefreshOverrideBadges()
@@ -239,17 +254,23 @@ namespace LiteMonitor.ThemeEditor
         {
             private readonly ThemePropertyDescriptor _p;
             private readonly ThemeDocumentSession? _session;
+            private readonly Action<ThemePropertyDescriptor> _onCommitted;
             private readonly Control _editor;
             private readonly TextBox? _textBox;
             private readonly CheckBox? _checkBox;
             private readonly ComboBox? _combo;
             private bool _refreshing;
 
-            public RowState(ThemePropertyDescriptor p, Control editor, ThemeDocumentSession? session)
+            public RowState(
+                ThemePropertyDescriptor p,
+                Control editor,
+                ThemeDocumentSession? session,
+                Action<ThemePropertyDescriptor> onCommitted)
             {
                 _p = p;
                 _session = session;
                 _editor = editor;
+                _onCommitted = onCommitted;
                 _textBox = editor as TextBox;
                 _checkBox = editor as CheckBox;
                 _combo = editor as ComboBox;
@@ -319,6 +340,7 @@ namespace LiteMonitor.ThemeEditor
                     _p.JsonPath,
                     json,
                     theme => _p.Setter(theme, value)));
+                _onCommitted(_p);
             }
 
             private static object? ParseNumberOrText(string text) => text;
