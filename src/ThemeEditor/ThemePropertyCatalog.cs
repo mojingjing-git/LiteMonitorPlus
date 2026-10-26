@@ -99,13 +99,6 @@ namespace LiteMonitor.ThemeEditor
         /// <summary>经典主题属性（M1 批次冻结集）。</summary>
         public static IReadOnlyList<ThemePropertyDescriptor> ClassicProperties => _classic;
 
-        /// <summary>按文档类型与编辑目标取属性集（GPU 主题在 M2 扩展）。</summary>
-        public static IReadOnlyList<ThemePropertyDescriptor> GetProperties(bool isGpuTheme)
-        {
-            // M1：经典编辑闭环。GPU 主题在 M2 接入主效果／兼容外观视图。
-            return _classic;
-        }
-
         private static string S(object? value) => value as string ?? string.Empty;
 
         private static JsonNode? JsonString(object? value) =>
@@ -228,7 +221,10 @@ namespace LiteMonitor.ThemeEditor
                 JsonPath = path,
                 Group = path.StartsWith("thresholds", StringComparison.Ordinal) ? "阈值" :
                     path.StartsWith("font", StringComparison.Ordinal) ? "文字" : "布局",
-                Scope = shared ? ThemePropertyScope.Shared : ThemePropertyScope.Classic,
+                Scope = shared || path.StartsWith("layout.", StringComparison.Ordinal) ||
+                        path.StartsWith("thresholds.", StringComparison.Ordinal)
+                    ? ThemePropertyScope.Shared
+                    : ThemePropertyScope.Classic,
                 EditorKind = ThemePropertyEditorKind.Number,
                 Invalidation = path.StartsWith("font", StringComparison.Ordinal)
                     ? ThemePropertyInvalidation.Font
@@ -268,7 +264,7 @@ namespace LiteMonitor.ThemeEditor
                 DisplayName = display,
                 JsonPath = path,
                 Group = "布局",
-                Scope = ThemePropertyScope.Classic,
+                Scope = ThemePropertyScope.Shared,
                 EditorKind = ThemePropertyEditorKind.Choice,
                 Invalidation = ThemePropertyInvalidation.Layout,
                 Choices = choices,

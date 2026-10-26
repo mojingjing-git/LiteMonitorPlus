@@ -32,11 +32,19 @@ namespace LiteMonitor.ThemeEditor
             Padding = new Padding(12, 8, 12, 8);
         }
 
-        /// <summary>绑定会话并重建检查器。</summary>
-        public void Bind(ThemeDocumentSession session)
+        /// <summary>当前编辑目标（视图状态，不写主题、不制造脏状态）。</summary>
+        public ThemeEditTarget Target { get; private set; } = ThemeEditTarget.Classic;
+
+        /// <summary>绑定会话并重建检查器（目标默认按文档类型选择）。</summary>
+        public void Bind(ThemeDocumentSession session) =>
+            Bind(session, ThemePropertyCatalog.DefaultTarget(session.Draft));
+
+        /// <summary>绑定会话与编辑目标；切换目标只换视图，不改 rendering.backend。</summary>
+        public void Bind(ThemeDocumentSession session, ThemeEditTarget target)
         {
             _session = session;
-            _properties = ThemePropertyCatalog.GetProperties(session.Draft.Rendering?.IsGpuRequested == true);
+            Target = target;
+            _properties = ThemePropertyCatalog.GetProperties(session.Draft, target);
             Rebuild();
         }
 
@@ -133,6 +141,22 @@ namespace LiteMonitor.ThemeEditor
                     rows.Add(resetLink);
                     _rowsByPath[p.JsonPath] = rows;
                     y += resetLink.Height + 6;
+
+                    // GPU 目标下的共享设置显式标注（不假装独立）——TE00 §2.5
+                    if (Target != ThemeEditTarget.Classic && p.Scope.HasFlag(ThemePropertyScope.Shared))
+                    {
+                        var sharedLabel = new Label
+                        {
+                            Text = "共享设置 — 同时影响主效果与兼容外观",
+                            Location = new Point(Padding.Left + 96, y),
+                            Size = new Size(Width - Padding.Horizontal - 96, 16),
+                            ForeColor = Color.FromArgb(0x2F, 0x6F, 0xED),
+                            Font = new Font("Segoe UI", 7.5F),
+                        };
+                        Controls.Add(sharedLabel);
+                        rows.Add(sharedLabel);
+                        y += sharedLabel.Height + 4;
+                    }
                 }
 
                 // 底部占位，保证滚动到底部时最后一行不被裁切

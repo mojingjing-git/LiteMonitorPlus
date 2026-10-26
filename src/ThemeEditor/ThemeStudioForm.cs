@@ -51,6 +51,9 @@ namespace LiteMonitor.ThemeEditor
         private Label _previewPlaceholder = null!;
         private ThemePreviewControl? _preview;
         private System.Windows.Forms.Timer? _previewDebounce;
+        private ToolStripComboBox _targetCombo = null!;
+        private ToolStripLabel _targetLabel = null!;
+        private bool _suppressTargetChange;
         private PropertyInspector _inspector = null!;
 
         private ThemeDocumentSession? _session;
@@ -237,6 +240,30 @@ namespace LiteMonitor.ThemeEditor
                 BackColor = PreviewBack,
             };
             _previewHost.Controls.Add(_previewPlaceholder);
+
+            // 画布工具栏：编辑目标（类型/目标/实际路线三者同时可辨认，计划 §3.2）
+            var canvasToolbar = new ToolStrip
+            {
+                Dock = DockStyle.Top,
+                GripStyle = ToolStripGripStyle.Hidden,
+                BackColor = CanvasBack,
+                RenderMode = ToolStripRenderMode.System,
+            };
+            _targetLabel = new ToolStripLabel("编辑目标：") { ForeColor = TextMuted };
+            _targetCombo = new ToolStripComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = Dip(180),
+                Enabled = false,
+            };
+            _targetCombo.SelectedIndexChanged += (_, _) => OnTargetChanged();
+            var routeHint = new ToolStripLabel("切换目标不修改 rendering.backend")
+            {
+                ForeColor = TextMuted,
+                Font = new Font("Segoe UI", 7.5F),
+            };
+            canvasToolbar.Items.AddRange([_targetLabel, _targetCombo, new ToolStripSeparator(), routeHint]);
+            canvas.Controls.Add(canvasToolbar);
 
             // 同源预览（TE04 首批）：复用生产渲染路径的经典/GPU 预览控件。
             // 每次编辑经 150ms 防抖刷新，避免连续输入触发 GPU 控件反复重建。
@@ -449,6 +476,7 @@ namespace LiteMonitor.ThemeEditor
             _session = session;
             _selectedTheme = name;
             _inspector.Bind(_session);
+            ConfigureTargetSelector();
             // 代码路径（新建/复制/打开）同步列表选中项，不触发打开流程
             _suppressSelection = true;
             try
@@ -566,6 +594,7 @@ namespace LiteMonitor.ThemeEditor
                 {
                     _session = null;
                     _selectedTheme = string.Empty;
+                    ConfigureTargetSelector();
                 }
 
                 ThemeFileService.DeleteTheme(name);
@@ -774,21 +803,75 @@ namespace LiteMonitor.ThemeEditor
             }
 
             bool gpuRequested = _session.Draft.Rendering?.IsGpuRequested == true;
+            string targetNote = _inspector.Target == ThemeEditTarget.GpuFallback
+                ? " ｜ 目标：兼容外观（画布仍为主效果，回退预览待 TE04）"
+                : _inspector.Target == ThemeEditTarget.GpuMain ? " ｜ 目标：主效果" : string.Empty;
+
             if (!gpuRequested)
             {
-                _statusRoute.Text = "预览路线：经典渲染（同源）";
+                _statusRoute.Text = "预览路线：经典渲染（同源）" + targetNote;
                 return;
             }
 
             if (_preview?.IsGpuPreviewActive == true)
             {
-                _statusRoute.Text = "预览路线：GPU 场景（同源）";
+                _statusRoute.Text = "预览路线：GPU 场景（同源）" + targetNote;
             }
             else
             {
                 string reason = _preview?.GpuPreviewError ?? "未启动";
-                _statusRoute.Text = "预览路线：GPU 不可用 → 兼容外观（常规绘制）— " + reason;
+                _statusRoute.Text = "预览路线：GPU 不可用 → 兼容外观（常规绘制）— " + reason + targetNote;
             }
+        }
+
+        /// <summary>按文档类型配置编辑目标选择器（视图状态，不写主题、不制造脏状态）。</summary>
+        private void ConfigureTargetSelector()
+        {
+            _suppressTargetChange = true;
+            try
+            {
+                _targetCombo.Items.Clear();
+                if (_session is null)
+                {
+                    _targetCombo.Items.Add("—");
+                    _targetCombo.SelectedIndex = 0;
+                    _targetCombo.Enabled = false;
+                    return;
+                }
+
+                bool gpu = _session.Draft.Rendering?.IsGpuRequested == true;
+                if (!gpu)
+                {
+                    _targetCombo.Items.Add("经典外观");
+                    _targetCombo.SelectedIndex = 0;
+                    _targetCombo.Enabled = false;
+                }
+                else
+                {
+                    _targetCombo.Items.Add("主效果（GPU）");
+                    _targetCombo.Items.Add("兼容外观（回退）");
+                    _targetCombo.SelectedIndex = _inspector.Target == ThemeEditTarget.GpuFallback ? 1 : 0;
+                    _targetCombo.Enabled = true;
+                }
+            }
+            finally
+            {
+                _suppressTargetChange = false;
+            }
+        }
+
+        private void OnTargetChanged()
+        {
+            if (_suppressTargetChange || _session is null) return;
+            if (_targetCombo.SelectedIndex < 0) return;
+
+            ThemeEditTarget target = _targetCombo.SelectedIndex == 1
+                ? ThemeEditTarget.GpuFallback
+                : (_session.Draft.Rendering?.IsGpuRequested == true ? ThemeEditTarget.GpuMain : ThemeEditTarget.Classic);
+
+            // 只切换文档视图：不修改 rendering.backend，不触发换肤。
+            _inspector.Bind(_session, target);
+            UpdateRouteStatus();
         }
 
         private void UpdateDocumentUi()

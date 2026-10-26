@@ -83,20 +83,24 @@ namespace LiteMonitor.Tests
         }
 
         [Fact]
-        public void 共享字段_仅字体族与字号加粗_作用域标注正确()
+        public void 共享字段_字体布局阈值_作用域标注正确()
         {
             var shared = ThemePropertyCatalog.ClassicProperties
                 .Where(p => p.Scope.HasFlag(ThemePropertyScope.Shared))
                 .Select(p => p.JsonPath)
                 .ToArray();
 
-            Assert.Equal(
-                new[]
-                {
-                    "font.family", "font.valueFamily", "font.title",
-                    "font.group", "font.item", "font.value", "font.bold"
-                },
-                shared);
+            // TE00 §2.1/§4.2：GPU 主效果与兼容外观共享字体、布局、阈值；
+            // 字体仅在 floatingToolbar 下被前景消费，目录层仍标 Shared（由视图过滤）。
+            string[] fontPaths =
+            [
+                "font.family", "font.valueFamily", "font.title",
+                "font.group", "font.item", "font.value", "font.bold"
+            ];
+            Assert.Equal(fontPaths, shared.Take(7).ToArray());
+            Assert.Equal(15, shared.Count(p => p.StartsWith("layout.", StringComparison.Ordinal)));
+            Assert.Equal(8, shared.Count(p => p.StartsWith("thresholds.", StringComparison.Ordinal)));
+            Assert.Equal(30, shared.Length);
         }
 
         [Fact]
