@@ -174,7 +174,11 @@ namespace LiteMonitor.src.Plugins
             {
                 if (string.IsNullOrEmpty(itemKey)) return "";
                 var settings = Settings.Load();
-                string owner;
+                // ★ owner 可空：PluginKeyOwnership.MonitorOwner 在「该 key 尚未归属任何
+                //   插件实例」时返回 null（正常语义，非异常）。
+                //   ★ 不能把 null 换成 "" —— PluginInstanceConfig.Id 的默认值是 ""，
+                //   两者语义不同（"" 表示存在一个 id 为空的实例，null 表示无归属）。
+                string? owner;
                 lock (settings.MonitorItems) owner = PluginKeyOwnership.MonitorOwner(settings, itemKey);
                 var instance = settings.PluginInstances.FirstOrDefault(i => i.Id == owner);
                 var template = templates.FirstOrDefault(t => t.Id == instance?.TemplateId);
