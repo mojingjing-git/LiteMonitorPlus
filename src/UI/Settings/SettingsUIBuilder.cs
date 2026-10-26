@@ -202,8 +202,15 @@ namespace LiteMonitor.src.UI.SettingsPage
                 var pLabel = t.GetProperty("Label");
                 var pValue = t.GetProperty("Value");
                 
-                if (pLabel != null) label = pLabel.GetValue(opt)?.ToString();
-                if (pValue != null) val = pValue.GetValue(opt)?.ToString();
+                // ★ 反射取 Label/Value：调用方传进来的选项对象（匿名类型
+                //   `new { Label = ..., Value = ... }`、PluginInputOption 等）的这两个属性
+                //   都是非空 string，正常情况下 ToString() 不会返回 null。
+                //   ★ 但 ComboBox.AddItem 的两个形参都要求非空 string，
+                //   这里用 `?? ""` 兜住「反射拿到 null」这一理论情况：
+                //   原代码把 null 传进去，下拉项显示成空白、选中值也是 null；
+                //   兜成空串后显示效果完全一致（还是空标签），只是不再把 null 带进配置。
+                if (pLabel != null) label = pLabel.GetValue(opt)?.ToString() ?? "";
+                if (pValue != null) val = pValue.GetValue(opt)?.ToString() ?? "";
                 
                 cmb.AddItem(label, val);
             }
@@ -230,17 +237,23 @@ namespace LiteMonitor.src.UI.SettingsPage
         {
             cmb.Inner.DropDown += (s, e) =>
             {
-                var box = (ComboBox)s;
-                int maxWidth = box.Width;
-                int scrollBarWidth = SystemInformation.VerticalScrollBarWidth;
-
-                foreach (var item in box.Items)
+                // ★ DropDown 事件的 sender 按 WinForms 约定声明为 object?，
+                //   这里用模式匹配收窄成 ComboBox（而不是强制转换 + 直接解引用），
+                //   这样 sender 为 null 时不会抛 NullReferenceException。
+                //   ★ 实际运行时 sender 一定是内嵌的 ComboBox，行为不变。
+                if (s is ComboBox box)
                 {
-                    if (item == null) continue;
-                    int w = TextRenderer.MeasureText(item.ToString(), box.Font).Width + scrollBarWidth + 10;
-                    if (w > maxWidth) maxWidth = w;
+                    int maxWidth = box.Width;
+                    int scrollBarWidth = SystemInformation.VerticalScrollBarWidth;
+
+                    foreach (var item in box.Items)
+                    {
+                        if (item == null) continue;
+                        int w = TextRenderer.MeasureText(item.ToString(), box.Font).Width + scrollBarWidth + 10;
+                        if (w > maxWidth) maxWidth = w;
+                    }
+                    box.DropDownWidth = maxWidth;
                 }
-                box.DropDownWidth = maxWidth;
             };
         }
 

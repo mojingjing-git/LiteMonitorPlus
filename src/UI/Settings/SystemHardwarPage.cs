@@ -19,11 +19,16 @@ namespace LiteMonitor.src.UI.SettingsPage
         private Panel _container;
         
         // ★★★ 修复：类型更正为 LiteComboBox ★★★
-        private LiteComboBox _cbDisk, _cbNet, _cbGpu, _cbMobo;
-        private LiteComboBox _cbFanCpu, _cbFanPump, _cbFanCase;
+        // ★★★ 这几个下拉框都在构造函数里经 InitializeUI() → CreateSourceCard() 链创建，
+        //   编译器看不到这条赋值链，于是在构造函数出口（44 行）报 CS8618。
+        //   ★ 运行时它们在构造函数返回前一定已赋值，`= null!` 只是声明占位，运行期行为不变。
+        //   ★ 与本文件下方 _cbGpuCount 的既有写法保持一致。
+        private LiteComboBox _cbDisk = null!, _cbNet = null!, _cbGpu = null!, _cbMobo = null!;
+        private LiteComboBox _cbFanCpu = null!, _cbFanPump = null!, _cbFanCase = null!;
 
         // ★ [#166] CPU 电压来源下拉（枚举**已发布**的候选，保存稳定传感器标识）
-        private LiteComboBox _cbCpuVoltage;
+        //   在 CreateSourceCard() 里赋值，同上，用 `= null!` 占位。
+        private LiteComboBox _cbCpuVoltage = null!;
 
         // ★ 实际检测到的显卡数量, 决定「监控显卡数量」下拉的可选上限 ★
         private int _detectedGpuCount = 0;
@@ -712,7 +717,18 @@ namespace LiteMonitor.src.UI.SettingsPage
                     () => (int)(get?.Invoke() ?? 0),        
                     v => set?.Invoke((float)(int)v)
                 );
-                if(input.Parent.Controls[0] is Label lbl) lbl.Text = LanguageManager.T(key) + suffix; 
+                // ★ AddDouble 返回的 LiteSettingsItem 在返回前已经 AddItem 到 group 上，
+                //   所以 input.Parent 必定非空、且 Controls[0] 必定是那个 Label
+                //   （见 LiteUI.AddDouble：先 AddItem 再 return input）。
+                //   ★ 但 Parent 是可空属性、编译器无法证明这一点，这里用局部变量 +
+                //     `is not null` 显式收窄，**不用 `?.` 短路** ——
+                //     `?.` 会把「取不到父容器」和「取到但首个子控件不是 Label」混成同一种静默跳过，
+                //     而显式判断能把两种情况区分开，且运行期行为与原代码一致。
+                var parent = input.Parent;
+                if (parent is not null && parent.Controls.Count > 0 && parent.Controls[0] is Label lbl)
+                {
+                    lbl.Text = LanguageManager.T(key) + suffix;
+                }
             }
             
             group.AddHint(LanguageManager.T("Menu.CalibrationTip"));

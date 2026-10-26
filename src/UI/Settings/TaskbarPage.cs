@@ -14,10 +14,14 @@ namespace LiteMonitor.src.UI.SettingsPage
         private Panel _container;
         private List<Control> _customColorInputs = new List<Control>();
         private List<Control> _customLayoutInputs = new List<Control>();
-        private Control _styleCombo;
+        // ★ _styleCombo / _cbFont 在构造函数里经 InitializeUI() → CreateGeneralGroup() /
+        //   CreateLayoutGroup() 同步创建，编译器看不到这条赋值链，于是在构造函数出口
+        //   （23 行）报 CS8618。`= null!` 只是声明占位，运行时构造函数返回前它们已赋值，
+        //   运行期行为不变。
+        private Control _styleCombo = null!;
 
         // 类型名称修正为 LiteComboBox
-        private LiteComboBox _cbFont;
+        private LiteComboBox _cbFont = null!;
         private Task<List<string>> _taskFonts;
 
         public TaskbarPage()
@@ -254,9 +258,25 @@ namespace LiteMonitor.src.UI.SettingsPage
             var btnPick = new LiteSortBtn(LanguageManager.T("Menu.ScreenColorPickerShort")); 
             btnPick.Location = new Point(UIUtils.S(70), UIUtils.S(1));
             btnPick.Click += (s, e) => {
+                // ★ Screen.PrimaryScreen 在「无显示器 / 显示器热插拔 / 远程会话」下**真的可能为 null**
+                //   （WinForms 文档明确说明），原来这里直接解引用会在取色窗口弹出瞬间抛
+                //   NullReferenceException，被全局异常处理吞掉、用户只看到「点了没反应」。
+                //   ★ 先取到局部变量再判空：顺带避免了原来连续两次读 Screen.PrimaryScreen
+                //     可能拿到两块不同屏幕的竞态。
+                //   ★ 这里用空值早退是安全的：这是按钮点击事件（不是自绘回调），
+                //     没有 e.Handled 之类必须保证的语义，取色窗打不开时本次点击本就没有后续动作。
+                var screen = Screen.PrimaryScreen;
+                if (screen == null)
+                {
+                    MessageBox.Show(
+                        string.Format(LanguageManager.T("Menu.PreferenceUnavailable"), LanguageManager.T("Menu.ScreenColorPicker")),
+                        "LiteMonitor++",
+                        MessageBoxButtons.OK);
+                    return;
+                }
                 using (Form f = new Form { FormBorderStyle = FormBorderStyle.None, WindowState = FormWindowState.Maximized, TopMost = true, Cursor = Cursors.Cross })
                 {
-                    Bitmap bmp = new Bitmap(Screen.PrimaryScreen.Bounds.Width, Screen.PrimaryScreen.Bounds.Height);
+                    Bitmap bmp = new Bitmap(screen.Bounds.Width, screen.Bounds.Height);
                     using (Graphics g = Graphics.FromImage(bmp)) g.CopyFromScreen(0, 0, 0, 0, bmp.Size);
                     f.BackgroundImage = bmp;
                     f.MouseClick += (ms, me) => {
