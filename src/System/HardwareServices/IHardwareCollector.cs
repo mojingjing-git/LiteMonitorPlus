@@ -57,5 +57,10 @@ namespace LiteMonitor.SystemServices
         /// <summary>请求一次"到期才采"的采样（共享唯一协调器）。</summary>
         Task<bool> RequestSamplingAsync(CancellationToken cancellationToken);
 
+        /// <summary>
+        /// 显式全量重扫：强制下一轮采集立刻执行并等待其落定。
+        /// <para>★ 返回 false 表示"没有真正执行"（采集层未就绪 / 已释放）。</para>
+        /// </summary>
+        Task<bool> RequestFullRescanAsync(CancellationToken cancellationToken);
     }
 }

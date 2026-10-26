@@ -389,6 +389,18 @@ namespace LiteMonitor.src.SystemServices
         /// <summary>配置**实际生效**后回写 revision（进快照的 ConfigRevision）。</summary>
         public void RecordSamplingConfigRevision(int revision) => _snapshotPublisher?.RecordConfigRevision(revision);
 
+        /// <summary>
+        /// 显式全量重扫：强制下一轮采集**立刻**执行（绕过周期门限）并等待其落定。
+        /// <para>★ 进程内 v1 的语义：触发协调器的一次真实采集并等它结束；
+        /// 与管道侧 <c>RequestFullRescanAsync</c> 的"独立操作 ID / 有界 / 状态可查"对齐。</para>
+        /// </summary>
+        public async Task<bool> RequestFullRescanAsync(CancellationToken cancellationToken = default)
+        {
+            // Invalidate：下一轮记为例外采集并立即执行（不受最小周期门限限制）。
+            _coordinator.Invalidate();
+            return await _coordinator.RequestCollectionAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         /// <summary>请求一次"到期才采"的采样（<see cref="IHardwareCollector"/> 接口面）。</summary>
         Task<bool> IHardwareCollector.RequestSamplingAsync(CancellationToken cancellationToken)
             => UpdateIfDueAsync(cancellationToken);

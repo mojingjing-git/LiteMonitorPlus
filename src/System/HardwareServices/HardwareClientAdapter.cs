@@ -17,7 +17,9 @@ namespace LiteMonitor.SystemServices; // 新文件按目标命名空间方案落
 ///   传感器的**值**按 StableId 从已发布快照刷新（结构不变时不再遍历 LHM 树）；
 ///   需求按**消费者身份**登记（租约），关闭窗口只释放自己的那一份。
 ///
-/// ★ 需求租约（E01-B）：需求按**消费者身份**登记（租约），关闭窗口只释放自己的那一份。
+/// ★ 命令面（E01 复审必改 1）：<see cref="ApplyConfigAsync"/> /
+///   <see cref="RequestFullRescanAsync"/> / <see cref="ReleaseDemand"/> 已在适配器落地，
+///   语义与管道侧（P-E02）对齐。
 /// </summary>
 public sealed class HardwareClientAdapter : IHardwareClient
 {
@@ -26,6 +28,12 @@ public sealed class HardwareClientAdapter : IHardwareClient
 
     /// <summary>Web 消费者桶：它的 Web 需求经 <c>SetWebDataDemand</c> 语义映射到采集层。</summary>
     public const string WebConsumerId = "web";
+
+    /// <summary>显式全量重扫的等待上限（毫秒）。超时只表示**本调用方**停止等待。</summary>
+    private const int FullRescanTimeoutMs = 5000;
+
+    /// <summary>显式全量重扫的等待上限（可注入，测试用）。</summary>
+    internal TimeSpan FullRescanTimeout { get; set; } = TimeSpan.FromMilliseconds(FullRescanTimeoutMs);
 
     private readonly IHardwareCollector _collector;
     private readonly DemandRegistry _demands = new DemandRegistry();
@@ -174,6 +182,68 @@ public sealed class HardwareClientAdapter : IHardwareClient
         catch (Exception ex)
         {
             return new SamplingApplyResult(Applied: false, Revision: null, FailureReason: ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 异步应用采集配置：返回实际生效的 revision 或明确失败。
+    /// <para>★ 委托既有 <see cref="ApplyConfig"/> 逻辑的 Task 包装（计划 §6 表的"应用配置"行）。</para>
+    /// <para>★ 真正的硬件重配可能持锁数秒 ⇒ 放到线程池执行，**不阻塞**调用线程。</para>
+    /// </summary>
+    public Task<SamplingApplyResult> ApplyConfigAsync(SamplingConfig config, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (config == null) throw new ArgumentNullException(nameof(config));
+        return Task.Run(() => ApplyConfig(config), cancellationToken);
+    }
+
+    /// <summary>
+    /// 显式全量重扫：独立操作 ID、**有界**、状态可查。
+    /// <para>★ 进程内 v1：触发协调器的一次真实采集并等它落定（语义与管道侧对齐）。</para>
+    /// <para>★ 超时/取消只表示**本调用方**停止等待——底层重扫不会被取消
+    /// （"取消底层执行必须由操作所有者明确发起"）。</para>
+    /// </summary>
+    public async Task<HardwareOperationResult> RequestFullRescanAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        string operationId = "rescan-" + Guid.NewGuid().ToString("N");
+
+        try
+        {
+            // ★ 底层执行**不**绑定调用方的取消令牌：调用方取消只结束等待。
+            Task<bool> scan = _collector.RequestFullRescanAsync(CancellationToken.None);
+            Task finished = await Task.WhenAny(
+                scan,
+                Task.Delay(FullRescanTimeout, cancellationToken)).ConfigureAwait(false);
+
+            if (finished == scan)
+            {
+                bool executed = await scan.ConfigureAwait(false);
+                return executed
+                    ? HardwareOperationResult.Ok(operationId, HardwareOperationState.Completed)
+                    : new HardwareOperationResult(
+                        Accepted: true, operationId, HardwareOperationState.Failed,
+                        FailureReason: "重扫未执行（采集层未就绪或已释放）");
+            }
+
+            bool cancelled = cancellationToken.IsCancellationRequested;
+            return new HardwareOperationResult(
+                Accepted: true,
+                operationId,
+                cancelled ? HardwareOperationState.Cancelled : HardwareOperationState.Running,
+                cancelled
+                    ? "调用方取消等待（底层重扫未被取消）"
+                    : "等待超时：本调用方停止等待（底层重扫可能仍在执行）");
+        }
+        catch (OperationCanceledException)
+        {
+            return new HardwareOperationResult(
+                Accepted: true, operationId, HardwareOperationState.Cancelled, "调用方取消等待");
+        }
+        catch (Exception ex)
+        {
+            return new HardwareOperationResult(
+                Accepted: false, operationId, HardwareOperationState.Failed, ex.Message);
         }
     }
 
