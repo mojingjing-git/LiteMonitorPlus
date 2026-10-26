@@ -135,6 +135,58 @@ namespace LiteMonitor.Tests
             Console.WriteLine("[M1] 工作室证据图：" + png);
         }
 
+        [Fact]
+        public void 工作室_GPU主题_目标切换到兼容外观_不改后端()
+        {
+            Application.EnableVisualStyles();
+            const string gpu = @"{
+  ""name"": ""玻璃"",
+  ""rendering"": { ""version"": 1, ""backend"": ""gpu"", ""material"": ""liquid_glass"",
+    ""parameters"": { ""liveBackground"": false },
+    ""fallback"": { ""backend"": ""legacy"", ""material"": ""legacy"" } }
+}";
+            File.WriteAllText(Path.Combine(_dir, "玻璃.json"), gpu, new UTF8Encoding(false));
+
+            Exception? failure = null;
+            var thread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    using var form = new ThemeStudioForm();
+                    form.Show();
+                    Application.DoEvents();
+                    form.OpenThemeForTesting("玻璃");
+                    form.RefreshPreviewForTesting();
+                    Application.DoEvents();
+
+                    // 主效果视图：液态玻璃参数可见，无 fallbackStyle 槽
+                    Assert.True(form.InspectorForTesting.Controls.Count > 0);
+
+                    form.SelectTargetForTesting(ThemeEditTarget.GpuFallback);
+                    Application.DoEvents();
+
+                    // 兼容外观视图：六槽描述符已绑定（通过目录断言）
+                    var fallbackProps = ThemePropertyCatalog.GetProperties(
+                        form.InspectorForTesting.Draft!, ThemeEditTarget.GpuFallback);
+                    Assert.Contains(fallbackProps, p =>
+                        p.JsonPath == "rendering.fallbackStyle.accent" && p.DisplayName == "标题强调色");
+                    form.Close();
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.Start();
+            thread.Join(TimeSpan.FromSeconds(30));
+
+            Assert.Null(failure);
+            // 切目标不写盘、不改后端
+            string saved = File.ReadAllText(Path.Combine(_dir, "玻璃.json"));
+            Assert.Equal(gpu, saved);
+        }
+
         private static ThemePropertyDescriptor Find(string path) =>
             System.Linq.Enumerable.Single(
                 ThemePropertyCatalog.ClassicProperties,

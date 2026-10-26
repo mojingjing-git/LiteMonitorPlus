@@ -932,6 +932,15 @@ namespace LiteMonitor.ThemeEditor
 
         internal PropertyInspector InspectorForTesting => _inspector;
 
+        /// <summary>测试钩子：按编辑目标重绑检查器（等价于画布工具栏切换）。</summary>
+        internal void SelectTargetForTesting(ThemeEditTarget target)
+        {
+            if (_session is null) return;
+            _inspector.Bind(_session, target);
+            ConfigureTargetSelector();
+            UpdateRouteStatus();
+        }
+
         private string? PromptName(string title, string initial)
         {
             using var dialog = new Form
