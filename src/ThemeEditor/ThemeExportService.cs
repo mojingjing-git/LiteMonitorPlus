@@ -1,0 +1,953 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Windows.Forms;
+using LiteMonitor.Rendering.Configuration;
+using LiteMonitor.src.Core;
+
+namespace LiteMonitor.ThemeEditor
+{
+    /// <summary>
+    /// 效果图导出的**实际渲染路线**（TE07 / 重做计划 §5.3）。
+    ///
+    /// ★ 诚实性硬规则：只有真正由 GPU 渲染器产出的图才允许是 <see cref="Gpu"/>；
+    ///   GPU 主题在 GPU 不可用时用兼容外观渲染器出的图一律是 <see cref="Fallback"/>，
+    ///   绝不允许"把经典图标成 GPU"。
+    /// </summary>
+    public enum ThemeExportImageRoute
+    {
+        /// <summary>经典（GDI+ / UIRenderer）路线：主题本身就是 legacy 主题。</summary>
+        Classic = 0,
+
+        /// <summary>GPU 路线：图由 GPU 渲染器（<c>GpuSceneRenderer</c>）真实产出。</summary>
+        Gpu = 1,
+
+        /// <summary>兼容外观路线：主题声明 GPU，但本次导出实际走的是经典渲染器。</summary>
+        Fallback = 2
+    }
+
+    /// <summary>效果图导出的路线偏好。</summary>
+    public enum ImageRoutePreference
+    {
+        /// <summary>自动：GPU 主题优先走 GPU 路线，不可用时明确回退到兼容外观路线。</summary>
+        Auto = 0,
+
+        /// <summary>强制经典路线（不尝试 GPU）。</summary>
+        Classic = 1,
+
+        /// <summary>强制 GPU 路线：不可用时导出**失败**（不产出经典冒充的图）。</summary>
+        Gpu = 2
+    }
+
+    /// <summary>效果图画幅（固定尺寸 ⇒ 导出结果可复现）。</summary>
+    public enum ThemeExportImageOrientation
+    {
+        /// <summary>竖向主面板：240×420。</summary>
+        Vertical = 0,
+
+        /// <summary>横向面板：400×120。</summary>
+        Horizontal = 1
+    }
+
+    /// <summary>JSON 导出结果。</summary>
+    public sealed record ThemeExportResult
+    {
+        /// <summary>是否成功写出文件。</summary>
+        public bool Success { get; init; }
+
+        /// <summary>失败原因（成功时为 null）。</summary>
+        public string? Error { get; init; }
+
+        /// <summary>写出的文件绝对路径。</summary>
+        public string Path { get; init; } = string.Empty;
+
+        /// <summary>**写入文件字节**的 SHA-256（十六进制小写）。</summary>
+        public string Sha256 { get; init; } = string.Empty;
+
+        /// <summary>写入文件的字节数。</summary>
+        public long ByteCount { get; init; }
+
+        /// <summary>诊断（渲染校验问题、载荷问题等；不改变"文件已写出"的事实）。</summary>
+        public IReadOnlyList<string> Diagnostics { get; init; } = Array.Empty<string>();
+    }
+
+    /// <summary>效果图导出结果。</summary>
+    public sealed record ThemeImageExportResult
+    {
+        /// <summary>是否成功产出图片文件。</summary>
+        public bool Success { get; init; }
+
+        /// <summary>失败原因（成功时为 null）。</summary>
+        public string? Error { get; init; }
+
+        /// <summary>图片文件绝对路径（失败时可能为空）。</summary>
+        public string Path { get; init; } = string.Empty;
+
+        /// <summary>图片文件字节的 SHA-256。</summary>
+        public string Sha256 { get; init; } = string.Empty;
+
+        /// <summary>图片文件字节数。</summary>
+        public long ByteCount { get; init; }
+
+        /// <summary>本次图片的**实际**渲染路线。</summary>
+        public ThemeExportImageRoute Route { get; init; } = ThemeExportImageRoute.Classic;
+
+        /// <summary>是否为兼容外观回退图（GPU 主题但本次未产出真实 GPU 图）。</summary>
+        public bool IsFallback => Route == ThemeExportImageRoute.Fallback;
+
+        /// <summary>诊断（路线说明、GPU 不可用原因等）。</summary>
+        public IReadOnlyList<string> Diagnostics { get; init; } = Array.Empty<string>();
+    }
+
+    /// <summary>投稿资料准备结果。</summary>
+    public sealed record ThemeSubmissionResult
+    {
+        /// <summary>本地材料是否齐备（**不代表市场校验通过**）。</summary>
+        public bool Success { get; init; }
+
+        /// <summary>失败原因。</summary>
+        public string? Error { get; init; }
+
+        /// <summary>资料目录绝对路径。</summary>
+        public string Directory { get; init; } = string.Empty;
+
+        /// <summary>最终主题载荷文件（theme.json）路径。</summary>
+        public string ThemeJsonPath { get; init; } = string.Empty;
+
+        /// <summary>资料摘要文件（submission.json）路径。</summary>
+        public string SubmissionJsonPath { get; init; } = string.Empty;
+
+        /// <summary>投稿入口说明（README.txt）路径。</summary>
+        public string ReadmePath { get; init; } = string.Empty;
+
+        /// <summary>效果图路径（若生成失败则为空）。</summary>
+        public string? PreviewImagePath { get; init; }
+
+        /// <summary>效果图的**实际**渲染路线（未生成时为 null）。</summary>
+        public ThemeExportImageRoute? PreviewRoute { get; init; }
+
+        /// <summary>主题声明的渲染路线（gpu / legacy）。</summary>
+        public string ThemeRoute { get; init; } = ThemeRenderingConfig.LegacyBackend;
+
+        /// <summary>最终主题载荷的 SHA-256（对 theme.json 实际文件字节计算）。</summary>
+        public string Sha256 { get; init; } = string.Empty;
+
+        /// <summary>最终主题载荷的字节数。</summary>
+        public long ByteCount { get; init; }
+
+        /// <summary>需要人工确认的事项（远程引用等）；非空即表示不能只看本地结论。</summary>
+        public IReadOnlyList<string> ReviewRequired { get; init; } = Array.Empty<string>();
+
+        /// <summary>诊断（渲染校验诊断、结构问题等）。</summary>
+        public IReadOnlyList<string> Diagnostics { get; init; } = Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// 主题导出与投稿准备服务（TE07）。
+    ///
+    /// ★ 合同（重做计划 §5.2/§5.3、并行计划 Lane B）：
+    ///   1. **只读会话**：本服务从不写入、不保存、不改写会话身份
+    ///      （不用 <c>SaveAs</c> / <c>Save</c>），只读 <see cref="ThemeDocumentSession"/> 的载荷。
+    ///   2. **载荷同源**：JSON 导出直接调用同程序集的 <c>internal BuildPayload()</c>，
+    ///      导出结果与会话当前修订**逐字节一致**（含未知扩展键、缺省不被物化）。
+    ///   3. **原子写盘共用核心**：写文件一律走 <see cref="ThemeFileService.WriteThemeJsonToPath"/>
+    ///      （Lane I 提供的共用 SafeWrite 核心），本服务不另写替换逻辑。
+    ///   4. **路线诚实**：效果图必须带 <see cref="ThemeExportImageRoute"/>；
+    ///      GPU 不可用时返回失败或**明确标注**的兼容外观图，绝不把经典图标成 GPU。
+    ///   5. **不伪造市场校验**：<c>ThemeMarket.ValidateThemeContent</c> 是 private 且下载侧专用，
+    ///      本地只做结构与 <c>rendering.Validate()</c> 校验，并声明"待市场 CI / 维护者审核"。
+    /// </summary>
+    public static class ThemeExportService
+    {
+        /// <summary>竖向效果图宽度（固定）。</summary>
+        public const int VerticalImageWidth = 240;
+
+        /// <summary>竖向效果图高度（固定）。</summary>
+        public const int VerticalImageHeight = 420;
+
+        /// <summary>横向效果图宽度（固定）。</summary>
+        public const int HorizontalImageWidth = 400;
+
+        /// <summary>横向效果图高度（固定）。</summary>
+        public const int HorizontalImageHeight = 120;
+
+        /// <summary>投稿资料里的最终主题载荷文件名。</summary>
+        public const string ThemeJsonFileName = "theme.json";
+
+        /// <summary>投稿资料里的资料摘要文件名。</summary>
+        public const string SubmissionJsonFileName = "submission.json";
+
+        /// <summary>投稿资料里的投稿入口说明文件名。</summary>
+        public const string ReadmeFileName = "README.txt";
+
+        /// <summary>投稿资料里的效果图文件名。</summary>
+        public const string PreviewImageFileName = "preview.png";
+
+        /// <summary>无 BOM 的 UTF-8（与 <see cref="ThemeFileService"/> 的写入口径一致）。</summary>
+        private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
+
+        // ============================================================
+        // JSON 导出
+        // ============================================================
+
+        /// <summary>
+        /// 导出当前修订的主题 JSON（不要求已保存；不修改会话）。
+        /// </summary>
+        /// <param name="session">只读会话。载荷取自 <c>internal BuildPayload()</c>。</param>
+        /// <param name="path">目标文件路径（目录不存在时自动创建）。</param>
+        /// <returns>导出结果：SHA-256（对写入文件字节）、字节数与诊断列表。</returns>
+        public static ThemeExportResult ExportJson(ThemeDocumentSession session, string path)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("导出路径不能为空。", nameof(path));
+
+            List<string> diagnostics = new();
+
+            // ★ 同程序集直接调用 internal BuildPayload()：导出结果与会话当前修订逐字节一致。
+            (byte[] payload, IReadOnlyList<string> payloadDiagnostics) = session.BuildPayload();
+            foreach (string item in payloadDiagnostics) diagnostics.Add(item);
+
+            // 载荷自检：必须是可解析的 JSON 对象（BuildPayload 由已解析的源 JSON 派生，理论上恒成立）
+            JsonObject? root = null;
+            try
+            {
+                root = JsonNode.Parse(
+                    payload,
+                    nodeOptions: null,
+                    documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true }) as JsonObject;
+            }
+            catch (Exception ex)
+            {
+                return new ThemeExportResult
+                {
+                    Success = false,
+                    Error = "主题载荷不是合法 JSON：" + ex.Message,
+                    Diagnostics = diagnostics
+                };
+            }
+
+            if (root == null)
+            {
+                return new ThemeExportResult
+                {
+                    Success = false,
+                    Error = "主题载荷的根节点不是 JSON 对象。",
+                    Diagnostics = diagnostics
+                };
+            }
+
+            // 渲染配置校验：问题写进诊断（导出是数据快照，不代替保存/投稿校验）
+            CollectRenderingDiagnostics(session.Draft, diagnostics);
+
+            string fullPath = Path.GetFullPath(path);
+            try
+            {
+                // ★ 共用原子写入核心（不先删目标、失败保留原文件）
+                ThemeFileService.WriteThemeJsonToPath(fullPath, Encoding.UTF8.GetString(payload));
+            }
+            catch (Exception ex)
+            {
+                return new ThemeExportResult
+                {
+                    Success = false,
+                    Error = "写入失败：" + ex.Message,
+                    Path = fullPath,
+                    Diagnostics = diagnostics
+                };
+            }
+
+            // SHA-256 与字节数：**对写入文件字节**计算
+            byte[] written = File.ReadAllBytes(fullPath);
+            return new ThemeExportResult
+            {
+                Success = true,
+                Path = fullPath,
+                Sha256 = Sha256Of(written),
+                ByteCount = written.Length,
+                Diagnostics = diagnostics
+            };
+        }
+
+        // ============================================================
+        // 效果图导出
+        // ============================================================
+
+        /// <summary>
+        /// 导出效果图（经典 / GPU / 兼容外观三条路线，路线如实标注）。
+        /// </summary>
+        /// <param name="session">只读会话（使用其草稿主题渲染，不修改草稿）。</param>
+        /// <param name="path">目标 PNG 路径（目录不存在时自动创建）。</param>
+        /// <param name="preference">路线偏好。</param>
+        /// <param name="orientation">画幅：竖向 240×420 / 横向 400×120。</param>
+        public static ThemeImageExportResult ExportEffectImage(
+            ThemeDocumentSession session,
+            string path,
+            ImageRoutePreference preference,
+            ThemeExportImageOrientation orientation = ThemeExportImageOrientation.Vertical)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("导出路径不能为空。", nameof(path));
+
+            Theme theme = session.Draft;
+            Size size = orientation == ThemeExportImageOrientation.Horizontal
+                ? new Size(HorizontalImageWidth, HorizontalImageHeight)
+                : new Size(VerticalImageWidth, VerticalImageHeight);
+
+            string fullPath = Path.GetFullPath(path);
+            List<string> diagnostics = new();
+
+            bool gpuTheme = IsGpuTheme(theme, out IReadOnlyList<string> renderingErrors, out IReadOnlyList<string> renderingDiagnostics);
+            foreach (string item in renderingDiagnostics) diagnostics.Add(item);
+
+            if (!gpuTheme)
+            {
+                if (preference == ImageRoutePreference.Gpu)
+                {
+                    return new ThemeImageExportResult
+                    {
+                        Success = false,
+                        Error = "主题未声明 GPU 渲染路线（rendering.backend != gpu），无法产出 GPU 效果图。",
+                        Path = fullPath,
+                        Diagnostics = diagnostics
+                    };
+                }
+
+                if (renderingErrors.Count > 0)
+                {
+                    diagnostics.Add("rendering 校验未通过：" + string.Join(" ", renderingErrors));
+                }
+
+                return RenderClassicImage(theme, fullPath, size, ThemeExportImageRoute.Classic, diagnostics);
+            }
+
+            // GPU 主题
+            if (preference == ImageRoutePreference.Classic)
+            {
+                diagnostics.Add("按偏好导出经典渲染图：本图不是 GPU 渲染结果。");
+                return RenderClassicImage(theme, fullPath, size, ThemeExportImageRoute.Fallback, diagnostics);
+            }
+
+            bool gpuOk = TryRenderGpuImage(theme, fullPath, out string? gpuError);
+            if (gpuOk)
+            {
+                diagnostics.Add("效果图由 GPU 渲染器产出（GpuSceneRenderer 固定输入回读）。");
+                return DescribeImage(fullPath, ThemeExportImageRoute.Gpu, diagnostics);
+            }
+
+            // GPU 不可用：按偏好决定"失败"还是"明确标注的兼容外观图"
+            diagnostics.Add("GPU 路线不可用：" + (gpuError ?? "未知原因"));
+            TryDeleteFile(fullPath);
+
+            if (preference == ImageRoutePreference.Gpu)
+            {
+                return new ThemeImageExportResult
+                {
+                    Success = false,
+                    Error = "GPU 路线不可用，未产出效果图：" + (gpuError ?? "未知原因"),
+                    Path = fullPath,
+                    Diagnostics = diagnostics
+                };
+            }
+
+            diagnostics.Add("已回退到兼容外观图（经典渲染器）：该图不是 GPU 渲染结果。");
+            return RenderClassicImage(theme, fullPath, size, ThemeExportImageRoute.Fallback, diagnostics);
+        }
+
+        // ============================================================
+        // 投稿资料
+        // ============================================================
+
+        /// <summary>
+        /// 准备投稿资料目录：theme.json（最终载荷）+ submission.json（素材摘要）+ README.txt（投稿入口说明），
+        /// 并附一张按**实际路线**标注的效果图。
+        /// </summary>
+        /// <param name="session">只读会话（不修改）。</param>
+        /// <param name="directory">资料目录（不存在时自动创建）。</param>
+        public static ThemeSubmissionResult PrepareSubmissionMaterials(ThemeDocumentSession session, string directory)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            if (string.IsNullOrWhiteSpace(directory)) throw new ArgumentException("资料目录不能为空。", nameof(directory));
+
+            string fullDir = Path.GetFullPath(directory);
+            Directory.CreateDirectory(fullDir);
+
+            List<string> diagnostics = new();
+            List<string> reviewRequired = new();
+
+            // ① 最终载荷
+            string themeJsonPath = Path.Combine(fullDir, ThemeJsonFileName);
+            ThemeExportResult export = ExportJson(session, themeJsonPath);
+            if (!export.Success)
+            {
+                return new ThemeSubmissionResult
+                {
+                    Success = false,
+                    Error = export.Error,
+                    Directory = fullDir,
+                    Diagnostics = export.Diagnostics
+                };
+            }
+
+            diagnostics.AddRange(export.Diagnostics);
+
+            // ② 本地结构校验：JSON 可解析 + rendering.Validate()
+            //    （市场校验 ThemeMarket.ValidateThemeContent 是 private 且下载侧专用，
+            //      本地**不**冒充市场校验结论）
+            JsonObject root;
+            try
+            {
+                root = JsonNode.Parse(
+                    File.ReadAllBytes(themeJsonPath),
+                    nodeOptions: null,
+                    documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true }) as JsonObject
+                    ?? throw new InvalidDataException("主题载荷的根节点不是 JSON 对象。");
+            }
+            catch (Exception ex)
+            {
+                return new ThemeSubmissionResult
+                {
+                    Success = false,
+                    Error = "主题载荷不是合法 JSON：" + ex.Message,
+                    Directory = fullDir,
+                    ThemeJsonPath = themeJsonPath,
+                    Diagnostics = diagnostics
+                };
+            }
+
+            bool gpuTheme = IsGpuTheme(session.Draft, out IReadOnlyList<string> renderingErrors, out IReadOnlyList<string> renderingDiagnostics);
+            foreach (string item in renderingDiagnostics) diagnostics.Add(item);
+            if (renderingErrors.Count > 0)
+            {
+                return new ThemeSubmissionResult
+                {
+                    Success = false,
+                    Error = "rendering 配置校验未通过：" + string.Join(" ", renderingErrors),
+                    Directory = fullDir,
+                    ThemeJsonPath = themeJsonPath,
+                    ThemeRoute = gpuTheme ? ThemeRenderingConfig.GpuBackend : ThemeRenderingConfig.LegacyBackend,
+                    Sha256 = export.Sha256,
+                    ByteCount = export.ByteCount,
+                    Diagnostics = diagnostics
+                };
+            }
+
+            // ③ 远程引用自检：主题包不得引用远程资源（市场合同 F7 的同一口径）
+            if (ContainsRemoteReference(root))
+            {
+                reviewRequired.Add("远程引用需人工确认：主题 JSON 含 http/https 引用，提交前请移除或说明。");
+                diagnostics.Add("远程引用需人工确认：主题 JSON 含 http/https 引用。");
+            }
+
+            // ④ 效果图（按实际路线标注）
+            string previewPath = Path.Combine(fullDir, PreviewImageFileName);
+            ThemeImageExportResult preview = ExportEffectImage(session, previewPath, ImageRoutePreference.Auto);
+            diagnostics.AddRange(preview.Diagnostics);
+            if (!preview.Success)
+            {
+                reviewRequired.Add("效果图未产出：" + (preview.Error ?? "未知原因"));
+            }
+
+            // ⑤ submission.json：素材摘要
+            string submissionPath = Path.Combine(fullDir, SubmissionJsonFileName);
+            var submission = new Dictionary<string, object?>
+            {
+                ["name"] = ReadString(root, "name") ?? session.ThemeName,
+                ["author"] = ReadString(root, "author") ?? string.Empty,
+                ["version"] = ReadRaw(root, "version"),
+                ["material"] = ReadMaterial(session.Draft),
+                ["route"] = gpuTheme ? ThemeRenderingConfig.GpuBackend : ThemeRenderingConfig.LegacyBackend,
+                ["capabilities"] = BuildCapabilities(session.Draft, gpuTheme),
+                ["file"] = ThemeJsonFileName,
+                ["byteCount"] = export.ByteCount,
+                ["sha256"] = export.Sha256,
+                ["exportedAtUtc"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+                ["previewImage"] = preview.Success ? PreviewImageFileName : null,
+                ["previewRoute"] = preview.Success ? preview.Route.ToString() : null,
+                ["previewIsFallback"] = preview.Success ? preview.IsFallback : (bool?)null,
+                ["marketValidation"] = new Dictionary<string, object?>
+                {
+                    ["status"] = "not_validated_locally",
+                    ["statement"] = "本地只做结构与 rendering 校验；市场校验由市场 CI 与维护者审核完成。",
+                    ["reviewRequired"] = reviewRequired
+                },
+                ["diagnostics"] = diagnostics
+            };
+
+            try
+            {
+                // 复用共用原子写入核心（同目录临时文件 + 安全替换）
+                // 用宽松编码器：中文等非 ASCII 字符保持可读（文件仍是标准 JSON）
+                ThemeFileService.WriteThemeJsonToPath(
+                    submissionPath,
+                    JsonSerializer.Serialize(submission, new JsonSerializerOptions
+                    {
+                        WriteIndented = true,
+                        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                    }));
+            }
+            catch (Exception ex)
+            {
+                return new ThemeSubmissionResult
+                {
+                    Success = false,
+                    Error = "写入投稿摘要失败：" + ex.Message,
+                    Directory = fullDir,
+                    ThemeJsonPath = themeJsonPath,
+                    Diagnostics = diagnostics
+                };
+            }
+
+            // ⑥ README.txt：投稿入口说明
+            string readmePath = Path.Combine(fullDir, ReadmeFileName);
+            try
+            {
+                File.WriteAllText(readmePath, BuildReadme(session, gpuTheme, preview), Utf8NoBom);
+            }
+            catch (Exception ex)
+            {
+                return new ThemeSubmissionResult
+                {
+                    Success = false,
+                    Error = "写入投稿说明失败：" + ex.Message,
+                    Directory = fullDir,
+                    ThemeJsonPath = themeJsonPath,
+                    SubmissionJsonPath = submissionPath,
+                    Diagnostics = diagnostics
+                };
+            }
+
+            return new ThemeSubmissionResult
+            {
+                Success = true,
+                Directory = fullDir,
+                ThemeJsonPath = themeJsonPath,
+                SubmissionJsonPath = submissionPath,
+                ReadmePath = readmePath,
+                PreviewImagePath = preview.Success ? preview.Path : null,
+                PreviewRoute = preview.Success ? preview.Route : null,
+                ThemeRoute = gpuTheme ? ThemeRenderingConfig.GpuBackend : ThemeRenderingConfig.LegacyBackend,
+                Sha256 = export.Sha256,
+                ByteCount = export.ByteCount,
+                ReviewRequired = reviewRequired,
+                Diagnostics = diagnostics
+            };
+        }
+
+        // ============================================================
+        // 内部实现
+        // ============================================================
+
+        /// <summary>
+        /// 判定主题是否走 GPU 路线（判据与市场快照服务同源：
+        /// rendering 存在 + backend == gpu + rendering 校验全绿）。
+        /// </summary>
+        private static bool IsGpuTheme(
+            Theme theme,
+            out IReadOnlyList<string> errors,
+            out IReadOnlyList<string> diagnostics)
+        {
+            errors = Array.Empty<string>();
+            diagnostics = Array.Empty<string>();
+
+            ThemeRenderingConfig? rendering = theme?.Rendering;
+            if (rendering == null)
+            {
+                return false;
+            }
+
+            errors = rendering.Validate(out IReadOnlyList<string> renderDiagnostics);
+            diagnostics = renderDiagnostics;
+
+            return rendering.IsGpuRequested && errors.Count == 0;
+        }
+
+        /// <summary>把渲染配置校验结果写进诊断列表（错误也记录，不改变导出是否成功）。</summary>
+        private static void CollectRenderingDiagnostics(Theme theme, List<string> diagnostics)
+        {
+            ThemeRenderingConfig? rendering = theme?.Rendering;
+            if (rendering == null)
+            {
+                return;
+            }
+
+            IReadOnlyList<string> errors = rendering.Validate(out IReadOnlyList<string> renderDiagnostics);
+            foreach (string item in renderDiagnostics) diagnostics.Add(item);
+            foreach (string item in errors) diagnostics.Add("rendering 校验错误：" + item);
+        }
+
+        /// <summary>
+        /// 经典路线渲染：固定 Mock 输入 + 固定样例背景 + 固定画幅 ⇒ 结果可复现。
+        /// 绝不抓取真实桌面。
+        /// </summary>
+        private static ThemeImageExportResult RenderClassicImage(
+            Theme theme,
+            string path,
+            Size size,
+            ThemeExportImageRoute route,
+            List<string> diagnostics)
+        {
+            try
+            {
+                string? dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+                // 预览副本：只读借用原主题，绝不改写会话草稿
+                Theme previewTheme = ThemePreviewControl.CreatePreviewTheme(theme, 1.0f);
+
+                // 固定 Mock 分组 + 主题布局（让图里有真实内容，而不是空底板）
+                List<GroupLayoutInfo> groups = ThemePreviewControl.CreateMockGroups();
+                var layout = new UILayout(previewTheme);
+                layout.Build(groups);
+
+                using var bitmap = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppPArgb);
+                using (Graphics g = Graphics.FromImage(bitmap))
+                {
+                    g.Clear(Color.FromArgb(16, 20, 24));
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+
+                    // ★ 正式渲染器四参重载：与主窗口同源的背景层 / 组块 / 外框
+                    ThemePreviewControl.RenderPreview(g, groups, previewTheme, new Rectangle(0, 0, size.Width, size.Height));
+
+                    DrawRouteCaption(g, size, route, diagnostics);
+                }
+
+                bitmap.Save(path, ImageFormat.Png);
+            }
+            catch (Exception ex)
+            {
+                TryDeleteFile(path);
+                return new ThemeImageExportResult
+                {
+                    Success = false,
+                    Error = "经典路线渲染失败：" + ex.Message,
+                    Path = path,
+                    Route = route,
+                    Diagnostics = diagnostics
+                };
+            }
+
+            return DescribeImage(path, route, diagnostics);
+        }
+
+        /// <summary>
+        /// GPU 路线渲染：隐藏宿主 + <see cref="GpuThemePreviewControl"/> 固定输入回读 PNG。
+        ///
+        /// ★ 启动守卫注入**临时目录**（构造参数）：不写也不读 %LOCALAPPDATA% 的生产状态。
+        /// ★ 主题必须带非空 <c>rendering</c>（否则控件启动渲染时空引用）。
+        ///
+        /// ★★ 为什么**不**直接复用 <c>ThemePreviewService.TryRenderGpuSnapshot</c>（同程序集 internal）：
+        ///   1) 它用进程级 <c>GpuThemePreviewControl.PreviewGuard</c>，状态写在 %LOCALAPPDATA%，
+        ///      与"导出不得污染 %LOCALAPPDATA%"的硬约束冲突；
+        ///   2) 它只调 <c>CreateControl()</c>，隐藏宿主（Opacity=0、未 Show）的句柄常常建不出来，
+        ///      于是在有 GPU 的机器上也会静默退回经典帧（实测如此）。
+        ///   本线按"显式取 Handle"的方式建链，保证 GPU 路线在有 GPU 的机器上真能出图。
+        /// </summary>
+        private static bool TryRenderGpuImage(Theme theme, string path, out string? error)
+        {
+            error = null;
+
+            if (theme.Rendering == null)
+            {
+                error = "主题缺少 rendering 块，GPU 预览无法启动。";
+                return false;
+            }
+
+            string guardDir = Path.Combine(
+                Path.GetTempPath(),
+                "litemonitor-te07-gpu-guard",
+                Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                string? dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+                // 临时目录守卫：与生产守卫（%LOCALAPPDATA%）完全隔离
+                var guard = new GpuStartupGuard(guardDir, AppContext.BaseDirectory);
+
+                using var owner = new Form
+                {
+                    ShowInTaskbar = false,
+                    StartPosition = FormStartPosition.Manual,
+                    Location = new Point(-30000, -30000),
+                    Size = new Size(HorizontalImageWidth + 40, VerticalImageHeight + 60),
+                    FormBorderStyle = FormBorderStyle.None,
+                    Opacity = 0d
+                };
+
+                var host = new GpuThemePreviewControl(
+                    theme,
+                    ThemePreviewControl.CreateMockGroups(),
+                    guard)
+                {
+                    Bounds = new Rectangle(10, 10, VerticalImageWidth, VerticalImageHeight)
+                };
+                owner.Controls.Add(host);
+
+                owner.CreateControl();
+                // ★ 显式取 Handle：Control.CreateControl 只保证"可见子控件"的句柄，
+                //   隐藏宿主（Opacity=0、未 Show）常常不会建链。取 Handle 会强制建句柄，
+                //   句柄建好后 GpuThemePreviewControl 的 HandleCreated 钩子才会启动渲染器。
+                if (!owner.IsHandleCreated) _ = owner.Handle;
+                if (!host.IsHandleCreated) _ = host.Handle;
+                if (!host.IsHandleCreated)
+                {
+                    error = "GPU 预览宿主句柄未创建。";
+                    return false;
+                }
+
+                if (!host.TryCaptureOnce(path))
+                {
+                    error = host.Error ?? "GPU 帧回读失败。";
+                    return false;
+                }
+
+                return File.Exists(path);
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+            finally
+            {
+                // 临时守卫目录用完即删：不留状态、不污染 %LOCALAPPDATA%
+                try
+                {
+                    if (Directory.Exists(guardDir)) Directory.Delete(guardDir, recursive: true);
+                }
+                catch
+                {
+                    // 清理失败不影响导出结果
+                }
+            }
+        }
+
+        /// <summary>读回已写出的图片文件并组装结果。</summary>
+        private static ThemeImageExportResult DescribeImage(
+            string path,
+            ThemeExportImageRoute route,
+            List<string> diagnostics)
+        {
+            if (!File.Exists(path))
+            {
+                return new ThemeImageExportResult
+                {
+                    Success = false,
+                    Error = "图片文件未生成。",
+                    Path = path,
+                    Route = route,
+                    Diagnostics = diagnostics
+                };
+            }
+
+            byte[] bytes = File.ReadAllBytes(path);
+            return new ThemeImageExportResult
+            {
+                Success = true,
+                Path = path,
+                Sha256 = Sha256Of(bytes),
+                ByteCount = bytes.Length,
+                Route = route,
+                Diagnostics = diagnostics
+            };
+        }
+
+        /// <summary>在图上标注渲染路线（图或伴随资料必须能看出这是哪条路线出的图）。</summary>
+        private static void DrawRouteCaption(Graphics g, Size size, ThemeExportImageRoute route, List<string> diagnostics)
+        {
+            string caption = route switch
+            {
+                ThemeExportImageRoute.Gpu => "GPU render / GPU 渲染",
+                ThemeExportImageRoute.Fallback => "Fallback · compatible look / 兼容外观图（非 GPU 渲染）",
+                _ => "Classic render / 经典渲染"
+            };
+
+            try
+            {
+                using var font = new Font("Microsoft YaHei UI", 7.5f, FontStyle.Regular, GraphicsUnit.Point);
+                using var brush = new SolidBrush(Color.FromArgb(235, 255, 214, 0));
+                using var shadow = new SolidBrush(Color.FromArgb(170, 0, 0, 0));
+                var point = new PointF(4f, Math.Max(2f, size.Height - 16f));
+                g.DrawString(caption, font, shadow, new PointF(point.X + 1f, point.Y + 1f));
+                g.DrawString(caption, font, brush, point);
+            }
+            catch
+            {
+                // 标注失败不影响图片本身
+            }
+        }
+
+        /// <summary>主题材料信息：材质（无渲染块即 legacy）。</summary>
+        private static string ReadMaterial(Theme theme)
+        {
+            ThemeRenderingConfig? rendering = theme?.Rendering;
+            if (rendering == null) return ThemeRenderingConfig.LegacyMaterial;
+            string material = rendering.Material?.Trim().ToLowerInvariant() ?? string.Empty;
+            return string.IsNullOrEmpty(material) ? ThemeRenderingConfig.LegacyMaterial : material;
+        }
+
+        /// <summary>
+        /// 主题能力清单（从主题实际内容推导，不臆测）：
+        /// 渲染路线、材质、是否请求动态背景、是否有动效、是否带兼容外观六槽。
+        /// </summary>
+        private static List<string> BuildCapabilities(Theme theme, bool gpuTheme)
+        {
+            List<string> capabilities = new();
+            capabilities.Add(gpuTheme ? "gpu-render" : "legacy-render");
+
+            ThemeRenderingConfig? rendering = theme?.Rendering;
+            if (rendering != null)
+            {
+                string material = rendering.Material?.Trim().ToLowerInvariant() ?? string.Empty;
+                if (!string.IsNullOrEmpty(material)) capabilities.Add("material:" + material);
+
+                if (GetBoolean(rendering.Parameters, "liveBackground")) capabilities.Add("live-background");
+                if (GetBoolean(rendering.Motion, "motionEnabled")) capabilities.Add("motion");
+                if (rendering.FallbackStyle != null) capabilities.Add("custom-fallback-style");
+            }
+
+            if (theme?.Backdrop != null) capabilities.Add("backdrop");
+            return capabilities;
+        }
+
+        private static bool GetBoolean(IReadOnlyDictionary<string, JsonElement> source, string key)
+        {
+            if (source == null) return false;
+            foreach (KeyValuePair<string, JsonElement> pair in source)
+            {
+                if (!string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)) continue;
+                return pair.Value.ValueKind == JsonValueKind.True;
+            }
+
+            return false;
+        }
+
+        /// <summary>远程引用自检（与市场合同 F7 的口径一致：http/https 字符串）。</summary>
+        private static bool ContainsRemoteReference(JsonNode root)
+        {
+            string text = root.ToJsonString();
+            return text.IndexOf("http://", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("https://", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>读取字符串字段（大小写不敏感）。</summary>
+        private static string? ReadString(JsonObject root, string key)
+        {
+            foreach (KeyValuePair<string, JsonNode?> pair in root)
+            {
+                if (!string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)) continue;
+                if (pair.Value is JsonValue value)
+                {
+                    return value.TryGetValue<string>(out string? text) ? text : value.ToString();
+                }
+
+                return pair.Value?.ToString();
+            }
+
+            return null;
+        }
+
+        /// <summary>原样读取字段节点（数字/字符串都按原始形态写出）。</summary>
+        private static JsonNode? ReadRaw(JsonObject root, string key)
+        {
+            foreach (KeyValuePair<string, JsonNode?> pair in root)
+            {
+                if (!string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)) continue;
+                return pair.Value?.DeepClone();
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 投稿入口说明（README.txt）。
+        ///
+        /// ★ 边界声明：只做"生成材料 → 人工提交 PR → 市场 CI / 维护者审核"，
+        ///   不写任何"已上架 / 已发布 / 已通过校验"式的结论。
+        /// </summary>
+        private static string BuildReadme(ThemeDocumentSession session, bool gpuTheme, ThemeImageExportResult preview)
+        {
+            string routeText = gpuTheme ? "gpu" : "legacy";
+            string previewText = preview.Success
+                ? preview.Route switch
+                {
+                    ThemeExportImageRoute.Gpu => "preview.png —— 由 GPU 渲染器产出（真实 GPU 路线）",
+                    ThemeExportImageRoute.Fallback => "preview.png —— 兼容外观图（本次未产出 GPU 图，图上已标注）",
+                    _ => "preview.png —— 经典渲染图"
+                }
+                : "preview.png —— 未产出（见 submission.json 的 diagnostics）";
+
+            var sb = new StringBuilder();
+            sb.AppendLine("LiteMonitor++ 主题投稿资料");
+            sb.AppendLine("=========================");
+            sb.AppendLine();
+            sb.AppendLine("本目录由主题工作室的“准备投稿”功能生成，只包含**本地材料**：");
+            sb.AppendLine("没有任何内容被上传，也没有替你完成提交。");
+            sb.AppendLine();
+            sb.AppendLine("目录内容");
+            sb.AppendLine("--------");
+            sb.AppendLine("- theme.json        最终主题载荷（保留未知扩展字段；字节与 submission.json 的 sha256 / byteCount 对应）");
+            sb.AppendLine("- submission.json   素材摘要（名称 / 作者 / 版本 / 材质 / 能力 / 字节数 / SHA-256 / 导出时间 / 渲染路线）");
+            sb.AppendLine("- " + previewText);
+            sb.AppendLine("- README.txt        本文件");
+            sb.AppendLine();
+            sb.AppendLine("主题： " + session.ThemeName);
+            sb.AppendLine("渲染路线（主题声明）： " + routeText);
+            sb.AppendLine();
+            sb.AppendLine("投稿入口（人工提交）");
+            sb.AppendLine("--------------------");
+            sb.AppendLine("1. 在 LiteMonitor++ 主题市场仓库的 themes/ 目录下准备主题文件：把 theme.json 放进去。");
+            sb.AppendLine("2. 补齐市场索引条目（themes/ 附加段）：name / name_en / author / version / file / download_url / sha256 / route / material。");
+            sb.AppendLine("3. 核对 submission.json 里的 sha256 与 byteCount 和 theme.json 的实际文件字节一致。");
+            sb.AppendLine("4. 新建分支，提交这些文件，向仓库发起 Pull Request。");
+            sb.AppendLine();
+            sb.AppendLine("审核流程");
+            sb.AppendLine("--------");
+            sb.AppendLine("- Pull Request 会由市场 CI 自动校验（主题 JSON 结构、渲染配置规则、远程引用限制等）。");
+            sb.AppendLine("- 维护者会对 Pull Request 做人工审核（视觉与兼容性）。");
+            sb.AppendLine("- CI 与维护者都通过、并且变更被合并之后，主题才会进入市场列表。");
+            sb.AppendLine();
+            sb.AppendLine("状态说明（重要）");
+            sb.AppendLine("----------------");
+            sb.AppendLine("- 本地只做**结构自检**（JSON 可解析、rendering 配置规则、远程引用扫描），");
+            sb.AppendLine("  这类自检不能代替市场 CI 的校验结论，也不能代替维护者的人工审核。");
+            sb.AppendLine("- 上传与提交是你在上面的 Pull Request 步骤里的显式操作；");
+            sb.AppendLine("  本目录本身不代表任何发布或上架状态。");
+            sb.AppendLine("- 若 submission.json 的 marketValidation.reviewRequired 非空");
+            sb.AppendLine("  （例如出现“远程引用需人工确认”），请先修正 theme.json 再提交。");
+            sb.AppendLine();
+            sb.AppendLine("效果图说明");
+            sb.AppendLine("------------");
+            sb.AppendLine("- 效果图使用固定模拟数据与固定背景生成，不抓取真实桌面。");
+            sb.AppendLine("- 效果图上的标注与 submission.json 的 previewRoute / previewIsFallback 一致，");
+            sb.AppendLine("  标明它是主效果、兼容外观还是 GPU 路线。");
+            return sb.ToString();
+        }
+
+        /// <summary>SHA-256（十六进制小写）。</summary>
+        private static string Sha256Of(byte[] bytes) =>
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+        /// <summary>尽力删除文件（不掩盖原始异常）。</summary>
+        private static void TryDeleteFile(string path)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path);
+            }
+            catch
+            {
+                // 清理失败不影响结果判定
+            }
+        }
+    }
+}
