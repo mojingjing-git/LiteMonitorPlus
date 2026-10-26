@@ -171,6 +171,26 @@ namespace LiteMonitor.ThemeEditor
         }
 
         /// <summary>
+        /// 按载荷直写主题 JSON（主题工作室补丁式保存入口，重做计划 §5.2）。
+        /// 走与 <see cref="SaveTheme"/> 完全相同的"临时文件 + 安全替换"核心；
+        /// 载荷的解析与校验由调用方（ThemeDocumentSession）完成后再进入这里。
+        /// </summary>
+        public static void WriteThemeJson(string name, string json)
+        {
+            WriteThemeJson(Dir, name, json);
+        }
+
+        /// <summary>把 JSON 载荷写入指定目录下的主题文件（共用安全写入核心）。</summary>
+        public static void WriteThemeJson(string dir, string name, string json)
+        {
+            if (!Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            string path = Path.Combine(dir, name + ".json");
+            SafeWrite(path, Utf8NoBom.GetBytes(json));
+        }
+
+        /// <summary>
         /// 在指定目录下新建主题（复制模板）
         /// </summary>
         public static void CreateTheme(string dir, string name)
