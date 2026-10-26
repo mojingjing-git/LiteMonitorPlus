@@ -330,18 +330,17 @@ namespace LiteMonitor.ThemeEditor
     /// 任务栏预览控件：与生产任务栏**同源**。
     /// <para>
     /// ★ 复用链：<c>HorizontalLayout(theme, width, LayoutMode.Taskbar, new Settings())</c>
-    ///   → <c>Build(cols, taskbarHeight)</c> → <c>TaskbarRenderer.ReloadStyle(cfg)</c>
-    ///   → <c>TaskbarRenderer.Render(g, cols, light)</c>。
+    ///   → <c>Build(cols, taskbarHeight)</c> → <c>TaskbarRenderer.TaskbarStyleContext</c>
+    ///   → <c>TaskbarRenderer.Render(g, cols, light, _styleContext)</c>。
     /// </para>
     /// <para>
-    /// ★ <b>事实边界（不得夸大）</b>：任务栏的**颜色由设置驱动</b>（<c>TaskbarRenderer.ReloadStyle</c>
-    ///   取的是 <c>Settings</c> 里的任务栏颜色），**不随主题变化</b>；主题只影响
+    /// ★ <b>事实边界（不得夸大）</b>：任务栏的**颜色由设置驱动</b>（<c>Settings</c>，
+    ///   默认标签灰黑 / 正常淡绿 / 警告金黄 / 严重橙红），**不随主题变化**；主题只影响
     ///   <b>布局</b>（列配对、内边距、行模式）。见 <see cref="ColorSourceNotice"/>。
     /// </para>
     /// <para>
-    /// ★ 确定性：渲染前<b>显式</b> <c>TaskbarRenderer.ReloadStyle(cfg)</c>，
-    ///   避免 <c>Render</c> 在静态字体为空时兜底调用 <c>Settings.Load()</c> 读用户磁盘配置；
-    ///   这里传入的是<b>显式 new 的 Settings 实例</b>（默认值），与用户磁盘配置无关。
+    /// ★ 隔离性：渲染使用独立 <c>TaskbarRenderer.TaskbarStyleContext</c>，
+    ///   严禁写入生产静态样式，彻底杜绝串扰生产任务栏。
     /// </para>
     /// </summary>
     public class TaskbarPreviewControl : Panel
@@ -369,6 +368,9 @@ namespace LiteMonitor.ThemeEditor
         /// <summary>本控件自持的设置实例（<b>显式 new</b>，绝不 Settings.Load()）。</summary>
         private readonly Settings _settings = new();
 
+        /// <summary>自持的独立任务栏样式上下文（隔离生产静态字段，谁创建谁释放）。</summary>
+        private TaskbarRenderer.TaskbarStyleContext? _styleContext;
+
         private HorizontalLayout? _layout;
         private int _contentWidth;
         private int _contentHeight;
@@ -385,6 +387,44 @@ namespace LiteMonitor.ThemeEditor
             BackColor = SystemColors.Control;
 
             _metrics.AddRange(ThemePreviewScene.CreateMetrics());
+            UpdateStyleContext();
+        }
+
+        /// <summary>
+        /// 更新任务栏独立样式上下文（安全释放旧上下文，按当前设置创建新上下文）。
+        /// </summary>
+        public void UpdateStyleContext()
+        {
+            _styleContext?.Dispose();
+            _styleContext = new TaskbarRenderer.TaskbarStyleContext(_settings);
+        }
+
+        /// <summary>
+        /// 应用自定义设置并更新样式上下文。
+        /// </summary>
+        public void ApplySettings(Settings settings)
+        {
+            if (settings is null) throw new ArgumentNullException(nameof(settings));
+            _settings.TaskbarCustomStyle = settings.TaskbarCustomStyle;
+            _settings.TaskbarColorLabel = settings.TaskbarColorLabel;
+            _settings.TaskbarColorSafe = settings.TaskbarColorSafe;
+            _settings.TaskbarColorWarn = settings.TaskbarColorWarn;
+            _settings.TaskbarColorCrit = settings.TaskbarColorCrit;
+            _settings.TaskbarColorBg = settings.TaskbarColorBg;
+            _settings.TaskbarCustomLayout = settings.TaskbarCustomLayout;
+            _settings.TaskbarFontFamily = settings.TaskbarFontFamily;
+            _settings.TaskbarFontSize = settings.TaskbarFontSize;
+            _settings.TaskbarFontBold = settings.TaskbarFontBold;
+            _settings.TaskbarPresetStyle = settings.TaskbarPresetStyle;
+            _settings.TaskbarItemSpacing = settings.TaskbarItemSpacing;
+            _settings.TaskbarInnerSpacing = settings.TaskbarInnerSpacing;
+            _settings.TaskbarVerticalPadding = settings.TaskbarVerticalPadding;
+            _settings.TaskbarSingleLine = settings.TaskbarSingleLine;
+            _singleLine = settings.TaskbarSingleLine;
+
+            UpdateStyleContext();
+            Rebuild();
+            Invalidate();
         }
 
         /// <summary>预览主题副本（<c>SetTheme</c> 之后可用；与源主题是不同对象）。</summary>
@@ -481,8 +521,8 @@ namespace LiteMonitor.ThemeEditor
 
         /// <summary>
         /// 把任务栏预览渲染到指定画布。
-        /// <para>★ 渲染前显式 <c>TaskbarRenderer.ReloadStyle</c>：既保证样式确定，
-        ///   又避免渲染器兜底去读用户磁盘配置。</para>
+        /// <para>★ 严格使用自持的 <see cref="TaskbarRenderer.TaskbarStyleContext"/> 进行隔离绘制，
+        ///   绝不修改生产任务栏静态样式，不串扰生产任务栏静态样式。</para>
         /// </summary>
         public void RenderPreview(Graphics g)
         {
@@ -491,12 +531,12 @@ namespace LiteMonitor.ThemeEditor
             HorizontalLayout? layout = _layout;
             if (layout is null) return;
 
-            // ★ 显式样式装载（不依赖 Render 内部的 Settings.Load() 兜底）。
-            //   注意：TaskbarRenderer 的字体是**进程级静态**，这里推入的是预览用的
-            //   默认样式（显式 new 的 Settings），生产任务栏会在下次 ReloadStyle 时覆盖它。
-            TaskbarRenderer.ReloadStyle(_settings);
+            if (_styleContext is null)
+            {
+                UpdateStyleContext();
+            }
 
-            TaskbarRenderer.Render(g, _columns, _lightMode);
+            TaskbarRenderer.Render(g, _columns, _lightMode, _styleContext);
         }
 
         /// <summary>重建列与布局。</summary>
@@ -609,6 +649,8 @@ namespace LiteMonitor.ThemeEditor
                 _disposed = true;
                 _cachedBitmap?.Dispose();
                 _cachedBitmap = null;
+                _styleContext?.Dispose();
+                _styleContext = null;
             }
             base.Dispose(disposing);
         }

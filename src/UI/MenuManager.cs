@@ -389,18 +389,11 @@ namespace LiteMonitor
 
             // === 主题 ===
             var themeRoot = new ToolStripMenuItem(LanguageManager.T("Menu.Theme"));
-            // 主题编辑器（重做计划 M1：默认打开新主题工作室；
-            // 过渡期 Shift+点击保留旧编辑器，供内部对照与回滚）
+            // 主题编辑器（N10 收口：移除 Shift+点击旧编辑器入口，由 ThemeStudioLauncher 单一收口）
             var themeEditor = new ToolStripMenuItem(LanguageManager.T("Menu.ThemeEditor"));
             themeEditor.Image = Properties.Resources.ThemeIcon;
             themeEditor.Click += (_, __) =>
             {
-                if ((Control.ModifierKeys & Keys.Shift) == Keys.Shift)
-                {
-                    new ThemeEditor.ThemeEditorForm().Show();
-                    return;
-                }
-
                 ThemeEditor.ThemeStudioLauncher.Open(form, cfg, ui);
             };
             themeRoot.DropDownItems.Add(themeEditor);

@@ -1,5 +1,7 @@
 # 主题工作室剩余批次并行执行计划
 
+- 执行状态：本轮分工已合流；G6 与未完成项由[下一阶段计划](2026-10-26-theme-studio-next-stage-plan.md)统一承接。该状态不表示本文件的全部最终验收门禁已通过。
+
 - 日期：2026-10-26。
 - 基线：master @ `832d357`（M1 完成：TE00/TE01/TE02/TE03 目录 + 入口/预览/GPU 保护隔离）。
 - 依据：[重做计划](2026-10-26-theme-studio-rebuild-plan.md) §9/§11、[TE00 能力合同](../design/theme-studio/TE00-capability-contract.md)、[实施记录](../design/theme-studio/implementation-log.md)。

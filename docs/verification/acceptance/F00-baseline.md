@@ -66,7 +66,7 @@ $p='scripts/run-probes.ps1'; $c=[IO.File]::ReadAllText($p,[Text.Encoding]::UTF8)
 
 ## 7. 工作树状态（开工时）
 
-未跟踪：`docs/UPSTREAM-*`（3 份）、`docs/development-windows-firewall-allowlist.md`、`docs/plans/2026-10-25-*`（2 份）、`docs/verification/`；已修改：`scripts/run-probes.ps1`；新增：`tests/WebProbe/`。以上均为 F00/文档产物，**外派包开工前由用户决定是否先提交**（建议提交，作为派发基线点）。
+未跟踪：`docs/UPSTREAM-*`（3 份）、`docs/development-windows-firewall.md`、`docs/plans/2026-10-25-*`（2 份）、`docs/verification/`；已修改：`scripts/run-probes.ps1`；新增：`tests/WebProbe/`。以上均为 F00/文档产物，**外派包开工前由用户决定是否先提交**（建议提交，作为派发基线点）。
 
 ## 8. 验收记录基础设施（F00-3 已完成）
 

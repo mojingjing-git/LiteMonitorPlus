@@ -20,7 +20,7 @@ public static class ThemeStudioLauncher
         studio.Show(form);
     }
 
-    /// <summary>主窗体应用网关：保存已由工作室完成，这里只负责让主界面生效。</summary>
+    /// <summary>主窗体应用网关：保存已由工作室完成，这里只负责让主界面生效（N06 三阶段细分）。</summary>
     private sealed class AppActionsThemeApplyGateway : ThemeStudioForm.IThemeApplyGateway
     {
         private readonly Settings _cfg;
@@ -34,13 +34,51 @@ public static class ThemeStudioLauncher
             _form = form;
         }
 
-        public bool ApplySavedTheme(string themeName)
+        public ThemeStudioForm.ThemeApplyResult ApplySavedTheme(string themeName, long revision)
         {
-            _cfg.Skin = themeName;
-            _cfg.Save();
-            // 与菜单换肤、设置页应用共用同一条编排；GPU/legacy 过渡由协调器推进。
-            AppActions.ApplyThemeAndLayout(_cfg, _ui, _form);
-            return string.Equals(_cfg.Skin, themeName, StringComparison.OrdinalIgnoreCase);
+            // 阶段 1：Settings 持久化
+            try
+            {
+                _cfg.Skin = themeName;
+                _cfg.Save();
+            }
+            catch (Exception ex)
+            {
+                return new ThemeStudioForm.ThemeApplyResult(
+                    Success: false,
+                    Stage: ThemeStudioForm.ThemeApplyStage.SettingsPersisted,
+                    Error: "配置持久化失败：" + ex.Message,
+                    Revision: revision
+                );
+            }
+
+            // 阶段 2：实际生效（同名文件变更强制重载，无按 Skin 跳过）
+            try
+            {
+                AppActions.ApplyThemeAndLayout(_cfg, _ui, _form);
+
+                string route = _cfg.GpuThemeEffectsEnabled && !Program.SafeMode
+                    ? "GPU 场景生效"
+                    : "常规绘制生效";
+
+                return new ThemeStudioForm.ThemeApplyResult(
+                    Success: true,
+                    Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
+                    EffectiveTheme: themeName,
+                    EffectiveRoute: route,
+                    Revision: revision
+                );
+            }
+            catch (Exception ex)
+            {
+                return new ThemeStudioForm.ThemeApplyResult(
+                    Success: false,
+                    Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
+                    Error: "运行时应用失败：" + ex.Message,
+                    EffectiveTheme: _cfg.Skin,
+                    Revision: revision
+                );
+            }
         }
     }
 }

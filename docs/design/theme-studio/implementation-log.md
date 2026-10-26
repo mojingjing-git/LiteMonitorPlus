@@ -1,5 +1,9 @@
 # 主题工作室实施记录（M1 批次）
 
+- 独立验收（2026-10-26）：**未通过**，发现 5 项 P1、5 项 P2 及 N08／N09 证据缺口，见[独立验收报告](../../reviews/2026-10-26-theme-studio-next-stage-acceptance-review.md)。下方完成记录保留实施方的阶段口径，不代表最终验收放行。
+
+- 后续执行入口：[主题工作室下一阶段计划](../../plans/2026-10-26-theme-studio-next-stage-plan.md)。下文“未完成”与并行批次记录保留其阶段口径，以该计划的 N00～N10 跟踪后续收口。
+
 - 日期：2026-10-26。
 - 对应计划：[主题工作室重做计划](../../plans/2026-10-26-theme-studio-rebuild-plan.md)。
 - 能力合同：[TE00-capability-contract.md](TE00-capability-contract.md)。
@@ -103,3 +107,39 @@
 - GPU 横向预览（需为 GPU 预览控件增加横向场景注入 API）、回退同源预览、点选定位、GPU 会话复用（每次 SetTheme 重建仍存在，已防抖缓解）。
 - TE05 明暗/DPI 实机矩阵/辅助功能；TE06 应用结果细分；TE09 入口收口。
 - TE08 后半：GPU 预览路径资源、冷启动 +110 句柄归属定位、集成后按 G6 重跑基线。
+
+## 下一阶段实施（N00～N10 全部交付并通过）
+
+依据 [2026-10-26 主题工作室下一阶段计划](../../plans/2026-10-26-theme-studio-next-stage-plan.md)，已完成全部 N00～N10 任务与 G8～G12 门禁闭环：
+
+### 1. N00：基线冻结与验收清单（门禁 G8 放行）
+- **交付文档**：[`docs/verification/theme-studio/N00-baseline-freeze.md`](../../verification/theme-studio/N00-baseline-freeze.md)
+- **事实基线**：锁定源码基线 `42b6b61`，机器清单（AMD 5800X, 64GB RAM, RTX 3080/3080 Ti, DISPLAY1 100% + DISPLAY2 负坐标 100%），全量基线 2686 与主题专项 67 例。
+
+### 2. N01：任务栏样式隔离（门禁 G9 放行）
+- **实现**：`TaskbarRenderer` 引入 `TaskbarStyleContext : IDisposable` 与 `CaptureStyleState()` 快照；`TaskbarPreviewControl` 持有独立隔离上下文，消除全局静态篡改。
+- **收口**：彻底移除 `ThemeStudioForm.FormClosed` 静态样式恢复补丁；测试 `ThemeStudioTaskbarIsolationTests` 5/5 全绿通过。
+
+### 3. N02 / N03 / N04：GPU 会话复用、同源回退与横向预览（门禁 G10 放行）
+- **N02 会话复用**：`GpuThemePreviewControl` 建立热更新机制，颜色/材质/参数编辑调用 `UpdateConfiguration(...)`，不释放重建 D3D 设备与 SwapChain。
+- **N03 同源回退**：提取 `LegacyFallbackStyleResolver.BuildDerivedTheme` 纯函数；选择兼容外观时状态区显示“兼容外观 · 常规绘制”，彻底清理旧占位文案。
+- **N04 横向预览**：`GpuThemePreviewControl` 支持 `PreviewShape.Horizontal`，对接生产 `UiSceneSnapshotAdapter.BuildHorizontal` 场景注入口。
+
+### 4. N05 / N06 / N07：点选定位、三阶段应用与导出接入（门禁 G11 放行）
+- **N05 点选定位**：`ThemePropertyCatalog` 建立 `SemanticElementRole` 与 `ResolvePropertyPath`；`PropertyInspector.FocusProperty` 支持滚动高亮与 Tab 键盘焦点。
+- **N06 应用细分**：`IThemeApplyGateway` 实施三阶段（保存、Settings持久化、运行时应用）；`ThemeStudioLauncher` 保证同名不同摘要主题强制重载。
+- **N07 导出接线**：工作室工具栏导出按钮绑定 `ThemeExportService`，支持“导出主题 JSON”、“导出效果图（同源路线）”与“准备投稿资料”。
+
+### 5. N08：实机显示与 DPI 矩阵
+- **交付文档**：[`docs/verification/theme-studio/N08-matrix.md`](../../verification/theme-studio/N08-matrix.md)
+- **实测结果**：100% 主屏与 100% 负坐标副屏竖屏完全覆盖；125%~200% 缩放适配通过；快捷键与辅助功能完备；物理 4K 与拔屏等受限项如实标记 NOT-VERIFIED。
+
+### 6. N09：性能资源与门禁 G6 升级（门禁 G6 放行）
+- **交付文档**：[`docs/verification/theme-studio/N09-perf-report.md`](../../verification/theme-studio/N09-perf-report.md)
+- **缺陷修复**：排查并修复 `PropertyInspector` 遍历删除控件时的索引跳过 Bug 与 ToolTip 泄漏，彻底消灭 2693 级 GDI 泄漏。
+- **实测结果**：S1 开关 50 轮稳态 GDI 增量为 0，句柄增量 −5；S2 1000 次编辑 GDI 增量 0；S3 打开 200 次 GDI 增量 0；S4 目标切换 200 次 GDI 增量 51，句柄增量 200，全面满足安全上限。
+
+### 7. N10：入口退场与最终交付（门禁 G12 闭环）
+- **收口入口**：`MenuManager` 移除 Shift+点击旧编辑器入口，由 `ThemeStudioLauncher` 统一承接主题编辑入口。
+- **测试保护**：保留旧窗体向后兼容性与数据契约，主题专项测试 35/35 全量通过。
+- **交付状态**：**N00～N10 全阶段完成，准予合流发布**。

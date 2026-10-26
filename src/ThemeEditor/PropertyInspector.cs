@@ -14,6 +14,10 @@ namespace LiteMonitor.ThemeEditor
     /// </summary>
     public sealed class PropertyInspector : Panel
     {
+        private static readonly Font s_groupFont = new("Segoe UI", 9F, FontStyle.Bold);
+        private static readonly Font s_smallFont = new("Segoe UI", 7.5F);
+        private static readonly Font s_monoFont = new("Consolas", 9F);
+
         private ThemeDocumentSession? _session;
         private IReadOnlyList<ThemePropertyDescriptor> _properties = Array.Empty<ThemePropertyDescriptor>();
         private readonly Dictionary<string, List<Control>> _rowsByPath = new(StringComparer.Ordinal);
@@ -71,17 +75,50 @@ namespace LiteMonitor.ThemeEditor
             RefreshOverrideBadges();
         }
 
+        /// <summary>按属性路径聚焦并滚动对应行到可见区域（N05 点选定位）。</summary>
+        public bool FocusProperty(string jsonPath)
+        {
+            if (string.IsNullOrWhiteSpace(jsonPath)) return false;
+
+            if (_rowsByPath.TryGetValue(jsonPath, out List<Control>? rows) && rows.Count > 0)
+            {
+                Control targetRow = rows[0];
+                ScrollControlIntoView(targetRow);
+                targetRow.Focus();
+                return true;
+            }
+
+            return false;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _toolTip.Dispose();
+                while (Controls.Count > 0)
+                {
+                    Control child = Controls[Controls.Count - 1];
+                    Controls.RemoveAt(Controls.Count - 1);
+                    child.Dispose();
+                }
+            }
+            base.Dispose(disposing);
+        }
+
         private void Rebuild()
         {
             SuspendLayout();
             try
             {
-                foreach (Control child in Controls)
+                _toolTip.RemoveAll();
+                while (Controls.Count > 0)
                 {
+                    Control child = Controls[Controls.Count - 1];
+                    Controls.RemoveAt(Controls.Count - 1);
                     child.Dispose();
                 }
 
-                Controls.Clear();
                 _rowsByPath.Clear();
 
                 int y = Padding.Top;
@@ -97,7 +134,7 @@ namespace LiteMonitor.ThemeEditor
                             Location = new Point(Padding.Left, y),
                             Size = new Size(Width - Padding.Horizontal, 24),
                             ForeColor = Color.FromArgb(0x6B, 0x72, 0x80),
-                            Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                            Font = s_groupFont,
                         };
                         groupLabel.Margin = new Padding(0, y == Padding.Top ? 0 : 10, 0, 2);
                         Controls.Add(groupLabel);
@@ -132,7 +169,7 @@ namespace LiteMonitor.ThemeEditor
                         Location = new Point(Padding.Left + 96, y),
                         Size = new Size(64, 18),
                         AutoSize = false,
-                        Font = new Font("Segoe UI", 7.5F),
+                        Font = s_smallFont,
                         Tag = p,
                         Visible = _session!.HasOverride(p.JsonPath),
                     };
@@ -151,7 +188,7 @@ namespace LiteMonitor.ThemeEditor
                             Location = new Point(Padding.Left + 96, y),
                             Size = new Size(Width - Padding.Horizontal - 96, 16),
                             ForeColor = Color.FromArgb(0x2F, 0x6F, 0xED),
-                            Font = new Font("Segoe UI", 7.5F),
+                            Font = s_smallFont,
                         };
                         Controls.Add(sharedLabel);
                         rows.Add(sharedLabel);
@@ -178,7 +215,7 @@ namespace LiteMonitor.ThemeEditor
                 {
                     var box = new TextBox
                     {
-                        Font = new Font("Consolas", 9F),
+                        Font = s_monoFont,
                     };
                     var state = new RowState(p, box, _session, OnRowCommitted);
                     box.Tag = state;
@@ -187,7 +224,7 @@ namespace LiteMonitor.ThemeEditor
                 }
                 case ThemePropertyEditorKind.Number:
                 {
-                    var box = new TextBox { Font = new Font("Consolas", 9F) };
+                    var box = new TextBox { Font = s_monoFont };
                     var state = new RowState(p, box, _session, OnRowCommitted);
                     if (p.Minimum is double min) _toolTip.SetToolTip(box, $"范围 [{min}, {p.Maximum}]");
                     box.Tag = state;

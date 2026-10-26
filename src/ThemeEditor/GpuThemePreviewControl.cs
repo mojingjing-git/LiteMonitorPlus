@@ -1,14 +1,52 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 using LiteMonitor.Rendering.Configuration;
 using LiteMonitor.Rendering.Contracts;
 using LiteMonitor.Rendering.Gpu.Device;
 using LiteMonitor.Rendering.Gpu.Effects;
-using LiteMonitor.Rendering.Presentation;
 using LiteMonitor.Rendering.Materials;
+using LiteMonitor.Rendering.Presentation;
 using LiteMonitor.Rendering.Scene;
 using LiteMonitor.src.Core;
 
 namespace LiteMonitor.ThemeEditor;
+
+/// <summary>预览形态。</summary>
+public enum PreviewShape
+{
+    Vertical = 0,
+    Horizontal = 1,
+    Taskbar = 2
+}
+
+/// <summary>横向预览数据模拟工厂。</summary>
+public static class HorizontalPreviewMock
+{
+    public static List<MetricItem> BuildMockMetrics() => ThemePreviewScene.CreateMetrics();
+
+    public static List<Column> BuildColumns(
+        IReadOnlyList<MetricItem>? metrics = null,
+        bool singleLine = false,
+        Theme? theme = null,
+        int width = 320)
+    {
+        var cols = ThemePreviewScene.BuildColumns(metrics ?? BuildMockMetrics(), singleLine);
+        if (theme != null)
+        {
+            var settings = new Settings { HorizontalSingleLine = singleLine };
+            var layout = new HorizontalLayout(theme, Math.Max(1, width), LayoutMode.Horizontal, settings, null);
+            layout.Build(cols);
+        }
+        return cols;
+    }
+
+    public static List<Column> BuildColumns(Theme theme, bool singleLine = false, int width = 320) =>
+        BuildColumns(BuildMockMetrics(), singleLine, theme, width);
+}
 
 /// <summary>
 /// Embedded fixed-input GPU preview. It uses the production material renderer
@@ -32,9 +70,10 @@ public sealed class GpuThemePreviewControl : Control
     public static GpuStartupGuard PreviewGuard => PreviewGuardFactory.Value;
 
     private readonly GpuStartupGuard _startupGuard;
-    private readonly Theme _theme;
-    private readonly List<GroupLayoutInfo> _groups;
-    private readonly MaterialRuntimeSettings _runtimeSettings;
+    private Theme _theme;
+    private List<GroupLayoutInfo> _groups;
+    private IReadOnlyList<Column>? _horizontalCols;
+    private MaterialRuntimeSettings _runtimeSettings;
     private readonly GpuResourceLedger _ledger = new(
         byteBudget: 512L * 1024 * 1024,
         resourceBudget: 128);
@@ -45,22 +84,28 @@ public sealed class GpuThemePreviewControl : Control
     private SceneSnapshot? _scene;
     private RenderGenerations _generations;
     private bool _disposed;
+    private bool _hasStartedOnce;
     private string? _error;
+
+    public int DeviceCreationCount { get; private set; } = 1;
+    public int SessionUpdateCount { get; private set; } = 0;
+    public long CurrentGeneration => (long)_generations.Theme;
+    public PreviewShape CurrentShape { get; private set; } = PreviewShape.Vertical;
 
     public GpuThemePreviewControl(
         Theme theme,
         List<GroupLayoutInfo> groups,
-        GpuStartupGuard? startupGuard = null)
+        GpuStartupGuard? startupGuard = null,
+        PreviewShape shape = PreviewShape.Vertical,
+        IReadOnlyList<Column>? horizontalCols = null)
     {
-        _theme = theme;
-        _groups = groups;
+        _theme = theme ?? throw new ArgumentNullException(nameof(theme));
+        _groups = groups ?? throw new ArgumentNullException(nameof(groups));
         _startupGuard = startupGuard ?? PreviewGuard;
-        MaterialKind material = theme.Rendering?.Material switch
-        {
-            ThemeRenderingConfig.LiquidGlassMaterial => MaterialKind.LiquidGlass,
-            ThemeRenderingConfig.CyberPunkMaterial => MaterialKind.CyberPunk,
-            _ => MaterialKind.Legacy
-        };
+        CurrentShape = shape;
+        _horizontalCols = horizontalCols;
+
+        MaterialKind material = ResolveMaterial(theme);
         _runtimeSettings = MaterialRuntimeSettings.Create(theme.Rendering, material, theme);
         _scheduler = new FrameScheduler(_runtimeSettings.TargetFramesPerSecond);
         BackColor = Color.Black;
@@ -72,7 +117,6 @@ public sealed class GpuThemePreviewControl : Control
             true);
         _timer = new System.Windows.Forms.Timer { Interval = 8 };
         _timer.Tick += OnTick;
-        HandleCreated += (_, _) => StartRenderer();
         Resize += (_, _) => ResizeRenderer();
     }
 
@@ -82,6 +126,103 @@ public sealed class GpuThemePreviewControl : Control
 
     public int CaptureSessionsCreated =>
         _renderer?.CaptureSessionsCreated ?? 0;
+
+    public bool UpdateTheme(
+        Theme theme,
+        List<GroupLayoutInfo>? groups = null,
+        PreviewShape shape = PreviewShape.Vertical,
+        IReadOnlyList<Column>? horizontalCols = null)
+    {
+        if (_disposed || !IsHandleCreated || Width <= 0 || Height <= 0)
+        {
+            return false;
+        }
+
+        if (theme?.Rendering == null || !theme.Rendering.IsGpuRequested)
+        {
+            return false;
+        }
+
+        MaterialKind newMaterial = ResolveMaterial(theme);
+        if (newMaterial == MaterialKind.Legacy || theme.Rendering.Validate().Count > 0)
+        {
+            return false;
+        }
+
+        MaterialKind oldMaterial = ResolveMaterial(_theme);
+        bool materialChanged = newMaterial != oldMaterial;
+
+        _theme = theme;
+        if (groups != null)
+        {
+            _groups = groups;
+        }
+        CurrentShape = shape;
+        if (horizontalCols != null)
+        {
+            _horizontalCols = horizontalCols;
+        }
+
+        _runtimeSettings = MaterialRuntimeSettings.Create(theme.Rendering, newMaterial, theme);
+
+        if (materialChanged || _renderer is null)
+        {
+            if (_hasStartedOnce)
+            {
+                DeviceCreationCount++;
+            }
+            _hasStartedOnce = true;
+            _renderer?.Dispose();
+            _renderer = null;
+            _startupAttempt?.Dispose();
+            _startupAttempt = null;
+            _error = null;
+            StartRenderer();
+            return _renderer != null && _error == null;
+        }
+
+        // 坚决复用既有 D3D 设备与 SwapChain 会话
+        try
+        {
+            float dpiScale = Math.Max(1, DeviceDpi) / 96f;
+            float layoutScale = Math.Max(0.1f, _theme.Layout.LayoutScale);
+            float userScale = Math.Max(0.1f, layoutScale / dpiScale);
+
+            _renderer.UpdateConfiguration(newMaterial, _runtimeSettings, DeviceDpi, userScale);
+            _generations = _generations with { Theme = _generations.Theme + 1 };
+            SetPreviewBackground();
+            UpdateScene(shape, horizontalCols);
+            SessionUpdateCount++;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.Message);
+            return false;
+        }
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (!_disposed && Width > 0 && Height > 0)
+        {
+            if (_hasStartedOnce)
+            {
+                DeviceCreationCount++;
+            }
+            _hasStartedOnce = true;
+            StartRenderer();
+        }
+    }
+
+    protected override void OnHandleDestroyed(EventArgs e)
+    {
+        _timer.Stop();
+        _renderer?.Dispose();
+        _renderer = null;
+        base.OnHandleDestroyed(e);
+    }
 
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -102,17 +243,12 @@ public sealed class GpuThemePreviewControl : Control
     private void StartRenderer()
     {
         if (_disposed || _renderer is not null ||
-            Width <= 0 || Height <= 0)
+            Width <= 0 || Height <= 0 || !IsHandleCreated)
         {
             return;
         }
 
-        MaterialKind material = _theme.Rendering?.Material switch
-        {
-            ThemeRenderingConfig.LiquidGlassMaterial => MaterialKind.LiquidGlass,
-            ThemeRenderingConfig.CyberPunkMaterial => MaterialKind.CyberPunk,
-            _ => MaterialKind.Legacy
-        };
+        MaterialKind material = ResolveMaterial(_theme);
         if (!_theme.Rendering!.IsGpuRequested ||
             _theme.Rendering.Validate().Count > 0 ||
             material == MaterialKind.Legacy)
@@ -121,7 +257,15 @@ public sealed class GpuThemePreviewControl : Control
             return;
         }
 
-        _generations = new RenderGenerations(1, 1, 1, 1, 1);
+        if (_generations.Theme == 0)
+        {
+            _generations = new RenderGenerations(1, 1, 1, 1, 1);
+        }
+        else
+        {
+            _generations = _generations with { Device = _generations.Device + 1 };
+        }
+
         if (!_startupGuard.TryBeginAttempt(
                 out GpuStartupAttempt? startupAttempt,
                 out string? guardCode,
@@ -156,10 +300,11 @@ public sealed class GpuThemePreviewControl : Control
         }
 
         _renderer = renderer;
+        _error = null;
         try
         {
             SetPreviewBackground();
-            UpdateScene();
+            UpdateScene(CurrentShape, _horizontalCols);
             _timer.Start();
         }
         catch (Exception ex) { Fail(ex.Message); }
@@ -177,7 +322,7 @@ public sealed class GpuThemePreviewControl : Control
         {
             _renderer.Resize(_generations, Width, Height);
             SetPreviewBackground();
-            UpdateScene();
+            UpdateScene(CurrentShape, _horizontalCols);
         }
         catch (Exception exception)
         {
@@ -185,27 +330,58 @@ public sealed class GpuThemePreviewControl : Control
         }
     }
 
-    private void UpdateScene()
+    private void UpdateScene(PreviewShape shape = PreviewShape.Vertical, IReadOnlyList<Column>? horizontalCols = null)
     {
         if (_renderer is null)
         {
             return;
         }
 
-        UILayout layout = new(_theme);
-        layout.Build(_groups);
-        _scene = UiSceneSnapshotAdapter.Build(
-            _groups,
-            _generations,
-            ClientRectangle,
-            DeviceDpi,
-            notices:
-            [
-                new SceneNotice(
-                    "gpu-preview",
-                    "GPU PREVIEW / FIXED INPUT / CAPTURE 0",
-                    MetricStatus.Normal)
-            ]);
+        CurrentShape = shape;
+        if (horizontalCols != null)
+        {
+            _horizontalCols = horizontalCols;
+        }
+
+        if (shape == PreviewShape.Horizontal)
+        {
+            IReadOnlyList<Column> cols = _horizontalCols ?? horizontalCols ?? HorizontalPreviewMock.BuildColumns(
+                metrics: HorizontalPreviewMock.BuildMockMetrics(),
+                singleLine: false,
+                theme: _theme,
+                width: Width > 0 ? Width : 320);
+
+            if (cols.Count > 0 && cols[0].Bounds.Width <= 0)
+            {
+                var settings = new Settings { HorizontalSingleLine = false };
+                var layout = new HorizontalLayout(_theme, Math.Max(1, Width > 0 ? Width : 320), LayoutMode.Horizontal, settings, null);
+                layout.Build(cols as List<Column> ?? cols.ToList());
+            }
+
+            _scene = UiSceneSnapshotAdapter.BuildHorizontal(
+                cols,
+                _generations,
+                ClientRectangle,
+                DeviceDpi,
+                [new SceneNotice("gpu-preview", "GPU PREVIEW / HORIZONTAL", MetricStatus.Normal)]);
+        }
+        else
+        {
+            UILayout layout = new(_theme);
+            layout.Build(_groups);
+            _scene = UiSceneSnapshotAdapter.Build(
+                _groups,
+                _generations,
+                ClientRectangle,
+                DeviceDpi,
+                notices:
+                [
+                    new SceneNotice(
+                        "gpu-preview",
+                        "GPU PREVIEW / FIXED INPUT / CAPTURE 0",
+                        MetricStatus.Normal)
+                ]);
+        }
     }
 
     private void SetPreviewBackground()
@@ -215,6 +391,14 @@ public sealed class GpuThemePreviewControl : Control
                 out string? code, out string? message))
             throw new InvalidOperationException(code + ": " + message);
     }
+
+    private static MaterialKind ResolveMaterial(Theme? theme) =>
+        theme?.Rendering?.Material switch
+        {
+            ThemeRenderingConfig.LiquidGlassMaterial => MaterialKind.LiquidGlass,
+            ThemeRenderingConfig.CyberPunkMaterial => MaterialKind.CyberPunk,
+            _ => MaterialKind.Legacy
+        };
 
     private void OnTick(object? sender, EventArgs e)
     {

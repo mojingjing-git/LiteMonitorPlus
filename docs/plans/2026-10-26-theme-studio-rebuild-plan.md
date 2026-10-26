@@ -1,7 +1,7 @@
 # 主题工作室重做计划：苹果风格工作区与 Windows 原生窗口栏
 
 - 日期：2026-10-26。
-- 状态：待评估；本轮交付计划与设计参考，尚未实施产品代码。
+- 状态：实施中；M1 与三线并行批次已阶段性交付，剩余项统一进入[下一阶段计划](2026-10-26-theme-studio-next-stage-plan.md)。下文现状与估算保留为初始设计基线，实际完成情况见实施记录。
 - 观察基线：master @ 18e63c9236b8d1ecb6388c11b738399e84ccc980。开工时重新记录实际 SHA 与工作树差异。
 - 已确认方向：双管线可视化调参、准确预览、保存与发布准备；苹果风格工作区，使用 Windows 原生最小化、最大化／还原、关闭控件。
 - 衔接：[工程改进计划](2026-10-26-post-review-engineering-improvement-plan.md)的 E03/E05/E08、[架构解耦计划](2026-10-26-architecture-decoupling-plan.md)、[既有主题市场合同](../superpowers/plans/2026-10-25-theme-marketplace-plan.md)。

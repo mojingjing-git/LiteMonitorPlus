@@ -311,5 +311,54 @@ namespace LiteMonitor.ThemeEditor
             "mem" => fresh.Thresholds.Mem,
             _ => fresh.Thresholds.NetKBps
         };
+
+        /// <summary>语义元素角色（N05 点选定位）。</summary>
+        public enum SemanticElementRole
+        {
+            PanelBackground,
+            GroupHeader,
+            ItemLabel,
+            ItemValue,
+            ProgressBar,
+            Title
+        }
+
+        /// <summary>按角色与当前编辑目标解析实际绑定的 JSON 路径（N05）。</summary>
+        public static string ResolvePropertyPath(SemanticElementRole role, ThemeEditTarget target)
+        {
+            return target switch
+            {
+                ThemeEditTarget.GpuFallback => role switch
+                {
+                    SemanticElementRole.PanelBackground => "rendering.fallbackStyle.background",
+                    SemanticElementRole.GroupHeader => "rendering.fallbackStyle.panelBackground",
+                    SemanticElementRole.Title => "rendering.fallbackStyle.accent",
+                    SemanticElementRole.ItemLabel => "rendering.fallbackStyle.mutedText",
+                    SemanticElementRole.ItemValue => "rendering.fallbackStyle.text",
+                    SemanticElementRole.ProgressBar => "color.barLow",
+                    _ => "rendering.fallbackStyle.background"
+                },
+                ThemeEditTarget.GpuMain => role switch
+                {
+                    SemanticElementRole.PanelBackground => "rendering.parameters.panel_color",
+                    SemanticElementRole.GroupHeader => "rendering.parameters.card_color",
+                    SemanticElementRole.Title => "font.title",
+                    SemanticElementRole.ItemLabel => "font.item",
+                    SemanticElementRole.ItemValue => "font.value",
+                    SemanticElementRole.ProgressBar => "color.barLow",
+                    _ => "rendering.parameters.panel_color"
+                },
+                _ => role switch
+                {
+                    SemanticElementRole.PanelBackground => "color.background",
+                    SemanticElementRole.GroupHeader => "color.groupBackground",
+                    SemanticElementRole.Title => "color.textTitle",
+                    SemanticElementRole.ItemLabel => "color.textSecondary",
+                    SemanticElementRole.ItemValue => "color.textPrimary",
+                    SemanticElementRole.ProgressBar => "color.barLow",
+                    _ => "color.background"
+                }
+            };
+        }
     }
 }

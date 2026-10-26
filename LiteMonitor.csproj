@@ -213,5 +213,9 @@
     <InternalsVisibleTo Include="AppearanceWindowShapeProbe" />
     <!-- B3：Instance 降 internal 后，主窗生命周期探针同样需要可见（与其他测试工程同待遇） -->
     <InternalsVisibleTo Include="GpuHostLifecycleProbe" />
+    <!-- 主题工作室验收探针（tools/ThemeStudioAuditProbe）：需要 SettingsHelper.PathOverride、
+         ThemeDocumentStore.SetThemeDirForTests/SetRecoveryDirForTests、SettingsThemeManager.Initialize
+         等 internal 测试接缝，才能复现 N00–N10 验收报告的 10 条观测点。 -->
+    <InternalsVisibleTo Include="ThemeStudioAuditProbe" />
   </ItemGroup>
 </Project>

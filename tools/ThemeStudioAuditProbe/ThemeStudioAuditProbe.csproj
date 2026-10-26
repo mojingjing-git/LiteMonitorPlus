@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- 独立程序集名：不得与 LiteMonitor.Tests 重名，避免与真实测试程序集冲突。
+         通过 LiteMonitor.csproj 的 InternalsVisibleTo 访问 internal 测试接缝。 -->
+    <AssemblyName>ThemeStudioAuditProbe</AssemblyName>
+    <RootNamespace>ThemeStudioAuditProbe</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\LiteMonitor.csproj" />
+  </ItemGroup>
+</Project>

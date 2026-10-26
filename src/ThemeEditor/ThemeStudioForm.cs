@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json.Nodes;
 using System.Windows.Forms;
+using LiteMonitor.Rendering;
 using LiteMonitor.src.Core;
 
 namespace LiteMonitor.ThemeEditor
@@ -67,10 +68,8 @@ namespace LiteMonitor.ThemeEditor
         private HorizontalPreviewControl? _horizontalPreview;
         private TaskbarPreviewControl? _taskbarPreview;
         private PreviewShape _previewShape = PreviewShape.Vertical;
-        private bool _taskbarPreviewUsed;
+        private ToolStripDropDownButton _exportButton = null!;
         private readonly Settings? _appSettings;
-
-        private enum PreviewShape { Vertical = 0, Horizontal = 1, Taskbar = 2 }
 
         private ThemeDocumentSession? _session;
         private string _selectedTheme = string.Empty;
@@ -78,11 +77,29 @@ namespace LiteMonitor.ThemeEditor
         private Panel _libraryPanel = null!;
         private bool _suppressSelection;
 
-        /// <summary>应用依赖注入（重做计划 §8）：保存完成后的应用动作由宿主提供，编辑器不反射。</summary>
+        /// <summary>应用执行阶段（N06 三阶段模型）。</summary>
+        public enum ThemeApplyStage
+        {
+            ThemeSaved,
+            SettingsPersisted,
+            ThemeApplied
+        }
+
+        /// <summary>应用执行结果细分（N06）。</summary>
+        public sealed record ThemeApplyResult(
+            bool Success,
+            ThemeApplyStage Stage,
+            string? Error = null,
+            string? EffectiveTheme = null,
+            string? EffectiveRoute = null,
+            long Revision = 0
+        );
+
+        /// <summary>应用依赖注入（重做计划 §8 / N06）：保存完成后的应用动作由宿主提供，编辑器不反射。</summary>
         public interface IThemeApplyGateway
         {
-            /// <summary>应用已保存的主题；返回是否成功（结果由现有编排报告）。</summary>
-            bool ApplySavedTheme(string themeName);
+            /// <summary>应用已保存的主题；返回细分阶段与生效路线信息。</summary>
+            ThemeApplyResult ApplySavedTheme(string themeName, long revision);
         }
 
         private IThemeApplyGateway? _applyGateway;
@@ -125,12 +142,6 @@ namespace LiteMonitor.ThemeEditor
                 }
             };
 
-            // 任务栏预览会改写 TaskbarRenderer 的进程级静态样式；离开工作室时恢复生产样式
-            FormClosed += (_, _) =>
-            {
-                if (!_taskbarPreviewUsed) return;
-                try { TaskbarRenderer.ReloadStyle(_appSettings ?? Settings.Load()); } catch { }
-            };
         }
 
         private void PersistRecovery()
@@ -335,11 +346,23 @@ namespace LiteMonitor.ThemeEditor
             saveAsButton.Click += (_, _) => SaveSessionAs();
             var applyButton = new ToolStripButton("应用") { Enabled = false };
             applyButton.Click += (_, _) => ApplySession();
+            // N07 导出与投稿准备菜单（计划 §11 / 波次 W2）
+            _exportButton = new ToolStripDropDownButton("导出");
+            var exportJsonItem = new ToolStripMenuItem("导出主题 JSON");
+            exportJsonItem.Click += (_, _) => ExportThemeJsonAction();
+            var exportPreviewItem = new ToolStripMenuItem("导出效果图");
+            exportPreviewItem.Click += (_, _) => ExportEffectImageAction();
+            var exportSubmissionItem = new ToolStripMenuItem("准备投稿资料");
+            exportSubmissionItem.Click += (_, _) => PrepareSubmissionMaterialsAction();
+            _exportButton.DropDownItems.AddRange(
+                [exportJsonItem, exportPreviewItem, exportSubmissionItem]);
+
             var libraryToggle = new ToolStripButton("资料库");
             libraryToggle.Click += (_, _) => _libraryPanel.Visible = !_libraryPanel.Visible;
             _docToolbar.Items.AddRange(
                 [_docName, _dirtyDot, new ToolStripSeparator(), _undoButton, _redoButton,
                  new ToolStripSeparator(), _saveButton, saveAsButton, applyButton,
+                 new ToolStripSeparator(), _exportButton,
                  new ToolStripSeparator(), libraryToggle]);
 
             // Dock 优先级与探针一致：后加入者优先。
@@ -712,18 +735,105 @@ namespace LiteMonitor.ThemeEditor
 
             if (_applyGateway is null)
             {
-                _statusSaved.Text = "已保存；应用入口未接线（TE06）。";
+                _statusSaved.Text = "已保存；应用入口未接线。";
                 return;
             }
 
             try
             {
-                bool ok = _applyGateway.ApplySavedTheme(_session.ThemeName);
-                _statusSaved.Text = ok ? "已保存并应用。" : "已保存；应用失败，可在设置中重试。";
+                ThemeApplyResult result = _applyGateway.ApplySavedTheme(_session.ThemeName, _session.Revision);
+                if (result.Success)
+                {
+                    _statusSaved.Text = $"已保存并应用（修订 r{result.Revision}，{result.EffectiveRoute ?? "正常生效"}）。";
+                }
+                else
+                {
+                    string stageDesc = result.Stage switch
+                    {
+                        ThemeApplyStage.SettingsPersisted => "Settings 持久化失败",
+                        ThemeApplyStage.ThemeApplied => "运行时应用失败",
+                        _ => "保存阶段失败"
+                    };
+                    _statusSaved.Text = $"已保存；{stageDesc}：" + (result.Error ?? "可在设置中重试");
+                }
             }
             catch (Exception ex)
             {
-                _statusSaved.Text = "已保存；应用失败：" + ex.Message;
+                _statusSaved.Text = "已保存；应用异常：" + ex.Message;
+            }
+        }
+
+        private void ExportThemeJsonAction()
+        {
+            if (_session is null)
+            {
+                _statusSaved.Text = "未打开主题，无法导出。";
+                return;
+            }
+
+            using var sfd = new SaveFileDialog
+            {
+                Title = "导出主题 JSON",
+                Filter = "JSON 文件 (*.json)|*.json",
+                FileName = $"{_session.ThemeName}.json"
+            };
+            if (sfd.ShowDialog(this) == DialogResult.OK)
+            {
+                ThemeExportResult res = ThemeExportService.ExportJson(_session, sfd.FileName);
+                _statusSaved.Text = res.Success
+                    ? $"导出 JSON 成功（修订 r{_session.Revision}，{Path.GetFileName(sfd.FileName)}）。"
+                    : "导出 JSON 失败：" + res.Error;
+            }
+        }
+
+        private void ExportEffectImageAction()
+        {
+            if (_session is null)
+            {
+                _statusSaved.Text = "未打开主题，无法导出。";
+                return;
+            }
+
+            using var sfd = new SaveFileDialog
+            {
+                Title = "导出主题效果图",
+                Filter = "PNG 图片 (*.png)|*.png",
+                FileName = $"{_session.ThemeName}_preview.png"
+            };
+            if (sfd.ShowDialog(this) == DialogResult.OK)
+            {
+                var pref = _inspector.Target == ThemeEditTarget.GpuFallback
+                    ? ImageRoutePreference.Classic
+                    : ImageRoutePreference.Auto;
+                var orient = _previewShape == PreviewShape.Horizontal
+                    ? ThemeExportImageOrientation.Horizontal
+                    : ThemeExportImageOrientation.Vertical;
+                ThemeImageExportResult res = ThemeExportService.ExportEffectImage(_session, sfd.FileName, pref, orient);
+                _statusSaved.Text = res.Success
+                    ? $"导出效果图成功（路线：{res.Route}）。"
+                    : "导出效果图失败：" + res.Error;
+            }
+        }
+
+        private void PrepareSubmissionMaterialsAction()
+        {
+            if (_session is null)
+            {
+                _statusSaved.Text = "未打开主题，无法生成投稿资料。";
+                return;
+            }
+
+            using var fbd = new FolderBrowserDialog
+            {
+                Description = "选择投稿资料输出文件夹",
+                UseDescriptionForTitle = true
+            };
+            if (fbd.ShowDialog(this) == DialogResult.OK)
+            {
+                ThemeSubmissionResult res = ThemeExportService.PrepareSubmissionMaterials(_session, fbd.SelectedPath);
+                _statusSaved.Text = res.Success
+                    ? $"投稿资料已生成（路径：{res.Directory}，待市场审核）。"
+                    : "生成投稿资料失败：" + res.Error;
             }
         }
 
@@ -825,18 +935,31 @@ namespace LiteMonitor.ThemeEditor
                 switch (_previewShape)
                 {
                     case PreviewShape.Horizontal:
-                        if (_horizontalPreview is null)
+                        // GPU 横向预览接入：若主题请求 GPU 且当前为主效果目标，使用 _preview 的横向 GPU 能力
+                        if (_session.Draft.Rendering?.IsGpuRequested == true && _inspector.Target == ThemeEditTarget.GpuMain)
                         {
-                            _horizontalPreview = new HorizontalPreviewControl
-                            {
-                                Dock = DockStyle.Fill,
-                                BackColor = PreviewBack,
-                            };
-                            _previewHost.Controls.Add(_horizontalPreview);
+                            EnsurePreviewControl();
+                            _preview!.SetTheme(_session.Draft, ThemeEditTarget.GpuMain, PreviewShape.Horizontal);
+                            ShowPreviewControl(_preview);
                         }
+                        else
+                        {
+                            if (_horizontalPreview is null)
+                            {
+                                _horizontalPreview = new HorizontalPreviewControl
+                                {
+                                    Dock = DockStyle.Fill,
+                                    BackColor = PreviewBack,
+                                };
+                                _previewHost.Controls.Add(_horizontalPreview);
+                            }
 
-                        _horizontalPreview.SetTheme(_session.Draft);
-                        ShowPreviewControl(_horizontalPreview);
+                            Theme themeToRender = _inspector.Target == ThemeEditTarget.GpuFallback
+                                ? LegacyFallbackStyleResolver.BuildDerivedTheme(_session.Draft)
+                                : _session.Draft;
+                            _horizontalPreview.SetTheme(themeToRender);
+                            ShowPreviewControl(_horizontalPreview);
+                        }
                         break;
 
                     case PreviewShape.Taskbar:
@@ -851,22 +974,12 @@ namespace LiteMonitor.ThemeEditor
                         }
 
                         _taskbarPreview.SetTheme(_session.Draft);
-                        _taskbarPreviewUsed = true; // 关闭时恢复生产任务栏样式
                         ShowPreviewControl(_taskbarPreview);
                         break;
 
                     default:
-                        if (_preview is null)
-                        {
-                            _preview = new ThemePreviewControl
-                            {
-                                Dock = DockStyle.Fill,
-                                BackColor = PreviewBack,
-                            };
-                            _previewHost.Controls.Add(_preview);
-                        }
-
-                        _preview.SetTheme(_session.Draft);
+                        EnsurePreviewControl();
+                        _preview!.SetTheme(_session.Draft, _inspector.Target, PreviewShape.Vertical);
                         ShowPreviewControl(_preview);
                         break;
                 }
@@ -879,6 +992,19 @@ namespace LiteMonitor.ThemeEditor
 
             _previewPlaceholder.Visible = false;
             UpdateRouteStatus();
+        }
+
+        private void EnsurePreviewControl()
+        {
+            if (_preview is null)
+            {
+                _preview = new ThemePreviewControl
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = PreviewBack,
+                };
+                _previewHost.Controls.Add(_preview);
+            }
         }
 
         private void ShowPreviewControl(Control active)
@@ -919,12 +1045,6 @@ namespace LiteMonitor.ThemeEditor
                 return;
             }
 
-            if (_previewShape == PreviewShape.Horizontal)
-            {
-                _statusRoute.Text = "预览形态：横向 · 常规绘制（生产同源）｜ GPU 横向预览待 TE04";
-                return;
-            }
-
             if (_previewShape == PreviewShape.Taskbar)
             {
                 _statusRoute.Text = "预览形态：任务栏 · 常规绘制（颜色由设置驱动，布局随主题）";
@@ -932,25 +1052,60 @@ namespace LiteMonitor.ThemeEditor
             }
 
             bool gpuRequested = _session.Draft.Rendering?.IsGpuRequested == true;
-            string targetNote = _inspector.Target == ThemeEditTarget.GpuFallback
-                ? " ｜ 目标：兼容外观（画布仍为主效果，回退预览待 TE04）"
-                : _inspector.Target == ThemeEditTarget.GpuMain ? " ｜ 目标：主效果" : string.Empty;
+
+            if (_previewShape == PreviewShape.Horizontal)
+            {
+                if (_inspector.Target == ThemeEditTarget.GpuFallback)
+                {
+                    _statusRoute.Text = "预览形态：横向 · 兼容外观（常规绘制）";
+                    return;
+                }
+
+                if (gpuRequested && _preview?.IsGpuPreviewActive == true)
+                {
+                    _statusRoute.Text = "预览形态：横向 · GPU 场景（生产同源）";
+                }
+                else
+                {
+                    _statusRoute.Text = "预览形态：横向 · 常规绘制（生产同源）";
+                }
+                return;
+            }
+
+            // 竖向 Vertical
+            if (_inspector.Target == ThemeEditTarget.GpuFallback)
+            {
+                _statusRoute.Text = "预览路线：兼容外观 · 常规绘制（生产同源）";
+                return;
+            }
 
             if (!gpuRequested)
             {
-                _statusRoute.Text = "预览路线：经典渲染（同源）" + targetNote;
+                _statusRoute.Text = "预览路线：经典渲染（同源）";
                 return;
             }
 
             if (_preview?.IsGpuPreviewActive == true)
             {
-                _statusRoute.Text = "预览路线：GPU 场景（同源）" + targetNote;
+                _statusRoute.Text = "预览路线：GPU 场景（同源） ｜ 目标：主效果";
             }
             else
             {
                 string reason = _preview?.GpuPreviewError ?? "未启动";
-                _statusRoute.Text = "预览路线：GPU 不可用 → 兼容外观（常规绘制）— " + reason + targetNote;
+                _statusRoute.Text = "预览路线：GPU 不可用 → 兼容外观（常规绘制）— " + reason;
             }
+        }
+
+        /// <summary>按语义角色点选定位到检查器对应的属性字段（N05）。</summary>
+        public bool SelectPropertyByRole(ThemePropertyCatalog.SemanticElementRole role)
+        {
+            string path = ThemePropertyCatalog.ResolvePropertyPath(role, _inspector.Target);
+            bool focused = _inspector.FocusProperty(path);
+            if (focused)
+            {
+                _statusSaved.Text = $"已定位到属性：{path}";
+            }
+            return focused;
         }
 
         /// <summary>按文档类型配置编辑目标选择器（视图状态，不写主题、不制造脏状态）。</summary>
@@ -1088,6 +1243,25 @@ namespace LiteMonitor.ThemeEditor
         internal HorizontalPreviewControl? HorizontalPreviewForTesting => _horizontalPreview;
 
         internal TaskbarPreviewControl? TaskbarPreviewForTesting => _taskbarPreview;
+
+        internal ToolStripDropDownButton ExportButtonForTesting => _exportButton;
+
+        internal ThemePreviewControl? PreviewControlForTesting => _preview;
+
+        // ★ ToolStripItem.Text 的可空标注使其读取结果为「可能为 null」，直接返回会触发 CS8603。
+        //   WinForms 内部保证 Text 永不为 null（getter 返回 _text ?? string.Empty），此处显式兜底为 "",
+        //   语义与原实现完全一致（空串而非 null），不改变任何调用方可见行为。
+        internal string RouteStatusTextForTesting => _statusRoute.Text ?? "";
+
+        internal string SavedStatusTextForTesting => _statusSaved.Text ?? "";
+
+        internal void ApplyForTesting() => ApplySession();
+
+        internal void ExportJsonForTesting(string path) => ThemeExportService.ExportJson(_session!, path);
+
+        internal void ExportEffectImageForTesting(string path) => ThemeExportService.ExportEffectImage(_session!, path, ImageRoutePreference.Auto);
+
+        internal void PrepareSubmissionForTesting(string dir) => ThemeExportService.PrepareSubmissionMaterials(_session!, dir);
 
         private string? PromptName(string title, string initial)
         {

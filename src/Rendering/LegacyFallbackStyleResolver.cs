@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using LiteMonitor.Rendering.Configuration;
+using LiteMonitor.src.Core;
 
 namespace LiteMonitor.Rendering;
 
@@ -220,5 +221,64 @@ public static class LegacyFallbackStyleResolver
         int alpha = (int)Math.Round(a * 255d, MidpointRounding.AwayFromZero);
         color = Color.FromArgb(alpha, r, g, b);
         return true;
+    }
+
+    /// <summary>
+    /// 用回退样式生成一份派生主题副本（源主题不被修改，严禁写盘）。
+    /// </summary>
+    public static Theme BuildDerivedTheme(Theme source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        LegacyFallbackStyle style = Resolve(source.Rendering);
+        return BuildDerivedTheme(source, style);
+    }
+
+    /// <summary>
+    /// 用回退样式生成一份派生主题副本（源主题不被修改，严禁写盘）。
+    /// 替换 Color 为回退配色（Background, PanelBackground -> GroupBackground, Border, Text -> TextPrimary, MutedText -> TextSecondary, Accent -> TextTitle）。
+    /// 共享源主题的 5 个 Font 实例（FontTitle, FontGroup, FontItem, FontValue, FontTaskbar），不二次调用 BuildFonts()，遵循“谁创建谁释放，派生主题绝不释放共享字体”的所有权合同。
+    /// </summary>
+    public static Theme BuildDerivedTheme(Theme source, LegacyFallbackStyle style)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(style);
+
+        ColorConfig colors = DeriveConfig(source.Color ?? new ColorConfig());
+        colors.Background = style.Background;
+        colors.GroupBackground = style.PanelBackground;
+        colors.Border = style.Border;
+        colors.TextPrimary = style.Text;
+        colors.TextSecondary = style.MutedText;
+
+        // ★ 裁决 D-H：accent 落到标题前景色
+        colors.TextTitle = style.Accent;
+
+        Theme derived = DeriveConfig(source);
+        derived.Color = colors;
+
+        // ★ 共享源主题的 5 个运行期字体字段（同一 Font 实例，绝不二次调用 BuildFonts/Scale/DisposeFonts）
+        derived.FontTitle = source.FontTitle;
+        derived.FontGroup = source.FontGroup;
+        derived.FontItem = source.FontItem;
+        derived.FontValue = source.FontValue;
+        derived.FontTaskbar = source.FontTaskbar;
+
+        return derived;
+    }
+
+    private static T DeriveConfig<T>(T source) where T : new()
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        T copy = new();
+        foreach (System.Reflection.PropertyInfo property in typeof(T).GetProperties(
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            if (!property.CanRead) continue;
+            if (property.SetMethod == null || !property.SetMethod.IsPublic) continue;
+            property.SetValue(copy, property.GetValue(source));
+        }
+
+        return copy;
     }
 }

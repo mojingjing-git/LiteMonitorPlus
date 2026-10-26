@@ -9,7 +9,106 @@ namespace LiteMonitor
     public static class TaskbarRenderer
     {
         //private static readonly Settings _settings = Settings.Load();
-        
+
+        /// <summary>
+        /// 任务栏渲染的独立样式上下文（用于预览等隔离场景，避免串扰生产静态样式）。
+        /// 遵循“谁创建谁释放”原则，实现 IDisposable 安全释放自有的 Font。
+        /// </summary>
+        public sealed class TaskbarStyleContext : IDisposable
+        {
+            private bool _disposed;
+
+            public Font Font { get; }
+            public bool UseCustom { get; }
+            public Color LabelColor { get; }
+            public Color SafeColor { get; }
+            public Color WarnColor { get; }
+            public Color CritColor { get; }
+
+            public TaskbarStyleContext(Settings cfg)
+            {
+                if (cfg == null) throw new ArgumentNullException(nameof(cfg));
+
+                var s = cfg.GetStyle();
+                try
+                {
+                    Font = new Font(s.Font, s.Size, s.Bold ? FontStyle.Bold : FontStyle.Regular);
+                }
+                catch
+                {
+                    // 字体族不存在或参数越界时退到系统默认族，避免整条任务栏渲染路径抛异常
+                    Font = new Font(SystemFonts.DefaultFont.FontFamily, s.Size,
+                                           s.Bold ? FontStyle.Bold : FontStyle.Regular);
+                }
+
+                bool useCustom = cfg.TaskbarCustomStyle;
+                Color cLabel = Color.Empty;
+                Color cSafe = Color.Empty;
+                Color cWarn = Color.Empty;
+                Color cCrit = Color.Empty;
+
+                if (useCustom)
+                {
+                    try
+                    {
+                        cLabel = ColorTranslator.FromHtml(cfg.TaskbarColorLabel);
+                        cSafe = ColorTranslator.FromHtml(cfg.TaskbarColorSafe);
+                        cWarn = ColorTranslator.FromHtml(cfg.TaskbarColorWarn);
+                        cCrit = ColorTranslator.FromHtml(cfg.TaskbarColorCrit);
+                    }
+                    catch
+                    {
+                        // 容错：如果解析失败，回退到默认
+                        useCustom = false;
+                    }
+                }
+
+                UseCustom = useCustom;
+                LabelColor = cLabel;
+                SafeColor = cSafe;
+                WarnColor = cWarn;
+                CritColor = cCrit;
+            }
+
+            public void Dispose()
+            {
+                if (!_disposed)
+                {
+                    _disposed = true;
+                    try { Font.Dispose(); } catch { }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 供测试专用的内部样式快照记录，反映生产静态样式字段的当前状态。
+        /// </summary>
+        internal record TaskbarStyleSnapshot(
+            string? FontFamilyName,
+            float? FontSize,
+            FontStyle? FontStyle,
+            bool UseCustom,
+            Color LabelColor,
+            Color SafeColor,
+            Color WarnColor,
+            Color CritColor);
+
+        /// <summary>
+        /// 测试专用：捕获当前生产静态样式字段的只读快照。
+        /// </summary>
+        internal static TaskbarStyleSnapshot CaptureStyleState()
+        {
+            return new TaskbarStyleSnapshot(
+                _cachedFont?.FontFamily.Name,
+                _cachedFont?.Size,
+                _cachedFont?.Style,
+                _useCustom,
+                _cLabel,
+                _cSafe,
+                _cWarn,
+                _cCrit);
+        }
+
         // 字体缓存 - 直接初始化，避免每次渲染都创建字体
         private static Font? _cachedFont = null;
 
@@ -83,40 +182,40 @@ namespace LiteMonitor
             }
         }
 
-        public static void Render(Graphics g, List<Column> cols, bool light) // <--- 新的
+        public static void Render(Graphics g, List<Column> cols, bool light, TaskbarStyleContext? context = null)
         {
-            // [防空策略] 万一还没人调用 ReloadStyle，就自己兜底初始化一次
-            if (_cachedFont == null)
+            if (context == null)
             {
-                // 兜底：读磁盘配置（仅第一次）
-                ReloadStyle(Settings.Load());
+                // [防空策略] 万一还没人调用 ReloadStyle，就自己兜底初始化一次
+                if (_cachedFont == null)
+                {
+                    // 兜底：读磁盘配置（仅第一次）
+                    ReloadStyle(Settings.Load());
+                }
             }
             
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
             g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-            // 使用传入的 light 参数，避免每次都查询系统主题瓠
-            //bool light = IsSystemLight();
-
             foreach (var col in cols)
             {
                 // ★★★ [新增]：如果只有 Top 没有 Bottom，强制使用全高绘制（居中）
                 if (col.Top != null && col.Bottom == null && col.Bounds != Rectangle.Empty)
                 {
-                    DrawItem(g, col.Top, col.Bounds, light);
+                    DrawItem(g, col.Top, col.Bounds, light, context);
                     continue; // 处理完这个特殊情况直接跳过本次循环
                 }
 
                 if (col.BoundsTop != Rectangle.Empty && col.Top != null)
-                    DrawItem(g, col.Top, col.BoundsTop, light);
+                    DrawItem(g, col.Top, col.BoundsTop, light, context);
 
                 if (col.BoundsBottom != Rectangle.Empty && col.Bottom != null)
-                    DrawItem(g, col.Bottom, col.BoundsBottom, light);
+                    DrawItem(g, col.Bottom, col.BoundsBottom, light, context);
             }
         }
 
-        private static void DrawItem(Graphics g, MetricItem item, Rectangle rc, bool light)
+        private static void DrawItem(Graphics g, MetricItem item, Rectangle rc, bool light, TaskbarStyleContext? context)
         {
             // ★★★ 优化：直接使用缓存的 ShortLabel，避免每帧生成 Key 和查询字典 ★★★
             string label = item.ShortLabel;
@@ -134,17 +233,18 @@ namespace LiteMonitor
 
             string value = item.GetFormattedText(true);
 
-            // 直接使用缓存的字体，不再 new Font
-            Font font = _cachedFont!;
+            // 直接使用上下文中的字体或静态缓存字体，不再 new Font
+            Font font = context != null ? context.Font : _cachedFont!;
 
             Color labelColor, valueColor;
 
             // ★★★ [修改] 颜色选择逻辑 ★★★
-            if (_useCustom)
+            bool useCustom = context != null ? context.UseCustom : _useCustom;
+            if (useCustom)
             {
                 // 自定义模式：忽略系统明暗，强制使用自定义色
-                labelColor = _cLabel;
-                valueColor = GetCustomStateColor(item.CachedColorState);
+                labelColor = context != null ? context.LabelColor : _cLabel;
+                valueColor = GetCustomStateColor(item.CachedColorState, context);
             }
             else
             {
@@ -184,6 +284,7 @@ namespace LiteMonitor
                 TextFormatFlags.NoClipping
             );
         }
+
         // [新增] 辅助：根据状态快速获取颜色 (替代原来的 PickColor)
         private static Color GetStateColor(int state, bool light)
         {
@@ -193,8 +294,14 @@ namespace LiteMonitor
         }
 
         // [新增] 辅助：自定义模式
-        private static Color GetCustomStateColor(int state)
+        private static Color GetCustomStateColor(int state, TaskbarStyleContext? context = null)
         {
+            if (context != null)
+            {
+                if (state == 2) return context.CritColor;
+                if (state == 1) return context.WarnColor;
+                return context.SafeColor;
+            }
             if (state == 2) return _cCrit;
             if (state == 1) return _cWarn;
             return _cSafe;

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Windows.Forms;
+using LiteMonitor.Rendering;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices.Backdrop;
 
@@ -73,6 +74,10 @@ namespace LiteMonitor.ThemeEditor
         private bool _disposed;
         private GpuThemePreviewControl? _gpuPreview;
 
+        private ThemeEditTarget _target = ThemeEditTarget.Classic;
+        private PreviewShape _shape = PreviewShape.Vertical;
+        private Theme? _rawTheme;
+
         public ThemePreviewControl()
         {
             DoubleBuffered = true;
@@ -97,11 +102,20 @@ namespace LiteMonitor.ThemeEditor
         /// </summary>
         public float DpiScale => GetDpiScale();
 
+        /// <summary>当前会话设备创建/重建次数（穿透诊断）。</summary>
+        public int DeviceCreationCount => _gpuPreview?.DeviceCreationCount ?? 0;
+
+        /// <summary>当前会话参数热更新次数（穿透诊断）。</summary>
+        public int SessionUpdateCount => _gpuPreview?.SessionUpdateCount ?? 0;
+
+        /// <summary>当前 GPU 会话代次（穿透诊断）。</summary>
+        public long CurrentGeneration => _gpuPreview?.CurrentGeneration ?? 0;
+
         /// <summary>
         /// 当前预览是否走 GPU 真实渲染（供状态区显示"实际路线"而非声明路线）。
         /// GPU 不可用 / 关闭特效 / 安全模式时恒为 false。
         /// </summary>
-        public bool IsGpuPreviewActive => _gpuPreview?.IsActive == true;
+        public bool IsGpuPreviewActive => _gpuPreview?.IsActive == true && _gpuPreview.Visible;
 
         /// <summary>GPU 预览不可用原因（未尝试或可用时为 null）。</summary>
         public string? GpuPreviewError => _gpuPreview?.Error;
@@ -109,12 +123,40 @@ namespace LiteMonitor.ThemeEditor
         /// <summary>
         /// 编辑器传入主题
         /// </summary>
-        public void SetTheme(Theme theme)
+        public void SetTheme(
+            Theme theme,
+            ThemeEditTarget target = ThemeEditTarget.Classic,
+            PreviewShape shape = PreviewShape.Vertical)
         {
             if (theme == null) throw new ArgumentNullException(nameof(theme));
 
-            _theme = theme;
+            ThemeEditTarget effectiveTarget = target;
+            if (effectiveTarget == ThemeEditTarget.Classic && theme.Rendering?.IsGpuRequested == true)
+            {
+                effectiveTarget = ThemeEditTarget.GpuMain;
+            }
+
+            _rawTheme = theme;
+            _target = effectiveTarget;
+            _shape = shape;
             _dpiScale = GetDpiScale();
+
+            // 若 target == ThemeEditTarget.GpuFallback，调用 LegacyFallbackStyleResolver.BuildDerivedTheme(theme) 生成派生主题
+            Theme themeToRender;
+            if (effectiveTarget == ThemeEditTarget.GpuFallback)
+            {
+                if (_gpuPreview != null)
+                {
+                    _gpuPreview.Visible = false;
+                }
+                themeToRender = LegacyFallbackStyleResolver.BuildDerivedTheme(theme);
+            }
+            else
+            {
+                themeToRender = theme;
+            }
+
+            _theme = themeToRender;
 
             // ★ 主题可能是**就地修改**的（编辑器改一个字段就会调一次 SetTheme），
             //   所以每次都强制重建预览副本 —— 不能按引用复用，否则改动的字段不会进预览。
@@ -122,7 +164,7 @@ namespace LiteMonitor.ThemeEditor
             _previewThemeSource = null;
 
             // 创建 DPI 缩放后的主题副本用于预览（独立布局副本，见类注释合同）
-            _layout = new UILayout(CreatePreviewTheme(theme, _dpiScale));
+            _layout = new UILayout(CreatePreviewTheme(themeToRender, _dpiScale));
 
             BuildMockData();
 
@@ -141,34 +183,70 @@ namespace LiteMonitor.ThemeEditor
 
         private void UpdateGpuPreview()
         {
-            if (_disposed || _theme?.Rendering is null ||
-                !_theme.Rendering.IsGpuRequested ||
-                !Settings.Load().GpuThemeEffectsEnabled ||
-                Program.SafeMode)
+            if (_disposed || _rawTheme == null)
             {
-                _gpuPreview?.Dispose();
-                _gpuPreview = null;
+                if (_gpuPreview != null) _gpuPreview.Visible = false;
                 return;
             }
 
-            if (!IsHandleCreated)
+            if (_target == ThemeEditTarget.GpuFallback)
             {
+                if (_gpuPreview != null)
+                {
+                    _gpuPreview.Visible = false;
+                }
                 return;
             }
 
-            _gpuPreview?.Dispose();
-            _gpuPreview = new GpuThemePreviewControl(
-                GetPreviewTheme(GetDpiScale()),
-                _groups)
+            if (_target == ThemeEditTarget.GpuMain && _rawTheme.Rendering?.IsGpuRequested == true)
             {
-                Bounds = new Rectangle(
+                if (!Settings.Load().GpuThemeEffectsEnabled || Program.SafeMode)
+                {
+                    if (_gpuPreview != null)
+                    {
+                        _gpuPreview.Visible = false;
+                    }
+                    return;
+                }
+
+                if (!IsHandleCreated)
+                {
+                    return;
+                }
+
+                Rectangle targetBounds = new(
                     Padding.Left,
                     Padding.Top,
                     Math.Max(1, Width - Padding.Horizontal),
-                    Math.Max(1, Height - Padding.Vertical))
-            };
-            Controls.Add(_gpuPreview);
-            _gpuPreview.BringToFront();
+                    Math.Max(1, Height - Padding.Vertical));
+
+                if (_gpuPreview == null)
+                {
+                    _gpuPreview = new GpuThemePreviewControl(
+                        GetPreviewTheme(GetDpiScale()),
+                        _groups,
+                        shape: _shape)
+                    {
+                        Bounds = targetBounds
+                    };
+                    Controls.Add(_gpuPreview);
+                }
+                else
+                {
+                    _gpuPreview.Bounds = targetBounds;
+                    _gpuPreview.UpdateTheme(_rawTheme, _groups, _shape);
+                }
+
+                _gpuPreview.Visible = true;
+                _gpuPreview.BringToFront();
+            }
+            else
+            {
+                if (_gpuPreview != null)
+                {
+                    _gpuPreview.Visible = false;
+                }
+            }
         }
 
         // ================================================================
@@ -448,7 +526,7 @@ namespace LiteMonitor.ThemeEditor
             if (_theme == null || _layout == null || _disposed)
                 return;
 
-            if (_gpuPreview?.IsActive == true)
+            if (_gpuPreview?.IsActive == true && _gpuPreview.Visible)
             {
                 return;
             }
@@ -536,7 +614,7 @@ namespace LiteMonitor.ThemeEditor
         /// 取当前预览副本：主题或 DPI 变化时重建，其余情况复用
         /// （复用才能让运行时的外观快照保持稳定，不逐帧重建）。
         /// <para>
-        /// ★ <see cref="SetTheme"/> 会把这里的缓存作废：编辑器是**就地改主题**的，
+        /// ★ <see cref="SetTheme(Theme, ThemeEditTarget, PreviewShape)"/> 会把这里的缓存作废：编辑器是**就地改主题**的，
         ///   同一个主题对象的内容随时可能变，不能按引用复用旧副本。
         /// </para>
         /// </summary>

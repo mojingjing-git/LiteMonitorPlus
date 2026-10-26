@@ -15,7 +15,14 @@ TrafficHistory.json.bak
 
 # Local review and development artifacts
 /docs/reviews/evidence/
+/docs/archive/
 /.review-scratch/
+
+# UI automation helper output: elevated-automation scripts plus ~40MB of
+# screenshot captures used for manual DPI/layout measurement. Machine-local
+# working material only; the reusable DPI probe is kept under
+# docs/verification/theme-studio/measure-dpi.ps1 instead.
+/.cua-helper/
 
 # Local parallel-development worktrees (owner/verifier flow).
 # These hold full repo copies; they must never be committed.
@@ -24,7 +31,7 @@ TrafficHistory.json.bak
 
 # Stray paths produced by unexpanded environment variables.
 # %SystemDrive% is a literal directory name created when a path was not expanded;
-/# undefined/ is the same class of residue from an unexpanded %TEMP%.
+# undefined/ is the same class of residue from an unexpanded %TEMP%.
 /%SystemDrive%/
 /undefined/
 /.zcode/

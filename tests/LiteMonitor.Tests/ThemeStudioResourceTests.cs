@@ -123,7 +123,6 @@ namespace LiteMonitor.Tests
 
         public void Dispose()
         {
-            try { _self.Dispose(); } catch { }
             ThemeDocumentStore.SetThemeDirForTests(null);
             ThemeDocumentStore.ResetRecoveryDir();
             try { Directory.Delete(_dir, recursive: true); } catch { }
@@ -341,6 +340,63 @@ namespace LiteMonitor.Tests
         {
             ThemeDocumentSession session = ThemeDocumentSession.Open(ClassicThemeName);
             Assert.NotNull(session.Draft);
+        }
+
+        // ─────────────────────────── 场景 4 (N09 G6 真实目标切换升级) ───────────────────────────
+
+        /// <summary>
+        /// 场景 4（G6 升级版）：真实编辑目标切换 200 次（主效果 ↔ 兼容外观）。
+        /// 验证双路线频繁切换时，D3D 会话与 GDI 回退派生之间资源平稳，无句柄或 GDI 泄漏。
+        /// </summary>
+        [Fact]
+        public void 场景4_真实目标切换200次_主效果与兼容外观交替_资源增量不累积()
+        {
+            ScenarioMeasurement measurement = Measure("S4-target-switch-200", 200, checkpoint =>
+            {
+                RunSta(() =>
+                {
+                    try { Application.EnableVisualStyles(); } catch { }
+                    using var form = new ThemeStudioForm();
+                    form.Show();
+                    Application.DoEvents();
+
+                    form.OpenThemeForTesting(ClassicThemeName);
+                    Application.DoEvents();
+
+                    for (int i = 1; i <= 200; i++)
+                    {
+                        var target = i % 2 == 0 ? ThemeEditTarget.GpuFallback : ThemeEditTarget.GpuMain;
+                        form.SelectTargetForTesting(target);
+                        Application.DoEvents();
+
+                        if (i % 20 == 0 || i == 200) checkpoint(i);
+                    }
+
+                    form.Close();
+                    Application.DoEvents();
+                });
+            });
+
+            AssertScenario(measurement);
+            Report(measurement);
+        }
+
+        private static void RunSta(Action action)
+        {
+            Exception? captured = null;
+            var thread = new Thread(() =>
+            {
+                try { action(); }
+                catch (Exception ex) { captured = ex; }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join(TimeSpan.FromMinutes(2));
+
+            if (captured != null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(captured).Throw();
+            }
         }
 
         // ─────────────────────────── 采样与断言 ───────────────────────────
