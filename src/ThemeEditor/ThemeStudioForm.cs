@@ -33,6 +33,13 @@ namespace LiteMonitor.ThemeEditor
         private static readonly Color TextMuted = Color.FromArgb(0x6B, 0x72, 0x80);
         private static readonly Color TextStrong = Color.FromArgb(0x2A, 0x2C, 0x30);
 
+        /// <summary>
+        /// 资料库副标题字体（进程内单实例）。
+        /// ★ Lane C 基线发现：逐帧 <c>new Font</c> 会让 GDI 计数在 GC 之间振荡（376→868→376）；
+        ///   字体只在终结器运行后释放，所以按"谁建谁释放"改为窗体持有、Dispose 时释放。
+        /// </summary>
+        private readonly Font _librarySubtitleFont = new("Segoe UI", 7.5F);
+
         private Func<int, int> _dip = v => v;
         private int Dip(int value) => _dip(value);
 
@@ -362,8 +369,20 @@ namespace LiteMonitor.ThemeEditor
             var nameRect = new Rectangle(e.Bounds.Left + Dip(12), e.Bounds.Top + Dip(5), e.Bounds.Width - Dip(16), Dip(16));
             var subRect = new Rectangle(e.Bounds.Left + Dip(12), e.Bounds.Top + Dip(22), e.Bounds.Width - Dip(16), Dip(14));
             TextRenderer.DrawText(e.Graphics, name, Font, nameRect, TextStrong);
-            TextRenderer.DrawText(e.Graphics, subtitle, new Font("Segoe UI", 7.5F), subRect, TextMuted);
+            TextRenderer.DrawText(e.Graphics, subtitle, _librarySubtitleFont, subRect, TextMuted);
             e.DrawFocusRectangle();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _librarySubtitleFont.Dispose();
+                _previewDebounce?.Dispose();
+                _recoveryTimer?.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
 
         // ============================================================
