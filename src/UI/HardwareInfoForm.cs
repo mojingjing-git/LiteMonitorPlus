@@ -15,6 +15,9 @@ namespace LiteMonitor.src.UI
 {
     public class HardwareInfoForm : Form
     {
+        /// <summary>传感器窗口的需求租约身份（E01-B：按消费者身份登记，关闭时只释放自己那一份）。</summary>
+        private const string SensorWindowConsumerId = "sensor-window";
+
         private LiteTreeView _tree;
         private System.Windows.Forms.Timer _refreshTimer;
         private Panel _headerPanel;
@@ -97,7 +100,8 @@ namespace LiteMonitor.src.UI
             this.Controls.Add(pnlToolbar);
 
             // B2：显式登记传感器窗口需求（契约侧存储，通道合流在 B3 接线），关闭时在 OnFormClosed 释放
-            _client.SubmitDemand(new SamplingDemand(Ui: false, Taskbar: false, Web: false, History: false, SensorWindow: true));
+            // ★ E01-B：按**消费者身份**登记（租约）——关闭本窗口只释放自己那一份，不影响其他消费者。
+            _client.SubmitDemand(SensorWindowConsumerId, new SamplingDemand(Ui: false, Taskbar: false, Web: false, History: false, SensorWindow: true));
             _ = LoadCatalogAsync(rebuild: true);
 
             // 局部刷新定时器：刷新目录缓存后只更新可见节点数值，不重建树（保持展开状态）
@@ -112,10 +116,16 @@ namespace LiteMonitor.src.UI
             {
                 var catalog = await _client.GetCatalogAsync(default).ConfigureAwait(true);
                 if (IsDisposed) return;
+
+                // ★ E01-B：目录**版本**变化才说明结构变了（值刷新不重建树）。
+                bool structureChanged = _catalog == null || catalog.Version != _catalog.Version;
+
                 _catalog = catalog;
                 _children = catalog.Entries.ToLookup(e => e.ParentStableId);
                 _sensorById = catalog.Entries.Where(e => e.SensorType != null).ToDictionary(e => e.StableId);
-                if (rebuild) RebuildTree(_searchInput.Text.Trim());
+
+                // 结构没变 ⇒ 只刷新可见节点的值（不重建整棵树，展开状态天然保持）。
+                if (rebuild || structureChanged) RebuildTree(_searchInput.Text.Trim());
             }
             catch (ObjectDisposedException)
             {
@@ -192,6 +202,9 @@ namespace LiteMonitor.src.UI
 
         private void RebuildTree(string filter)
         {
+            // ★ E01-B：目录版本变化（结构变了）才重建树；重建前先按 StableId 记下展开状态，重建后恢复。
+            var expanded = CaptureExpandedState();
+
             _tree.BeginUpdate();
             _tree.Nodes.Clear();
 
@@ -211,6 +224,53 @@ namespace LiteMonitor.src.UI
                 isFirstHardware = false;
             }
             _tree.EndUpdate();
+
+            RestoreExpandedState(expanded);
+        }
+
+        /// <summary>
+        /// 采集当前树的展开状态（键 = 设备条目的 StableId；传感器类型分组用 "父StableId|类型"）。
+        /// </summary>
+        private HashSet<string> CaptureExpandedState()
+        {
+            var expanded = new HashSet<string>(StringComparer.Ordinal);
+            CollectExpandedState(_tree.Nodes, string.Empty, expanded);
+            return expanded;
+        }
+
+        private static void CollectExpandedState(TreeNodeCollection nodes, string parentKey, HashSet<string> expanded)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                string key = NodeStateKey(node, parentKey);
+                if (node.IsExpanded) expanded.Add(key);
+                CollectExpandedState(node.Nodes, key, expanded);
+            }
+        }
+
+        /// <summary>重建后按 StableId 恢复展开状态。</summary>
+        private void RestoreExpandedState(HashSet<string> expanded)
+        {
+            if (expanded.Count == 0) return;
+            RestoreExpandedState(_tree.Nodes, string.Empty, expanded);
+        }
+
+        private static void RestoreExpandedState(TreeNodeCollection nodes, string parentKey, HashSet<string> expanded)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                string key = NodeStateKey(node, parentKey);
+                if (expanded.Contains(key)) node.Expand();
+                RestoreExpandedState(node.Nodes, key, expanded);
+            }
+        }
+
+        /// <summary>节点的状态键：设备条目用 StableId；分组节点用 "父键|分组名"。</summary>
+        private static string NodeStateKey(TreeNode node, string parentKey)
+        {
+            if (node.Tag is HardwareCatalogEntry entry) return entry.StableId;
+            string group = node.Tag as string ?? node.Text;
+            return string.IsNullOrEmpty(parentKey) ? group : parentKey + "|" + group;
         }
 
         private void AddHardwareNode(TreeNodeCollection parentNodes, HardwareCatalogEntry hw, string filter, bool isSearch, bool isFirstHardware)
@@ -318,12 +378,14 @@ namespace LiteMonitor.src.UI
         {
             _refreshTimer.Stop();
             _refreshTimer.Dispose();
-            // B2：释放传感器窗口需求；客户端归组合根所有，此处不释放
+            // ★ E01-B：释放**本窗口**的需求租约（只释放 sensor-window 这一份，
+            //   其它消费者（面板 / 任务栏 / Web / 历史）的需求不受影响）。
             try
             {
-                _client.SubmitDemand(new SamplingDemand(Ui: false, Taskbar: false, Web: false, History: false, SensorWindow: false));
+                _client.ReleaseDemand(SensorWindowConsumerId);
             }
             catch (ObjectDisposedException) { }
+            catch (NotSupportedException) { /* 尚未实现需求租约的客户端：忽略 */ }
             base.OnFormClosed(e);
             this.Dispose();
         }

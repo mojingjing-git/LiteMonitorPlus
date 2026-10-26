@@ -27,6 +27,9 @@ namespace LiteMonitor.SystemServices
         /// <summary>最近一次**已发布**的快照（未发布过 ⇒ null）。</summary>
         HardwareSnapshot? PublishedSnapshot { get; }
 
+        /// <summary>最近一次**已发布**的目录（未发布过 ⇒ null）。</summary>
+        HardwareCatalog? PublishedCatalog { get; }
+
         /// <summary>当前批次的批次级缺失原因（"initializing" / "collection-failed" / null）。</summary>
         string? CurrentMissingReason { get; }
 
@@ -53,5 +56,6 @@ namespace LiteMonitor.SystemServices
 
         /// <summary>请求一次"到期才采"的采样（共享唯一协调器）。</summary>
         Task<bool> RequestSamplingAsync(CancellationToken cancellationToken);
+
     }
 }

@@ -16,6 +16,7 @@ namespace LiteMonitor.Tests
     internal sealed class E01FakeCollector : IHardwareCollector
     {
         public SnapshotPublisher Publisher { get; } = new SnapshotPublisher();
+        public CatalogPublisher Catalog { get; } = new CatalogPublisher();
 
         public bool IsReady { get; set; } = true;
         public int SamplingGeneration { get; set; }
@@ -33,6 +34,9 @@ namespace LiteMonitor.Tests
         public Exception? ApplyFailure { get; set; }
 
         public HardwareSnapshot? PublishedSnapshot => Publisher.HasPublished ? Publisher.Current : null;
+
+        public HardwareCatalog? PublishedCatalog =>
+            Catalog.Current.Entries.Count == 0 ? null : Catalog.Current;
 
         public string? CurrentMissingReason => Publisher.CurrentMissingReason;
 

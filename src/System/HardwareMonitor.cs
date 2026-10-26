@@ -115,6 +115,16 @@ namespace LiteMonitor.src.SystemServices
         //   消费方只读已发布批次（读取不推进 BatchId / 时效）。
         private readonly SnapshotPublisher _snapshotPublisher = new SnapshotPublisher();
 
+        // ★★★★★ E01-B：设备/传感器目录的发布点（结构变化才递增版本）。
+        private readonly CatalogPublisher _catalogPublisher = new CatalogPublisher();
+
+        // ★ E01-B：传感器登记表（目录结构变化时重建；值刷新只读它，不再遍历 LHM 树）。
+        private volatile Dictionary<string, LibreHardwareMonitor.Hardware.ISensor> _catalogSensors
+            = new Dictionary<string, LibreHardwareMonitor.Hardware.ISensor>(StringComparer.Ordinal);
+
+        // ★ E01-A：本轮采集读到的传感器样本（在采集锁内、同一代次里生成）。
+        //   由采集线程写、由同一采集线程的完成回调读（不需要跨线程同步）。
+        private List<LiteMonitor.Contracts.MetricSample>? _pendingSensorSamples;
         #endregion
 
         #region Public Properties
@@ -361,6 +371,18 @@ namespace LiteMonitor.src.SystemServices
             }
         }
 
+        /// <summary>最近一次**已发布**的目录（未发布过 ⇒ null）。</summary>
+        public LiteMonitor.Contracts.HardwareCatalog? PublishedCatalog
+        {
+            get
+            {
+                var publisher = _catalogPublisher;
+                if (publisher == null) return null;
+                LiteMonitor.Contracts.HardwareCatalog catalog = publisher.Current;
+                return catalog.Entries.Count == 0 ? null : catalog;
+            }
+        }
+
         /// <summary>当前批次的批次级缺失原因（"initializing" / "collection-failed" / null）。</summary>
         public string? CurrentMissingReason => _snapshotPublisher?.CurrentMissingReason;
 
@@ -483,15 +505,19 @@ namespace LiteMonitor.src.SystemServices
 
             try
             {
+                List<LiteMonitor.Contracts.MetricSample>? sensorSamples = _pendingSensorSamples;
+                _pendingSensorSamples = null;
+
                 double durationMs = _samplingStatistics.LastCollectionDurationMs;
                 var duration = TimeSpan.FromMilliseconds(durationMs < 0 ? 0 : durationMs);
-                long catalogVersion = 0;
+                long catalogVersion = _catalogPublisher.Version;
 
-                if (success)
+                if (success && sensorSamples != null)
                 {
                     // ★ 指标样本在"采集落定"之后组装：取值层缓存刚被清空，本轮**只算一次**
                     //   （UI / 任务栏 / Web 随后命中同一份缓存，性能计数器的 NextValue 语义不变）。
                     var samples = BuildMetricSamples();
+                    samples.AddRange(sensorSamples);
 
                     // ★ 样本年龄：进程内发布时样本在采集锁内、发布前一刻生成，
                     //   发布时刻 - 样本时刻在毫秒级，按 0 记（见 BuildSensorSamples 的说明）。
@@ -525,6 +551,28 @@ namespace LiteMonitor.src.SystemServices
         // ===============================================================
         // ★★★★★ E01-A / E01-B：快照样本组装 + 目录发布（生产者侧）
         // ===============================================================
+
+        /// <summary>
+        /// 组装本轮快照的**传感器样本**（**必须在采集锁内**调用：读的是同一代次的传感器值）。
+        ///
+        /// ★ Key = 传感器在目录中的 StableId，StableDeviceId 同值：
+        ///   供"目录的传感器值按 StableId 从已发布快照刷新"使用
+        ///   （结构不变时刷新值**不需要**再遍历 LHM 树）。
+        ///
+        /// ★ 样本年龄：进程内发布时样本在采集锁内、发布前一刻生成，
+        ///   发布时刻 - 样本时刻在毫秒级，按 0 记（契约允许进程内为 0）。
+        /// </summary>
+        private List<LiteMonitor.Contracts.MetricSample> BuildSensorSamples()
+        {
+            var samples = new List<LiteMonitor.Contracts.MetricSample>();
+            Dictionary<string, LibreHardwareMonitor.Hardware.ISensor> sensors = _catalogSensors;
+            foreach (KeyValuePair<string, LibreHardwareMonitor.Hardware.ISensor> kv in sensors)
+            {
+                float? raw = kv.Value?.Value;
+                samples.Add(SnapshotSampleFactory.Create(kv.Key, raw, kv.Key, sampleAgeMs: 0));
+            }
+            return samples;
+        }
 
         /// <summary>
         /// 组装本轮快照的**指标样本**（外部指标 Key）。
@@ -600,6 +648,95 @@ namespace LiteMonitor.src.SystemServices
         }
 
         /// <summary>
+        /// 发布目录**结构**（设备/传感器增删改 ⇒ 版本递增）。
+        /// <para>★ 只在设备树真正变化时调用（初始化完成 / 硬件重载 / 映射表重建）。</para>
+        /// </summary>
+        private void PublishCatalogStructure()
+        {
+            var entries = new List<LiteMonitor.Contracts.HardwareCatalogEntry>();
+            var sensors = new Dictionary<string, LibreHardwareMonitor.Hardware.ISensor>(StringComparer.Ordinal);
+
+            lock (_lock)
+            {
+                var computer = _computer;
+                if (computer != null && _isReady)
+                {
+                    foreach (IHardware hw in computer.Hardware)
+                        AddCatalogEntries(entries, sensors, hw, parentStableId: null);
+                }
+            }
+
+            _catalogSensors = sensors;
+            _catalogPublisher.PublishStructure(entries);
+        }
+
+        /// <summary>
+        /// 刷新**已发布目录**里的传感器当前值 / 峰值（结构不变 ⇒ 版本不变）。
+        /// <para>★ 值来自传感器登记表（缓存的 ISensor 引用）：不遍历 LHM 树。</para>
+        /// </summary>
+        private void RefreshCatalogValues()
+        {
+            LiteMonitor.Contracts.HardwareCatalog current = _catalogPublisher.Current;
+            if (current.Entries.Count == 0) return;
+
+            Dictionary<string, LibreHardwareMonitor.Hardware.ISensor> sensors = _catalogSensors;
+            if (sensors.Count == 0) return;
+
+            var entries = new LiteMonitor.Contracts.HardwareCatalogEntry[current.Entries.Count];
+            for (int i = 0; i < current.Entries.Count; i++)
+            {
+                LiteMonitor.Contracts.HardwareCatalogEntry e = current.Entries[i];
+                if (e.SensorType != null && sensors.TryGetValue(e.StableId, out LibreHardwareMonitor.Hardware.ISensor? sensor))
+                {
+                    entries[i] = e with { Value = sensor?.Value, Max = sensor?.Max };
+                }
+                else
+                {
+                    entries[i] = e;
+                }
+            }
+
+            _catalogPublisher.PublishSameVersion(current.Version, entries);
+        }
+
+        /// <summary>目录条目遍历（与目录 StableId 口径一致：设备用硬件标识、传感器用传感器标识）。</summary>
+        private static void AddCatalogEntries(
+            List<LiteMonitor.Contracts.HardwareCatalogEntry> entries,
+            Dictionary<string, LibreHardwareMonitor.Hardware.ISensor> sensors,
+            IHardware hw,
+            string? parentStableId)
+        {
+            string id = hw.Identifier.ToString();
+            entries.Add(new LiteMonitor.Contracts.HardwareCatalogEntry(
+                StableId: id,
+                RuntimeId: id,
+                ParentStableId: parentStableId,
+                DeviceType: hw.HardwareType.ToString(),
+                SensorType: null,
+                Available: true,
+                Name: hw.Name));
+
+            foreach (ISensor sensor in hw.Sensors)
+            {
+                string sensorId = sensor.Identifier.ToString();
+                entries.Add(new LiteMonitor.Contracts.HardwareCatalogEntry(
+                    StableId: sensorId,
+                    RuntimeId: sensorId,
+                    ParentStableId: id,
+                    DeviceType: hw.HardwareType.ToString(),
+                    SensorType: sensor.SensorType.ToString(),
+                    Available: true,
+                    Name: sensor.Name,
+                    Value: sensor.Value,
+                    Max: sensor.Max));
+                sensors[sensorId] = sensor;
+            }
+
+            foreach (IHardware sub in hw.SubHardware)
+                AddCatalogEntries(entries, sensors, sub, id);
+        }
+
+        /// <summary>
         /// 一次真实采集（原 UpdateAll 的全部工作）。
         /// 只有通过协调器门限后才会被调用。
         ///
@@ -613,6 +750,9 @@ namespace LiteMonitor.src.SystemServices
         {
             if (_disposed) return;
             if (!_isReady) return;   // 尚未就绪：不发生真实采集
+
+            // ★ E01-A：本轮样本重新组装（失败时保持 null ⇒ 发布失败批次，不保活上一批的值）。
+            _pendingSensorSamples = null;
 
             // [Fix #290] 标记是否需要触发重载（因硬件变更或故障）
             bool needsReload = false;
@@ -635,6 +775,10 @@ namespace LiteMonitor.src.SystemServices
                     if (_sensorMap.EnsureFresh(_computer, _cfg))
                     {
                         _valueProvider.PreCacheAllSensors(_sensorMap);
+
+                        // ★ E01-B：映射表重建（设备选择可能变化）⇒ 重新发布目录结构。
+                        try { PublishCatalogStructure(); }
+                        catch (Exception ex) { HardwareErrorLog.Write("CollectOnce.PublishCatalog", ex); }
                     }
 
                     // 主板/SuperIO、非目标网卡：不快于每 3 秒一次
@@ -713,6 +857,14 @@ namespace LiteMonitor.src.SystemServices
                     //   UI / Web 只读已发布的结果，绝不旁路采集。
                     PublishCpuVoltageResolution();
 
+                    // ★★★★★ E01-A：在**同一把锁、同一采集代次**里读出传感器值。
+                    //   传感器读数在 hw.Update() 之后读（不会拿到更新前的旧值），
+                    //   且不触碰性能计数器（NextValue 语义保持"每轮一次"）。
+                    _pendingSensorSamples = BuildSensorSamples();
+
+                    // ★ E01-B：刷新已发布目录里的传感器当前值 / 峰值（结构不变 ⇒ 版本不变）。
+                    //   值来自传感器登记表（缓存的 ISensor 引用），**不**遍历 LHM 树。
+                    RefreshCatalogValues();
                 }
 
                 // ★ [#610] IP 流量排除后端：按需创建 / 应用配置 / 推进窗口。
@@ -1143,6 +1295,10 @@ namespace LiteMonitor.src.SystemServices
                     {
                         _isReady = true;
                         _coordinator.SetReady(true);
+
+                        // ★ E01-B：设备树就绪 ⇒ 发布第一版目录结构（版本从 1 起）。
+                        try { PublishCatalogStructure(); }
+                        catch (Exception ex) { HardwareErrorLog.Write("InitializeAsync.PublishCatalog", ex); }
                     }
                 }
             });
@@ -1496,6 +1652,10 @@ namespace LiteMonitor.src.SystemServices
                 {
                     _isReady = true;
                     _coordinator.SetReady(true);
+
+                    // ★ E01-B：设备树已被整体替换 ⇒ 重新发布目录结构（结构变了才递增版本）。
+                    try { PublishCatalogStructure(); }
+                    catch (Exception ex) { HardwareErrorLog.Write("ReloadComputerSafe.PublishCatalog", ex); }
                 }
             }
         }
