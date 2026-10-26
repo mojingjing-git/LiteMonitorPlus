@@ -2,7 +2,9 @@
 
 - 日期：2026-10-26。
 - 工作包：P-E02（完善计划 §6「异步操作和命令语义」），分支 `pkg/E02-commands`，工作树 `.worktrees/e02-cmd`。
-- 基线：`master` @ `cb24130`（含契约 v2 基座 `8e2de2f` 与集成人预落的 IPC 操作名 `cb24130`）。
+- 基线：开工时 `master` @ `cb24130`（含契约 v2 基座 `8e2de2f` 与集成人预落的 IPC 操作名 `cb24130`）；
+  验证期间 `master` 前进（并入 P-E01 适配器命令面 `1eea7ea`、主题工作室 lane 等），本分支已
+  **rebase 到 `master@328143a`** 后重跑全部数字（rebase 无冲突）。
 - 契约边界：**未修改任何 `src/Contracts/` 文件**（集成人独占）。命令面语义以 v2 接口注释与
   `docs/plans/dispatch/P-E02.md` 为准；并行包 P-E01 领地（`src/System/HardwareMonitor.cs`、
   `src/System/HardwareServices/**`、`HardwareHistoryLogger`、`src/UI/HardwareInfoForm.cs`）**零改动**。
@@ -111,22 +113,36 @@ CI/门禁/基线文件（`scripts/architecture-baseline.json` 未改）。
 进程内适配器（`HardwareClientAdapter`）的对照结果落盘为移交清单
 （`tests/LiteMonitor.Tests/bin/Debug/net8.0-windows/e02-adapter-comparison.txt`，
 亦可经 `E02ClientSemanticConsistencyTests.AdapterComparisonLog` 读取）。
+适配器侧用 E01 提供的可编程采集替身 `E01FakeCollector` 驱动（`HardwareMonitor` 构造即 Open LHM
+硬件树，单测不可实例化；替身让命令面/需求面在不打开硬件的环境里被真实驱动）。
 
-**本轮对照输出（逐点）**：
+> **时点说明**：本分支 rebase 后 `master` 已并入 P-E01 的适配器命令面（`1eea7ea`），因此下表是
+> **E01 落地之后**的对照结果（rebase 前基线上的对照为"接口默认实现抛 NotSupportedException"，
+> 已由 E01 补齐）。
 
-| 语义点 | 适配器对照结果 | 移交给 E01 的语义要求 |
-|---|---|---|
-| 语义点 1 应用配置 | `不支持:NotSupportedException:IHardwareClient v2：由具体客户端实现（P-E02）` | 适配器需实现 `ApplyConfigAsync`：仅相同 revision+内容可合并；不同版本排队或明确被取代；返回**实际生效** revision；超时/取消不得谎报底层已停止 |
-| 语义点 2 到期采样 | `不支持:ArgumentNullException:Value cannot be null.` | 接口默认实现转发到 `RequestRescanAsync`；适配器需把"到期采样"与"显式重扫"分家：`RequestSamplingAsync` 走唯一协调器的到期判定，`RequestFullRescanAsync` 走独立重扫路径（**不得**把 UI Tick 当重扫）。*（本次 ArgumentNullException 来自无硬件壳，非语义差异）* |
-| 语义点 3 显式重扫 | `不支持:NotSupportedException:…（P-E02）` | 适配器需实现 `RequestFullRescanAsync`：独立操作 ID、有界记录、`HardwareOperationResult` 状态机；同代次重复请求加入在途操作；超时后新请求取得同一 operationId |
-| 语义点 6 旧会话应答 | `不支持:ArgumentNullException:Value cannot be null.` | 进程内无会话概念，语义等价项为"旧操作结果不得完成新命令"；适配器需保证同一操作 ID 的后询能取到真实结局 |
-| 语义点 7 重连重放 | `不支持:NotSupportedException:IHardwareClient v2：由具体客户端实现（P-E01 需求租约）` | 适配器需实现 `ReleaseDemand(string)`（需求租约）；进程内"重连"对应采集器重建，重建后须重放需求并递增进程内纪元（**进程内纪元归 E01**） |
-| 语义点 10 keyed 需求 | `不支持:NotSupportedException:…（P-E01 需求租约）` | 适配器当前 `SubmitDemand(consumerId, demand)` 走接口默认桥接到旧单桶（**不按消费者隔离**）；需实现 keyed 需求：同消费者保留最新值、关闭一个消费者不清掉其他消费者需求 |
+**本轮对照输出（逐点，管道侧语义一致 ⇒ 移交项相应收敛）**：
 
-**结论**：进程内适配器的**命令面在本轮基线尚未实现**（`IHardwareClient` v2 的默认实现抛
-`NotSupportedException`），因此适配器侧不具备与管道侧一致的语义。本包**不越界修改**
-`src/System/HardwareServices/**`；上述 6 项移交清单由集成人转 P-E01，E01 落地后用**同一测试文件**
-（`E02ClientSemanticConsistencyTests.cs`）复验收口。
+| 语义点 | 适配器对照结果 | 与管道侧一致性 | 结论 / 仍需移交 |
+|---|---|---|---|
+| 语义点 1 应用配置 | `applied=True,revision=1,reason=` | 一致（返回实际生效 revision，失败给可解释原因） | ✅ 已对齐；无遗留 |
+| 语义点 1 同内容重复提交 | `first=True/1,second=True/1` | **可接受差异**：契约为"**可**合并"（管道侧合并为一次底层应用，适配器每次各应用一次） | 差异为**性能形态**而非语义；如需严格同形，由集成人决定是否统一 |
+| 语义点 2 到期采样 | `triggered=True` | 一致 | ✅ 已对齐；**遗留**：适配器把"到期采样"与"显式重扫"的分家依赖 E01 的 `RequestSamplingAsync`/`RequestFullRescanAsync` 两个入口，管道侧对应 `sampling-due`/`rescan-full-v2` 两个操作名（线协议层面天然可区分） |
+| 语义点 3 显式重扫 | `accepted=True,state=Completed,operationId=rescan-…` | 一致（独立操作 ID + 状态机 + 可解释失败） | ✅ 已对齐；**遗留**：管道侧还有"超时后新请求取得同一 operationId（busy）、不重复重扫"的**跨请求**语义，进程内无跨请求通道（无超时）⇒ 不适用，非缺陷 |
+| 语义点 6 旧会话应答 | `ok=True` | 进程内无会话概念 | ✅ 等价项不适用（非缺陷） |
+| 语义点 7 重连重放 | `released=True` | 一致（keyed 需求租约已实现） | ✅ 已对齐；**遗留**：进程内"重连"对应采集器重建，重建后须重放需求并递增**进程内纪元**（复审必改 4 的归属拆分：进程内纪元归 E01） |
+| 语义点 10 keyed 需求 | `released=True` | 一致（按消费者登记/释放） | ✅ 已对齐；无遗留 |
+
+**移交清单（E01 落地后收敛为 3 项，全部为"归属说明/差异登记"，无需 E01 再改代码）**：
+
+1. **同内容重复应用的形态差异**：管道侧合并为一次底层应用，适配器每次各应用一次（契约措辞为
+   "仅相同 revision/内容**可**合并"，两者都合规）。若集成人要求严格同形，需在适配器侧加合并层。
+2. **进程内纪元**：会话纪元的**进程内重建**语义归 E01（管道侧 Host 会话纪元归 E02）；
+   语义点 8/9 只覆盖管道侧。
+3. **协议层可区分性**：管道侧"到期采样/显式重扫"是两个不同操作名（`sampling-due`/`rescan-full-v2`），
+   进程内是两个不同方法；消费者迁移（E01-C/E03）时应保持"到期采样 ≠ 重新枚举"的区分。
+
+> 本包**未修改** `src/System/HardwareServices/**`（E01 领地）：适配器侧的命令面实现与断言归 E01，
+> 本包只提供同一测试文件作为一致性对照与移交清单。
 
 ---
 
@@ -152,14 +168,18 @@ CI/门禁/基线文件（`scripts/architecture-baseline.json` 未改）。
 
 | 测试工程 | 发现(total) | 执行(executed) | 通过 | 失败 | 跳过 | TRX |
 |---|---|---|---|---|---|---|
-| LiteMonitor.Tests | 2492 | 2485 | 2485 | **0** | 7 | `tests/LiteMonitor.Tests/TestResults/e02-full-main-final.trx` |
+| LiteMonitor.Tests | 2594 | 2587 | 2587 | **0** | 7 | `tests/LiteMonitor.Tests/TestResults/e02-full-main-final.trx` |
 | LiteMonitor.GpuNonperformance.Tests | 19 | 19 | 19 | **0** | 0 | `tests/LiteMonitor.GpuNonperformance.Tests/TestResults/e02-full-gpu.trx` |
 | LiteMonitor.Updater.Tests | 73 | 73 | 73 | **0** | 0 | `tests/LiteMonitor.Updater.Tests/TestResults/e02-full-updater.trx` |
-| **合计** | **2584** | **2577** | **2577** | **0** | **7** | |
+| **合计** | **2686** | **2679** | **2679** | **0** | **7** | |
 
-门禁对照：主工程 **2492 ≥ 2479** ✓；三工程合计 **2584 ≥ 2571** ✓；失败 **0** ✓。
+门禁对照：主工程 **2594 ≥ 2479** ✓；三工程合计 **2686 ≥ 2571** ✓；失败 **0** ✓。
 7 项跳过的原因与既有基线一致（`MarketIndexContractTests` 6 例 + `MarketE2ETests` 1 例：
 需要真实插件仓库环境变量 `LITEMONITOR_PLUGIN_REPO`，本机不具备 ⇒ 合法跳过，**不得**据此宣称完整发布门禁通过）。
+
+> 基线说明：本分支在开工时基于 `master@cb24130`；验证期间 `master` 前进（并入 P-E01 适配器命令面
+> `1eea7ea`、主题工作室 lane 等），本分支已 **rebase 到最新 master**（`328143a`）后重跑全部数字。
+> rebase 无冲突，本包相对 master 的改动仅 11 个文件（见 §1），**禁改区零改动**。
 
 **专项复跑（独立 TRX）**
 
@@ -168,7 +188,7 @@ CI/门禁/基线文件（`scripts/architecture-baseline.json` 未改）。
 | E02 语义一致性测试（13 个命名语义点） | 13/13 通过 | `e02-new.trx` |
 | Host 专项（`I2*` 全类：监督 12 + 定位器 12 + 协议 12 + 原子性 5 + 端点等） | **47/47 通过**（不回退） | `e02-i2-final.trx` |
 | 架构棘轮断言 `scripts/architecture-assert.ps1` | **12/12 通过**（C 组 4/4、A 组 8/8；基线未改） | 控制台输出 |
-| 构建警告基线 | 289（与基线**一致**，本包新增/改动文件**零新增警告**） | `dotnet build -t:Rebuild` 输出 |
+| 构建警告基线 | 293（与基线**一致**；本包新增/改动文件**零新增警告**，仅保留既有 3 条可空性告警） | `dotnet build -t:Rebuild` 输出 |
 
 **并行会话干扰记录（须知）**：`I2HostSupervisionTests` 中两处断言统计的是**整机**同名
 `LiteMonitor.HardwareHost` 进程数（`Assert.Equal(1, HostProcessCount())` /
@@ -176,14 +196,15 @@ CI/门禁/基线文件（`scripts/architecture-baseline.json` 未改）。
 （`.worktrees/e01-snap`、`.worktrees/lane-b`）同时在跑各自的 `dotnet test`，其 Host 进程会被计入，
 导致该两处断言偶发失败。取证：进程采样日志显示同期存在
 `…\.worktrees\e01-snap\src\HardwareHost\bin\Debug\…\LiteMonitor.HardwareHost.exe --pipe … --fault stop-heartbeat`
-等**其他工作树**的 Host 进程。单独复跑 `I2*` 专项（47/47）与机器空闲时的全量复跑（2492/0 失败）
+等**其他工作树**的 Host 进程。单独复跑 `I2*` 专项（47/47）与机器空闲时的全量复跑（2594/0 失败）
 均通过 ⇒ 属**环境干扰**，非本包回归。
 
 ---
 
 ## 9. 遗留与已知边界
 
-1. **适配器命令面未实现**：见 §6 移交清单（6 项），归 P-E01；本包不修。
+1. **适配器命令面**：E01 已落地并与管道侧语义对齐（对照见 §6）；剩余 3 项为"形态差异/归属说明"，
+   不需要 E01 再改代码（清单见 §6 末尾）。
 2. **最小 Host 的"显式全量重扫"= 目录重建 + 代次递增**，不是真实设备重开
    （`Computer.Close/Open`）：真实采集器迁移属 I3/E09 范围。目录代次变化可被快照 `CatalogVersion` 观测，
    语义点 3/4 据此断言"底层只重扫一次"。
@@ -200,6 +221,8 @@ CI/门禁/基线文件（`scripts/architecture-baseline.json` 未改）。
 7. **命令超时计数口径**：超时守护是传输期限的唯一裁决者（到期即计数并结算完成源）；调用方等待另有
    250ms 兜底宽限，仅用于"守护未按时醒来"时保持等待**有界**（不得改为无限等待）。
 8. **Release 配置未在本轮执行**：沿用既有基线口径（Debug 全量 + Release 待 CI）。
+9. **并行 lane 干扰**：`I2HostSupervisionTests` 的两处整机进程数断言在多 lane 同机跑测试时偶发失败
+   （取证与复跑结论见 §8），本包未改动该断言（不回退既有门禁）。
 
 ---
 
@@ -208,4 +231,6 @@ CI/门禁/基线文件（`scripts/architecture-baseline.json` 未改）。
 - 计划 §6 的 9 条语义约定在**管道侧**逐条落地并有命名用例钉住（13 个语义点，管道侧断言全绿）。
 - 超时 ≠ 底层取消、取消不取消共享操作、容量与截止期限有界、重连重放、旧会话应答拦截、
   SessionEpoch 递增与旧会话快照隔离、E00-F2 批次基准重置、UI 同步下载改异步——均有独立可复跑证据。
-- 进程内适配器的命令面差异**只记不改**，已形成 6 项可执行的移交清单交 P-E01。
+- 进程内适配器（E01 已落地）经**同一测试文件**对照，命令面语义与管道侧一致；剩余 3 项为形态差异
+  与归属说明，已在 §6 末尾列明，**不需 E01 再改代码**。
+- 门禁：主工程 2594 / 三工程合计 2686 / 失败 0；Host 专项 I2 47/47；架构棘轮 12/12；构建警告零新增。

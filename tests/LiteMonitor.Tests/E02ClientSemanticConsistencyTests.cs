@@ -182,16 +182,16 @@ public sealed class E02ClientSemanticConsistencyTests
 
     // ── 进程内适配器对照（移交清单；不作为本包失败判据）──────────────────────
 
-    private static HardwareClientAdapter CreateAdapterShell()
+    /// <summary>
+    /// 构造进程内适配器（对照用）。
+    /// <para>用 E01 提供的可编程采集替身（<see cref="E01FakeCollector"/>）而非真实硬件：
+    /// <c>HardwareMonitor</c> 构造即 Open LHM 硬件树，单测不可实例化；替身让命令面/需求面
+    /// 在不打开硬件的环境里被真实驱动（E01 的命令面断言同此思路）。</para>
+    /// </summary>
+    private static HardwareClientAdapter CreateAdapterForCompare(out E01FakeCollector collector)
     {
-        // HardwareMonitor 构造即 Open 硬件，单测不可实例化——目录/采集面用未初始化壳，
-        // 触碰不到任何硬件路径（与 E00 R3 回归同口径）。命令面在当前树尚未实现
-        // （接口默认实现抛 NotSupportedException），对照结果即移交清单的输入。
-        var monitorShell = (HardwareMonitor)RuntimeHelpers.GetUninitializedObject(typeof(HardwareMonitor));
-        typeof(HardwareMonitor)
-            .GetField("_coordinator", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(monitorShell, RuntimeHelpers.GetUninitializedObject(typeof(HardwareSamplingCoordinator)));
-        return new HardwareClientAdapter(monitorShell);
+        collector = new E01FakeCollector();
+        return new HardwareClientAdapter(collector);
     }
 
     private static async Task<string> CompareAdapterAsync(string point, Func<IHardwareClient, Task<string>> scenario)
@@ -199,7 +199,7 @@ public sealed class E02ClientSemanticConsistencyTests
         string outcome;
         try
         {
-            using HardwareClientAdapter adapter = CreateAdapterShell();
+            using HardwareClientAdapter adapter = CreateAdapterForCompare(out _);
             outcome = await scenario(adapter);
         }
         catch (Exception ex)
@@ -258,6 +258,12 @@ public sealed class E02ClientSemanticConsistencyTests
         {
             SamplingApplyResult r = await adapter.ApplyConfigAsync(Config(1));
             return $"applied={r.Applied},revision={r.Revision},reason={r.FailureReason}";
+        });
+        await CompareAdapterAsync("语义点1_应用配置_同内容重复提交", async adapter =>
+        {
+            SamplingApplyResult r1 = await adapter.ApplyConfigAsync(Config(1));
+            SamplingApplyResult r2 = await adapter.ApplyConfigAsync(Config(1));
+            return $"first={r1.Applied}/{r1.Revision},second={r2.Applied}/{r2.Revision}";
         });
     }
 
