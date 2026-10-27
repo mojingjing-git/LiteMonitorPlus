@@ -33,12 +33,24 @@ namespace LiteMonitor.src.UI.SettingsPage
             
             grpAlert.AddToggle(this, "Menu.AlertTemp", 
                 () => Config.AlertTempEnabled, 
-                v => Config.AlertTempEnabled = v);
+                v =>
+                {
+                    Config.AlertTempEnabled = v;
+                    Config.RebuildMigratedAlertRules();
+                });
 
             grpAlert.AddInt(this, "Menu.AlertThreshold", "°C", 
                 () => Config.AlertTempThreshold, 
-                v => Config.AlertTempThreshold = v, 
+                v =>
+                {
+                    Config.AlertTempThreshold = v;
+                    Config.RebuildMigratedAlertRules();
+                },
                 width: 80, color: UIColors.TextCrit);
+
+            grpAlert.AddToggle(this, "Menu.AlertMute",
+                () => Config.AlertMuteAll,
+                v => Config.AlertMuteAll = v);
 
             AddGroupToPage(grpAlert);
 

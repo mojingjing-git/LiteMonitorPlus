@@ -409,7 +409,7 @@ namespace LiteMonitor.src.Plugins
         /// <c>{{target_url}}</c>）时<b>不</b>构成声明 —— 那种目标由用户在界面上填写，
         /// 插件并未声明它，带凭据的请求不得发往该主机。</para>
         /// </summary>
-        public static HashSet<string> GetDeclaredHosts(PluginTemplate tmpl)
+        public static HashSet<string> GetDeclaredHosts(PluginTemplate tmpl, string? instanceId = null)
         {
             var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (tmpl == null) return hosts;
@@ -423,6 +423,12 @@ namespace LiteMonitor.src.Plugins
                 {
                     AddDeclaredHost(hosts, step?.Url);
                 }
+            }
+
+            if (!string.IsNullOrWhiteSpace(instanceId))
+            {
+                foreach (string origin in DynamicHostAuthorizer.Default.GetAuthorizedOrigins(instanceId))
+                    hosts.Add(origin);
             }
 
             return hosts;
@@ -511,6 +517,33 @@ namespace LiteMonitor.src.Plugins
         /// [LM-045] 重定向跳数超过上限（上限 5 跳，与 <c>PluginMarket.MaxDownloadRedirects</c> 对齐）。
         /// </summary>
         public const string RedirectLimit = "LM009_REDIRECT_LIMIT";
+
+        /// <summary>
+        /// [S02a] "是否允许发请求"检查失败：目标不在插件声明或用户授权的目标集合内
+        /// （无论是否携带凭据）。与凭据检查分离，共享在途命中时每个调用方仍各自履责。
+        /// </summary>
+        public const string RequestTargetNotAllowed = "LM009_REQUEST_TARGET_NOT_ALLOWED";
+
+        /// <summary>
+        /// [S02a] 连接前地址预检失败：目标解析到云元数据/链路本地/未指定地址等
+        /// 永远禁止的类别（"允许内网"授权也不放行）。
+        /// </summary>
+        public const string AddressPolicyDenied = "LM009_ADDRESS_POLICY_DENIED";
+
+        /// <summary>
+        /// [S02a] 目标解析到本机/私网地址，且该插件实例没有对应的本地网络授权
+        /// （模板声明不能授权本地网络，须用户单独确认）。
+        /// </summary>
+        public const string LocalNetworkNotAllowed = "LM009_LOCAL_NETWORK_NOT_ALLOWED";
+
+        /// <summary>[S02a] 目标主机解析失败或无候选地址，请求未发出（不静默放行）。</summary>
+        public const string TargetUnresolvable = "LM009_TARGET_UNRESOLVABLE";
+
+        /// <summary>
+        /// [S02a] 插件模板指定的代理端点未经用户确认（端点字符串变化即视为新端点）。
+        /// 系统代理不适用本检查。
+        /// </summary>
+        public const string PluginProxyNotAuthorized = "LM009_PLUGIN_PROXY_NOT_AUTHORIZED";
     }
 
     /// <summary>
@@ -961,6 +994,7 @@ namespace LiteMonitor.src.Plugins
             "cookie",
             "set-cookie",
             "x-api-key",
+            "x-api-token",
             "api-key",
             "apikey",
             "x-auth-token",
@@ -1022,6 +1056,16 @@ namespace LiteMonitor.src.Plugins
 
             if (allowedHosts != null)
             {
+                // 用户授权记录以完整 origin 保存；端口/IDN/大小写必须精确匹配。
+                if (Uri.TryCreate(url.Trim(), UriKind.Absolute, out Uri? requestUri))
+                {
+                    foreach (var allowed in allowedHosts)
+                    {
+                        if (string.IsNullOrWhiteSpace(allowed)) continue;
+                        if (DynamicHostAuthorizer.MatchesAuthorizedOrigin(allowed, requestUri)) return;
+                    }
+                }
+
                 foreach (var allowed in allowedHosts)
                 {
                     if (string.IsNullOrWhiteSpace(allowed)) continue;
@@ -1043,6 +1087,47 @@ namespace LiteMonitor.src.Plugins
         public static void EnsureCredentialTargetAllowed(string url, IEnumerable<KeyValuePair<string, string>> headers, PluginTemplate tmpl)
         {
             EnsureCredentialTargetAllowed(url, headers, PluginProcessor.GetDeclaredHosts(tmpl));
+        }
+
+        /// <summary>
+        /// [S02a] "是否允许发请求"检查，与"是否允许带凭据"分离：**不带凭据**的目标
+        /// 同样必须落在插件声明或用户授权的目标集合内，未声明未授权的请求不发出。
+        /// <para>与凭据检查同构：所有生产路径在发送前调用（调用侧 + 共享在途创建处），
+        /// 保证命中在途租约的每个调用方各自履责，避免白名单跳过。</para>
+        /// </summary>
+        /// <param name="allowedHosts">声明主机 ∪ 用户授权 origin 主机；null 表示无声明上下文（既有测试/直连兜底路径），此时不做集合复核。</param>
+        public static void EnsureRequestTargetAllowed(string url, HashSet<string>? allowedHosts)
+        {
+            if (allowedHosts == null) return;
+
+            string trimmed = url?.Trim() ?? "";
+            if (trimmed.StartsWith("native://", StringComparison.OrdinalIgnoreCase))
+            {
+                // native:// 目标（含内嵌 fallback URL）仍按既有规则校验。
+                PluginHostPolicy.ValidateRequestUrl(trimmed);
+                return;
+            }
+
+            string host = PluginHostPolicy.RequireHttpHost(trimmed, PluginSandboxReasons.RequestTargetNotAllowed);
+
+            if (Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? requestUri))
+            {
+                foreach (var allowed in allowedHosts)
+                {
+                    if (string.IsNullOrWhiteSpace(allowed)) continue;
+                    if (DynamicHostAuthorizer.MatchesAuthorizedOrigin(allowed, requestUri)) return;
+                }
+            }
+
+            foreach (var allowed in allowedHosts)
+            {
+                if (string.IsNullOrWhiteSpace(allowed)) continue;
+                if (HostMatches(allowed, host)) return;
+            }
+
+            throw new PluginSandboxException(
+                PluginSandboxReasons.RequestTargetNotAllowed,
+                $"目标主机 '{host}' 不在插件声明或用户授权的目标集合内，请求未发送");
         }
 
         private static bool HostMatches(string allowed, string host)

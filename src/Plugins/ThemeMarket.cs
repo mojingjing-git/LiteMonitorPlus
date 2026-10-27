@@ -130,7 +130,10 @@ namespace LiteMonitor.src.Plugins
             }
 
             // ★ 下载原始字节并校验完整性（口径与插件一致：对响应原始字节算 SHA-256）
-            byte[] raw = await PluginMarket.DownloadBytesAsync(downloadUri, ct).ConfigureAwait(false);
+            byte[] raw = await PluginMarket.DownloadBytesAsync(
+                downloadUri, ct,
+                TimeSpan.FromMilliseconds(PluginMarket.DefaultDownloadTimeoutMs),
+                ThemeMarketValidator.MaxThemeBytes).ConfigureAwait(false);
             if (!PluginMarket.VerifySha256(raw, entry.Sha256))
                 throw new PluginMarketException(MarketErrorReason.HashMismatch, "下载内容校验失败（SHA-256 不匹配）");
 
@@ -228,100 +231,12 @@ namespace LiteMonitor.src.Plugins
         /// </summary>
         private static void ValidateThemeContent(byte[] raw, MarketThemeEntry entry)
         {
-            string content;
-            try { content = Encoding.UTF8.GetString(raw); }
-            catch (DecoderFallbackException ex)
-            {
-                throw new PluginMarketException(MarketErrorReason.BadContent, "下载到的内容不是合法 UTF-8 文本：" + ex.Message);
-            }
+            ThemeMarketValidationResult result = ThemeMarketValidator.Validate(
+                raw, entry.Route, entry.Material, entry.Size);
 
-            JsonDocument doc;
-            try { doc = JsonDocument.Parse(content); }
-            catch (JsonException ex)
-            {
-                throw new PluginMarketException(MarketErrorReason.BadContent, "下载到的不是合法 JSON：" + ex.Message);
-            }
-
-            // ② route 声明必须合法（gpu | legacy）
-            bool routeIsGpu = string.Equals(entry.Route, ThemeRenderingConfig.GpuBackend, StringComparison.OrdinalIgnoreCase);
-            bool routeIsLegacy = string.Equals(entry.Route, ThemeRenderingConfig.LegacyBackend, StringComparison.OrdinalIgnoreCase);
-
-            using (doc)
-            {
-                if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                    throw new PluginMarketException(MarketErrorReason.BadContent, "主题文件顶层必须是 JSON 对象");
-
-                // ① 远程引用契约（F7/REV1-P3-6）：主题 JSON 全文不得含 http(s)://
-                if (ContainsRemoteReference(content))
-                {
-                    throw new PluginMarketException(MarketErrorReason.ThemeContentRejected,
-                        "主题文件包含远程资源引用（http/https），违反主题包安全契约");
-                }
-
-                if (!routeIsGpu && !routeIsLegacy)
-                {
-                    throw new PluginMarketException(MarketErrorReason.ThemeContentRejected,
-                        "索引 route 非法（必须是 gpu 或 legacy）：" + entry.Route);
-                }
-
-                // ③ rendering 块存在时，backend 必须存在且与索引 route 互验；
-                //    rendering 块缺席 ⇒ 内容按 legacy 解释（与 ThemeManager.IsGpuTheme 的
-                //    容错口径一致：缺 rendering/坏 JSON 一律归类 legacy，F16），
-                //    此时索引必须声明 legacy 路线，声明 gpu 仍然拒收（下方分支处理）。
-                if (doc.RootElement.TryGetProperty("rendering", out JsonElement rendering) &&
-                    rendering.ValueKind == JsonValueKind.Object)
-                {
-                    if (!rendering.TryGetProperty("backend", out JsonElement backendEl) ||
-                        backendEl.ValueKind != JsonValueKind.String)
-                    {
-                        throw new PluginMarketException(MarketErrorReason.ThemeContentRejected,
-                            "rendering.backend 声明缺失或非法，无法与索引 route 互验");
-                    }
-
-                    string backend = backendEl.GetString() ?? "";
-                    if (!string.Equals(backend, entry.Route, StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new PluginMarketException(MarketErrorReason.ThemeContentRejected,
-                            $"rendering.backend（{backend}）与索引 route（{entry.Route}）不一致");
-                    }
-                }
-            }
-
-            // ④ 完整反序列化（口径与 ThemeManager.Load 一致），material 互验 + Validate() 全规则集
-            Theme? theme;
-            try { theme = JsonSerializer.Deserialize<Theme>(content, ThemeJsonOpts); }
-            catch (JsonException ex)
-            {
-                throw new PluginMarketException(MarketErrorReason.BadContent, "主题反序列化失败：" + ex.Message);
-            }
-
-            if (theme == null)
-                throw new PluginMarketException(MarketErrorReason.BadContent, "主题解析失败");
-
-            if (theme.Rendering == null)
-            {
-                // 缺 rendering = 纯 legacy 主题（12 个内置 legacy 主题均无此块，F16）。
-                // 索引必须声明 legacy 路线 + legacy 材质；声明 gpu/material 非法即拒收。
-                if (!routeIsLegacy || !string.Equals(entry.Material, ThemeRenderingConfig.LegacyMaterial, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new PluginMarketException(MarketErrorReason.ThemeContentRejected,
-                        "主题缺少 rendering 配置（按 legacy 解释），与索引 route/material 声明不一致");
-                }
-                return;
-            }
-
-            if (!string.Equals(theme.Rendering.Material, entry.Material, StringComparison.OrdinalIgnoreCase))
-            {
+            if (!result.IsValid)
                 throw new PluginMarketException(MarketErrorReason.ThemeContentRejected,
-                    $"rendering.material（{theme.Rendering.Material}）与索引 material（{entry.Material}）不一致");
-            }
-
-            var errors = theme.Rendering.Validate();
-            if (errors.Count > 0)
-            {
-                throw new PluginMarketException(MarketErrorReason.ThemeContentRejected,
-                    "主题渲染参数未通过校验：" + string.Join("; ", errors));
-            }
+                    $"{result.ErrorCode}: {result.Message}");
         }
     }
 }

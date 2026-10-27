@@ -5,6 +5,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LiteMonitor.Rendering.Configuration;
@@ -442,10 +444,7 @@ namespace LiteMonitor.src.Core
 
         public static Theme Current { get; private set; } = new Theme();
 
-        // ★★★ 修改：移除 _stringPool，只保留 _colorCache ★★★
-        // private static readonly Dictionary<string, string> _stringPool ... (删除)
-        private static readonly Dictionary<string, Color> _colorCache = new(32);
-        private static readonly object _lock = new object();
+        // [S04] 颜色缓存与解析迁移到 ThemeColorParser（统一校验器，成败分离缓存）。
 
         public static string ThemeDir
         {
@@ -526,17 +525,41 @@ namespace LiteMonitor.src.Core
         }
 
         /// <summary>
-        /// 加载指定主题：读取 JSON → 反序列化 → 构建字体 → 设置 Current。
+        /// 主题加载的如实结果（R3/F02）：请求身份、源文件摘要、实际主题、是否用了缺省主题。
+        /// 加载失败时 Theme 为缺省主题，Success=false，调用方不得把它当作请求主题。
         /// </summary>
-        public static Theme Load(string name)
+        public sealed record ThemeLoadResult(
+            string RequestedName,
+            string? SourcePath,
+            string? SourceHash,
+            Theme? Theme,
+            bool Success,
+            bool UsedDefault,
+            string? Error);
+
+        /// <summary>最近一次 LoadWithResult 的结果；供应用编排确认“实际加载的是谁”。</summary>
+        public static ThemeLoadResult? LastLoad { get; private set; }
+
+        /// <summary>
+        /// 只读检查主题文件，不修改 Current。供工作室在持久化前预检，
+        /// 避免坏 JSON 先落盘再静默套缺省主题。
+        /// </summary>
+        public static ThemeLoadResult Inspect(string path, string? requestedName = null)
         {
+            string name = requestedName ?? Path.GetFileNameWithoutExtension(path) ?? string.Empty;
             try
             {
-                var path = Path.Combine(ThemeDir, $"{name}.json");
                 if (!File.Exists(path))
-                    throw new FileNotFoundException("Theme json not found", path);
+                {
+                    return new ThemeLoadResult(name, path, null, null, false, true, "Theme json not found");
+                }
 
-                var json = File.ReadAllText(path);
+                byte[] bytes = File.ReadAllBytes(path);
+                string hash = Convert.ToHexString(SHA256.HashData(bytes));
+                // 摘要必须按原始字节计算，但文本解码必须识别 BOM：
+                // Encoding.UTF8.GetString 会把 UTF-8 BOM 保留为 U+FEFF，导致 JSON 解析失败；
+                // 也会破坏旧版可读取的 UTF-16 BOM 主题。File.ReadAllText 保留旧行为。
+                string json = File.ReadAllText(path);
                 var theme = JsonSerializer.Deserialize<Theme>(json, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true,
@@ -545,11 +568,11 @@ namespace LiteMonitor.src.Core
                 });
 
                 if (theme == null)
-                    throw new Exception("Theme parse failed.");
+                {
+                    return new ThemeLoadResult(name, path, hash, null, false, true, "Theme parse failed.");
+                }
 
-                // 兜底：扩展键不得与已知属性同名（否则序列化会重复写出同名键）
                 PruneExtensionDataConflicts(theme);
-
                 if (theme.Font != null)
                 {
                     theme.Font.Family = UIUtils.Intern(theme.Font.Family);
@@ -558,24 +581,41 @@ namespace LiteMonitor.src.Core
                         theme.Font.ValueFamily = UIUtils.Intern(theme.Font.ValueFamily);
                     }
                 }
-                // 构建运行期字体
                 theme.BuildFonts();
-
-                Current = theme;
-                Console.WriteLine($"[ThemeManager] Loaded theme: {theme.Name} (v{theme.Version})");
-
-                return theme;
+                return new ThemeLoadResult(name, path, hash, theme, true, false, null);
             }
             catch (Exception ex)
             {
-                // 兜底主题，保证程序可继续运行
-                Console.WriteLine($"[ThemeManager] Load error: {ex.Message}");
-                var fallback = new Theme();
-                fallback.BuildFonts();
-                Current = fallback;
-                return fallback;
+                return new ThemeLoadResult(name, path, null, null, false, true, ex.Message);
             }
         }
+
+        /// <summary>加载并发布结果；保留旧 <see cref="Load"/> 的容错行为。</summary>
+        public static ThemeLoadResult LoadWithResult(string name)
+        {
+            string path = Path.Combine(ThemeDir, $"{name}.json");
+            ThemeLoadResult inspected = Inspect(path, name);
+            if (inspected.Success && inspected.Theme != null)
+            {
+                Current = inspected.Theme;
+                LastLoad = inspected;
+                Console.WriteLine($"[ThemeManager] Loaded theme: {inspected.Theme.Name} (v{inspected.Theme.Version})");
+                return inspected;
+            }
+
+            Console.WriteLine($"[ThemeManager] Load error: {inspected.Error}");
+            var fallback = new Theme();
+            fallback.BuildFonts();
+            Current = fallback;
+            LastLoad = inspected with { Theme = fallback, UsedDefault = true };
+            return LastLoad;
+        }
+
+        /// <summary>
+        /// 加载指定主题：读取 JSON → 反序列化 → 构建字体 → 设置 Current。
+        /// 失败时返回缺省主题，保证程序可继续运行；需要知道失败原因用 <see cref="LoadWithResult"/>。
+        /// </summary>
+        public static Theme Load(string name) => LoadWithResult(name).Theme ?? new Theme();
 
         // ★★★ 修改：删除私有 Intern 方法 ★★★
         // private static string Intern(string str) ... (删除)
@@ -648,111 +688,26 @@ namespace LiteMonitor.src.Core
 
         /// <param name="colorStr">颜色字面量。★ 允许为 null —— 主题 DTO 的 Border / Shadow / TextSecondary
         /// 本身就可空，null 与空白一律回落为 <see cref="Color.Transparent"/>（下方 IsNullOrWhiteSpace 已覆盖）。</param>
+        /// <remarks>
+        /// [S04] 运行时兜底语义保持不变：任何解析失败仍回透明、不抛异常（渲染路径不因坏颜色崩溃）。
+        /// 但解析与缓存全部委托 <see cref="ThemeColorParser.TryParse"/>（成功/失败独立状态 + 失败诊断），
+        /// 工作室与主题市场用同一校验器拿到明确结论；此处只保留"失败→透明"的渲染侧回退。
+        /// </remarks>
         public static Color ParseColor(string? colorStr)
         {
-            if (string.IsNullOrWhiteSpace(colorStr))
-                return Color.Transparent;
-
-            // ★★★ 修改：使用 UIUtils 的全局池 ★★★
-            string key = UIUtils.Intern(colorStr);
-
-            lock (_lock)
+            var result = ThemeColorParser.TryParse(colorStr);
+            if (!result.Success)
             {
-                if (_colorCache.TryGetValue(key, out var cached))
-                    return cached;
-            }
-
-            Color color;
-            if (colorStr.StartsWith('#'))
-            {
-                ReadOnlySpan<char> hex = colorStr.AsSpan(1);
-                try {
-                    if (hex.Length == 6)
-                    {
-                        int r = Convert.ToInt32(hex.Slice(0, 2).ToString(), 16);
-                        int g = Convert.ToInt32(hex.Slice(2, 2).ToString(), 16);
-                        int b = Convert.ToInt32(hex.Slice(4, 2).ToString(), 16);
-                        color = Color.FromArgb(r, g, b);
-                    }
-                    else if (hex.Length == 8)
-                    {
-                        int a = Convert.ToInt32(hex.Slice(0, 2).ToString(), 16);
-                        int r = Convert.ToInt32(hex.Slice(2, 2).ToString(), 16);
-                        int g = Convert.ToInt32(hex.Slice(4, 2).ToString(), 16);
-                        int b = Convert.ToInt32(hex.Slice(6, 2).ToString(), 16);
-                        color = Color.FromArgb(a, r, g, b);
-                    }
-                    else
-                    {
-                        color = Color.Transparent;
-                    }
-                } catch { color = Color.Transparent; }
-            }
-            else if (colorStr.StartsWith("rgba(", StringComparison.OrdinalIgnoreCase)
-                     && colorStr.EndsWith(")", StringComparison.Ordinal))
-            {
-                // rgba(r,g,b,a)：r/g/b 为 0–255 整数，a 统一为 0–1（1 = 不透明）
-                color = ParseRgbaColor(colorStr);
-            }
-            else
-            {
-                color = Color.FromName(colorStr);
-            }
-
-            // 🔒 写缓存加锁
-            lock (_lock)
-            {
-                _colorCache[key] = color;
-            }
-            return color;
-        }
-
-        /// <summary>
-        /// 解析 rgba(r,g,b,a)：
-        /// - r/g/b：0–255 整数（越界拒绝）
-        /// - a：0–1（1 = 不透明；越界 / NaN / Infinity 拒绝）
-        /// - alpha×255 按 AwayFromZero 舍入
-        /// - 使用 InvariantCulture，避免受系统区域设置影响
-        /// 非法值一律回退到全透明色（与旧行为一致，不抛异常）。
-        /// </summary>
-        private static Color ParseRgbaColor(string colorStr)
-        {
-            int open = colorStr.IndexOf('(');
-            int close = colorStr.LastIndexOf(')');
-            if (open < 0 || close <= open) return Color.Transparent;
-
-            string body = colorStr.Substring(open + 1, close - open - 1);
-            string[] parts = body.Split(',');
-            if (parts.Length != 4) return Color.Transparent;
-
-            if (!int.TryParse(parts[0].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int r) ||
-                !int.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int g) ||
-                !int.TryParse(parts[2].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int b))
-            {
+                // 可定位诊断：不抛异常，渲染侧按既有约定回退透明。
+                System.Diagnostics.Debug.WriteLine("[ThemeColor] 解析失败，回退透明：" + result.Diagnostic);
                 return Color.Transparent;
             }
-            if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255)
-                return Color.Transparent;
-
-            if (!double.TryParse(parts[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double a))
-                return Color.Transparent;
-            if (double.IsNaN(a) || double.IsInfinity(a)) return Color.Transparent;
-            if (a < 0d || a > 1d) return Color.Transparent;
-
-            int alpha = (int)Math.Round(a * 255d, MidpointRounding.AwayFromZero);
-            if (alpha < 0) alpha = 0;
-            if (alpha > 255) alpha = 255;
-
-            return Color.FromArgb(alpha, r, g, b);
+            return result.Color;
         }
 
         public static void ClearCaches()
         {
-            lock (_lock) // 🔒 加锁
-            {
-                _colorCache.Clear();
-                // _stringPool.Clear(); (删除，这里不需要清理全局字符串，因为主题切换不影响硬件Key)
-            }
+            ThemeColorParser.ClearCache();
             // ★★★ 新增：清理 UIUtils 的画刷缓存 (配合主题切换) ★★★
             UIUtils.ClearBrushCache();
         }

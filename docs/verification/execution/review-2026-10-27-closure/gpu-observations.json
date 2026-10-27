@@ -1,0 +1,44 @@
+{
+  "observations": [
+    {
+      "i": 0,
+      "updated": true,
+      "IsActive": true,
+      "Error": null,
+      "PresentedFrameCount": 13,
+      "DeviceCreationCount": 1,
+      "SessionUpdateCount": 1,
+      "CurrentGeneration": 2,
+      "DeviceDpi": 168
+    },
+    {
+      "i": 1,
+      "updated": true,
+      "IsActive": true,
+      "Error": null,
+      "PresentedFrameCount": 17,
+      "DeviceCreationCount": 1,
+      "SessionUpdateCount": 2,
+      "CurrentGeneration": 3,
+      "DeviceDpi": 168
+    },
+    {
+      "i": 2,
+      "updated": true,
+      "IsActive": true,
+      "Error": null,
+      "PresentedFrameCount": 22,
+      "DeviceCreationCount": 1,
+      "SessionUpdateCount": 3,
+      "CurrentGeneration": 4,
+      "DeviceDpi": 168
+    }
+  ],
+  "before": 22,
+  "minimized": 22,
+  "restored": 27,
+  "restoredActive": true,
+  "restoredError": null,
+  "deviceCreations": 1,
+  "finalGeneration": 4
+}

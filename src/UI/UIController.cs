@@ -1,6 +1,9 @@
 using LiteMonitor.src.Core;
+using LiteMonitor.src.Core.Alerts;
+using LiteMonitor.Diagnostics;
 using LiteMonitor.src.SystemServices.InfoService;
 using LiteMonitor.src.SystemServices;
+using LiteMonitor.src.Core.Trends;
 using LiteMonitor.SystemServices; // B1：HardwareClientAdapter（目标命名空间方案）
 using LiteMonitor.src.UI.Helpers;
 using LiteMonitor.src.WebServer;
@@ -23,7 +26,14 @@ namespace LiteMonitor
         private readonly Form _form;
         private readonly HardwareMonitor _mon;
         private readonly LiteMonitor.Contracts.IHardwareClient _hwClient;
+        private readonly ShortTermTrendBuffer _trendBuffer = new();
         private readonly System.Windows.Forms.Timer _timer;
+
+        /// <summary>D01：诊断只读采集事实源；不触发采样。</summary>
+        public LiteMonitor.Contracts.IHardwareClient HardwareClient => _hwClient;
+        public HardwareSamplingStatistics HardwareSamplingStatistics => _mon.SamplingStatistics;
+        /// <summary>T01/T02：只读秒级趋势缓冲；UI Tick 消费已发布快照，不触发采样。</summary>
+        public ShortTermTrendBuffer TrendBuffer => _trendBuffer;
 
         private UILayout _layout;
         private bool _layoutDirty = true;
@@ -40,7 +50,7 @@ namespace LiteMonitor
         //   主题代次由 ApplyTheme 推进 ⇒ 换肤 / 重缩放后旧度量立即失效，
         //   绝不会拿"上一代主题"的行高去裁切新主题的文字。
         private readonly FontMetricsCache _fontMetrics = new FontMetricsCache();
-        private Dictionary<string, DateTime> _overheatStartTimes = new Dictionary<string, DateTime>();
+        private readonly AlertRuntime _alertRuntime = new();
 
         // ===== 外观运行时（A13 接线）=====
         // 唯一的外观宿主：背景层 / 装饰层 / 进度条层都从这里取，
@@ -1079,6 +1089,16 @@ namespace LiteMonitor
                 //   此时不能再触碰界面对象，也不能触发重建。
                 if (_disposed || _form.IsDisposed) return;
 
+                // T01/T02：只消费已发布快照，不触发采样；趋势缓冲失败不得影响 UI。
+                try
+                {
+                    _trendBuffer.Ingest(_hwClient.GetLatestSnapshot(), DateTimeOffset.UtcNow);
+                }
+                catch
+                {
+                    // 诊断/趋势是旁路，不能让采集或绘制停摆。
+                }
+
                 // ★★★ [多显卡] 实际显卡数少于配置数时 (例如拔掉了第二张卡),
                 // 夹紧配置并重建监控项, 否则会留下一组永远没有数据的空白指标。 ★★★
                 int actualGpuCount = _mon.GetMonitoredGpuCount();
@@ -1157,7 +1177,7 @@ namespace LiteMonitor
 
                 HardwareHistoryLogger.RecordSnapshot(_cfg, key => _mon.Get(key));
  
-                CheckTemperatureAlert();
+                CheckRuleAlerts();
 
                 // 驱动 DashboardService 更新
                 InfoService.Instance.Update();
@@ -2141,71 +2161,90 @@ namespace LiteMonitor
             if (val.HasValue) item.DisplayValue = val.Value;
         }
         
-        private void CheckTemperatureAlert()
+        private void CheckRuleAlerts()
         {
-            if (!_cfg.AlertTempEnabled) 
+            if (_cfg.AlertRules == null || _cfg.AlertRules.Count == 0) return;
+
+            IReadOnlyList<AlertTransition> transitions;
+            try
             {
-                _overheatStartTimes.Clear();
+                // R07：告警只消费已发布快照的真实批次/源采样身份；
+                // 重复 UI Tick 读取同一快照时 Evaluator 会按 BatchId 丢弃。
+                LiteMonitor.Contracts.HardwareSnapshot snapshot = _hwClient.GetLatestSnapshot();
+                transitions = _alertRuntime.Evaluate(_cfg.AlertRules, snapshot, DateTimeOffset.Now);
+            }
+            catch
+            {
+                // 告警不能反过来影响 UI 刷新或采样。
                 return;
             }
 
-            if ((DateTime.Now - _cfg.LastAlertTime).TotalMinutes < 3) return;
+            if (transitions.Count == 0) return;
 
-            int globalThreshold = _cfg.AlertTempThreshold; 
-            int diskThreshold = Math.Min(globalThreshold - 20, 60); 
-
-            List<string> alertLines = new List<string>();
-            string alertTitle = LanguageManager.T("Menu.AlertTemp"); 
-
-            void Check(string key, float? val, int threshold, string label, string msgSuffix = "")
+            var alertLines = new List<string>();
+            foreach (AlertTransition transition in transitions)
             {
-                if (val.HasValue && val.Value >= threshold)
+                AlertRule? rule = _cfg.AlertRules.FirstOrDefault(r => r.RuleId == transition.RuleId);
+                string ruleName = rule?.Name ?? transition.RuleId;
+
+                DiagnosticSeverity severity = transition.Kind switch
                 {
-                    if (!_overheatStartTimes.ContainsKey(key))
-                        _overheatStartTimes[key] = DateTime.Now;
-                    
-                    if ((DateTime.Now - _overheatStartTimes[key]).TotalSeconds >= 5)
-                    {
-                        alertLines.Add($"{label} {alertTitle}: {val:F0}°C{msgSuffix}");
-                    }
+                    AlertEventKind.Triggered => DiagnosticSeverity.Warning,
+                    AlertEventKind.InputUnavailable => DiagnosticSeverity.Warning,
+                    AlertEventKind.Reminder => DiagnosticSeverity.Warning,
+                    AlertEventKind.Recovered => DiagnosticSeverity.Info,
+                    _ => DiagnosticSeverity.Info
+                };
+
+                try
+                {
+                    DiagnosticHub.Current.Record(
+                        "alerts",
+                        severity,
+                        $"alert_{transition.Kind.ToString().ToLowerInvariant()}",
+                        context: new Dictionary<string, string>
+                        {
+                            ["ruleId"] = transition.RuleId,
+                            ["deviceId"] = transition.DeviceId,
+                            ["state"] = transition.State.ToString(),
+                            ["notification"] = transition.Notification.ToString(),
+                            ["reason"] = transition.ReasonCode,
+                            ["incidentId"] = transition.IncidentId ?? ""
+                        },
+                        utcTime: transition.ObservedAt);
                 }
-                else
+                catch
                 {
-                    if (_overheatStartTimes.ContainsKey(key))
-                        _overheatStartTimes.Remove(key);
+                    // 诊断出口失败不应阻塞告警/通知。
+                }
+
+                if (!transition.ShouldNotify || _cfg.AlertMuteAll) continue;
+
+                if (transition.Kind == AlertEventKind.Triggered)
+                {
+                    double? value = rule == null ? null : _mon.Get(rule.MetricKey);
+                    string reading = value.HasValue ? $" {value.Value:F0}" : "";
+                    alertLines.Add($"{ruleName}:{reading}（阈值 {rule?.TriggerThreshold:F0}）");
+                }
+                else if (transition.Kind == AlertEventKind.Recovered)
+                {
+                    alertLines.Add($"{ruleName}: 已恢复");
                 }
             }
 
-            Check("CPU.Temp", _mon.Get("CPU.Temp"), globalThreshold, LanguageManager.T("Short.CPU.Temp"));
+            if (alertLines.Count == 0) return;
 
-            // ★★★ [多显卡] 逐张显卡检查超温 ★★★
-            //   ⚠️ 不能只查 "GPU.Temp": 迁移后 MonitorItems 里不再有它,
-            //   而 SensorMap 只为 0 号卡写了这个旧格式 Key —— 那样等于**只告警第 0 张卡**,
-            //   多卡用户最关心的"哪张卡过热"会完全失效。
-            for (int gpuIdx = 0; gpuIdx < _cfg.MonitoredGpuCount; gpuIdx++)
+            try
             {
-                string gpuTempKey = GpuKey.Build(gpuIdx, "Temp");
-                string gpuShort = GpuRegistry.GetShortName(gpuIdx);
-                string gpuAlertLabel = string.IsNullOrEmpty(gpuShort)
-                    ? LanguageManager.T("Short.GPU.Temp")
-                    : $"{gpuShort} {LanguageManager.T("Short.GPU.Temp")}";
-                Check(gpuTempKey, _mon.Get(gpuTempKey), globalThreshold, gpuAlertLabel);
-            }
-
-            Check("MOBO.Temp", _mon.Get("MOBO.Temp"), globalThreshold, LanguageManager.T("Short.MOBO.Temp"));
-            Check("DISK.Temp", _mon.Get("DISK.Temp"), diskThreshold, LanguageManager.T("Short.DISK.Temp"), $" (>{diskThreshold}°C)");
-
-            if (alertLines.Count > 0)
-            {
-                string thresholdText = (alertLines.Count == 1 && alertLines[0].StartsWith("DISK")) 
-                    ? $"(>{diskThreshold}°C)" 
-                    : $"(>{globalThreshold}°C)";
-
-                alertTitle += $" {thresholdText}";
-                string bodyText = string.Join("\n", alertLines);
-                
-                ((MainForm)_form).ShowNotification(alertTitle, bodyText, ToolTipIcon.Warning);
+                ((MainForm)_form).ShowNotification(
+                    LanguageManager.T("Menu.AlertTemp"),
+                    string.Join("\n", alertLines),
+                    ToolTipIcon.Warning);
                 _cfg.LastAlertTime = DateTime.Now;
+            }
+            catch
+            {
+                // 托盘未初始化时仍然保留诊断事件与状态机。
             }
         }
         public void Dispose()

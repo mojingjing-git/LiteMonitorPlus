@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using LiteMonitor.Contracts;
+using LiteMonitor.src.Core.Trends;
 
 namespace LiteMonitor.src.Core
 {
@@ -53,6 +55,8 @@ namespace LiteMonitor.src.Core
         private static DateTime _lastSaveTime = DateTime.MinValue;
         private static readonly Dictionary<string, Accumulator> _currentBucket = new Dictionary<string, Accumulator>(StringComparer.OrdinalIgnoreCase);
         private static bool _saveRunning;
+        private static readonly TrendHistoryV2Store _v2Store = new TrendHistoryV2Store();
+        private static bool _v2Initialized;
 
         public static HardwareHistoryData Data { get; private set; } = new HardwareHistoryData();
 
@@ -62,7 +66,24 @@ namespace LiteMonitor.src.Core
         {
             lock (_ioLock)
             {
-                var loaded = TryLoadFile(_filePath) ?? TryLoadFile(_backupPath) ?? new HardwareHistoryData();
+                var legacy = TryLoadFile(_filePath) ?? TryLoadFile(_backupPath) ?? new HardwareHistoryData();
+                try
+                {
+                    if (!_v2Initialized)
+                    {
+                        _v2Initialized = true;
+                        if (_v2Store.Manifest.LastImportedTimestampUtc is null)
+                        {
+                            _v2Store.ImportV1(_filePath);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[HardwareHistoryLogger] v1 历史导入失败: {ex.Message}");
+                }
+
+                HardwareHistoryData loaded = TryLoadV2Data() ?? legacy;
                 loaded.Points ??= new List<HardwareHistoryPoint>();
                 foreach (var point in loaded.Points)
                 {
@@ -73,6 +94,45 @@ namespace LiteMonitor.src.Core
                     Data = loaded;
                     TrimUnsafe(DateTime.Now);
                 }
+            }
+        }
+
+        private static HardwareHistoryData? TryLoadV2Data()
+        {
+            try
+            {
+                TrendHistoryReadResult read = _v2Store.ReadSince(DateTimeOffset.Now.AddDays(-7));
+                if (read.Points.Count == 0) return null;
+
+                var data = new HardwareHistoryData();
+                foreach (var minute in read.Points.GroupBy(
+                    p => p.TimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")))
+                {
+                    var point = new HardwareHistoryPoint
+                    {
+                        Time = DateTime.ParseExact(minute.Key, "yyyy-MM-dd HH:mm",
+                            System.Globalization.CultureInfo.InvariantCulture)
+                    };
+                    foreach (TrendHistoryPointRecord record in minute)
+                    {
+                        point.Values[record.MetricKey] = new HardwareHistoryValue
+                        {
+                            Avg = record.Value,
+                            // R04：v2 必须保留分钟聚合的峰值/最低/样本数；
+                            // 旧点没有这些字段时才退回单值语义。
+                            Max = record.Max ?? record.Value,
+                            Min = record.Min ?? record.Value,
+                            Count = record.Count > 0 ? record.Count : 1
+                        };
+                    }
+                    if (point.Values.Count > 0) data.Points.Add(point);
+                }
+                return data.Points.Count > 0 ? data : null;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[HardwareHistoryLogger] v2 历史读取失败: {ex.Message}");
+                return null;
             }
         }
 
@@ -155,19 +215,12 @@ namespace LiteMonitor.src.Core
 
         private static void SaveCore(bool flushPending)
         {
-            HardwareHistoryData snapshot;
-            lock (_dataLock)
+            if (flushPending)
             {
-                if (flushPending)
+                lock (_dataLock)
                 {
                     FlushCurrentBucketUnsafe();
-                }
-                TrimUnsafe(DateTime.Now);
-                snapshot = CloneDataUnsafe();
-                if (!flushPending)
-                {
-                    var pending = BuildCurrentPointUnsafe();
-                    if (pending != null) snapshot.Points.Add(pending);
+                    TrimUnsafe(DateTime.Now);
                 }
             }
 
@@ -175,13 +228,12 @@ namespace LiteMonitor.src.Core
             {
                 try
                 {
-                    string json = JsonSerializer.Serialize(snapshot);
-                    AtomicWrite(json);
+                    // T03：v2 JSONL 是唯一写入路径；旧 HardwareHistory.json 只读导入，不再双写。
+                    _v2Store.TrimToNow();
                 }
                 catch (Exception ex)
                 {
                     Debug.WriteLine($"[HardwareHistoryLogger] 保存硬件趋势失败: {ex.Message}");
-                    CleanupTempFile();
                 }
             }
         }
@@ -248,8 +300,25 @@ namespace LiteMonitor.src.Core
             if (point == null) return;
 
             Data.Points.Add(point);
+            AppendPointToV2(point);
             _currentBucket.Clear();
             TrimUnsafe(DateTime.Now);
+        }
+
+        private static void AppendPointToV2(HardwareHistoryPoint point)
+        {
+            try
+            {
+                var time = new DateTimeOffset(DateTime.SpecifyKind(point.Time, DateTimeKind.Local));
+                _v2Store.Append(point.Values.Select(kv =>
+                    new TrendHistoryPointRecord(
+                        time, kv.Key, null, kv.Value.Avg, SampleQuality.Good, 0,
+                        kv.Value.Max, kv.Value.Min, kv.Value.Count)));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[HardwareHistoryLogger] v2 历史写入失败: {ex.Message}");
+            }
         }
 
         private static HardwareHistoryPoint? BuildCurrentPointUnsafe()

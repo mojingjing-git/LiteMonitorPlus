@@ -599,6 +599,11 @@ namespace LiteMonitor.ThemeEditor
                     ForeColor = textColor // 根据背景亮度设置文字颜色
                 };
 
+                // [S04] 八位 hex 的 alpha 位置提示（#AARRGGBB，alpha 在最前两位）
+                var colorTip = new ToolTip();
+                colorTip.SetToolTip(btn,
+                    "支持 / Supported: #RRGGBB、#AARRGGBB（八位时 alpha 在最前两位 / alpha is the first two digits）、rgba(r,g,b,a)、命名色 / color name");
+
                 // alpha（透明度）编辑：0–1，写回格式 rgba(r,g,b,a)
                 var alphaEditor = new AppearanceAlphaEditor
                 {
@@ -736,6 +741,21 @@ namespace LiteMonitor.ThemeEditor
         private void SaveCurrentTheme()
         {
             if (_theme == null) return;
+
+            // [S04] 保存前统一颜色校验（与运行时/主题市场同一校验器）：
+            // 非法颜色阻止保存与应用，指向具体字段与原因，修正前不允许落盘。
+            var colorFailures = ThemeColorParser.ValidateTheme(_theme);
+            if (colorFailures.Count > 0)
+            {
+                MessageBox.Show(
+                    "以下颜色字段无法解析，请修正后再保存 / The following color fields cannot be parsed, please fix them before saving:\n\n" +
+                    string.Join("\n", colorFailures) +
+                    "\n\n支持格式 / Supported: #RRGGBB、#AARRGGBB（alpha 在最前两位）、rgba(r,g,b,a)、已知命名色 / known color names",
+                    "颜色无效 / Invalid Colors",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
 
             try
             {

@@ -97,9 +97,9 @@ namespace LiteMonitor.Tests
             ThemeDocumentSession standard = Open("玻璃", LiquidStandard);
             string[] standardPaths = Paths(standard.Draft, ThemeEditTarget.GpuMain);
             Assert.DoesNotContain(standardPaths, p => p.StartsWith("font.", StringComparison.Ordinal));
-            // 布局/阈值仍共享
+            // 布局仍共享；[S05] 阈值已移出目录（状态阈值来自生效设置）
             Assert.Contains("layout.rowHeight", standardPaths);
-            Assert.Contains("thresholds.load.warn", standardPaths);
+            Assert.DoesNotContain("thresholds.load.warn", standardPaths);
 
             ThemeDocumentSession toolbar = Open("浮动", LiquidToolbar);
             string[] toolbarPaths = Paths(toolbar.Draft, ThemeEditTarget.GpuMain);
@@ -126,8 +126,7 @@ namespace LiteMonitor.Tests
 
             Assert.All(
                 props.Where(p => p.JsonPath.StartsWith("font.", StringComparison.Ordinal) ||
-                                 p.JsonPath.StartsWith("layout.", StringComparison.Ordinal) ||
-                                 p.JsonPath.StartsWith("thresholds.", StringComparison.Ordinal)),
+                                 p.JsonPath.StartsWith("layout.", StringComparison.Ordinal)),
                 p => Assert.True(p.Scope.HasFlag(ThemePropertyScope.Shared), p.JsonPath));
         }
 

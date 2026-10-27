@@ -159,6 +159,7 @@ namespace LiteMonitor.ThemeEditor
 
             AppearanceThemeConfig.RestoreConfig(Draft, AppearanceThemeConfig.CloneConfig(txn.BeforeSnapshot));
             ApplyOverlayChanges(txn.Changes, useAfter: false);
+            NormalizeThresholdsToSource();
             Revision++;
             return true;
         }
@@ -171,8 +172,59 @@ namespace LiteMonitor.ThemeEditor
 
             AppearanceThemeConfig.RestoreConfig(Draft, AppearanceThemeConfig.CloneConfig(txn.AfterSnapshot));
             ApplyOverlayChanges(txn.Changes, useAfter: true);
+            NormalizeThresholdsToSource();
             Revision++;
             return true;
+        }
+
+        // ------------------------------------------------------------
+        // [S05] 阈值覆盖清理（状态阈值来自生效设置；主题只负责颜色）
+        // ------------------------------------------------------------
+
+        /// <summary>路径是否指向 thresholds 块（根段大小写不敏感；含子树/叶字段/删除标记）。</summary>
+        private static bool IsThresholdsPath(string jsonPath)
+        {
+            int dot = jsonPath.IndexOf('.');
+            string root = dot < 0 ? jsonPath : jsonPath[..dot];
+            return root.Equals("thresholds", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 草稿 thresholds 恢复为源文档值：源文件已有阈值原样生效；
+        /// 源文档没有 thresholds 块时保持模型缺省实例（不合成）。
+        /// 撤销／重做的配置快照里可能烘着清理前的旧阈值，恢复后必须重申。
+        /// </summary>
+        private void NormalizeThresholdsToSource()
+        {
+            try
+            {
+                Draft.Thresholds = ParseDraft(_sourceBytes).Thresholds;
+            }
+            catch
+            {
+                // 源字节异常时保持草稿现状（后续保存链有自己的解析校验）。
+            }
+        }
+
+        /// <summary>
+        /// [S05] 会话级清理：移除大小写等价 thresholds 的全部未提交覆盖
+        /// （子树/叶字段/删除标记），草稿恢复源文档值，并从撤销/重做历史中
+        /// 移除触碰过这些路径的事务（防止快照复活）。**不改源文件已存阈值**。
+        /// 返回移除的覆盖条数（0 = 无需清理）。
+        /// </summary>
+        internal int RemoveStaleThresholdOverrides()
+        {
+            List<string> stale = _overlay.Keys.Where(IsThresholdsPath).ToList();
+            if (stale.Count == 0) return 0;
+
+            foreach (string path in stale)
+            {
+                _overlay.Remove(path);
+            }
+
+            _history.RemoveTransactionsTouching(IsThresholdsPath);
+            NormalizeThresholdsToSource();
+            return stale.Count;
         }
 
         private void ApplyOverlayChanges(IReadOnlyList<ThemeOverlayChange> changes, bool useAfter)
@@ -261,6 +313,9 @@ namespace LiteMonitor.ThemeEditor
         /// <summary>构造最终保存载荷：无覆盖时与源字节一致；有覆盖时补丁写回。</summary>
         internal (byte[] Payload, IReadOnlyList<string> Diagnostics) BuildPayload()
         {
+            // [S05] 保存/另存/导出载荷构建前复用清理入口：thresholds 覆盖不落盘。
+            RemoveStaleThresholdOverrides();
+
             if (_overlay.Count == 0)
             {
                 return (_sourceBytes, Array.Empty<string>());
@@ -496,6 +551,9 @@ namespace LiteMonitor.ThemeEditor
 
                 AppearanceThemeConfig.RestoreConfig(session.Draft, snapshot.DraftConfig);
                 session.Draft.BuildFonts();
+                // [S05] 恢复快照里可能带着清理前的 thresholds 覆盖，重建后复用清理入口；
+                // 冲突副本分支不做清理（草稿成为新源，阈值已烘进源字节——不猜原值，保留并标注）。
+                session.RemoveStaleThresholdOverrides();
                 return (session, ConflictCopied: false);
             }
 

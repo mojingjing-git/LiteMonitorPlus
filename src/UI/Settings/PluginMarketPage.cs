@@ -746,6 +746,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             public LiteHeaderBtn ActionButton = null!;
             public Label Badge = null!;
             public LiteHeaderBtn? PreviewButton;
+            public LiteHeaderBtn? ApplyButton;
             public PictureBox? Snapshot;
             public MarketInstallState State = MarketInstallState.NotInstalled;
             public string ContentKey = string.Empty;
@@ -894,6 +895,14 @@ namespace LiteMonitor.src.UI.SettingsPage
             row.PreviewButton = btnPreview;
             _controlsCreated += 1;
 
+            // TM05：已安装主题可直接应用；不要求用户先关闭设置再走主界面。
+            var btnApply = new LiteHeaderBtn(LanguageManager.T("Menu.Apply"));
+            btnApply.Visible = state == MarketInstallState.Installed;
+            btnApply.Click += async (s, e) => await ApplyThemeAsync(entry);
+            group.AddHeaderAction(btnApply);
+            row.ApplyButton = btnApply;
+            _controlsCreated += 1;
+
             var btn = new LiteHeaderBtn(ActionText(state));
             btn.SetColor(ActionColor(state));
             btn.Click += async (s, e) =>
@@ -998,6 +1007,9 @@ namespace LiteMonitor.src.UI.SettingsPage
                 row.ActionButton.Text = ActionText(state);
                 row.ActionButton.SetColor(ActionColor(state));
             }
+
+            if (row.ApplyButton != null && !row.ApplyButton.IsDisposed)
+                row.ApplyButton.Visible = state == MarketInstallState.Installed;
 
             if (row.Badge != null && !row.Badge.IsDisposed)
             {
@@ -1132,6 +1144,18 @@ namespace LiteMonitor.src.UI.SettingsPage
         // ================================================================
         // 主题市场（M4/D5）
         // ================================================================
+
+        /// <summary>
+        /// 导航入口在进入页面前声明类别；实际刷新由随后的 OnShow 完成。
+        /// 与页内 SwitchCategory 分开，避免在页面尚未挂到容器时触碰控件。
+        /// </summary>
+        internal void RequestCategory(MarketCategory category)
+        {
+            if (_category == category) return;
+
+            _category = category;
+            _selectedThemeId = null;
+        }
 
         /// <summary>测试接缝：切到指定页签（等价于点击分类按钮）。</summary>
         internal void SwitchCategory(MarketCategory category)
@@ -1366,6 +1390,63 @@ namespace LiteMonitor.src.UI.SettingsPage
             if (changed) _contentGeneration++;
         }
 
+        /// <summary>
+        /// TM05：直接把已安装主题应用到运行时。使用 Live Settings 的副本，只改 Skin，
+        /// 不把设置页中其他未保存的草稿一并提交；应用成功后只持久化 Skin。
+        /// </summary>
+        private async Task ApplyThemeAsync(MarketThemeEntry entry)
+        {
+            if (_busy) return;
+            _busy = true;
+            _statusText = LanguageManager.T("Menu.PluginMarketInstalling") + PluginI18n.Pick(entry.Name, entry.NameEn) + " ...";
+            _statusIsError = false;
+            SyncUi();
+
+            try
+            {
+                var live = Settings.Load();
+                var applyCfg = live.DeepClone();
+                applyCfg.Skin = entry.Id;
+
+                var result = LiteMonitor.src.Core.Actions.AppActions.ApplyThemeAndLayoutWithResult(applyCfg, UI, MainForm);
+                var runtime = result.Modules.FirstOrDefault(m => string.Equals(m.Module, "ThemeRuntime", StringComparison.Ordinal));
+                if (runtime == null || !runtime.Applied)
+                {
+                    _statusText = LanguageManager.T("Menu.ThemeMarketApplyFailed") + " " +
+                                  (runtime?.FailureReason ?? result.FailureCode ?? "");
+                    _statusIsError = true;
+                    return;
+                }
+
+                live.Skin = entry.Id;
+                bool saved = live.TrySave();
+                Config.Skin = entry.Id;
+
+                if (result.OverallStatus == LiteMonitor.Core.Actions.Services.ApplyOperationStatus.Applied && saved)
+                {
+                    _statusText = LanguageManager.T("Menu.ThemeMarketApplied") + PluginI18n.Pick(entry.Name, entry.NameEn);
+                    _statusIsError = false;
+                }
+                else
+                {
+                    _statusText = LanguageManager.T("Menu.ThemeMarketApplyPartial") + PluginI18n.Pick(entry.Name, entry.NameEn);
+                    _statusIsError = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _statusText = LanguageManager.T("Menu.ThemeMarketApplyFailed") + " " + DescribeError(ex);
+                _statusIsError = true;
+            }
+            finally
+            {
+                _busy = false;
+                SyncUi();
+            }
+
+            await Task.CompletedTask;
+        }
+
         private async Task InstallThemeAsync(MarketThemeEntry entry)
         {
             if (_busy) return;
@@ -1409,8 +1490,13 @@ namespace LiteMonitor.src.UI.SettingsPage
                 var switchToDefault = new Action(() =>
                 {
                     cfg.Skin = "DarkFlat_Classic";   // Settings.Skin 的出厂默认（Settings.cs）
-                    cfg.Save();
-                    LiteMonitor.src.Core.Actions.AppActions.ApplyThemeAndLayout(cfg, UI, MainForm);
+                    var result = LiteMonitor.src.Core.Actions.AppActions.ApplyThemeAndLayoutWithResult(cfg, UI, MainForm);
+                    var runtime = result.Modules.FirstOrDefault(m => string.Equals(m.Module, "ThemeRuntime", StringComparison.Ordinal));
+                    if (runtime == null || !runtime.Applied)
+                        throw new InvalidOperationException(runtime?.FailureReason ?? result.FailureCode ?? "theme runtime not applied");
+                    if (!cfg.TrySave())
+                        throw new InvalidOperationException("settings save failed");
+                    Config.Skin = "DarkFlat_Classic";
                 });
 
                 if (!ThemeMarket.TryUninstall(entry, switchToDefault, out var reason))

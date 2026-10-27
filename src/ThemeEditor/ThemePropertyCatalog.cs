@@ -164,15 +164,8 @@ namespace LiteMonitor.ThemeEditor
             Choice("进度条样式", "layout.barStyle", t => t.Layout.BarStyle, (t, v) => t.Layout.BarStyle = (int)D(v),
                 ["0", "1", "2"]),
 
-            // ---------- 阈值 ----------
-            Num("负载警告", "thresholds.load.warn", t => t.Thresholds.Load.Warn, (t, v) => t.Thresholds.Load.Warn = D(v), 0, 100),
-            Num("负载危险", "thresholds.load.crit", t => t.Thresholds.Load.Crit, (t, v) => t.Thresholds.Load.Crit = D(v), 0, 100),
-            Num("温度警告", "thresholds.temp.warn", t => t.Thresholds.Temp.Warn, (t, v) => t.Thresholds.Temp.Warn = D(v), 0, 150),
-            Num("温度危险", "thresholds.temp.crit", t => t.Thresholds.Temp.Crit, (t, v) => t.Thresholds.Temp.Crit = D(v), 0, 150),
-            Num("显存警告", "thresholds.vram.warn", t => t.Thresholds.Vram.Warn, (t, v) => t.Thresholds.Vram.Warn = D(v), 0, 100),
-            Num("显存危险", "thresholds.vram.crit", t => t.Thresholds.Vram.Crit, (t, v) => t.Thresholds.Vram.Crit = D(v), 0, 100),
-            Num("内存警告", "thresholds.mem.warn", t => t.Thresholds.Mem.Warn, (t, v) => t.Thresholds.Mem.Warn = D(v), 0, 100),
-            Num("内存危险", "thresholds.mem.crit", t => t.Thresholds.Mem.Crit, (t, v) => t.Thresholds.Mem.Crit = D(v), 0, 100),
+            // [S05] 阈值不再作为可编辑主题属性暴露：状态阈值来自当前生效设置（MetricUtils.GetThresholds），
+            // 主题只负责颜色。旧主题 JSON 里的 thresholds 块仍按原样读写保留（会话清理见 ThemeDocumentSession）。
         };
 
         private static ThemePropertyDescriptor Color(

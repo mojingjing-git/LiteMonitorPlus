@@ -24,6 +24,13 @@ namespace LiteMonitor.src.Plugins
         [JsonPropertyName("outputs")]
         public List<PluginOutput> Outputs { get; set; } = new();
 
+        /// <summary>
+        /// 目标主机由用户输入（如 <c>https://{{host}}/api</c>）且需要凭据时，模板必须显式声明。
+        /// 运行时仍要求用户对具体 origin 授权；该标志只表示模板设计允许动态主机。
+        /// </summary>
+        [JsonPropertyName("dynamic_host")]
+        public bool DynamicHost { get; set; }
+
         [JsonPropertyName("display")]
         public PluginDisplay Display { get; set; } = new();
     }

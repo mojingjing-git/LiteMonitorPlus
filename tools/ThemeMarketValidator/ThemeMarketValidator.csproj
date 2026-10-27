@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>ThemeMarketValidator</AssemblyName>
+    <RootNamespace>ThemeMarketValidator</RootNamespace>
+    <DefineConstants>THEME_MARKET_CLI</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 与客户端共用同一份源码；禁止在仓库脚本里复制校验规则。 -->
+    <Compile Include="..\..\src\Plugins\ThemeMarketValidator.cs" Link="Shared\ThemeMarketValidator.cs" />
+    <Compile Include="..\..\src\Rendering\Configuration\ThemeRenderingConfig.cs" Link="Shared\ThemeRenderingConfig.cs" />
+  </ItemGroup>
+
+</Project>

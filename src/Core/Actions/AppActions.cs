@@ -9,6 +9,8 @@ using LiteMonitor.src.WebServer; // ★★★ 引用 WebServer 命名空间 ★�
 using LiteMonitor.src.Plugins;
 using System.Linq;
 using System.Collections.Generic;
+using LiteMonitor.Core.Actions.Services;
+using LiteMonitor.Diagnostics;
 
 namespace LiteMonitor.src.Core.Actions
 {
@@ -75,21 +77,98 @@ namespace LiteMonitor.src.Core.Actions
             var (plan, _) = ResolveSaveApplyPlan(before, cfg);
             if (!plan.Any) return "no-change";
 
+            _ = ApplySettingsSelectivelyWithResults(before, cfg, mainForm, ui, applyAutoStart);
+            return (plan.UiGroup ? "ui" : "") + (plan.WebServer ? "+web" : "") + (plan.Plugins ? "+plugins" : "");
+        }
+
+        /// <summary>
+        /// INF-06：与 <see cref="ApplySettingsSelectively"/> 同序执行，但把每个受影响模块的
+        /// 实际结果返回给调用方。组级失败（UI 重建组任一环节异常）按组标记失败，绝不把
+        /// 未执行的模块报成成功；设置已落盘的事实由 SavedState 表达。
+        /// </summary>
+        public static IReadOnlyList<LiteMonitor.Core.Actions.Services.ModuleApplyResult> ApplySettingsSelectivelyWithResults(
+            Settings before, Settings cfg, MainForm mainForm, UIController ui, bool applyAutoStart)
+        {
+            var (plan, diffs) = ResolveSaveApplyPlan(before, cfg);
+            var results = new List<LiteMonitor.Core.Actions.Services.ModuleApplyResult>();
+            if (!plan.Any) return results;
+
             if (plan.UiGroup)
             {
-                bool wasHorizontal = ui.IsLayoutHorizontal;
-                ApplyLanguage(cfg, null, mainForm);
-                if (applyAutoStart) ApplyAutoStart(cfg);
-                ApplyWindowAttributes(cfg, mainForm);
-                ApplyThemeAndLayout(cfg, ui, mainForm, wasHorizontal);
-                ApplyMonitorLayout(cfg, ui, mainForm);
-                ApplyTaskbarStyle(cfg, ui);
-                ApplyVisibility(cfg, mainForm);
+                string[] uiModules = diffs
+                    .Where(d => d.Module != LiteMonitor.Core.Actions.Services.SettingsModule.WebServer
+                             && d.Module != LiteMonitor.Core.Actions.Services.SettingsModule.Plugins)
+                    .Select(d => d.Module.ToString())
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                try
+                {
+                    bool wasHorizontal = ui.IsLayoutHorizontal;
+                    ApplyLanguage(cfg, null, mainForm);
+                    if (applyAutoStart) ApplyAutoStart(cfg);
+                    ApplyWindowAttributes(cfg, mainForm);
+                    ApplyThemeAndLayout(cfg, ui, mainForm, wasHorizontal);
+                    ApplyMonitorLayout(cfg, ui, mainForm);
+                    ApplyTaskbarStyle(cfg, ui);
+                    ApplyVisibility(cfg, mainForm);
+                    foreach (string module in uiModules)
+                        results.Add(LiteMonitor.Core.Actions.Services.ModuleApplyResult.Ok(module, "applied", "ui-group"));
+                }
+                catch (Exception ex)
+                {
+                    foreach (string module in uiModules)
+                        results.Add(LiteMonitor.Core.Actions.Services.ModuleApplyResult.Fail(module, "applied", null, ex.Message));
+                }
             }
-            if (plan.WebServer) ApplyWebServer(cfg);
-            if (plan.Plugins) PluginManager.Instance.Reload(cfg);
 
-            return (plan.UiGroup ? "ui" : "") + (plan.WebServer ? "+web" : "") + (plan.Plugins ? "+plugins" : "");
+            if (plan.WebServer)
+            {
+                try
+                {
+                    // R09：ApplyWebServer 是 void 门面，真实拒绝/启动失败通过
+                    // WebServerApplyResult 返回且不会抛异常；必须消费它，不能把
+                    // “未抛异常”当成“已生效”。
+                    WebServerApplyResult webResult = ApplyWebServerWithResult(cfg);
+                    bool rejected = webResult.RejectedLanWithoutPassword
+                        || webResult.RejectedExternalWithoutPassword;
+                    bool started = !cfg.WebServerEnabled || webResult.ServiceRunning;
+                    if (rejected || !started)
+                    {
+                        string reason = string.IsNullOrWhiteSpace(webResult.ErrorMessage)
+                            ? "网页服务未按请求生效。"
+                            : webResult.ErrorMessage;
+                        results.Add(LiteMonitor.Core.Actions.Services.ModuleApplyResult.Fail(
+                            nameof(LiteMonitor.Core.Actions.Services.SettingsModule.WebServer),
+                            "applied", null, reason, retryable: true));
+                    }
+                    else
+                    {
+                        results.Add(LiteMonitor.Core.Actions.Services.ModuleApplyResult.Ok(
+                            nameof(LiteMonitor.Core.Actions.Services.SettingsModule.WebServer),
+                            "applied",
+                            webResult.ServiceRunning ? $"web:running:{cfg.WebServerPort}" : "web:stopped"));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    results.Add(LiteMonitor.Core.Actions.Services.ModuleApplyResult.Fail(nameof(LiteMonitor.Core.Actions.Services.SettingsModule.WebServer), "applied", null, ex.Message));
+                }
+            }
+
+            if (plan.Plugins)
+            {
+                try
+                {
+                    PluginManager.Instance.Reload(cfg);
+                    results.Add(LiteMonitor.Core.Actions.Services.ModuleApplyResult.Ok(nameof(LiteMonitor.Core.Actions.Services.SettingsModule.Plugins), "applied", "plugins"));
+                }
+                catch (Exception ex)
+                {
+                    results.Add(LiteMonitor.Core.Actions.Services.ModuleApplyResult.Fail(nameof(LiteMonitor.Core.Actions.Services.SettingsModule.Plugins), "applied", null, ex.Message));
+                }
+            }
+
+            return results;
         }
 
         // ★★★ 新增：全局应用入口 ★★★
@@ -218,6 +297,67 @@ namespace LiteMonitor.src.Core.Actions
 
         public static void ApplyThemeAndLayout(Settings cfg, UIController? ui, MainForm form, bool? wasHorizontal = null, bool retainData = false)
         {
+            ApplyOperationResult result = ApplyThemeAndLayoutWithResult(cfg, ui, form, wasHorizontal, retainData);
+            if (result.OverallStatus is ApplyOperationStatus.Failed or ApplyOperationStatus.Partial)
+            {
+                string reason = string.Join("；", result.Modules
+                    .Where(m => !m.Applied)
+                    .Select(m => m.Module + "：" + (m.FailureReason ?? "失败")));
+                throw new InvalidOperationException(reason);
+            }
+        }
+
+        /// <summary>
+        /// R3/F02：按阶段报告主题运行时提交、菜单、任务栏、布局结果。
+        /// 主题已提交后后续模块失败时返回 Partial，绝不声称原子回滚。
+        /// </summary>
+        internal static bool HasThemeCommitted(
+            ThemeManager.ThemeLoadResult? previousLoad,
+            ThemeManager.ThemeLoadResult? actualLoad,
+            Theme? previousTheme,
+            Theme? actualTheme)
+        {
+            if (!ReferenceEquals(previousTheme, actualTheme)) return true;
+            if (previousLoad is null || actualLoad is null) return false;
+
+            // 同名文件也可能已经是新修订：必须比较来源文件和内容摘要，
+            // 不能只比较 Theme.Name（显示名）。
+            return !string.Equals(actualLoad.SourceHash, previousLoad.SourceHash,
+                       StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(actualLoad.SourcePath, previousLoad.SourcePath,
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool CanRestorePrevious(ThemeManager.ThemeLoadResult? previous)
+        {
+            if (previous is not { Success: true, Theme: not null }
+                || string.IsNullOrWhiteSpace(previous.RequestedName)
+                || string.IsNullOrWhiteSpace(previous.SourcePath)
+                || !System.IO.File.Exists(previous.SourcePath))
+            {
+                return false;
+            }
+
+            try
+            {
+                ThemeManager.ThemeLoadResult current =
+                    ThemeManager.Inspect(previous.SourcePath, previous.RequestedName);
+                return current.Success
+                    && string.Equals(current.SourceHash, previous.SourceHash, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static ApplyOperationResult ApplyThemeAndLayoutWithResult(
+            Settings cfg, UIController? ui, MainForm form, bool? wasHorizontal = null,
+            bool retainData = false, long revision = 0)
+        {
+            var modules = new List<ModuleApplyResult>();
+            string operationId = "theme:" + cfg.Skin + ":" + Guid.NewGuid().ToString("N")[..8];
+
             // 1. 确定是否发生了模式切换
             // 如果外部没传 wasHorizontal，则尝试从 ui 获取当前渲染状态
             bool oldMode = wasHorizontal ?? (ui?.IsLayoutHorizontal ?? cfg.HorizontalMode);
@@ -229,22 +369,159 @@ namespace LiteMonitor.src.Core.Actions
                 center = new Point(form.Left + form.Width / 2, form.Top + form.Height / 2);
             }
 
-            // 2. 应用主题
-            ui?.ApplyTheme(cfg.Skin, retainData);
-            
-            // 3. 强制立即刷新布局以获得正确的新尺寸 (关键：否则 form.Width 还是旧的)
-            //ui?.RebuildLayout();
-            
-            // 如果切换了横竖屏模式，菜单结构会变，需要重建
-            form.RebuildMenus();
-            ReloadTaskbarWindows();
+            // 2. 应用主题（真正的运行时提交）
+            ThemeManager.ThemeLoadResult? previousLoad = ThemeManager.LastLoad;
+            Theme previousThemeObject = ThemeManager.Current;
+            string previousTheme = previousThemeObject.Name;
+            if (ui is null)
+            {
+                modules.Add(ModuleApplyResult.Ok("ThemeRuntime", saved: "no-ui", effective: "skipped"));
+            }
+            else
+            {
+                try
+                {
+                    ui.ApplyTheme(cfg.Skin, retainData);
+                    modules.Add(ModuleApplyResult.Ok("ThemeRuntime", saved: cfg.Skin,
+                        effective: ThemeManager.Current.Name, moduleRevision: revision));
+                }
+                catch (Exception ex)
+                {
+                    // R08：ApplyTheme 可能在 ThemeManager.Current 已切到新主题之后、
+                    // 窗口/外观/路由后段才抛错。此时不能假装“旧主题仍有效”，
+                    // 必须先按来源身份/摘要确认是否已提交，再尝试恢复旧修订；
+                    // 同名文件被覆盖时不能仅凭显示名加载“旧主题”。
+                    ThemeManager.ThemeLoadResult? actualLoad = ThemeManager.LastLoad;
+                    string actualTheme = ThemeManager.Current.Name;
+                    bool committed = HasThemeCommitted(
+                        previousLoad, actualLoad, previousThemeObject, ThemeManager.Current);
+                    bool restored = false;
+                    string restoreError = "";
+                    if (committed)
+                    {
+                        if (CanRestorePrevious(previousLoad))
+                        {
+                            try
+                            {
+                                ui.ApplyTheme(previousLoad!.RequestedName, retainData);
+                                ThemeManager.ThemeLoadResult? restoredLoad = ThemeManager.LastLoad;
+                                restored = restoredLoad is { Success: true }
+                                    && string.Equals(restoredLoad.RequestedName, previousLoad.RequestedName, StringComparison.Ordinal)
+                                    && string.Equals(restoredLoad.SourceHash, previousLoad.SourceHash, StringComparison.OrdinalIgnoreCase);
+                                actualTheme = ThemeManager.Current.Name;
+                                if (!restored)
+                                    restoreError = "旧主题文件已变化，恢复后身份不一致。";
+                            }
+                            catch (Exception restoreEx)
+                            {
+                                restoreError = restoreEx.Message;
+                                actualTheme = ThemeManager.Current.Name;
+                            }
+                        }
+                        else
+                        {
+                            restoreError = "旧主题文件已被同名修订覆盖，无法恢复旧版本。";
+                        }
+                    }
 
-            // 4. 执行居中重定位
+                    modules.Add(ModuleApplyResult.Fail("ThemeRuntime", cfg.Skin,
+                        actualTheme, ex.Message + (restored ? "；已恢复旧主题。" : ""),
+                        retryable: true, moduleRevision: revision));
+
+                    if (committed && !restored)
+                    {
+                        // 运行时已部分提交且恢复失败：后续菜单/任务栏不能继续按
+                        // “全部失败”处理，否则调用方会回滚 Skin 而画面仍是新主题。
+                        ApplyOperationResult partial = new(
+                            operationId,
+                            revision,
+                            revision == 0 ? null : revision,
+                            ApplyOperationStatus.Partial,
+                            modules,
+                            "theme-runtime-partial");
+                        RecordApplyDiagnostic(partial);
+                        return partial;
+                    }
+
+                    ApplyOperationResult failed = ApplyOperationResult.FromModules(operationId, revision, modules,
+                        effectiveRevision: null, failureCode: "theme-runtime-failed");
+                    RecordApplyDiagnostic(failed);
+                    return failed;
+                }
+            }
+
+            // 3. 菜单
+            try
+            {
+                form.RebuildMenus();
+                modules.Add(ModuleApplyResult.Ok("Menus", moduleRevision: revision));
+            }
+            catch (Exception ex)
+            {
+                modules.Add(ModuleApplyResult.Fail("Menus", "rebuilt", null, ex.Message,
+                    retryable: true, moduleRevision: revision));
+            }
+
+            // 4. 任务栏窗口
+            try
+            {
+                ReloadTaskbarWindows();
+                modules.Add(ModuleApplyResult.Ok("Taskbar", moduleRevision: revision));
+            }
+            catch (Exception ex)
+            {
+                modules.Add(ModuleApplyResult.Fail("Taskbar", "reloaded", null, ex.Message,
+                    retryable: true, moduleRevision: revision));
+            }
+
+            // 5. 居中重定位
             if (center.HasValue)
             {
-                form.ApplyRoundedCorners();
-                form.Location = new Point(center.Value.X - form.Width / 2, center.Value.Y - form.Height / 2);
-                form.EnsureVisibleAndSavePos();
+                try
+                {
+                    form.ApplyRoundedCorners();
+                    form.Location = new Point(center.Value.X - form.Width / 2, center.Value.Y - form.Height / 2);
+                    form.EnsureVisibleAndSavePos();
+                    modules.Add(ModuleApplyResult.Ok("Layout", moduleRevision: revision));
+                }
+                catch (Exception ex)
+                {
+                    modules.Add(ModuleApplyResult.Fail("Layout", "center", null, ex.Message,
+                        retryable: false, moduleRevision: revision));
+                }
+            }
+
+            ApplyOperationResult completed = ApplyOperationResult.FromModules(operationId, revision, modules,
+                effectiveRevision: revision > 0 ? revision : null);
+            RecordApplyDiagnostic(completed);
+            return completed;
+        }
+
+        private static void RecordApplyDiagnostic(ApplyOperationResult result)
+        {
+            try
+            {
+                DiagnosticSeverity severity = result.OverallStatus switch
+                {
+                    ApplyOperationStatus.Applied => DiagnosticSeverity.Info,
+                    ApplyOperationStatus.Partial => DiagnosticSeverity.Warning,
+                    ApplyOperationStatus.Pending or ApplyOperationStatus.Cancelled => DiagnosticSeverity.Warning,
+                    _ => DiagnosticSeverity.Error,
+                };
+                var context = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["status"] = result.OverallStatus.ToString(),
+                    ["revision"] = result.RequestRevision.ToString(),
+                    ["count"] = result.Modules.Count.ToString(),
+                };
+                if (!string.IsNullOrWhiteSpace(result.FailureCode)) context["error_code"] = result.FailureCode;
+                DiagnosticHub.Current.Record("apply", severity,
+                    result.OverallStatus == ApplyOperationStatus.Applied ? "apply-applied" : "apply-not-applied",
+                    result.OperationId, context);
+            }
+            catch
+            {
+                // 诊断失败不得影响应用路径。
             }
         }
 

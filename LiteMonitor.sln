@@ -21,6 +21,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.Contracts", "sr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.HardwareHost", "src\HardwareHost\LiteMonitor.HardwareHost.csproj", "{4962985F-81B6-4DB3-BC69-1350A597B13A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiteMonitor.Cli", "src\Cli\LiteMonitor.Cli.csproj", "{AC1190AF-65F7-4E01-8E1E-54CAEB243B74}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -55,6 +57,10 @@ Global
 		{4962985F-81B6-4DB3-BC69-1350A597B13A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4962985F-81B6-4DB3-BC69-1350A597B13A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4962985F-81B6-4DB3-BC69-1350A597B13A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AC1190AF-65F7-4E01-8E1E-54CAEB243B74}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AC1190AF-65F7-4E01-8E1E-54CAEB243B74}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AC1190AF-65F7-4E01-8E1E-54CAEB243B74}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AC1190AF-65F7-4E01-8E1E-54CAEB243B74}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -68,5 +74,6 @@ Global
 		{2143EAB6-AABB-44DB-9371-418C7222C748} = {90DB0C1B-D047-48A1-876E-ACCE695ADE5D}
 		{E33912F3-A06A-471A-8B3D-1A101B7FEE0B} = {2FB2DF84-0DB5-41BA-AB25-D099A7F43538}
 		{4962985F-81B6-4DB3-BC69-1350A597B13A} = {2FB2DF84-0DB5-41BA-AB25-D099A7F43538}
+		{AC1190AF-65F7-4E01-8E1E-54CAEB243B74} = {2FB2DF84-0DB5-41BA-AB25-D099A7F43538}
 	EndGlobalSection
 EndGlobal

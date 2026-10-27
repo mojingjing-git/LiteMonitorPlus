@@ -978,7 +978,10 @@ namespace LiteMonitor.Tests
             });
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
-            thread.Join();
+            if (!thread.Join(TimeSpan.FromSeconds(30)))
+            {
+                throw new TimeoutException("STA 测试线程未在 30 秒内完成。");
+            }
 
             if (captured != null) throw captured;
             return result;

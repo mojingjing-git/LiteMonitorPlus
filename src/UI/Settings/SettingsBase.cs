@@ -11,6 +11,7 @@ namespace LiteMonitor.src.UI.SettingsPage
     {
         void Save();
         void OnShow();
+        void OnHide();
     }
 
     public class SettingsPageBase : UserControl, ISettingsPage
@@ -113,6 +114,11 @@ namespace LiteMonitor.src.UI.SettingsPage
 
             // ★ 配置写入被阻止时必须让用户看见（否则他改了半天气，退出后全没了）。
             UpdateConfigWriteBlockedNotice();
+        }
+
+        /// <summary>页面被导航摘下时调用；派生页应在这里停止订阅/计时器。</summary>
+        public virtual void OnHide()
+        {
         }
 
         /// <summary>

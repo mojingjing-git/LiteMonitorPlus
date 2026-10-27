@@ -1,12 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
+using LiteMonitor.Core.Actions.Services;
+using LiteMonitor.src.Core.Scenarios;
 using System.Windows.Forms;
 using LiteMonitor.src.Core;
 using LiteMonitor.SystemServices; // B3:HardwareGateway
 using LiteMonitor.src.Core.Actions;
 using LiteMonitor.src.UI.Controls;
 using LiteMonitor.src.UI.SettingsPage;
+using LiteMonitor.Rendering.Configuration;
 
 namespace LiteMonitor.src.UI
 {
@@ -92,9 +96,13 @@ namespace LiteMonitor.src.UI
         {
             if (_pages.Count == 0) return;
 
-            foreach (var kv in _pages)
+            // 同一实例可能注册到多个导航键（插件市场/主题市场共用 PluginMarketPage）。
+            // 必须按引用去重，否则第二次 Dispose 会释放已释放的 WinForms 控件。
+            var disposed = new HashSet<SettingsPageBase>(ReferenceEqualityComparer.Instance);
+            foreach (var page in _pages.Values)
             {
-                kv.Value.Dispose();
+                if (disposed.Add(page))
+                    page.Dispose();
             }
 
             _pages.Clear();
@@ -170,7 +178,7 @@ namespace LiteMonitor.src.UI
             var btnApply = new LiteButton(LanguageManager.T("Menu.Apply"), false);
             var btnReset = new LiteButton(LanguageManager.T("Menu.Reset"), false) { ForeColor = UIColors.TextWarn };
 
-            btnOk.Click += (s, e) => { ApplySettings(); this.DialogResult = DialogResult.OK; this.Close(); };
+            btnOk.Click += (s, e) => { if (ApplySettings()) { this.DialogResult = DialogResult.OK; this.Close(); } };
             btnCancel.Click += (s, e) => { this.DialogResult = DialogResult.Cancel; this.Close(); };
             btnApply.Click += (s, e) => { ApplySettings(); };
             
@@ -219,24 +227,37 @@ namespace LiteMonitor.src.UI
             AddNav("Threshold", LanguageManager.T("Menu.Thresholds"), new ThresholdPage());
             AddNav("System", LanguageManager.T("Menu.SystemHardwar"), new SystemHardwarPage());
             AddNav("Plugins", LanguageManager.T("Menu.Plugins"), new PluginPage());
-            AddNav("PluginMarket", LanguageManager.T("Menu.PluginMarket"), new PluginMarketPage());
+            var marketPage = new PluginMarketPage();
+            AddNav("PluginMarket", LanguageManager.T("Menu.PluginMarket"), marketPage);
+            AddNav("ThemeMarket", LanguageManager.T("Menu.ThemeMarket"), marketPage, MarketCategory.Themes);
+            var scenarioPage = new ScenarioPage();
+            scenarioPage.ApplyHandler = ApplyScenarioFromPage;
+            AddNav("Scenarios", LanguageManager.T("Menu.Scenarios"), scenarioPage);
+            AddNav("Diagnostics", LanguageManager.T("Menu.Diagnostics"), new DiagnosticPage());
 
             _pnlNavContainer.PerformLayout();
             SwitchPage("MainPanel");
         }
 
-        private void AddNav(string key, string text, SettingsPageBase page)
+        private void AddNav(string key, string text, SettingsPageBase page, MarketCategory? marketCategory = null)
         {
             // ★★★ 关键点 2：将 Draft 传递给页面，而不是 Live Settings ★★★
             page.SetContext(_draftCfg, _mainForm, _ui);
             _pages[key] = page;
             var btn = new LiteNavBtn(text) { Tag = key };
-            btn.Click += (s, e) => SwitchPage(key);
+            btn.Click += (s, e) => SwitchPage(key, marketCategory);
             _pnlNavContainer.Controls.Add(btn);
         }
 
-        public void SwitchPage(string key)
+        internal void SwitchPage(string key, MarketCategory? marketCategory = null)
         {
+            // 同一市场页实例可挂两个入口；进入前先声明类别，不能依赖上次页签。
+            if (marketCategory.HasValue && _pages.TryGetValue(key, out SettingsPageBase? target) &&
+                target is PluginMarketPage marketPage)
+            {
+                marketPage.RequestCategory(marketCategory.Value);
+            }
+
             if (_currentKey == key) return;
             _currentKey = key;
 
@@ -260,6 +281,16 @@ namespace LiteMonitor.src.UI
                 
                 try 
                 {
+                    // Controls.Clear 只是把旧页 Parent 置空，不会触发 OnVisibleChanged；
+                    // 必须显式通知离页，页面才能停掉计时器/订阅。
+                    foreach (Control child in _pnlContent.Controls)
+                    {
+                        if (child is SettingsPageBase oldPage)
+                        {
+                            oldPage.OnHide();
+                            break;
+                        }
+                    }
                     _pnlContent.Controls.Clear();
                     var targetPage = _pages[key];
                     
@@ -281,19 +312,51 @@ namespace LiteMonitor.src.UI
             }
         }
 
-        private void ApplySettings()
+        private string? ApplyScenarioFromPage(ScenarioProfile profile)
+        {
+            var service = new ScenarioService(
+                new ScenarioProfileStore(),
+                candidate => SettingsHelper.TrySave(candidate),
+                (live, candidate) =>
+                {
+                    var before = live.CloneForDiff();
+                    SettingsChanger.Merge(live, candidate);
+                    return AppActions.ApplySettingsSelectivelyWithResults(before, live, _mainForm, _ui, false);
+                },
+                name => File.Exists(Path.Combine(ThemeManager.ThemeDir, name + ".json")));
+
+            var outcome = service.Apply(profile, _cfg);
+            if (outcome.Operation.OverallStatus is ApplyOperationStatus.Applied or ApplyOperationStatus.Partial)
+            {
+                SettingsChanger.Merge(_draftCfg, _cfg);
+                SettingsThemeManager.SyncFromSettings(_cfg);
+            }
+
+            if (outcome.Operation.OverallStatus == ApplyOperationStatus.Applied)
+                return null;
+
+            var failures = string.Join("; ", outcome.Operation.Modules
+                .Where(module => !module.Applied)
+                .Select(module => module.Module + ": " + (module.FailureReason ?? "failed")));
+            return string.IsNullOrWhiteSpace(failures)
+                ? "Scenario apply failed: " + outcome.Operation.OverallStatus
+                : failures;
+        }
+        private bool ApplySettings()
         {
             bool oldAutoStart = _cfg.AutoStart;
 
-            // 保存逻辑顺序优化
-            foreach (var kv in _pages) 
+            // 保存逻辑顺序优化；同一实例可注册多个导航键（插件市场/主题市场），按引用只保存一次。
+            var savedPages = new HashSet<SettingsPageBase>(ReferenceEqualityComparer.Instance);
+            foreach (var kv in _pages)
             {
-                if (kv.Key != "Monitor") kv.Value.Save(); 
+                if (kv.Key != "Monitor" && savedPages.Add(kv.Value))
+                    kv.Value.Save();
             }
-            
-            if (_pages.ContainsKey("Monitor")) 
+
+            if (_pages.TryGetValue("Monitor", out SettingsPageBase? monitorPage) && savedPages.Add(monitorPage))
             {
-                _pages["Monitor"].Save();
+                monitorPage.Save();
             }
             
             // ★★★ Draft 机制核心：提交事务 ★★★
@@ -310,24 +373,42 @@ namespace LiteMonitor.src.UI
                 MessageBox.Show("为了防止所有可交互入口都被死锁（隐藏或穿透+隐藏托盘），已强制显示托盘图标。", "LiteMonitor++", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
 
-            // 2. 合并变更到 Live Settings
-            //    B3：合并前克隆 live 快照，保存后按 live/合并前差异选择性应用副作用
-            //    （空差异零扰动；纯 Web/插件变更不重建界面——Plan B §4.2"只重配受影响模块"）。
+            // 2. 先在草稿副本上完成落盘，成功后才提交到 Live Settings。
+            //    这样保存失败不会把内存中的 Live 配置改成“未落盘”的状态。
             Settings before = _cfg.CloneForDiff();
-            SettingsChanger.Merge(_cfg, _draftCfg);
-            bool autoStartChanged = oldAutoStart != _cfg.AutoStart;
+            Settings candidate = _draftCfg.DeepClone();
 
             // 2.5 ★★★ [多显卡] 落盘前先同步显卡监控项 ★★★
-            //     必须在 _cfg.Save() 之前 —— ApplyAllSettings 里那一次 Ensure
+            //     必须在保存之前 —— ApplyAllSettings 里那一次 Ensure
             //     发生在保存之后, 磁盘上的 MonitorItems 会比内存晚一轮。
             int detectedGpuCount = HardwareGateway.DetectedGpuCount;
             int gpuCap = detectedGpuCount > 0
                 ? detectedGpuCount
-                : Math.Max(1, _cfg.MonitoredGpuCount);
-            GpuItemSync.Ensure(_cfg, availableGpuCount: gpuCap);
+                : Math.Max(1, candidate.MonitoredGpuCount);
+            GpuItemSync.Ensure(candidate, availableGpuCount: gpuCap);
 
-            // 3. 持久化保存
-            _cfg.Save();
+            // 3. 持久化保存；失败时保持对话框打开、Live 配置不变。
+            //    S01：凭据 DPAPI 保护失败单独提示（未保存、磁盘未动、哪个参数没写入），
+            //    与一般写入失败（ConfigWriteBlockedShort）区分开，绝不谎报成功。
+            SettingsSaveOutcome saveOutcome = candidate.TrySaveWithOutcome();
+            if (saveOutcome != SettingsSaveOutcome.Saved)
+            {
+                string saveErrorText = saveOutcome == SettingsSaveOutcome.CredentialProtectionFailed
+                    ? LanguageManager.T("ConfigCredentialProtectFailed") +
+                      (string.IsNullOrEmpty(SettingsHelper.LastCredentialProtectionError)
+                          ? ""
+                          : "\n\n" + SettingsHelper.LastCredentialProtectionError)
+                    : LanguageManager.T("ConfigWriteBlockedShort");
+                MessageBox.Show(
+                    saveErrorText,
+                    "LiteMonitor++",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return false;
+            }
+
+            SettingsChanger.Merge(_cfg, candidate);
+            bool autoStartChanged = oldAutoStart != _cfg.AutoStart;
 
             // 4. 应用副作用 (刷新界面)
             // GPU 开关自 MainPanelPage 迁入「渲染路线」页 ⇒ 重试申请从新页读取，R3 §4.1）。
@@ -335,10 +416,33 @@ namespace LiteMonitor.src.UI
                 routePage is RenderingRoutePage renderingPage &&
                 renderingPage.GpuStartupRetryRequested)
             {
-                _ui.AllowGpuStartupRetryAfterExplicitSettingsApply();
+                // 【S06】重试可能被守卫拒绝（存储不可用 / 状态异常）——必须如实提示，
+                // 不能让用户以为"点了应用=已重试"。拒绝时守卫状态不变，可再次手动申请。
+                bool retryAllowed = _ui.AllowGpuStartupRetryAfterExplicitSettingsApply();
                 renderingPage.AcknowledgeGpuStartupRetryRequest();
+                if (!retryAllowed)
+                {
+                    string? guardMessage = GpuStartupGuard.Shared.StatusMessage;
+                    MessageBox.Show(
+                        LanguageManager.T("ConfigGpuRetryBlocked") +
+                        (string.IsNullOrWhiteSpace(guardMessage) ? "" : "\n\n" + guardMessage),
+                        "LiteMonitor++",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
             }
-            AppActions.ApplySettingsSelectively(before, _cfg, _mainForm, _ui, autoStartChanged);
+            var applyResults = AppActions.ApplySettingsSelectivelyWithResults(before, _cfg, _mainForm, _ui, autoStartChanged);
+            var failedModules = applyResults.Where(r => !r.Applied).ToList();
+            if (failedModules.Count > 0)
+            {
+                string detail = string.Join("\n", failedModules.Select(r =>
+                    string.IsNullOrWhiteSpace(r.FailureReason) ? r.Module : $"{r.Module}: {r.FailureReason}"));
+                MessageBox.Show(
+                    LanguageManager.T("SettingsApplyPartial") + "\n\n" + detail,
+                    "LiteMonitor++",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
 
             // 5. [Fix] Rebase Draft to match Live
             // 将 Live 环境中由插件生成的最新监控项同步回 Draft，并保留动态显示属性
@@ -346,6 +450,7 @@ namespace LiteMonitor.src.UI
 
             // E05：保存成功 ⇒ 主题状态机提交到新模式（预览态落成为已提交；无变化时为幂等空操作）
             SettingsThemeManager.SyncFromSettings(_cfg);
+            return true;
         }
 
         // ── E05：明暗主题接线 ──────────────────────────────────────────────────

@@ -37,6 +37,9 @@
         探针不引用任何测试框架 ⇒ dotnet test 不会把它当成测试工程。
     -->
     <ProjectReference Include="..\..\tools\GpuHostLifecycleProbe\GpuHostLifecycleProbe.csproj" />
+    <!-- [S03] 卸载强杀子进程探针：MarketUninstallRecoveryTests 以子进程方式
+         启动它在指定事务边界"被杀"，随后在测试进程内做启动恢复对账。 -->
+    <ProjectReference Include="..\..\tools\MarketUninstallCrashProbe\MarketUninstallCrashProbe.csproj" />
   </ItemGroup>
 
   <!--

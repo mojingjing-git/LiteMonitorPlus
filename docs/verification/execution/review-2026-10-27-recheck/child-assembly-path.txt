@@ -1,0 +1,1 @@
+G:\TOOL\LiteMonitor-fork\tests\LiteMonitor.Tests\bin\Release\net8.0-windows\LiteMonitor.Tests.dll

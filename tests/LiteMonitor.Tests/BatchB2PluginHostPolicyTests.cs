@@ -34,6 +34,10 @@ namespace LiteMonitor.Tests
     /// </summary>
     public class BatchB2PluginHostPolicyTests
     {
+        // [S02a] 回环测试服务器需要本地网络授权（见 LocalNetworkAuthGrant）。
+        private readonly LocalNetworkAuthGrant _localAuth = new();
+        private readonly PluginProxyAuthGrant _proxyAuth = new();
+
         // =====================================================================
         // LM-078 —— 在途租约不得成为白名单旁路
         // =====================================================================
@@ -240,12 +244,14 @@ namespace LiteMonitor.Tests
             using var server = new RedirectSandboxServer(_ => RedirectSandboxResponse.Redirect(302, "http://[fd00::2]/x"));
             using var exec = new PluginExecutor();
 
-            // 无凭据 ⇒ 逐跳复核走 PluginExecutor.HostInAllowedSet 口径
+            // 无凭据 ⇒ 逐跳复核走 PluginExecutor.HostInAllowedSet 口径。
+            // [S02a] 无凭据首跳同样必须在声明/授权集合内 ⇒ 首跳主机（回环测试服务器）
+            // 也列入声明；负例仍然是重定向跳的未声明 IPv6 目标。
             var stepNoCred = NewStep(server.Url + "/redirect");
             using (var scope = NewScope())
             {
                 var ex = await Assert.ThrowsAsync<PluginSandboxException>(
-                    () => RunStepWithScopeAsync(exec, NewInstance("inst-lm079-nocred"), stepNoCred, scope, Hosts("[fd00::1]")));
+                    () => RunStepWithScopeAsync(exec, NewInstance("inst-lm079-nocred"), stepNoCred, scope, Hosts("127.0.0.1", "[fd00::1]")));
                 Assert.Equal(PluginSandboxReasons.RedirectTargetNotAllowed, ex.Reason);
             }
 

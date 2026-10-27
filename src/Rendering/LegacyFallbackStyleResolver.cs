@@ -152,76 +152,19 @@ public static class LegacyFallbackStyleResolver
     }
 
     /// <summary>
-    /// 判断色值文本是否是既有解析器（<c>ThemeManager.ParseColor</c>）能接受的格式：
+    /// 判断色值文本是否可被统一校验器（<see cref="ThemeColorParser"/>，即
+    /// <c>ThemeManager.ParseColor</c> 的底层实现）接受：
     /// <c>#RRGGBB</c> / <c>#AARRGGBB</c> / <c>rgba(r,g,b,a)</c> / 已知颜色名。
-    /// 接受集合与该解析器保持一致（多写一个"格式是否合法"的判据，
-    /// 因为 ParseColor 对非法值只回退为全透明色，不抛异常、无法据此判定合法性）。
+    /// [S04] 判定逻辑收敛到统一校验器，避免两处规则漂移；空白仍视为不支持。
     /// </summary>
     public static bool IsSupportedColorText(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return false;
-        string value = text.Trim();
-
-        if (value[0] == '#')
-        {
-            ReadOnlySpan<char> hex = value.AsSpan(1);
-            if (hex.Length != 6 && hex.Length != 8) return false;
-            foreach (char c in hex)
-            {
-                if (!Uri.IsHexDigit(c)) return false;
-            }
-            return true;
-        }
-
-        if (value.StartsWith("rgba(", StringComparison.OrdinalIgnoreCase) &&
-            value.EndsWith(")", StringComparison.Ordinal))
-        {
-            return TryParseRgba(value, out _);
-        }
-
-        return Color.FromName(value).IsKnownColor;
+        return ThemeColorParser.TryParse(text).Success;
     }
 
     private static string Diagnostic(string field) =>
         $"{InvalidStyleDiagnosticCode}: rendering.fallbackStyle.{field}";
-
-    /// <summary>
-    /// rgba(r,g,b,a) 的合法性判定（接受条件与 <c>ThemeManager.ParseRgbaColor</c> 一致）：
-    /// r/g/b 为 0-255 整数，a 为 0-1 实数；越界 / NaN / Infinity 一律非法。
-    /// </summary>
-    private static bool TryParseRgba(string value, out Color color)
-    {
-        color = Color.Transparent;
-
-        int open = value.IndexOf('(');
-        int close = value.LastIndexOf(')');
-        if (open < 0 || close <= open) return false;
-
-        string body = value.Substring(open + 1, close - open - 1);
-        string[] parts = body.Split(',');
-        if (parts.Length != 4) return false;
-
-        if (!int.TryParse(parts[0].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int r) ||
-            !int.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int g) ||
-            !int.TryParse(parts[2].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int b))
-        {
-            return false;
-        }
-
-        if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255) return false;
-
-        if (!double.TryParse(parts[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double a))
-        {
-            return false;
-        }
-
-        if (double.IsNaN(a) || double.IsInfinity(a)) return false;
-        if (a < 0d || a > 1d) return false;
-
-        int alpha = (int)Math.Round(a * 255d, MidpointRounding.AwayFromZero);
-        color = Color.FromArgb(alpha, r, g, b);
-        return true;
-    }
 
     /// <summary>
     /// 用回退样式生成一份派生主题副本（源主题不被修改，严禁写盘）。

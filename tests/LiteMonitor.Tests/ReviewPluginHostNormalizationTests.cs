@@ -95,7 +95,9 @@ public class ReviewPluginHostNormalizationTests
     [InlineData("2513")]
     public async Task ScopedIpv6IsRejectedBeforeCacheIdentityInflightReuseAndDirectHttp(string scopeId)
     {
-        string plain = "http://[fe80::1]/data";
+        // [S02a] 链路本地 fe80::1 属 ForbiddenAlways（任何授权都不能放行），
+        // 主源/允许目标改用文档前缀 2001:db8::1（Public）保留"合法 v6 目标"语义。
+        string plain = "http://[2001:db8::1]/data";
         string scoped = "http://[fe80::1%" + scopeId + "]/data";
         Assert.Empty(PluginProcessor.GetDeclaredHosts(Template(scoped)));
         Assert.Throws<PluginSandboxException>(() => PluginSandbox.EnsureCredentialTargetAllowed(scoped, Credentials, new[] { "[fe80::1]" }));
@@ -163,7 +165,7 @@ public class ReviewPluginHostNormalizationTests
         var instance = new PluginInstanceConfig { Id = "redirect-" + Guid.NewGuid().ToString("N"), Enabled = true };
         try
         {
-            var error = await Assert.ThrowsAsync<PluginSandboxException>(() => executor.ExecuteInstanceAsync(instance, Template("http://[fe80::1]/data")));
+            var error = await Assert.ThrowsAsync<PluginSandboxException>(() => executor.ExecuteInstanceAsync(instance, Template("http://[2001:db8::1]/data")));
             Assert.Equal(PluginSandboxReasons.RedirectTargetNotAllowed, error.Reason);
             Assert.Equal(1, transport.Count);
 
@@ -227,8 +229,8 @@ public class ReviewPluginHostNormalizationTests
             var canonical = typeof(PluginExecutor).GetMethod("CanonicalizeUrl", BindingFlags.NonPublic | BindingFlags.Static);
             Assert.Contains("/a%20b?q=%25", (string)canonical.Invoke(null, new object[] { "http://[2001:db8::1]/a%20b?q=%25" }));
             using var native = new NativeScope((_, _) => Task.FromResult(Bybit()));
-            Assert.NotEmpty(await CryptoNative.FetchAsync(native.Symbol, "http://[fe80::1]/x%25?q=%2512", CancellationToken.None, 0,
-                new[] { "[fe80::1]" }, "ordinary-review"));
+            Assert.NotEmpty(await CryptoNative.FetchAsync(native.Symbol, "http://[2001:db8::1]/x%25?q=%2512", CancellationToken.None, 0,
+                new[] { "[2001:db8::1]" }, "ordinary-review"));
             Assert.Equal(1, native.Transport.Count);
         }
         finally { Cleanup(instance.Id); }
@@ -278,10 +280,12 @@ public class ReviewPluginHostNormalizationTests
             try
             {
                 _client.SetValue(null, new HttpClient(Transport) { Timeout = TimeSpan.FromSeconds(8) });
+                // [S02a] 官方源 override 用文档前缀 2001:db8::1（Public，预检放行）——
+                // 链路本地 fe80::1 属 ForbiddenAlways，任何授权都不能放行，不能再当测试服务器。
                 CryptoNative.SourceUrlOverrides = new(StringComparer.OrdinalIgnoreCase)
                 {
-                    ["Bybit"] = "http://[fe80::1]/data", ["GateIO"] = "http://[fe80::1]/data",
-                    ["Binance"] = "http://[fe80::1]/data", ["OKX"] = "http://[fe80::1]/data"
+                    ["Bybit"] = "http://[2001:db8::1]/data", ["GateIO"] = "http://[2001:db8::1]/data",
+                    ["Binance"] = "http://[2001:db8::1]/data", ["OKX"] = "http://[2001:db8::1]/data"
                 };
             }
             catch { Dispose(); throw; }

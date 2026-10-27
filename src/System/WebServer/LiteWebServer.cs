@@ -397,6 +397,8 @@ namespace LiteMonitor.src.WebServer
         public void Dispose()
         {
             Stop();
+            // 仅清理由本实例拥有的静态引用；避免旧实例 Dispose 时误清新实例。
+            if (ReferenceEquals(Instance, this)) Instance = null;
         }
 
         private async Task ListenLoop(int generation, TcpListener listener)

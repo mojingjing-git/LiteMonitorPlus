@@ -55,6 +55,141 @@ namespace LiteMonitor.src.UI.SettingsPage
             this.Controls.Add(_container);
         }
 
+        private static void AuthorizeTarget(PluginInstanceConfig inst, Dictionary<string, string> targetVals)
+        {
+            string host = "";
+            foreach (var kv in targetVals)
+            {
+                if (kv.Key.Contains("host", StringComparison.OrdinalIgnoreCase))
+                {
+                    host = kv.Value ?? "";
+                    break;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                MessageBox.Show(
+                    string.Format(LanguageManager.T("Menu.PluginAuthorizeFailed"), "host is empty"),
+                    "LiteMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string candidate = host.Trim();
+            if (!candidate.Contains("://", StringComparison.Ordinal))
+                candidate = "https://" + candidate;
+
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out Uri? uri) ||
+                !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(
+                    string.Format(LanguageManager.T("Menu.PluginAuthorizeFailed"), "only HTTPS origins are supported"),
+                    "LiteMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string origin = uri.GetLeftPart(UriPartial.Authority);
+            DialogResult confirm = MessageBox.Show(
+                string.Format(LanguageManager.T("Menu.PluginAuthorizeConfirm"), origin),
+                "LiteMonitor", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (confirm != DialogResult.Yes) return;
+
+            DynamicHostAuthorizer.AuthorizationDecision decision =
+                DynamicHostAuthorizer.Default.AuthorizeForUser(inst.Id, uri);
+            MessageBox.Show(
+                decision.Allow
+                    ? string.Format(LanguageManager.T("Menu.PluginAuthorizeDone"), origin)
+                    : string.Format(LanguageManager.T("Menu.PluginAuthorizeFailed"), decision.Reason),
+                "LiteMonitor", MessageBoxButtons.OK,
+                decision.Allow ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+
+            // [S02a] 授权后的补充确认：目标地址分类（本地网络权限）+ 模板声明的代理端点。
+            AuthorizeLocalNetworkIfNeeded(inst, uri);
+            ConfirmDeclaredProxies(inst);
+        }
+
+        /// <summary>
+        /// [S02a] 目标授权后的地址分类补充确认：公网目标静默通过；解析到本机/私网时
+        /// 单独确认本地网络权限（模板声明不能代替该确认）；解析到云元数据/链路本地等
+        /// 禁止类别时警告——即使授权了凭据，预检也会在请求时拒绝。
+        /// </summary>
+        private static void AuthorizeLocalNetworkIfNeeded(PluginInstanceConfig inst, Uri origin)
+        {
+            PluginAddressClass cls;
+            if (System.Net.IPAddress.TryParse(origin.IdnHost, out System.Net.IPAddress? literal))
+            {
+                cls = PluginAddressPolicy.Classify(literal);
+            }
+            else
+            {
+                try
+                {
+                    // 授权是低频用户操作：短暂同步解析可接受。解析失败不在此打断流程，
+                    // 预检会在请求时以 TargetUnresolvable 给出明确拒绝原因。
+                    System.Net.IPAddress[] addresses = System.Threading.Tasks.Task.Run(
+                        () => System.Net.Dns.GetHostAddresses(origin.IdnHost)).GetAwaiter().GetResult();
+                    cls = addresses.Length == 0
+                        ? PluginAddressClass.Private
+                        : addresses.Select(PluginAddressPolicy.Classify)
+                            .OrderBy(c => c == PluginAddressClass.Public ? 0 : 1)
+                            .First(); // 混合组按最保守类别提示。
+                }
+                catch (Exception)
+                {
+                    return;
+                }
+            }
+
+            if (PluginAddressPolicy.IsForbiddenAlways(cls))
+            {
+                MessageBox.Show(
+                    string.Format(LanguageManager.T("Menu.PluginAddressDenied"), origin),
+                    "LiteMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!PluginAddressPolicy.IsLocalScope(cls)) return;
+            if (PluginLocalNetworkAuthorizer.Default.IsLocalAuthorized(inst.Id, origin)) return;
+
+            DialogResult localConfirm = MessageBox.Show(
+                string.Format(LanguageManager.T("Menu.PluginLocalNetworkConfirm"), origin),
+                "LiteMonitor", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (localConfirm != DialogResult.Yes) return;
+
+            bool localOk = PluginLocalNetworkAuthorizer.Default.AuthorizeForUser(inst.Id, origin);
+            if (!localOk)
+                MessageBox.Show(
+                    string.Format(LanguageManager.T("Menu.PluginAuthorizeFailed"), "persistence failed"),
+                    "LiteMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        /// <summary>
+        /// [S02a] 插件模板步骤声明代理端点的首次使用确认：端点未确认时弹窗询问，
+        /// 用户确认后写入授权存储；拒绝则运行时按 PluginProxyNotAuthorized 拒发请求。
+        /// </summary>
+        private static void ConfirmDeclaredProxies(PluginInstanceConfig inst)
+        {
+            var template = PluginManager.Instance.GetAllTemplates()
+                .FirstOrDefault(t => t.Id == inst.TemplateId);
+            if (template?.Execution?.Steps == null) return;
+
+            foreach (string proxy in template.Execution.Steps
+                .Where(s => !string.IsNullOrWhiteSpace(s.Proxy))
+                .Select(s => s.Proxy!.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!PluginProxyAuthorizer.TryNormalizeProxyEndpoint(proxy, out string endpoint)) continue;
+                if (PluginProxyAuthorizer.Default.IsAuthorized(inst.Id, proxy)) continue;
+
+                DialogResult proxyConfirm = MessageBox.Show(
+                    string.Format(LanguageManager.T("Menu.PluginProxyConfirm"), endpoint),
+                    "LiteMonitor", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (proxyConfirm != DialogResult.Yes) continue;
+
+                PluginProxyAuthorizer.Default.AuthorizeForUser(inst.Id, proxy);
+            }
+        }
+
         public override void Save()
         {
             base.Save();
@@ -430,6 +565,14 @@ namespace LiteMonitor.src.UI.SettingsPage
                             );
                             if (!string.IsNullOrEmpty(input.Placeholder)) inputCtrl.Placeholder = input.Placeholder;
 
+                            // 凭据类字段不在设置页明文显示；用户仍可覆盖输入。
+                            if (input.Key.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+                                input.Key.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
+                                input.Key.Contains("password", StringComparison.OrdinalIgnoreCase))
+                            {
+                                inputCtrl.Inner.UseSystemPasswordChar = true;
+                            }
+
                             // Direct Binding: Update Model Immediately on Change (Memory Only)
                             inputCtrl.Inner.TextChanged += (s, e) => {
                                 targetVals[input.Key] = inputCtrl.Inner.Text;
@@ -441,6 +584,14 @@ namespace LiteMonitor.src.UI.SettingsPage
                             targetVisibles.Add(item);
                         }
                     }
+
+                    // 动态主机模板：凭据只能发往用户明确授权的 origin。
+                    // 这里只收集主机，具体 origin 规范化、持久化与拒绝逻辑由 DynamicHostAuthorizer 负责。
+                    var authItem = new LiteSettingsItem("  ", new LiteLink(
+                        LanguageManager.T("Menu.PluginAuthorizeHost"),
+                        () => AuthorizeTarget(inst, targetVals)));
+                    group.AddItem(authItem);
+                    targetVisibles.Add(authItem);
                 }
 
                 // Add Target Button

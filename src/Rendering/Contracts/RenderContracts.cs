@@ -100,6 +100,16 @@ public readonly record struct RenderGenerations(
         Size == other.Size &&
         Topology == other.Topology &&
         Device == other.Device;
+
+    /// <summary>
+    /// 同一渲染会话的身份是否一致。主题修订可以变化，但窗口、尺寸、拓扑
+    /// 或设备代次变化必须走重建/Resize，不能只改配置。
+    /// </summary>
+    public bool HasSameSessionIdentity(RenderGenerations other) =>
+        Window == other.Window &&
+        Size == other.Size &&
+        Topology == other.Topology &&
+        Device == other.Device;
 }
 
 public readonly record struct LogicalRect(double X, double Y, double Width, double Height)

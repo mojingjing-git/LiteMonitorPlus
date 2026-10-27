@@ -1,0 +1,125 @@
+{
+  "head": "4de25d38add7f8b2342303805fdf0b654c57fa55",
+  "reviewed_files_unchanged_at_end": true,
+  "changed_files": [],
+  "runs": [
+    {
+      "file": "G:\\TOOL\\LiteMonitor-fork\\.tmp\\review-20261027\\results\\targeted.trx",
+      "sha256": "ad38e39d4b9be6c75eff4663e62b4277d9e9deb82c84108a5da4a9adc9c3cdd7",
+      "counters": {
+        "total": "448",
+        "executed": "447",
+        "passed": "447",
+        "failed": "0",
+        "error": "0",
+        "timeout": "0",
+        "aborted": "0",
+        "inconclusive": "0",
+        "passedButRunAborted": "0",
+        "notRunnable": "0",
+        "notExecuted": "0",
+        "disconnected": "0",
+        "warning": "0",
+        "completed": "0",
+        "inProgress": "0",
+        "pending": "0"
+      },
+      "skips": [
+        "LiteMonitor.Tests.MarketIndexContractTests.仓库里每个插件目录下的plugin_json_内容id_与目录名一致"
+      ],
+      "failures": []
+    },
+    {
+      "file": "G:\\TOOL\\LiteMonitor-fork\\.tmp\\review-20261027\\results\\main-full.trx",
+      "sha256": "f3b412f47d2c93770f417e791c58087ac88fdfc2e1d9df243e06ee522d3dcaff",
+      "counters": {
+        "total": "2633",
+        "executed": "2626",
+        "passed": "2626",
+        "failed": "0",
+        "error": "0",
+        "timeout": "0",
+        "aborted": "0",
+        "inconclusive": "0",
+        "passedButRunAborted": "0",
+        "notRunnable": "0",
+        "notExecuted": "0",
+        "disconnected": "0",
+        "warning": "0",
+        "completed": "0",
+        "inProgress": "0",
+        "pending": "0"
+      },
+      "skips": [
+        "LiteMonitor.Tests.MarketIndexContractTests.索引里的下载地址_都落在允许的源范围内",
+        "LiteMonitor.Tests.MarketIndexContractTests.仓库里每个插件目录下的plugin_json_内容id_与目录名一致",
+        "LiteMonitor.Tests.MarketIndexContractTests.索引里的sha256与size_与仓库文件原始字节一致",
+        "LiteMonitor.Tests.MarketIndexContractTests.索引里的插件id_都能通过客户端的安装校验",
+        "LiteMonitor.Tests.MarketIndexContractTests.索引能被客户端模型完整解析",
+        "LiteMonitor.Tests.MarketIndexContractTests.索引里的插件id_不与内置插件重名",
+        "LiteMonitor.Tests.MarketE2ETests.端到端_拉索引_安装_校验_卸载"
+      ],
+      "failures": []
+    },
+    {
+      "file": "G:\\TOOL\\LiteMonitor-fork\\.tmp\\review-20261027\\results\\updater.trx",
+      "sha256": "5e8e8cb558fc5de81beeeccbbae27edb8e71289a5713c15f457ef46da8d48320",
+      "counters": {
+        "total": "73",
+        "executed": "73",
+        "passed": "73",
+        "failed": "0",
+        "error": "0",
+        "timeout": "0",
+        "aborted": "0",
+        "inconclusive": "0",
+        "passedButRunAborted": "0",
+        "notRunnable": "0",
+        "notExecuted": "0",
+        "disconnected": "0",
+        "warning": "0",
+        "completed": "0",
+        "inProgress": "0",
+        "pending": "0"
+      },
+      "skips": [],
+      "failures": []
+    },
+    {
+      "file": "G:\\TOOL\\LiteMonitor-fork\\.tmp\\review-20261027\\results\\gpu-nonperformance.trx",
+      "sha256": "318f95a734ed3bce06821eb1ddc2e24858623b567da139ef54a4f8255dac92e8",
+      "counters": {
+        "total": "19",
+        "executed": "19",
+        "passed": "19",
+        "failed": "0",
+        "error": "0",
+        "timeout": "0",
+        "aborted": "0",
+        "inconclusive": "0",
+        "passedButRunAborted": "0",
+        "notRunnable": "0",
+        "notExecuted": "0",
+        "disconnected": "0",
+        "warning": "0",
+        "completed": "0",
+        "inProgress": "0",
+        "pending": "0"
+      },
+      "skips": [],
+      "failures": []
+    }
+  ],
+  "full_three_assemblies": {
+    "total": 2725,
+    "passed": 2718,
+    "skipped": 7,
+    "failed": 0
+  },
+  "release_solution_build": {
+    "exit": 0,
+    "warnings": 44,
+    "errors": 0
+  },
+  "note": "Targeted run overlaps full main run; do not add its counts."
+}

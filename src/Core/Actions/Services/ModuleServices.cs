@@ -28,13 +28,15 @@ namespace LiteMonitor.Core.Actions.Services
         bool Applied,
         string? SavedState,
         string? EffectiveState,
-        string? FailureReason)
+        string? FailureReason,
+        long ModuleRevision = 0,
+        bool Retryable = false)
     {
-        public static ModuleApplyResult Ok(string module, string? saved = null, string? effective = null)
-            => new(module, true, saved, effective, null);
+        public static ModuleApplyResult Ok(string module, string? saved = null, string? effective = null, long moduleRevision = 0)
+            => new(module, true, saved, effective, null, moduleRevision);
 
-        public static ModuleApplyResult Fail(string module, string saved, string? effective, string reason)
-            => new(module, false, saved, effective, reason);
+        public static ModuleApplyResult Fail(string module, string saved, string? effective, string reason, bool retryable = false, long moduleRevision = 0)
+            => new(module, false, saved, effective, reason, moduleRevision, retryable);
     }
 
     /// <summary>

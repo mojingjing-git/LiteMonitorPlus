@@ -243,6 +243,19 @@ namespace LiteMonitor.Tests
                     form.ApplyForTesting();
                     Assert.Contains("已保存并应用", form.SavedStatusTextForTesting);
                     Assert.Contains("GPU 场景生效", form.SavedStatusTextForTesting);
+
+                    // 4. 部分成功：主题已生效，后续菜单/任务栏失败；不得显示为完整成功
+                    gateway.ResultToReturn = new ThemeStudioForm.ThemeApplyResult(
+                        Success: false,
+                        Partial: true,
+                        Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
+                        Error: "Menus：重建失败",
+                        EffectiveTheme: themeName,
+                        Revision: 1);
+                    form.ApplyForTesting();
+                    Assert.Contains("主题已生效", form.SavedStatusTextForTesting);
+                    Assert.Contains("部分模块失败", form.SavedStatusTextForTesting);
+                    Assert.Contains("不存在原子回滚", form.SavedStatusTextForTesting);
                 }
                 finally
                 {

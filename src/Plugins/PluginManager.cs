@@ -448,6 +448,11 @@ namespace LiteMonitor.src.Plugins
                 }
             }
             FinishChanges(retired, new List<Runtime>());
+            // 实例删除后不保留其动态主机授权，避免同一实例 ID 复用时继承旧权限。
+            DynamicHostAuthorizer.Default.RevokeAll(instanceId);
+            // [S02a] 本地网络权限与代理确认随实例删除一并清理（同一复用风险）。
+            PluginLocalNetworkAuthorizer.Default.RevokeAll(instanceId);
+            PluginProxyAuthorizer.Default.RevokeAll(instanceId);
             Settings.Load().Save();
         }
 

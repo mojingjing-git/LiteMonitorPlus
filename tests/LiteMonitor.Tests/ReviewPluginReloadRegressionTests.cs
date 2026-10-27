@@ -658,5 +658,12 @@ internal sealed class ReviewPluginTransport : HttpMessageHandler
         var field = typeof(PluginExecutor).GetField("_http", BindingFlags.NonPublic | BindingFlags.Instance);
         ((HttpClient)field.GetValue(executor)).Dispose();
         field.SetValue(executor, new HttpClient(transport) { Timeout = TimeSpan.FromSeconds(8) });
+        // [S02a] 策略版本对齐：更早的测试若推进过 PluginNetworkPolicy.Version，
+        // 本 executor 首次 GetClient 会触发 EnsureNetworkPolicyCurrent 的池重建
+        //（InitializeDefaultClient 覆盖刚注入的 mock，请求打到真实 DNS 后超时）。
+        // 注入完成后把已应用版本对齐到当前策略版本，本作用域内不再触发重置。
+        typeof(PluginExecutor)
+            .GetField("s_appliedPolicyVersion", BindingFlags.NonPublic | BindingFlags.Static)
+            ?.SetValue(null, PluginNetworkPolicy.Version);
     }
 }

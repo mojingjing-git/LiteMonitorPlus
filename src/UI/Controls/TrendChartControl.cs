@@ -28,11 +28,11 @@ namespace LiteMonitor
 
     public class TrendChartControl : Control
     {
-        private readonly Color _gridColor = Color.FromArgb(58, 58, 58);
-        private readonly Color _axisColor = Color.FromArgb(95, 95, 95);
-        private readonly Color _textColor = Color.FromArgb(220, 220, 220);
-        private readonly Color _dimTextColor = Color.FromArgb(145, 145, 145);
-        private readonly Color _tooltipBack = Color.FromArgb(235, 38, 38, 38);
+        private Color _gridColor = Color.FromArgb(58, 58, 58);
+        private Color _axisColor = Color.FromArgb(95, 95, 95);
+        private Color _textColor = Color.FromArgb(220, 220, 220);
+        private Color _dimTextColor = Color.FromArgb(145, 145, 145);
+        private Color _tooltipBack = Color.FromArgb(235, 38, 38, 38);
         private readonly List<TrendChartSeries> _series = new List<TrendChartSeries>();
         private readonly HashSet<string> _hiddenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly List<LegendHit> _legendHits = new List<LegendHit>();
@@ -52,6 +52,21 @@ namespace LiteMonitor
             BackColor = Color.FromArgb(38, 38, 38);
             ForeColor = _textColor;
             Font = new Font("Microsoft YaHei UI", 9F);
+        }
+
+        /// <summary>T04：跟随设置窗体/应用主题切换图表配色；不改变系列颜色。</summary>
+        public void ApplyPalette(Color background, Color grid, Color text, Color dim)
+        {
+            BackColor = background;
+            _gridColor = grid;
+            _axisColor = Color.FromArgb(
+                Math.Min(255, (grid.R + 37 + text.R) / 3),
+                Math.Min(255, (grid.G + 37 + text.G) / 3),
+                Math.Min(255, (grid.B + 37 + text.B) / 3));
+            _textColor = text;
+            _dimTextColor = dim;
+            _tooltipBack = Color.FromArgb(235, background);
+            Invalidate();
         }
 
         public void SetSeries(IEnumerable<TrendChartSeries> series)

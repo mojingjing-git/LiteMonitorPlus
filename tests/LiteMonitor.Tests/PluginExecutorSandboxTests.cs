@@ -38,6 +38,10 @@ namespace LiteMonitor.Tests
     {
         private readonly ITestOutputHelper _output;
 
+        // [S02a] 回环测试服务器需要本地网络授权（见 LocalNetworkAuthGrant）。
+        private readonly LocalNetworkAuthGrant _localAuth = new();
+        private readonly PluginProxyAuthGrant _proxyAuth = new();
+
         public PluginExecutorSandboxTests(ITestOutputHelper output)
         {
             _output = output;
@@ -671,6 +675,8 @@ namespace LiteMonitor.Tests
 
             var lines = new List<string>();
             int credentialStepCount = 0;
+            int staticCredentialStepCount = 0;
+            int dynamicCredentialStepCount = 0;
 
             foreach (var file in files)
             {
@@ -686,20 +692,31 @@ namespace LiteMonitor.Tests
                     if (!PluginSandbox.HasCredentialHeader(step.Headers)) continue;
                     credentialStepCount++;
 
-                    // 不变式：带凭据的步骤，其目标主机必须是插件**显式声明**的
-                    // （主机来自模板 ⇒ 未声明 ⇒ 会被拒绝）
+                    if (HostFromTemplate(step.Url))
+                    {
+                        // 动态主机模板：运行时必须由用户对具体 origin 授权；
+                        // 模板用 dynamic_host 明确声明这是设计允许的组合。
+                        Assert.True(tmpl.DynamicHost,
+                            $"内置插件 {tmpl.Id} 的步骤 {step.Id} 带凭据且目标主机来自用户模板，" +
+                            $"但未声明 dynamic_host（{step.Url}）");
+                        dynamicCredentialStepCount++;
+                        continue;
+                    }
+
+                    // 固定主机：必须由插件显式声明，不能来自用户模板。
                     Assert.False(HostFromTemplate(step.Url),
                         $"内置插件 {tmpl.Id} 的步骤 {step.Id} 带凭据，但目标主机来自用户填写的模板" +
                         $"（{step.Url}）—— 会被 LM009_CREDENTIAL_TARGET_NOT_ALLOWED 拒绝");
+                    staticCredentialStepCount++;
                 }
             }
 
             _output.WriteLine("内置插件声明主机集合实测：");
             foreach (var line in lines) _output.WriteLine("  " + line);
-            _output.WriteLine($"带凭据头的内置步骤数：{credentialStepCount}");
+            _output.WriteLine($"带凭据头的内置步骤数：{credentialStepCount}（固定主机 {staticCredentialStepCount}，动态主机 {dynamicCredentialStepCount}）");
 
-            // 当前内置插件**没有任何**带凭据头的步骤 —— 新校验对内置插件零影响
-            Assert.Equal(0, credentialStepCount);
+            // 固定主机的内置凭据步骤必须为零；动态主机步骤必须显式声明 dynamic_host。
+            Assert.Equal(0, staticCredentialStepCount);
         }
 
         /// <summary>

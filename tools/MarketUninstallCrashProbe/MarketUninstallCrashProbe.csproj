@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    [S03] 卸载强杀子进程探针：由 LiteMonitor.Tests 以独立进程方式启动，
+    在卸载事务的指定边界注入 MarketInstallCrashException 后退出，
+    使写前日志与磁盘残留保持"被杀瞬间"的状态，由测试进程扮演
+    "下次启动"完成对账。通过 LiteMonitor.csproj 的 InternalsVisibleTo
+    访问 internal 测试接缝，不加入 sln。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>MarketUninstallCrashProbe</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\LiteMonitor.csproj" />
+  </ItemGroup>
+</Project>

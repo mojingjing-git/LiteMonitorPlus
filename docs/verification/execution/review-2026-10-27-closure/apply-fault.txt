@@ -1,0 +1,26 @@
+[ThemeManager] Loaded theme: Same Display Name (v1)
+[ThemeManager] Loaded theme: Same Display Name (v2)
+{
+  "result": {
+    "OperationId": "theme:closure-same-name-3d99c6ba398d451da116d2216c575263:54dc756b",
+    "RequestRevision": 0,
+    "EffectiveRevision": null,
+    "OverallStatus": 3,
+    "Modules": [
+      {
+        "Module": "ThemeRuntime",
+        "Applied": false,
+        "SavedState": "closure-same-name-3d99c6ba398d451da116d2216c575263",
+        "EffectiveState": "Same Display Name",
+        "FailureReason": "Object reference not set to an instance of an object.",
+        "ModuleRevision": 0,
+        "Retryable": true
+      }
+    ],
+    "FailureCode": "theme-runtime-failed"
+  },
+  "currentChanged": true,
+  "sourceChanged": true,
+  "loadSucceeded": true,
+  "currentVersion": 2
+}

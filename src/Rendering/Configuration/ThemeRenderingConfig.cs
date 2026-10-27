@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using LiteMonitor.Rendering.Contracts;
 
 namespace LiteMonitor.Rendering.Configuration;
 
@@ -156,8 +155,11 @@ public sealed class ThemeRenderingConfig
 
         // 【GPU T05】新增兄弟块 rendering.fallbackStyle 的校验接入点：
         //   非法值只进诊断通道，不进上面的错误列表（合同 §5.3 规则 1）。
+#if THEME_MARKET_CLI
+        diagnostics = Array.Empty<string>();
+#else
         diagnostics = LegacyFallbackStyleResolver.ValidateFallbackStyle(this);
-
+#endif
         return errors;
     }
 
@@ -165,8 +167,10 @@ public sealed class ThemeRenderingConfig
     /// 【GPU T05】只校验新增的 <c>rendering.fallbackStyle</c> 兄弟块。
     /// 返回诊断码（<c>gpu_fallback_style_invalid</c>），**不**影响整份主题是否可用。
     /// </summary>
+#if !THEME_MARKET_CLI
     public IReadOnlyList<string> ValidateFallbackStyle() =>
         LegacyFallbackStyleResolver.ValidateFallbackStyle(this);
+#endif
 
     private static bool HasBoolean(Dictionary<string, JsonElement>? values, string key) =>
         values is not null &&

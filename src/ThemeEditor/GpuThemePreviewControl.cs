@@ -85,6 +85,7 @@ public sealed class GpuThemePreviewControl : Control
     private RenderGenerations _generations;
     private bool _disposed;
     private bool _hasStartedOnce;
+    private bool _wasRenderEligible;
     private string? _error;
 
     public int DeviceCreationCount { get; private set; } = 1;
@@ -223,8 +224,15 @@ public sealed class GpuThemePreviewControl : Control
             float layoutScale = Math.Max(0.1f, _theme.Layout.LayoutScale);
             float userScale = Math.Max(0.1f, layoutScale / dpiScale);
 
-            _renderer.UpdateConfiguration(newMaterial, _runtimeSettings, DeviceDpi, userScale);
-            _generations = _generations with { Theme = _generations.Theme + 1 };
+            RenderGenerations nextGenerations =
+                _generations with { Theme = _generations.Theme + 1 };
+            _renderer.UpdateConfiguration(
+                newMaterial,
+                _runtimeSettings,
+                DeviceDpi,
+                userScale,
+                nextGenerations);
+            _generations = nextGenerations;
             SetPreviewBackground();
             UpdateScene(shape, horizontalCols);
             SessionUpdateCount++;
@@ -272,8 +280,13 @@ public sealed class GpuThemePreviewControl : Control
             Parent?.Invalidate();
             e.Graphics.Clear(Color.FromArgb(16, 20, 24));
             using SolidBrush brush = new(Color.FromArgb(255, 122, 92));
+            // 【S06】守卫类失败补充作用域说明：预览守卫独立于主面板守卫，
+            // 重试主面板不能修复预览；预览自身的恢复路径是重启工作室进程。
+            string note = _error.Contains("gpu_startup_guard", StringComparison.Ordinal)
+                ? "\n（预览守卫独立于主面板；重启主题工作室可重置预览守卫。）"
+                : string.Empty;
             e.Graphics.DrawString(
-                "GPU preview unavailable: " + _error,
+                "GPU preview unavailable: " + _error + note,
                 Font,
                 brush,
                 new PointF(8, 8));
@@ -354,6 +367,16 @@ public sealed class GpuThemePreviewControl : Control
     {
         if (_renderer is null || Width <= 0 || Height <= 0)
         {
+            return;
+        }
+
+        // R01：同尺寸布局事件（最小化恢复常见）不能让 Size 代次单边递增。
+        // GpuSceneRenderer.Resize 对同尺寸直接 return，不同步代次；若这里先递增，
+        // 下一次 Render 会因 CanAccept 不等而拒帧，表现为“恢复后黑屏”。
+        if (_renderer.Width == Width && _renderer.Height == Height)
+        {
+            SetPreviewBackground();
+            UpdateScene(CurrentShape, _horizontalCols);
             return;
         }
 
@@ -448,7 +471,15 @@ public sealed class GpuThemePreviewControl : Control
         //   这里按"自身与整条祖先链都可见"判定可见性，隐藏即跳过本次帧。
         if (!IsEffectivelyVisible())
         {
+            _wasRenderEligible = false;
             return;
+        }
+
+        if (!_wasRenderEligible)
+        {
+            // 恢复时重新建立帧基准，避免把不可见期间的墙钟时间当成掉帧/追帧。
+            _scheduler.Reset();
+            _wasRenderEligible = true;
         }
 
         if (_renderer is null || _scene is null || !_scheduler.TryTakeFrame(out FrameTick tick))
@@ -475,6 +506,11 @@ public sealed class GpuThemePreviewControl : Control
     /// <summary>控件自身与整条祖先链都可见才算可见（隐藏的预览不该继续烧 GPU）。</summary>
     private bool IsEffectivelyVisible()
     {
+        if (TopLevelControl is Form form && form.WindowState == FormWindowState.Minimized)
+        {
+            return false;
+        }
+
         for (Control? current = this; current is not null; current = current.Parent)
         {
             if (!current.Visible) return false;

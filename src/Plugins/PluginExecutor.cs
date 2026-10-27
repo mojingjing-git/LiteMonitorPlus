@@ -187,38 +187,47 @@ namespace LiteMonitor.src.Plugins
                 if (_lastNetworkReset != DateTime.MinValue && (DateTime.Now - _lastNetworkReset) < NetworkResetCooldown) return;
                 _lastNetworkReset = DateTime.Now;
 
-                // [Fix] Properly dispose old clients to release sockets
-                var oldHttp = _http;
-                var oldProxies = new List<HttpClient>(_proxyClients.Values);
-
-                // [C5] 代次推进：正在途的请求据此把中止归类为"客户端被替换"，走普通异常路径。
-                _clientGeneration++;
-
-                InitializeDefaultClient();
-                
-                // [Optimized] Clear proxy clients dictionary but do NOT dispose them.
-                // Other threads might be using them. Removing them from the dictionary ensures
-                // new requests get fresh clients, while old requests can finish (or fail safely).
-                _proxyClients.Clear();
-                
-                // [Fix] Also reset native resolvers that might hold network state or cache
-                CityCodeResolver.ResetClient();
-                CryptoNative.ResetClient();
-
-                // [Fix] Delay dispose old clients to allow inflight requests to complete (or timeout)
-                // This prevents ObjectDisposedException while ensuring Sockets are eventually released
-                Task.Run(async () => 
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(30));
-                    try 
-                    {
-                        oldHttp?.Dispose();
-                        foreach(var c in oldProxies) c.Dispose();
-                    }
-                    catch {}
-                });
+                ResetNetworkClientsLocked();
             }
-            
+        }
+
+        /// <summary>
+        /// [S02a] 锁内核心：重建默认客户端、清空代理池、复位原生解析器、延迟释放旧客户端。
+        /// 调用方必须已持有 <see cref="_httpLock"/>；冷却节流由 <see cref="ResetNetworkClients"/> 负责。
+        /// 授权变更路径（<see cref="EnsureNetworkPolicyCurrent"/>）为即时生效会**绕过冷却**直接调用本方法。
+        /// </summary>
+        private void ResetNetworkClientsLocked()
+        {
+            // [Fix] Properly dispose old clients to release sockets
+            var oldHttp = _http;
+            var oldProxies = new List<HttpClient>(_proxyClients.Values);
+
+            // [C5] 代次推进：正在途的请求据此把中止归类为"客户端被替换"，走普通异常路径。
+            _clientGeneration++;
+
+            InitializeDefaultClient();
+
+            // [Optimized] Clear proxy clients dictionary but do NOT dispose them.
+            // Other threads might be using them. Removing them from the dictionary ensures
+            // new requests get fresh clients, while old requests can finish (or fail safely).
+            _proxyClients.Clear();
+
+            // [Fix] Also reset native resolvers that might hold network state or cache
+            CityCodeResolver.ResetClient();
+            CryptoNative.ResetClient();
+
+            // [Fix] Delay dispose old clients to allow inflight requests to complete (or timeout)
+            // This prevents ObjectDisposedException while ensuring Sockets are eventually released
+            Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30));
+                try
+                {
+                    oldHttp?.Dispose();
+                    foreach (var c in oldProxies) c.Dispose();
+                }
+                catch { }
+            });
         }
 
         public void Dispose()
@@ -278,7 +287,7 @@ namespace LiteMonitor.src.Plugins
             using var scope = CreateScope(token);
 
             // 声明主机集合：同一实例的模板固定，入口算一次，向下逐层传递（避免每一步重复计算）。
-            var declaredHosts = PluginProcessor.GetDeclaredHosts(tmpl);
+            var declaredHosts = PluginProcessor.GetDeclaredHosts(tmpl, inst.Id);
 
             return await ExecuteInstanceWithScopeAsync(inst, tmpl, token, scope, declaredHosts).ConfigureAwait(false);
             }
@@ -387,7 +396,7 @@ namespace LiteMonitor.src.Plugins
                     // For simplicity and backward compatibility, we execute directly here but reuse Fetch helper
                     var sw = System.Diagnostics.Stopwatch.StartNew();
                     var resolvedHeaders = ResolveHeaders(step.Headers, inputs);
-                    resultRaw = await FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, token, null, scope, declaredHosts);
+                    resultRaw = await FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, token, null, scope, declaredHosts, instanceId: inst.Id);
                     sw.Stop();
                     inputs["__latency__"] = sw.ElapsedMilliseconds.ToString();
                 }
@@ -478,7 +487,7 @@ namespace LiteMonitor.src.Plugins
                     Url = step.Url,
                     Steps = new List<PluginExecutionStep> { step }
                 }
-            });
+            }, inst.Id);
 
             await ExecuteStepWithFallbackAsync(inst, step, context, keySuffix, token, scope, declaredHosts);
         }
@@ -622,12 +631,17 @@ namespace LiteMonitor.src.Plugins
                         if (IsAbsoluteHttpUrl(target)) EnsureNativeTargetAllowed(target, resolvedHeaders, nativeAllowed, declaredHosts);
                 }
                 else
+                {
                     // ★ 不再判 `declaredHosts != null`：该集合的唯一来源是
                     //   PluginProcessor.GetDeclaredHosts(tmpl)（恒返回非 null 集合），
                     //   测试反射调用也全部传非 null ⇒ 这个判空是死代码。
                     //   而且它会把 declaredHosts 的 null-state 置为"可能为 null"，
                     //   连带把下游 635/663 行的传参变成 CS8604 误报。
+                    // [S02a] "是否允许发请求"与"是否允许带凭据"分离：未声明未授权的
+                    // 目标不发出请求（无论是否带凭据），在缓存/租约查找之前履责。
                     PluginSandbox.EnsureCredentialTargetAllowed(url, resolvedHeaders, declaredHosts);
+                    PluginSandbox.EnsureRequestTargetAllowed(url, declaredHosts);
+                }
 
                 // [C1] 请求身份：实例ID / 目标索引 / 步骤ID 沿用现行键里的三个维度，
                 // 摘要则覆盖**全部影响响应**的字段（方法 / 规范化URL / 请求体 /
@@ -670,7 +684,8 @@ namespace LiteMonitor.src.Plugins
                         // [LM-082] 原生在途去重的**作用域键** = **执行作用域标识**（不是实例 ID）：
                         // 同一实例的**不同代次**（不同执行作用域）**不共享**在途请求 ⇒
                         // "一个代次到期"不会连带打断另一个代次正在复用的同一请求。
-                        resultRaw = await ExecuteNativeAsync(url, context, step, scope, declaredHosts, NativeInflightScopeKey(scope));
+                        resultRaw = await ExecuteNativeAsync(url, context, step, scope, declaredHosts,
+                            NativeInflightScopeKey(scope), inst.Id);
                     }
                     else
                     {
@@ -693,10 +708,13 @@ namespace LiteMonitor.src.Plugins
                         // 契约 C1/C2/C4 与 PluginRequestIdentityTests.I7 锁死"在途键逐字等于摘要"，
                         // 因此**不得**把允许目标/凭据策略塞进在途键或摘要里。
                         // ★ 同上：declaredHosts 恒非 null（GetDeclaredHosts 保证），不再判空。
+                        // [S02a] "允许发请求"与凭据检查同构：每个等待者在加入租约前各自履责
+                        // ——共享在途命中时自己的目标授权仍被检查，杜绝 fail-open。
+                        PluginSandbox.EnsureRequestTargetAllowed(url, declaredHosts);
                         PluginSandbox.EnsureCredentialTargetAllowed(url, resolvedHeaders, declaredHosts);
 
                         var task = GetOrStartInflight(inflightKey, () =>
-                            FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, System.Threading.CancellationToken.None, proxy, scope, declaredHosts, scopeCancelsRequest: false));
+                            FetchRawAsync(step.Method, url, body, resolvedHeaders, step.ResponseEncoding, System.Threading.CancellationToken.None, proxy, scope, declaredHosts, scopeCancelsRequest: false, instanceId: inst.Id));
 
                         await PreparePublicationAsync(inst.Id, "inflight-wait").ConfigureAwait(false);
 
@@ -807,14 +825,31 @@ namespace LiteMonitor.src.Plugins
         // Proxy Client Cache: Key = "host:port" or "http://host:port"
         private readonly ConcurrentDictionary<string, HttpClient> _proxyClients = new();
 
-        private HttpClient GetClient(string proxy)
+        // [S02a] 已生效的网络授权策略版本：与 PluginNetworkPolicy.Version 不一致 ⇒
+        // 连接池与响应缓存立即失效（授权收紧即时生效，不等 60 秒冷却窗口）。
+        private static long s_appliedPolicyVersion;
+
+        private HttpClient GetClient(string proxy, string? instanceId = null)
         {
+            EnsureNetworkPolicyCurrent();
+
             if (string.IsNullOrEmpty(proxy))
             {
                 lock (_httpLock) return _http;
             }
 
-            return _proxyClients.GetOrAdd(proxy.Trim(), p => 
+            // [S02a] 插件模板指定的代理端点必须经用户确认（实例+端点），端点字符串变化
+            // 即视为新端点。系统代理不经过本检查。instanceId 缺失的兼容路径（既有测试
+            // 直调 FetchRawAsync 不传实例）不做此检查；生产路径恒有实例 ID。
+            if (!string.IsNullOrWhiteSpace(instanceId) &&
+                !PluginProxyAuthorizer.Default.IsAuthorized(instanceId, proxy))
+            {
+                throw new PluginSandboxException(
+                    PluginSandboxReasons.PluginProxyNotAuthorized,
+                    $"插件指定的代理端点 '{proxy.Trim()}' 未经用户确认，请求未发送。请在插件管理页确认该代理。");
+            }
+
+            return _proxyClients.GetOrAdd(proxy.Trim(), p =>
             {
                 var handler = new SocketsHttpHandler();
                 handler.Proxy = new System.Net.WebProxy(p);
@@ -828,12 +863,31 @@ namespace LiteMonitor.src.Plugins
                 // [Fix] Limit pooled connections for proxies too
                 handler.PooledConnectionLifetime = TimeSpan.FromMinutes(2);
                 handler.MaxConnectionsPerServer = 20;
-                
+
                 var client = new HttpClient(handler);
                 client.Timeout = TimeSpan.FromSeconds(10);
                 client.DefaultRequestHeaders.Add("User-Agent", "LiteMonitor++/1.0");
                 return client;
             });
+        }
+
+        /// <summary>
+        /// [S02a] 授权（凭据目标/本地网络/代理确认）发生任何写入后，连接池与响应缓存
+        /// 立即失效。复用 <see cref="ResetNetworkClientsLocked"/> 的完整重置语义
+        /// （重建默认客户端、清空代理池、复位原生解析器），但**绕过冷却节流**，
+        /// 因为授权收紧必须即时生效，不能等 60 秒窗口。
+        /// </summary>
+        private void EnsureNetworkPolicyCurrent()
+        {
+            if (Interlocked.Read(ref s_appliedPolicyVersion) == PluginNetworkPolicy.Version) return;
+
+            lock (_httpLock)
+            {
+                if (Interlocked.Read(ref s_appliedPolicyVersion) == PluginNetworkPolicy.Version) return;
+                ResetNetworkClientsLocked();
+                _stepCache.Clear(); // 授权变更前缓存的响应不再可信，一并失效。
+                Interlocked.Exchange(ref s_appliedPolicyVersion, PluginNetworkPolicy.Version);
+            }
         }
 
         /// <summary>
@@ -855,8 +909,10 @@ namespace LiteMonitor.src.Plugins
         /// <param name="scope">沙箱作用域（令牌 / 字节上限）。</param>
         /// <param name="declaredHosts">插件显式声明的主机集合。</param>
         /// <param name="inflightScopeKey">原生在途去重的作用域键（避免跨作用域互相打断）。</param>
+        /// <param name="instanceId">发起请求的插件实例 ID（[S02a] 地址预检的本地网络授权主体）。</param>
         private async Task<string> ExecuteNativeAsync(string url, Dictionary<string, string> context,
-            PluginExecutionStep step, PluginSandboxScope scope, HashSet<string> declaredHosts, string inflightScopeKey)
+            PluginExecutionStep step, PluginSandboxScope scope, HashSet<string> declaredHosts, string inflightScopeKey,
+            string? instanceId = null)
         {
             // url: native://citycode?province=...
             var uri = new Uri(url);
@@ -900,7 +956,7 @@ namespace LiteMonitor.src.Plugins
                 var publication = _publication.Value
                     ?? throw new InvalidOperationException("插件执行缺少发布租约，原生步骤无法落盘。");
                 return await CryptoNative.FetchLeasedAsync(s, fb, nativeToken, maxResponseBytes, allowedHosts,
-                    inflightScopeKey, publication).ConfigureAwait(false);
+                    inflightScopeKey, publication, instanceId).ConfigureAwait(false);
             }
             else if (uri.Host.Equals("newyear", StringComparison.OrdinalIgnoreCase))
             {
@@ -1045,7 +1101,7 @@ namespace LiteMonitor.src.Plugins
         //   scope 为空=不绑作用域令牌；allowedHosts 为空=无声明上下文，不做凭据校验）。
         // ★ encoding 可空：来源是插件 JSON 里的 "response_encoding"，JSON 显式写 null 时
         //   反序列化会真的给出 null ⇒ 函数体的 `encoding?.ToLower() == "gbk"` 是必要的空值保护。
-        private async Task<string> FetchRawAsync(string methodStr, string url, string body, Dictionary<string, string> headers, string? encoding, System.Threading.CancellationToken token, string? proxy = null, PluginSandboxScope? scope = null, HashSet<string>? allowedHosts = null, bool scopeCancelsRequest = true)
+        private async Task<string> FetchRawAsync(string methodStr, string url, string body, Dictionary<string, string> headers, string? encoding, System.Threading.CancellationToken token, string? proxy = null, PluginSandboxScope? scope = null, HashSet<string>? allowedHosts = null, bool scopeCancelsRequest = true, string? instanceId = null)
         {
             PluginHostPolicy.RequireHttpHost(url);
             // 方法解析：**只支持 GET / POST / HEAD**，其余一律回落 GET（既有行为，逐字不变）。
@@ -1055,14 +1111,20 @@ namespace LiteMonitor.src.Plugins
             HttpMethod method = HttpMethod.Get;
             if (methodStr?.ToUpper() == "POST") method = HttpMethod.Post;
             else if (methodStr?.ToUpper() == "HEAD") method = HttpMethod.Head;
-            
+
             // Log($"[Start] {method} {url} Proxy:{proxy ?? "None"}");
 
             // [LM-009] 凭据目标校验：**必须在请求发出之前**。
             // 目标主机不在插件显式声明集合内 ⇒ 直接拒绝，请求不会被发出，凭据不会发送。
+            // [S02a] "是否允许发请求"与"是否允许带凭据"分离：**不带凭据**的首跳同样
+            // 必须落在声明/授权集合内（EnsureRequestTargetAllowed 自带 allowedHosts 判空，
+            // 与调用侧检查同构，此处是共享在途创建者路径的兜底复核）。
+            // ★ 顺序：凭据校验先于请求校验 —— 带凭据且目标未声明时保持既有
+            // CredentialTargetNotAllowed 原因码合同；请求校验兜底无凭据场景。
             if (allowedHosts != null)
             {
                 PluginSandbox.EnsureCredentialTargetAllowed(url, headers, allowedHosts);
+                PluginSandbox.EnsureRequestTargetAllowed(url, allowedHosts);
             }
 
             // [LM-045] 逐跳复核所需的两组事实：
@@ -1073,7 +1135,8 @@ namespace LiteMonitor.src.Plugins
 
             // ★ proxy 可空（可选参数）：无代理时用空串交给 GetClient ——
             //   GetClient 体内用 string.IsNullOrEmpty 判空，对 null 与 "" 的处理逐字相同。
-            var client = GetClient(proxy ?? string.Empty);
+            //   [S02a] instanceId 用于插件显式代理的用户确认闸门。
+            var client = GetClient(proxy ?? string.Empty, instanceId);
             int generation = GetClientGeneration();
             try
             {
@@ -1118,6 +1181,10 @@ namespace LiteMonitor.src.Plugins
                         if (current != null)
                         {
                             EnsureHopTargetAllowed(current, allowedHosts, hopAllowedHosts, headers, hasCredential);
+
+                            // [S02a] 连接前地址预检：解析 + 整组分类判定，**每一跳重做**
+                            // （重定向跳与首跳同一策略；重定向到内网/元数据地址在发送前拒绝）。
+                            await PluginAddressPreflight.EnsureAddressPolicyAsync(current, proxy, instanceId, linked.Token);
                         }
 
                         // 每一跳都**重建**请求（StringContent 正文不可复用）。

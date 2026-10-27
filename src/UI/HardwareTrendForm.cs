@@ -6,6 +6,8 @@ using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.Core.Trends;
+using LiteMonitor.src.UI.SettingsPage;
 
 namespace LiteMonitor
 {
@@ -20,7 +22,9 @@ namespace LiteMonitor
         private readonly Dictionary<TrendRange, Button> _rangeButtons = new Dictionary<TrendRange, Button>();
         private readonly TrendChartControl _chart;
         private readonly FlowLayoutPanel _summaryPanel;
+        private readonly FlowLayoutPanel _metricPanel;
         private readonly DataGridView _grid;
+        private readonly List<string> _shortcutKeys = new List<string>();
 
         private TrendCategory _category = TrendCategory.Temperature;
         private TrendRange _range = TrendRange.Hour1;
@@ -29,14 +33,14 @@ namespace LiteMonitor
         private bool _fillingGrid;
         private float _scale = 1.0f;
 
-        private readonly Color C_Back = Color.FromArgb(32, 32, 32);
-        private readonly Color C_Panel = Color.FromArgb(45, 45, 45);
-        private readonly Color C_GridBack = Color.FromArgb(38, 38, 38);
-        private readonly Color C_GridLine = Color.FromArgb(60, 60, 60);
-        private readonly Color C_TextMain = Color.FromArgb(230, 230, 230);
-        private readonly Color C_TextDim = Color.FromArgb(160, 160, 160);
-        private readonly Color C_Header = Color.FromArgb(50, 50, 50);
-        private readonly Color C_Accent = Color.FromArgb(0, 122, 204);
+        private Color C_Back = Color.FromArgb(32, 32, 32);
+        private Color C_Panel = Color.FromArgb(45, 45, 45);
+        private Color C_GridBack = Color.FromArgb(38, 38, 38);
+        private Color C_GridLine = Color.FromArgb(60, 60, 60);
+        private Color C_TextMain = Color.FromArgb(230, 230, 230);
+        private Color C_TextDim = Color.FromArgb(160, 160, 160);
+        private Color C_Header = Color.FromArgb(50, 50, 50);
+        private Color C_Accent = Color.FromArgb(0, 122, 204);
 
         protected override CreateParams CreateParams
         {
@@ -64,6 +68,7 @@ namespace LiteMonitor
         {
             _cfg = cfg;
             DoubleBuffered = true;
+            AutoScaleMode = AutoScaleMode.Dpi;
 
             using (Graphics g = CreateGraphics())
             {
@@ -82,6 +87,18 @@ namespace LiteMonitor
 
             var toolbar = CreateToolbar();
             Controls.Add(toolbar);
+
+            _metricPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                Height = S(40),
+                BackColor = C_Panel,
+                Padding = new Padding(S(16), S(5), S(12), S(4)),
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                AutoScroll = true
+            };
+            Controls.Add(_metricPanel);
 
             _summaryPanel = new FlowLayoutPanel
             {
@@ -110,6 +127,7 @@ namespace LiteMonitor
 
             ResumeLayout(true);
 
+            ApplyTheme();
             LoadData();
 
             _timer = new System.Windows.Forms.Timer { Interval = 15000 };
@@ -130,6 +148,35 @@ namespace LiteMonitor
             int x = workingArea.Left + (workingArea.Width - Width) / 2;
             int y = workingArea.Top + (workingArea.Height - Height) / 2;
             Location = new Point(Math.Max(workingArea.Left, x), Math.Max(workingArea.Top, y));
+        }
+
+        private void ApplyTheme()
+        {
+            SettingsThemeManager.Initialize(_cfg.SettingThemeMode);
+            SettingsThemePalette palette = SettingsThemeManager.CurrentPalette;
+
+            C_Back = palette.MainBg;
+            C_Panel = palette.SurfaceBg;
+            C_GridBack = palette.CardBg;
+            C_GridLine = palette.Border;
+            C_TextMain = palette.TextMain;
+            C_TextDim = palette.TextSub;
+            C_Header = palette.GroupHeader;
+            C_Accent = palette.Primary;
+
+            BackColor = C_Back;
+            ForeColor = C_TextMain;
+            _metricPanel.BackColor = C_Panel;
+            _summaryPanel.BackColor = C_Panel;
+            _grid.BackgroundColor = C_GridBack;
+            _grid.GridColor = C_GridLine;
+            _grid.ColumnHeadersDefaultCellStyle.BackColor = C_Header;
+            _grid.ColumnHeadersDefaultCellStyle.ForeColor = C_TextMain;
+            _grid.DefaultCellStyle.BackColor = C_GridBack;
+            _grid.DefaultCellStyle.ForeColor = C_TextMain;
+
+            _chart.ApplyPalette(C_GridBack, C_GridLine, C_TextMain, C_TextDim);
+            Invalidate(true);
         }
 
         private Control CreateToolbar()
@@ -225,12 +272,16 @@ namespace LiteMonitor
                 .Where(s => s.Points.Count > 0)
                 .ToList();
 
-            _chart.Title = GetCategoryTitle();
+            TrendCoverage coverage = TrendViewMetrics.Calculate(
+                _currentSeries.SelectMany(s => s.Points).Select(p => p.Time),
+                GetRangeSpan(), GetBucketMinutes());
+            _chart.Title = $"{GetCategoryTitle()}  ·  {T("分辨率", "Resolution")} {GetBucketMinutes()} min  ·  {T("覆盖", "Coverage")} {coverage.ObservedBuckets}/{coverage.ExpectedBuckets}";
             _chart.Threshold = _category == TrendCategory.Temperature ? _cfg.AlertTempThreshold : null;
             _chart.EmptyText = HasEnabledMetricInCurrentCategory()
                 ? T("暂无历史数据", "No history")
                 : T("当前分类没有开启的监控项", "No enabled metrics in this group");
             _chart.SetSeries(_currentSeries);
+            RebuildMetricShortcuts();
 
             FillSummary();
             FillGrid();
@@ -269,6 +320,64 @@ namespace LiteMonitor
                 Color = GetSeriesColor(index),
                 Points = points
             };
+        }
+
+        private void RebuildMetricShortcuts()
+        {
+            var keys = _currentSeries.Select(s => s.Key).ToList();
+            if (keys.SequenceEqual(_shortcutKeys, StringComparer.OrdinalIgnoreCase)) return;
+
+            _shortcutKeys.Clear();
+            _shortcutKeys.AddRange(keys);
+            _metricPanel.SuspendLayout();
+            _metricPanel.Controls.Clear();
+
+            if (keys.Count > 0)
+            {
+                AddLabel(_metricPanel, T("指标", "Series"));
+                foreach (string key in keys)
+                {
+                    TrendChartSeries series = _currentSeries.First(s =>
+                        s.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+                    var btn = CreateButton(series.Label, GetTextButtonWidth(series.Label, S(82)));
+                    btn.Tag = key;
+                    btn.Click += (_, __) => SelectSeriesFromShortcut(key);
+                    _metricPanel.Controls.Add(btn);
+                }
+            }
+
+            _metricPanel.ResumeLayout();
+            RefreshMetricShortcutSelection();
+        }
+
+        private void SelectSeriesFromShortcut(string key)
+        {
+            _selectedSeriesKey = key;
+            _chart.SetHighlightedSeries(key);
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                if (row.Tag is string rowKey &&
+                    rowKey.Equals(key, StringComparison.OrdinalIgnoreCase))
+                {
+                    _grid.ClearSelection();
+                    row.Selected = true;
+                    _grid.CurrentCell = row.Cells["Name"];
+                    break;
+                }
+            }
+            RefreshMetricShortcutSelection();
+        }
+
+        private void RefreshMetricShortcutSelection()
+        {
+            foreach (Control control in _metricPanel.Controls)
+            {
+                if (control is not Button button || button.Tag is not string key) continue;
+                bool active = !string.IsNullOrEmpty(_selectedSeriesKey) &&
+                    key.Equals(_selectedSeriesKey, StringComparison.OrdinalIgnoreCase);
+                button.BackColor = active ? C_Accent : C_Back;
+                button.ForeColor = active ? Color.White : C_TextDim;
+            }
         }
 
         private void FillSummary()
@@ -358,6 +467,7 @@ namespace LiteMonitor
                 _selectedSeriesKey = null;
                 _chart.SetHighlightedSeries(null);
             }
+            RefreshMetricShortcutSelection();
         }
 
         private void ExportCsv()

@@ -36,6 +36,10 @@ namespace LiteMonitor.Tests
     /// </summary>
     public class PluginRequestIdentityTests
     {
+        // [S02a] 回环测试服务器需要本地网络授权（见 LocalNetworkAuthGrant）。
+        private readonly LocalNetworkAuthGrant _localAuth = new();
+        private readonly PluginProxyAuthGrant _proxyAuth = new();
+
         static PluginRequestIdentityTests()
         {
             // GBK 编解码需要 CodePages provider（产品侧在 PluginExecutor 构造函数里注册，

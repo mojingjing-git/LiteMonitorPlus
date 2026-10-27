@@ -1,0 +1,149 @@
+{
+  "bomTheme": {
+    "oldReaderParses": true,
+    "Success": false,
+    "Error": "\u00270xEF\u0027 is an invalid start of a value. Path: $ | LineNumber: 0 | BytePositionInLine: 0."
+  },
+  "shortTrend": {
+    "points": [
+      {
+        "TimeUtc": "2026-10-27T04:00:00+00:00",
+        "Value": 95,
+        "Quality": 0,
+        "SampleAgeMs": 0,
+        "StableDeviceId": "cpu-A"
+      },
+      {
+        "TimeUtc": "2026-10-27T04:00:01+00:00",
+        "Value": 95,
+        "Quality": 0,
+        "SampleAgeMs": 1000,
+        "StableDeviceId": "cpu-A"
+      }
+    ],
+    "stats": {
+      "SeriesCount": 1,
+      "PointCount": 2,
+      "MaxSeries": 32,
+      "CapacityPerSeries": 3600,
+      "AcceptedSnapshots": 3,
+      "DuplicateBatches": 0,
+      "OutOfOrderBatches": 0,
+      "RejectedSamples": 1,
+      "SessionResets": 0,
+      "DroppedPoints": 0
+    }
+  },
+  "cachedAlert": {
+    "transitions": [
+      {
+        "RuleId": "r",
+        "DeviceId": "default",
+        "State": 2,
+        "Kind": 0,
+        "ObservedAt": "2026-10-27T04:00:06+00:00",
+        "IncidentId": "r:default:2026-10-27T04:00:06.0000000\u002B00:00",
+        "Notification": 0,
+        "ReasonCode": "trigger_duration_met",
+        "ShouldNotify": true
+      }
+    ],
+    "state": "Active",
+    "CurrentBatchId": 2
+  },
+  "alertResetByIdenticalRules": [
+    {
+      "RuleId": "r",
+      "DeviceId": "default",
+      "State": 2,
+      "Kind": 0,
+      "ObservedAt": "2026-10-27T04:00:14+00:00",
+      "IncidentId": "r:default:2026-10-27T04:00:14.0000000\u002B00:00",
+      "Notification": 0,
+      "ReasonCode": "trigger_duration_met",
+      "ShouldNotify": true
+    }
+  ],
+  "alertRecoveringGap": {
+    "transitions": [],
+    "state": "Normal",
+    "incident": "r:cpu-A:2026-10-27T04:00:06.0000000\u002B00:00"
+  },
+  "scenarioBackup": {
+    "first": [
+      "A"
+    ],
+    "second": [],
+    "primaryExists": false
+  },
+  "futureScenario": {
+    "loaded": 0,
+    "saveAccepted": true,
+    "activeNames": [
+      "replacement"
+    ]
+  },
+  "scenarioInteractionLockout": {
+    "CanApply": true,
+    "HideTrayIcon": true,
+    "HideMainForm": false,
+    "ShowTaskbar": true,
+    "ClickThrough": true,
+    "TaskbarClickThrough": true,
+    "noInteractiveEntry": true
+  },
+  "gpuAlertMigration": {
+    "remigrated": false,
+    "MonitoredGpuCount": 2,
+    "gpuRules": [
+      "GPU.0.Temp"
+    ]
+  },
+  "alertDiagnostic": [
+    {
+      "UtcTime": "2026-10-27T04:00:00+00:00",
+      "Module": "alerts",
+      "Severity": 1,
+      "ReasonCode": "alert_triggered",
+      "OperationId": null,
+      "SessionId": "s",
+      "Context": {
+        "reason": "trigger_duration_met"
+      },
+      "EventId": 1,
+      "RepeatCount": 2
+    }
+  ],
+  "privacy": {
+    "Success": true,
+    "json": "{\u0022schema\u0022:\u0022litemonitor.diagnostics/1\u0022,\u0022appVersion\u0022:\u0022test\u0022,\u0022generatedAtUtc\u0022:\u00222026-10-27T04:50:48.5954234\u002B00:00\u0022,\u0022summary\u0022:{\u0022eventCount\u0022:0,\u0022moduleCount\u0022:1,\u0022droppedCount\u0022:0,\u0022rejectedCount\u0022:0},\u0022snapshot\u0022:{\u0022capturedAtUtc\u0022:\u00222026-10-27T04:00:00\u002B00:00\u0022,\u0022modules\u0022:[{\u0022module\u0022:\u0022apply\u0022,\u0022state\u0022:2,\u0022reasonCode\u0022:\u0022failed\u0022,\u0022summary\u0022:\u0022failed\u0022,\u0022observedAtUtc\u0022:\u00222026-10-27T04:00:00\u002B00:00\u0022,\u0022facts\u0022:{\u0022module.ThemeRuntime\u0022:\u0022failed: Could not open G:\\\\Users\\\\Alice\\\\private-theme.json (host 192.0.2.1)\u0022}}]},\u0022events\u0022:[]}"
+  },
+  "historyImport": {
+    "Points": [
+      {
+        "TimeUtc": "2026-10-27T12:00:00+08:00",
+        "MetricKey": "GPU.0.Temp",
+        "StableDeviceId": null,
+        "Value": 65,
+        "Quality": 0,
+        "SampleAgeMs": 0
+      }
+    ],
+    "CorruptLines": 0,
+    "FilesRead": 1
+  },
+  "powerCaps": {
+    "ecoAt5": {
+      "Fps": 10,
+      "Paused": false,
+      "Reason": "eco"
+    },
+    "autoAt5": {
+      "Fps": 15,
+      "Paused": false,
+      "Reason": "auto-battery"
+    },
+    "ecoAnimation": 20,
+    "autoAnimation": 30
+  }
+}

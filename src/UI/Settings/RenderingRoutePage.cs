@@ -29,6 +29,7 @@ namespace LiteMonitor.src.UI.SettingsPage
         private Label? _themeRouteLabel;
         private Label? _statusSummaryLabel;
         private FullWidthDetailRow? _statusDetailRow;
+        private LiteButton? _gpuRetryButton;
 
         private bool Chinese => (Config.Language ?? string.Empty)
             .StartsWith("zh", StringComparison.OrdinalIgnoreCase);
@@ -173,12 +174,78 @@ namespace LiteMonitor.src.UI.SettingsPage
                 "实时背景与旧 LiveGlassEnabled 完全独立；赛博朋克主题始终为零抓屏。",
                 "Live background is independent from legacy LiveGlassEnabled; cyberpunk always performs zero desktop capture."));
 
+            // ──【S06】启动守卫状态与有界手动重试 ──
+            // 守卫保守（上次尝试未确认首帧 / 守卫存储不可用）时提供显式重试入口：
+            // 复用 GpuStartupRetryRequested + 既有 Apply 编排（SettingsForm 消费 →
+            // AllowGpuStartupRetryAfterExplicitSettingsApply → AllowExplicitManualRetry）。
+            // 一次申请一次尝试；页面刷新（RegisterRefresh）只恢复按钮可用性，不自动重试。
+            if (GpuStartupGuard.Shared.ConservativeForThisProcess)
+            {
+                _gpuRetryButton = new LiteButton(GetText("重试 GPU 渲染", "Retry GPU rendering"));
+                _gpuRetryButton.Click += (_, _) => OnGpuRetryClicked();
+                group.AddItem(new LiteSettingsItem(
+                    GetText("GPU 启动重试", "GPU startup retry"),
+                    _gpuRetryButton));
+                group.AddHint(GetText(
+                    "上次 GPU 尝试未正常收尾（见上方状态）。重试按当前已保存的 GPU 与捕获权限执行，不会开启抓屏，也不会提交其他未保存的更改。",
+                    "The previous GPU attempt did not finish cleanly (see the status above). Retry uses the currently saved GPU and capture permissions, enables no capture, and submits no other pending changes."));
+            }
+
+            group.AddHint(GetText(
+                "此处的重试只作用于主面板的 GPU 启动守卫；主题工作室预览有独立的启动守卫，需要在工作室中单独恢复。",
+                "The retry here applies to the main panel GPU guard only; the theme studio preview has its own startup guard and is recovered separately in the studio."));
+
+            RegisterRefresh(() =>
+            {
+                if (_gpuRetryButton is null)
+                {
+                    return;
+                }
+
+                if (!GpuStartupRetryRequested)
+                {
+                    // 尝试失败后允许再次手动申请（S06 §8.2.6）；成功路径下守卫已清，
+                    // 按钮同样恢复，但卡片只在进页时保守才创建。
+                    _gpuRetryButton.Enabled = true;
+                    _gpuRetryButton.Text = GetText("重试 GPU 渲染", "Retry GPU rendering");
+                }
+            });
+
             AddGroupToPage(group);
         }
 
         // ================================================================
         // 状态聚合（纯逻辑在 RenderingRouteStatusBuilder，便于单测）
         // ================================================================
+        /// <summary>
+        /// 【S06】「重试 GPU」点击：确认按已保存权限执行后置位重试申请，
+        /// 由 SettingsForm 在 Apply 时消费（一次申请一次尝试）。
+        /// </summary>
+        private void OnGpuRetryClicked()
+        {
+            if (_gpuRetryButton is null)
+            {
+                return;
+            }
+
+            DialogResult accepted = MessageBox.Show(
+                FindForm(),
+                GetText(
+                    "将按当前已保存的 GPU 与捕获权限重试 GPU 渲染；不会开启抓屏，也不会提交其他未保存的更改。\n\n申请后请点击设置窗口的「应用」生效。",
+                    "GPU rendering will be retried using the currently saved GPU and capture permissions; no capture is enabled and no other pending changes are submitted.\n\nClick Apply in the settings window to take effect."),
+                GetText("重试 GPU 渲染", "Retry GPU rendering"),
+                MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Question);
+            if (accepted != DialogResult.OK)
+            {
+                return;
+            }
+
+            GpuStartupRetryRequested = true;
+            _gpuRetryButton.Enabled = false;
+            _gpuRetryButton.Text = GetText("已申请：点击应用生效", "Requested: click Apply");
+        }
+
         private static bool IsGpuTheme(ThemeRenderingConfig? rendering) =>
             rendering is not null &&
             string.Equals(rendering.Backend?.Trim(),
@@ -208,7 +275,9 @@ namespace LiteMonitor.src.UI.SettingsPage
                 LiveBackgroundRequested: UI?.IsGpuLiveBackgroundRequested == true,
                 RuntimeFailure: UI?.GpuRuntimeFailure,
                 FallbackCode: UI?.GpuFallbackCode,
-                WindowIsLayered: MainForm is { IsHandleCreated: true } && MainForm.IsWindowLayered());
+                WindowIsLayered: MainForm is { IsHandleCreated: true } && MainForm.IsWindowLayered(),
+                GpuGuardConservative: GpuStartupGuard.Shared.ConservativeForThisProcess,
+                GpuGuardStatusCode: GpuStartupGuard.Shared.StatusCode);
 
             var lines = new List<string>();
             foreach (RenderingRouteStatusLine line in RenderingRouteStatusBuilder.Build(snapshot))
@@ -221,6 +290,13 @@ namespace LiteMonitor.src.UI.SettingsPage
                     RenderingRouteStatusKind.LiveBackgroundOff => "Menu.RouteStatus.LiveBackgroundOff",
                     RenderingRouteStatusKind.LiveBackgroundUnavailable => "Menu.RouteStatus.LiveBackgroundUnavailable",
                     RenderingRouteStatusKind.NotStarted => "Menu.RouteStatus.NotStarted",
+                    // 【S06】守卫原因码转易懂文案；原码已由 Detail 追加展示，排障信息不丢。
+                    RenderingRouteStatusKind.GpuGuardConservative => string.Equals(
+                        line.Detail,
+                        "gpu_startup_guard_storage_unavailable",
+                        StringComparison.Ordinal)
+                        ? "Menu.RouteStatus.GpuGuardStorage"
+                        : "Menu.RouteStatus.GpuGuardUnclean",
                     RenderingRouteStatusKind.LayeredDiagnostic => "Menu.RouteStatus.LayeredNote",
                     _ => "Menu.RouteStatus.NotStarted"
                 };

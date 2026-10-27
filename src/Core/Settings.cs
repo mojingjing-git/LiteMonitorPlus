@@ -10,7 +10,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using LiteMonitor.src.Core;
+using LiteMonitor.src.Core.Alerts;
 using LiteMonitor.src.Plugins;
 namespace LiteMonitor
 {
@@ -235,6 +237,13 @@ namespace LiteMonitor
         public bool AlertTempEnabled { get; set; } = true;
         public int AlertTempThreshold { get; set; } = 80;
 
+        /// <summary>T06：全局静音；规则仍评估并写诊断事件，只是不发通知。</summary>
+        public bool AlertMuteAll { get; set; } = false;
+
+        /// <summary>T05：旧温度告警迁移版本；0 表示尚未迁移。</summary>
+        public int AlertRulesVersion { get; set; } = 0;
+        public List<AlertRule> AlertRules { get; set; } = new();
+
         public bool WebServerEnabled { get; set; } = false;
         public int WebServerPort { get; set; } = 5000; // 默认端口
 
@@ -382,11 +391,13 @@ namespace LiteMonitor
         /// <summary>
         /// B3：克隆一份用于差异比对的快照（JSON 往返；运行时 [JsonIgnore] 字段不参与——
         /// 它们在 ComputeDiff 的黑名单里本就不算差异）。只读用途，不得当 Live 用。
+        /// S01：走 <see cref="SettingsJsonCloning.MemoryCloneOptions"/> —— 不触发
+        /// Protect/Unprotect（0 次 DPAPI 调用），凭据值（明文或密文）逐值原样保留。
         /// </summary>
         public Settings CloneForDiff()
         {
-            var json = System.Text.Json.JsonSerializer.Serialize(this);
-            return System.Text.Json.JsonSerializer.Deserialize<Settings>(json) ?? new Settings();
+            var json = System.Text.Json.JsonSerializer.Serialize(this, SettingsJsonCloning.MemoryCloneOptions);
+            return System.Text.Json.JsonSerializer.Deserialize<Settings>(json, SettingsJsonCloning.MemoryCloneOptions) ?? new Settings();
         }
 
         // ★★★ [多显卡] 各显卡各自的峰值记录 (key = 完整 Key, 如 "GPU.1.Power"), 供进度条按卡自适应 ★★★
@@ -464,7 +475,22 @@ namespace LiteMonitor
             // ★ W9：插件凭据解密失败的显式处理（禁用受影响实例 + 记录错误，绝不静默变空）
             loaded.ApplyPluginCredentialState();
 
+            // ★ T05：旧温度告警迁移到规则模型。幂等，且不改变已关闭告警的启用状态。
+            AlertRuleMigration.Apply(loaded, Math.Max(0, loaded.MonitoredGpuCount));
+            // R16：已迁移配置也要跟随当前监控 GPU 数量补齐逐卡规则。
+            AlertRuleMigration.SyncGpuRules(loaded, Math.Max(0, loaded.MonitoredGpuCount));
+
             return loaded;
+        }
+
+        /// <summary>
+        /// T06：旧温度设置变更后重建迁移规则，避免设置页切换后规则仍是旧阈值。
+        /// 仅用于尚未提供逐规则编辑的首版；后续规则编辑应直接改 <see cref="AlertRules"/>。
+        /// </summary>
+        public void RebuildMigratedAlertRules()
+        {
+            AlertRules = AlertRuleMigration.Build(this, Math.Max(0, MonitoredGpuCount)).ToList();
+            AlertRulesVersion = AlertRuleMigration.CurrentVersion;
         }
 
         /// <summary>
@@ -564,8 +590,11 @@ namespace LiteMonitor
 
         public Settings DeepClone()
         {
-            var json = System.Text.Json.JsonSerializer.Serialize(this);
-            return System.Text.Json.JsonSerializer.Deserialize<Settings>(json) ?? new Settings();
+            // S01：内存克隆专用选项（见 SettingsJsonCloning）——不触碰 DPAPI；
+            // 凭据保护失败与否都不影响克隆。结果只用于内存，禁止直接落盘/导出/诊断/日志
+            // （落盘必须走正常保存路径，持久化转换器会重新强制保护）。
+            var json = System.Text.Json.JsonSerializer.Serialize(this, SettingsJsonCloning.MemoryCloneOptions);
+            return System.Text.Json.JsonSerializer.Deserialize<Settings>(json, SettingsJsonCloning.MemoryCloneOptions) ?? new Settings();
         }
 
         // ================================================================
@@ -1156,10 +1185,21 @@ namespace LiteMonitor
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr LocalFree(IntPtr hMem);
 
+        // ★ S01 测试接缝：非 null 时 Protect 用它代替 DPAPI（返回值当作密文；抛异常即模拟保护失败）。
+        //   只用于观察调用入口与失败路径，**不记录任何凭据内容**。测试串行运行，用完必须清空。
+        internal static Func<string, string>? ProtectHookForTests;
+
+        // ★ S01 调用计数：内存克隆（MemoryClone）路径必须为 0，持久化写入必须 > 0。
+        internal static int ProtectCallCount;
+        internal static int UnprotectCallCount;
+
         /// <summary>明文 → 密文（CurrentUser 作用域）。</summary>
         public static string Protect(string plaintext)
         {
             if (plaintext == null) return "";
+            System.Threading.Interlocked.Increment(ref ProtectCallCount);
+            Func<string, string>? hook = ProtectHookForTests;
+            if (hook != null) return hook(plaintext);
             byte[] data = Encoding.UTF8.GetBytes(plaintext);
 
             IntPtr inBuf = Marshal.AllocHGlobal(Math.Max(data.Length, 1));
@@ -1198,6 +1238,7 @@ namespace LiteMonitor
         {
             plaintext = "";
             error = "";
+            System.Threading.Interlocked.Increment(ref UnprotectCallCount);
 
             if (!IsProtected(value))
             {
@@ -1261,8 +1302,35 @@ namespace LiteMonitor
     }
 
     // ==================================================================
-    //  插件凭据的落盘转换器（透明加解密）
+    //  插件凭据的落盘转换器（透明加解密）—— S01 用途化
     // ==================================================================
+
+    /// <summary>
+    /// S01：插件凭据转换器的用途。两套转换器实例**各自固定**、选项只读，
+    /// 不做任何进程级切换：持久化走保护规则，内存克隆纯复制。
+    /// </summary>
+    internal enum SecretConverterUsage
+    {
+        /// <summary>持久化：读取时解密（失败保留密文并报错），写入时强制 DPAPI 保护（失败中止保存）。</summary>
+        Persistence,
+        /// <summary>内存克隆：字符串逐值原样复制，不调用 Protect/Unprotect（0 次保护调用）。</summary>
+        MemoryClone
+    }
+
+    /// <summary>
+    /// S01：持久化写入时凭据保护（DPAPI）失败 —— 立即中止整个序列化，
+    /// **绝不把明文写进文件**。由 <see cref="PluginSecretDictionaryConverter"/> 抛出、
+    /// <c>SettingsHelper.TrySaveLocked</c> 捕获并归类为「凭据保护失败」保存结果。
+    /// </summary>
+    /// <remarks>
+    /// ★ 派生自 <see cref="JsonException"/>：无论 System.Text.Json 是否再包一层，
+    ///   异常链上都能被识别。消息只含参数名与底层原因，**绝不含凭据值**。
+    /// </remarks>
+    internal sealed class SecretProtectionFailureException : JsonException
+    {
+        public SecretProtectionFailureException(string message, Exception innerException)
+            : base(message, innerException) { }
+    }
 
     /// <summary>
     /// 插件参数字典的转换器：把"看起来是凭据"的参数用 DPAPI（CurrentUser）加密后落盘。
@@ -1272,9 +1340,20 @@ namespace LiteMonitor
     ///   插件执行路径（<c>PluginExecutor</c>）完全不受影响。
     /// ★ 解密失败时**保留原密文**并向上层暴露（由 <c>Settings.ApplyPluginCredentialState</c>
     ///   停用该实例并报错），绝不静默变成空值。
+    /// ★ S01：用途见 <see cref="SecretConverterUsage"/>。持久化用途下保护失败 ⇒
+    ///   抛 <see cref="SecretProtectionFailureException"/> 中止保存（旧版此处把明文原样落盘，
+    ///   已删除）；内存克隆用途下所有值原样复制、不触碰 DPAPI。
     /// </remarks>
     internal sealed class PluginSecretDictionaryConverter : JsonConverter<Dictionary<string, string>>
     {
+        private readonly SecretConverterUsage _usage;
+
+        /// <summary>属性级 [JsonConverter] 与持久化序列化走此构造：保护优先。</summary>
+        public PluginSecretDictionaryConverter() : this(SecretConverterUsage.Persistence) { }
+
+        /// <summary>指定用途构造（MemoryClone 由 <c>SettingsJsonCloning</c> 经元数据修饰器注入）。</summary>
+        public PluginSecretDictionaryConverter(SecretConverterUsage usage) { _usage = usage; }
+
         /// <summary>会被当作凭据加密的参数名（小写比较）。</summary>
         internal static readonly string[] SecretKeyNames =
         {
@@ -1301,7 +1380,7 @@ namespace LiteMonitor
         }
 
         /// <summary>读取一个参数字典（供列表转换器复用）。</summary>
-        internal static Dictionary<string, string> ReadDict(ref Utf8JsonReader reader)
+        internal Dictionary<string, string> ReadDict(ref Utf8JsonReader reader)
         {
             var result = new Dictionary<string, string>();
             if (reader.TokenType == JsonTokenType.Null) return result;
@@ -1320,7 +1399,8 @@ namespace LiteMonitor
                 string raw = ReadScalar(ref reader);
                 string value = raw;
 
-                if (ProtectedSecret.IsProtected(raw))
+                // ★ S01：只有持久化用途才解密；内存克隆原样复制（TryUnprotect 0 次）。
+                if (_usage == SecretConverterUsage.Persistence && ProtectedSecret.IsProtected(raw))
                 {
                     if (ProtectedSecret.TryUnprotect(raw, out string plain, out string err))
                     {
@@ -1346,7 +1426,7 @@ namespace LiteMonitor
         }
 
         /// <summary>写出一个参数字典（供列表转换器复用）。</summary>
-        internal static void WriteDict(Utf8JsonWriter writer, Dictionary<string, string> value)
+        internal void WriteDict(Utf8JsonWriter writer, Dictionary<string, string> value)
         {
             writer.WriteStartObject();
             if (value != null)
@@ -1355,13 +1435,21 @@ namespace LiteMonitor
                 {
                     writer.WritePropertyName(kv.Key);
                     string v = kv.Value ?? "";
-                    if (IsSecretKey(kv.Key) && !ProtectedSecret.IsProtected(v) && v.Length > 0)
+                    if (_usage == SecretConverterUsage.Persistence &&
+                        IsSecretKey(kv.Key) && !ProtectedSecret.IsProtected(v) && v.Length > 0)
                     {
+                        // ★ S01：DPAPI 保护失败 ⇒ 整体保存失败、磁盘不动；
+                        //   旧版此处 catch 后把明文原样落盘，已删除（绝不写明文）。
                         try { writer.WriteStringValue(ProtectedSecret.Protect(v)); }
-                        catch (Exception) { writer.WriteStringValue(v); }   // DPAPI 失败 ⇒ 原样写（不丢数据）
+                        catch (Exception ex)
+                        {
+                            throw new SecretProtectionFailureException(
+                                "凭据保护失败（" + ex.Message + "），本次保存已取消，参数未写入：" + kv.Key, ex);
+                        }
                     }
                     else
                     {
+                        // 空值 / 已是密文 / 非凭据参数 / 内存克隆用途 ⇒ 原样写出。
                         writer.WriteStringValue(v);
                     }
                 }
@@ -1384,9 +1472,22 @@ namespace LiteMonitor
         }
     }
 
-    /// <summary>插件目标列表的转换器（逐项交给字典转换器处理）。</summary>
+    /// <summary>
+    /// 插件目标列表的转换器（逐项交给**同用途**的字典转换器处理）。
+    /// S01：不再静态调用默认持久化字典转换器 —— 列表与字典共用同一
+    /// <see cref="SecretConverterUsage"/>，内存克隆时整条链路都不触碰 DPAPI。
+    /// </summary>
     internal sealed class PluginSecretListConverter : JsonConverter<List<Dictionary<string, string>>>
     {
+        private readonly PluginSecretDictionaryConverter _dict;
+
+        public PluginSecretListConverter() : this(SecretConverterUsage.Persistence) { }
+
+        public PluginSecretListConverter(SecretConverterUsage usage)
+        {
+            _dict = new PluginSecretDictionaryConverter(usage);
+        }
+
         public override List<Dictionary<string, string>> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             var list = new List<Dictionary<string, string>>();
@@ -1397,7 +1498,7 @@ namespace LiteMonitor
             while (reader.Read())
             {
                 if (reader.TokenType == JsonTokenType.EndArray) return list;
-                list.Add(PluginSecretDictionaryConverter.ReadDict(ref reader));
+                list.Add(_dict.ReadDict(ref reader));
             }
 
             throw new JsonException("插件目标列表 JSON 结构非法");
@@ -1410,7 +1511,7 @@ namespace LiteMonitor
             {
                 foreach (var d in value)
                 {
-                    PluginSecretDictionaryConverter.WriteDict(writer, d);
+                    _dict.WriteDict(writer, d);
                 }
             }
             writer.WriteEndArray();
@@ -1439,6 +1540,56 @@ namespace LiteMonitor
                 _failures.Clear();
                 return copy;
             }
+        }
+    }
+
+    /// <summary>
+    /// S01：内存克隆专用的 JSON 序列化选项。与持久化唯一的差别是
+    /// <c>PluginInstanceConfig.InputValues</c> / <c>Targets</c> 换成
+    /// <see cref="SecretConverterUsage.MemoryClone"/> 用途的转换器（纯复制、0 次保护调用），
+    /// 保证 <c>DeepClone</c>/<c>CloneForDiff</c> 不触发 DPAPI、不因保护失败而崩，
+    /// 也不会只复制密文而丢掉已解密的值（混合明文/密文逐值原样保留）。
+    /// </summary>
+    /// <remarks>
+    /// ★ 属性级 [JsonConverter] 的优先级高于 options.Converters，因此**不能**只靠
+    ///   options 工厂覆盖 —— 这里用 <see cref="DefaultJsonTypeInfoResolver"/> 的修饰器
+    ///   改写 <see cref="JsonPropertyInfo.CustomConverter"/>（.NET 8 官方覆盖点，
+    ///   修饰器在 attribute 解析之后运行，后写者胜）。
+    /// ★ 选项实例只读固化（<see cref="JsonSerializerOptions.MakeReadOnly"/>），
+    ///   与持久化默认选项各自固定，不做进程级切换。
+    /// ★ 本选项产出的克隆只用于内存比对/快照；禁止把结果用于文件保存/导出/诊断/日志
+    ///   （若确需落盘，走正常保存路径 —— 属性级持久化转换器仍会强制保护）。
+    /// </remarks>
+    internal static class SettingsJsonCloning
+    {
+        internal static readonly JsonSerializerOptions MemoryCloneOptions = CreateMemoryCloneOptions();
+
+        private static JsonSerializerOptions CreateMemoryCloneOptions()
+        {
+            var options = new JsonSerializerOptions();
+            options.TypeInfoResolver = new DefaultJsonTypeInfoResolver
+            {
+                Modifiers =
+                {
+                    static (JsonTypeInfo typeInfo) =>
+                    {
+                        if (typeInfo.Type != typeof(PluginInstanceConfig)) return;
+                        foreach (JsonPropertyInfo prop in typeInfo.Properties)
+                        {
+                            if (prop.PropertyType == typeof(Dictionary<string, string>))
+                            {
+                                prop.CustomConverter = new PluginSecretDictionaryConverter(SecretConverterUsage.MemoryClone);
+                            }
+                            else if (prop.PropertyType == typeof(List<Dictionary<string, string>>))
+                            {
+                                prop.CustomConverter = new PluginSecretListConverter(SecretConverterUsage.MemoryClone);
+                            }
+                        }
+                    }
+                }
+            };
+            options.MakeReadOnly();
+            return options;
         }
     }
 }

@@ -111,6 +111,9 @@ namespace LiteMonitor.ThemeEditor
         /// <summary>当前 GPU 会话代次（穿透诊断）。</summary>
         public long CurrentGeneration => _gpuPreview?.CurrentGeneration ?? 0;
 
+        /// <summary>GPU 预览实际呈现帧数（R10：门禁必须验证真实出帧，而不是只看资源数量）。</summary>
+        public int PresentedFrameCount => _gpuPreview?.PresentedFrameCount ?? 0;
+
         /// <summary>
         /// 当前预览是否走 GPU 真实渲染（供状态区显示"实际路线"而非声明路线）。
         /// GPU 不可用 / 关闭特效 / 安全模式时恒为 false。
@@ -119,6 +122,9 @@ namespace LiteMonitor.ThemeEditor
 
         /// <summary>GPU 预览不可用原因（未尝试或可用时为 null）。</summary>
         public string? GpuPreviewError => _gpuPreview?.Error;
+
+        /// <summary>GPU 预览运行期不可用时触发，宿主应切换到同形态的 GDI 回退。</summary>
+        public event EventHandler? GpuPreviewUnavailable;
 
         /// <summary>
         /// 当前画布**实际渲染**的主题副本（R1 整改新增可观测量）。
@@ -129,6 +135,9 @@ namespace LiteMonitor.ThemeEditor
 
         /// <summary>当前画布实际渲染的编辑目标（R1 整改新增可观测量）。</summary>
         internal ThemeEditTarget RenderedTarget => _target;
+
+        /// <summary>当前画布形态（R2 F05 回归可观测量）。</summary>
+        internal PreviewShape CurrentShape => _shape;
 
         /// <summary>
         /// 编辑器传入主题
@@ -151,21 +160,10 @@ namespace LiteMonitor.ThemeEditor
             _shape = shape;
             _dpiScale = GetDpiScale();
 
-            // 若 target == ThemeEditTarget.GpuFallback，调用 LegacyFallbackStyleResolver.BuildDerivedTheme(theme) 生成派生主题
-            Theme themeToRender;
-            if (effectiveTarget == ThemeEditTarget.GpuFallback)
-            {
-                if (_gpuPreview != null)
-                {
-                    _gpuPreview.Visible = false;
-                }
-                themeToRender = LegacyFallbackStyleResolver.BuildDerivedTheme(theme);
-            }
-            else
-            {
-                themeToRender = theme;
-            }
-
+            // 编辑目标是“用户想编辑哪条路线”，实际绘制主题还要看 GPU 是否真的可用。
+            // F04：主效果目标在 GPU 关闭/安全模式/初始化失败时也必须走同一份
+            // legacy fallback 派生主题，不能继续用主效果原始 Color 画 GDI 兜底。
+            Theme themeToRender = ResolveGdiTheme(effectiveTarget);
             _theme = themeToRender;
 
             // ★ 主题可能是**就地修改**的（编辑器改一个字段就会调一次 SetTheme），
@@ -191,6 +189,67 @@ namespace LiteMonitor.ThemeEditor
             UpdateGpuPreview();
         }
 
+        /// <summary>
+        /// 解析 GDI 实际应绘制的主题。编辑目标与运行路线分开：
+        /// 主效果目标只有在 GPU 真正可用时才用原主题，否则用兼容派生主题。
+        /// </summary>
+        private Theme ResolveGdiTheme(ThemeEditTarget target)
+        {
+            if (_rawTheme is null) throw new InvalidOperationException("Theme is not set.");
+
+            if (target == ThemeEditTarget.GpuFallback)
+            {
+                return LegacyFallbackStyleResolver.BuildDerivedTheme(_rawTheme);
+            }
+
+            if (target == ThemeEditTarget.GpuMain && !IsGpuRouteUsable())
+            {
+                return LegacyFallbackStyleResolver.BuildDerivedTheme(_rawTheme);
+            }
+
+            return _rawTheme;
+        }
+
+        private bool IsGpuRouteUsable()
+        {
+            return _rawTheme?.Rendering?.IsGpuRequested == true
+                && !Program.SafeMode
+                && Settings.Load().GpuThemeEffectsEnabled;
+        }
+
+        private void UseGdiFallbackTheme()
+        {
+            if (_rawTheme is null || ReferenceEquals(_theme, _rawTheme) == false)
+            {
+                return;
+            }
+
+            Theme fallback = LegacyFallbackStyleResolver.BuildDerivedTheme(_rawTheme);
+            _theme = fallback;
+            _previewTheme = null;
+            _previewThemeSource = null;
+            _layout = new UILayout(CreatePreviewTheme(fallback, _dpiScale));
+            Invalidate();
+            NotifyGpuUnavailable();
+        }
+
+        private void NotifyGpuUnavailable()
+        {
+            if (!IsHandleCreated || _disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                BeginInvoke(new Action(() => GpuPreviewUnavailable?.Invoke(this, EventArgs.Empty)));
+            }
+            catch
+            {
+                // 关闭/句柄销毁阶段不再抛给宿主。
+            }
+        }
+
         private void UpdateGpuPreview()
         {
             if (_disposed || _rawTheme == null)
@@ -212,6 +271,7 @@ namespace LiteMonitor.ThemeEditor
             {
                 if (!Settings.Load().GpuThemeEffectsEnabled || Program.SafeMode)
                 {
+                    UseGdiFallbackTheme();
                     if (_gpuPreview != null)
                     {
                         _gpuPreview.Visible = false;
@@ -249,8 +309,12 @@ namespace LiteMonitor.ThemeEditor
                     //   旧代码丢弃 bool 并继续把预览设为可见 ⇒ 主题非法时画布仍显示
                     //   上一个主题（用户看到「改了没反应」），且错误被彻底吞掉。
                     //   失败时隐藏 GPU 预览并保留 GpuThemePreviewControl.Error 以便 UI 提示。
-                    if (!_gpuPreview.UpdateTheme(_rawTheme, _groups, _shape))
+                    if (!_gpuPreview.UpdateTheme(
+                            GetPreviewTheme(GetDpiScale()),
+                            _groups,
+                            _shape))
                     {
+                        UseGdiFallbackTheme();
                         _gpuPreview.Visible = false;
                         return;
                     }
@@ -538,8 +602,16 @@ namespace LiteMonitor.ThemeEditor
 
             if (_gpuPreview?.Error is not null)
             {
+                bool wasVisible = _gpuPreview.Visible;
+                // 首次构造失败时 SetTheme 仍持有 raw 主效果主题；这里必须在
+                // 同一修订上切到 fallback 派生配色，不能只隐藏 GPU 子控件。
+                UseGdiFallbackTheme();
                 _gpuPreview.Visible = false;
                 AccessibleDescription = "GPU preview unavailable; showing GDI+ fallback preview.";
+                if (wasVisible)
+                {
+                    NotifyGpuUnavailable();
+                }
             }
 
             if (_theme == null || _layout == null || _disposed)

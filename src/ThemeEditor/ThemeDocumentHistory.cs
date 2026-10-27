@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LiteMonitor.src.Core;
 
 namespace LiteMonitor.ThemeEditor
@@ -160,6 +161,19 @@ namespace LiteMonitor.ThemeEditor
             _undo.Clear();
             _redo.Clear();
             _open = null;
+        }
+
+        /// <summary>
+        /// [S05] 从撤销／重做历史中移除"触碰过匹配路径"的整个事务（打开事务先关闭）。
+        /// 整事务移除而不是只剔除变更：事务快照里烘着清理前的阈值旧值，半删会让
+        /// 撤销/重做通过快照把已清理的阈值编辑复活。返回移除的事务数。
+        /// </summary>
+        internal int RemoveTransactionsTouching(Func<string, bool> pathMatch)
+        {
+            CloseOpenTransaction();
+            int removed = _undo.RemoveAll(txn => txn.Changes.Any(c => pathMatch(c.Path)));
+            removed += _redo.RemoveAll(txn => txn.Changes.Any(c => pathMatch(c.Path)));
+            return removed;
         }
 
         /// <summary>淘汰超出上限的最旧事务（数量或快照总量任一触限；打开中的事务计入总量）。</summary>

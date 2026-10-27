@@ -108,15 +108,17 @@ namespace LiteMonitor.src.Plugins.Native
         /// <param name="inflightScopeKey">在途去重的作用域键（**执行作用域标识**）：<b>不同作用域不共享</b>在途请求，
         /// 避免"一个作用域到期"连带打断另一个作用域正在复用的同一请求。</param>
         public static async Task<string> FetchAsync(string symbol, string fallbackUrl, CancellationToken token,
-            int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts, string inflightScopeKey)
+            int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts, string inflightScopeKey,
+            string? instanceId = null)
             // ★ publication 传 null = 无发布租约（直接写缓存）⇒ 形参必须可空。
             => await FetchLeasedAsync(symbol, fallbackUrl, token, maxResponseBytes, allowedHosts,
-                inflightScopeKey, null).ConfigureAwait(false);
+                inflightScopeKey, null, instanceId).ConfigureAwait(false);
 
         // ★ allowedHosts 为 null = 无声明上下文（不做目标校验，见 XML 文档）；
         //   publication 为 null = 无发布租约（直接写缓存）⇒ 两者都必须可空。
         internal static async Task<string> FetchLeasedAsync(string symbol, string fallbackUrl, CancellationToken token,
-            int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts, string inflightScopeKey, PluginPublicationLease? publication)
+            int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts, string inflightScopeKey,
+            PluginPublicationLease? publication, string? instanceId = null)
         {
             // [LM-039] 回退目标校验：必须在任何请求发出之前（否则用户填的任意 URL 会被取回）。
             EnsureFallbackTargetAllowed(fallbackUrl, allowedHosts);
@@ -139,7 +141,7 @@ namespace LiteMonitor.src.Plugins.Native
                 // [LM-045] allowedHosts 必须**贯穿**到真正发请求的那一层：
                 // 少了它，逐跳复核就没有"允许集合"可用（这正是缺口本身）。
                 // [LM-082] 共享请求用**自己的**中止令牌（不是任何等待者的令牌）启动。
-                ct => FetchFreshAsync(info, fallbackUrl, cacheKey, ct, maxResponseBytes, allowedHosts, publication));
+                ct => FetchFreshAsync(info, fallbackUrl, cacheKey, ct, maxResponseBytes, allowedHosts, publication, instanceId));
 
             Task<string> shared;
             try
@@ -300,7 +302,8 @@ namespace LiteMonitor.src.Plugins.Native
 
         // ★ allowedHosts / publication 的 null 语义同 FetchLeasedAsync（无声明上下文 / 无发布租约）。
         private static async Task<string> FetchFreshAsync(SymbolInfo info, string fallbackUrl, string cacheKey,
-            CancellationToken token, int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts, PluginPublicationLease? publication)
+            CancellationToken token, int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts,
+            PluginPublicationLease? publication, string? instanceId = null)
         {
             foreach (var source in GetOfficialSources(info))
             {
@@ -308,7 +311,7 @@ namespace LiteMonitor.src.Plugins.Native
                 {
                     // [LM-045] 官方源的允许集合 = 内建官方源主机 ∪ {该次请求的初始主机}。
                     string json = await GetStringAsync(source.url, TimeSpan.FromSeconds(3), token, maxResponseBytes,
-                        BuildOfficialAllowedHosts(source.url));
+                        BuildOfficialAllowedHosts(source.url), instanceId);
                     string normalized = source.parser(json, info);
                     CommitNative(publication, () => SaveCache(cacheKey, normalized, false));
                     return normalized;
@@ -346,7 +349,7 @@ namespace LiteMonitor.src.Plugins.Native
                     string targetUrl = BuildFallbackUrl(fallbackUrl, info.ApiSymbol);
                     // [LM-045] 回退源的允许集合 = native 允许目标集合 ∪ {回退目标主机}。
                     string fallbackJson = await GetStringAsync(targetUrl, TimeSpan.FromSeconds(8), token, maxResponseBytes,
-                        BuildFallbackAllowedHosts(targetUrl, allowedHosts));
+                        BuildFallbackAllowedHosts(targetUrl, allowedHosts), instanceId);
                     CommitNative(publication, () => SaveCache(cacheKey, fallbackJson, true));
                     return fallbackJson;
                 }
@@ -441,8 +444,9 @@ namespace LiteMonitor.src.Plugins.Native
         /// 复核不通过时**该跳请求根本不发出**（未声明主机的响应不会进入插件流水线）。</para>
         /// </summary>
         /// <param name="allowedHosts">该次请求的**允许目标主机集合**（逐跳复核用；null ⇒ 不做复核）。</param>
+        /// <param name="instanceId">[S02a] 发起请求的插件实例 ID（本地网络授权主体；null ⇒ 本地目标一律拒绝）。</param>
         private static async Task<string> GetStringAsync(string url, TimeSpan timeout, CancellationToken token,
-            int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts)
+            int maxResponseBytes, IReadOnlyCollection<string>? allowedHosts, string? instanceId)
         {
             PluginHostPolicy.RequireHttpHost(url);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -465,6 +469,12 @@ namespace LiteMonitor.src.Plugins.Native
             {
                 // [LM-045] 本跳目标复核：不通过 ⇒ 这一跳请求**根本不发出**。
                 if (current != null) EnsureRedirectTargetAllowed(current, allowedHosts);
+
+                // [S02a] 每跳地址预检：解析并按整组候选地址判定（云元数据/链路本地/未指定
+                // 一律拒绝；本机/私网需要该实例的本地网络授权）。与 HTTP 步骤路径同一原语。
+                if (current != null)
+                    await PluginAddressPreflight.EnsureAddressPolicyAsync(
+                        current, proxy: "", instanceId, cts.Token).ConfigureAwait(false);
 
                 // 用 ResponseHeadersRead：正文在读取时按字节上限计数（整体缓冲会先吃满内存）。
                 using var request = new HttpRequestMessage(HttpMethod.Get, requestTarget);

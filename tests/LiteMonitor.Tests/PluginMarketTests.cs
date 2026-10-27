@@ -329,7 +329,9 @@ namespace LiteMonitor.Tests
             store.Add(new MarketPluginRecord
             {
                 Id = "demo",
-                File = "demo.json"
+                File = "demo.json",
+                // [S03] 卸载事务化后要求记录携带可用摘要（真实安装记录必有）。
+                Sha256 = new string('a', 64)
             });
 
             bool removed = PluginMarketUninstallCore.Uninstall(
@@ -447,7 +449,8 @@ namespace LiteMonitor.Tests
             store.Add(new MarketPluginRecord
             {
                 Id = "PublicIP",
-                File = "PublicIP.json"
+                File = "PublicIP.json",
+                Sha256 = new string('b', 64)
             });
 
             bool removed = PluginMarketUninstallCore.Uninstall(

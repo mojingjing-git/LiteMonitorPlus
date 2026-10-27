@@ -1,0 +1,23 @@
+ M .github/workflows/ci.yml
+ D docs/HARDWARE-ROBUSTNESS-RESEARCH-2026-10-20.md
+ D docs/UPSTREAM-FEEDBACK-2026-10-20.md
+ D docs/UPSTREAM-ISSUE-VERIFICATION-TASKS-2026-10-25.md
+ D docs/UPSTREAM-ISSUES-2026-10-25.md
+ D docs/UPSTREAM-OPEN-BUGS-PERFORMANCE-2026-10-25.md
+ D docs/plans/2026-10-23-updater-legacy-bridge-design.md
+ D docs/plans/2026-10-24-architecture-debt-plan.md
+ D docs/plans/2026-10-24-architecture-debt-requirements.md
+ D docs/plans/2026-10-25-verified-bugs-remediation-subagent-plan.md
+?? docs/plans/2026-10-27-diagnostics-center-implementation-plan.md
+?? docs/plans/2026-10-27-low-power-mode-implementation-plan.md
+?? docs/plans/2026-10-27-p1-p2-remediation-plan.md
+?? docs/plans/2026-10-27-repair-and-product-execution-plan.md
+?? docs/plans/2026-10-27-repair-and-product-roadmap.md
+?? docs/plans/2026-10-27-scenario-profiles-implementation-plan.md
+?? docs/plans/2026-10-27-trends-alerts-implementation-plan.md
+?? docs/reviews/2026-10-27-all-recent-changes-review.md
+?? docs/reviews/2026-10-27-execution-plan-independent-review-v2.md
+?? docs/reviews/2026-10-27-execution-plan-independent-review.md
+?? docs/verification/execution/
+?? docs/verification/theme-studio/review-2026-10-27/
+?? resources/plugins/vps_traffic.json

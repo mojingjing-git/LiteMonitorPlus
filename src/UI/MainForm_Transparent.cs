@@ -1,7 +1,10 @@
+using LiteMonitor.Diagnostics;
 using LiteMonitor.Rendering.Configuration;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.SystemServices;
 using LiteMonitor.src.UI;
+using LiteMonitor.src.UI.SettingsPage;
+using LiteMonitor.src.WebServer;
 using LiteMonitor.src.UI.Helpers;
 using System;
 using System.Drawing;
@@ -21,6 +24,7 @@ namespace LiteMonitor
         // ★★★ 双助手架构 ★★★
         private readonly MainFormWinHelper _winHelper;
         private readonly MainFormBizHelper _bizHelper;
+        private readonly src.WebServer.LiteWebServer? _webServer;
         private readonly int _wmTaskbarCreated;
 
         // ★ A13：窗口轮廓的唯一写入者（A09 的 WindowAppearanceController）。
@@ -304,7 +308,55 @@ namespace LiteMonitor
             _winHelper = new MainFormWinHelper(this);
 
             _ui = new UIController(_cfg, this);
-            new src.WebServer.LiteWebServer(_cfg);
+            _webServer = new src.WebServer.LiteWebServer(_cfg);
+
+            try
+            {
+                DiagnosticHub.Current.SnapshotProvider = () => new DiagnosticSnapshotBuilder(new IDiagnosticProvider[]
+                {
+                    new HardwareDiagnosticProvider(
+                        () => _ui.HardwareClient.GetHealth(),
+                        () => _ui.HardwareClient.GetLatestSnapshot(),
+                        _ui.HardwareSamplingStatistics),
+                    new RenderingDiagnosticProvider(
+                        () => new RenderingRouteStatusSnapshot(
+                            ThemeUsesGpuMaterial: ThemeManager.Current.Rendering is { } rendering &&
+                                string.Equals(rendering.Backend?.Trim(), ThemeRenderingConfig.GpuBackend,
+                                    StringComparison.OrdinalIgnoreCase),
+                            GpuEffectsEnabled: _cfg.GpuThemeEffectsEnabled,
+                            PresentationActive: _ui.IsGpuPresentationActive,
+                            LiveBackgroundActive: _ui.IsGpuLiveBackgroundActive,
+                            LiveBackgroundRequested: _ui.IsGpuLiveBackgroundRequested,
+                            RuntimeFailure: _ui.GpuRuntimeFailure,
+                            FallbackCode: _ui.GpuFallbackCode,
+                            WindowIsLayered: _winHelper.IsWindowLayered())),
+                    new WebDiagnosticProvider(
+                        () => _cfg.WebServerEnabled,
+                        () => LiteWebServer.Instance),
+                    new PluginDiagnosticProvider(
+                        () => _cfg.PluginInstances.Count,
+                        () => _cfg.PluginInstances.Count(i => i.Enabled)),
+                    new IpcDiagnosticProvider(),
+                }).Build();
+                DiagnosticHub.Current.Record("app", DiagnosticSeverity.Info, "started");
+                DiagnosticRunMarker.PreviousRun previous = DiagnosticRunMarker.ReadAndBegin();
+                if (previous.HadMarker)
+                {
+                    DiagnosticHub.Current.Record(
+                        "app",
+                        previous.CleanShutdown ? DiagnosticSeverity.Info : DiagnosticSeverity.Warning,
+                        previous.CleanShutdown ? "previous-run-clean" : "previous-run-unclean",
+                        context: new Dictionary<string, string>
+                        {
+                            ["startedAtUtc"] = previous.StartedAtUtc?.ToString("O") ?? string.Empty,
+                            ["endedAtUtc"] = previous.EndedAtUtc?.ToString("O") ?? string.Empty,
+                        });
+                }
+            }
+            catch
+            {
+                // 诊断不得阻断启动。
+            }
 
             // 5. 设置背景色 (这是关键！解耦时漏掉了这行，导致背景是系统默认色而非透明或皮肤色)
             BackColor = ThemeManager.ParseColor(ThemeManager.Current.Color.Background);
@@ -740,20 +792,45 @@ namespace LiteMonitor
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
-            _cfg.Save();
-            TrafficLogger.Save();
-            HardwareHistoryLogger.Save();
-            src.WebServer.LiteWebServer.Instance?.Stop();
-            
+            // ★ INF-07：退出路径逐项隔离。任一资源释放失败，不得阻断后续清理。
+            //   先落盘，再停服务；日志/设置保存失败也要继续关闭。
+            SafeShutdown("Settings.Save", () => _cfg.Save());
+            SafeShutdown("TrafficLogger.Save", TrafficLogger.Save);
+            SafeShutdown("HardwareHistoryLogger.Save", HardwareHistoryLogger.Save);
+            SafeShutdown("PluginManager.Stop", () => src.Plugins.PluginManager.Instance.Stop());
+            SafeShutdown("LiteWebServer.Dispose", () => _webServer?.Dispose());
+
             base.OnFormClosed(e);
 
             // ★ A16：退出前停掉后台捕获服务（恢复显示亲和性，避免窗口在用户录屏里永久消失）。
-            _ui?.StopLiveGlass();
-            _ui?.Dispose();
-            _bizHelper.Dispose();
+            //   INF-07：直接调用并就地隔离异常；不能包进 lambda，否则 IL 护栏看不到整停调用。
+            try
+            {
+                _ui?.StopLiveGlass();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[INF-07] shutdown step failed: UIController.StopLiveGlass: {ex}");
+            }
+            SafeShutdown("UIController.Dispose", () => _ui?.Dispose());
+            SafeShutdown("MainFormBizHelper.Dispose", () => _bizHelper.Dispose());
 
             // ★ A13：释放窗口外观控制器（它负责把窗体上的 Region 交回 WinForms 释放）
-            _windowAppearance?.Dispose();
+            SafeShutdown("WindowAppearance.Dispose", () => _windowAppearance?.Dispose());
+            SafeShutdown("DiagnosticRunMarker.MarkClean", () => DiagnosticRunMarker.MarkCleanShutdown());
+        }
+
+        private static void SafeShutdown(string name, Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                // 退出阶段不得再弹窗或抛异常；留下可诊断痕迹即可。
+                System.Diagnostics.Debug.WriteLine($"[INF-07] shutdown step failed: {name}: {ex}");
+            }
         }
     }
 }

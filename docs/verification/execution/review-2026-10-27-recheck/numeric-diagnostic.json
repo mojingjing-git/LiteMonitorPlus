@@ -1,0 +1,27 @@
+{
+  "values": {
+    "0": false,
+    "1": false,
+    "2": false,
+    "512": false,
+    "1200": false,
+    "42.0": false,
+    "2001:db8::1234": false,
+    "gpu": true
+  },
+  "events": [
+    {
+      "UtcTime": "2026-10-27T07:02:44.7002715+00:00",
+      "Module": "apply",
+      "Severity": 0,
+      "ReasonCode": "apply-applied",
+      "OperationId": null,
+      "SessionId": "d3dd0e3d65584b1fbfeb5f5183028b48",
+      "Context": {
+        "status": "Applied"
+      },
+      "EventId": 1,
+      "RepeatCount": 1
+    }
+  ]
+}

@@ -83,6 +83,8 @@
   <ItemGroup>
     <Compile Remove="src\Contracts\**\*.cs" />
     <Compile Remove="src\HardwareHost\**\*.cs" />
+    <!-- ★ src\Cli 是独立控制台工程（LiteMonitor.Cli），有自己 Main ⇒ 必须排除，否则 CS0017 多入口点 -->
+    <Compile Remove="src\Cli\**" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="src\Contracts\LiteMonitor.Contracts.csproj" />
@@ -175,6 +177,7 @@
   <EmbeddedResource Remove="tests\**" />
   <EmbeddedResource Remove="tools\**" />
   <EmbeddedResource Remove="docs\**" />
+  <EmbeddedResource Remove="src\Cli\**" />
   <None Remove="LiteMonitor.Updater\**" />
   <None Remove="LiteMonitor.Wpf\**" />
   <None Remove="tests\**" />
@@ -217,5 +220,8 @@
          ThemeDocumentStore.SetThemeDirForTests/SetRecoveryDirForTests、SettingsThemeManager.Initialize
          等 internal 测试接缝，才能复现 N00–N10 验收报告的 10 条观测点。 -->
     <InternalsVisibleTo Include="ThemeStudioAuditProbe" />
+    <!-- [S03] 卸载强杀子进程探针（tools/MarketUninstallCrashProbe）：
+         独立进程注入 MarketInstallCrashException 后退出，需要 internal 卸载核心。 -->
+    <InternalsVisibleTo Include="MarketUninstallCrashProbe" />
   </ItemGroup>
 </Project>

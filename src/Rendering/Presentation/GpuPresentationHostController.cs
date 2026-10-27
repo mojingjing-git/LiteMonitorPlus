@@ -4,6 +4,7 @@ using LiteMonitor.Rendering.Configuration;
 using LiteMonitor.Rendering.Contracts;
 using LiteMonitor.Rendering.Gpu.Device;
 using LiteMonitor.Rendering.Gpu.Effects;
+using LiteMonitor.Rendering.Power;
 using LiteMonitor.src.Core;
 using LiteMonitor.Rendering.Materials;
 
@@ -32,6 +33,8 @@ public sealed class GpuPresentationHostController : IDisposable
     private readonly GpuPresentationSessionOwner _sessionOwner = new();
     private readonly IPresentationWindowAdapter _windowAdapter;
     private readonly WindowHandleGeneration _handleGeneration;
+    private PowerMode _powerMode;
+    private bool _onBattery;
     private GpuSceneRenderer? _renderer;
     private SceneSnapshot? _scene;
     private RenderGenerations _generations;
@@ -79,7 +82,9 @@ public sealed class GpuPresentationHostController : IDisposable
         GpuStartupGuard? startupGuard = null,
         Theme? theme = null,
         IPresentationWindowAdapter? windowAdapter = null,
-        WindowHandleGeneration? handleGeneration = null)
+        WindowHandleGeneration? handleGeneration = null,
+        PowerMode powerMode = PowerMode.Off,
+        bool onBattery = false)
     {
         ArgumentNullException.ThrowIfNull(form);
         if (material is not MaterialKind.LiquidGlass and not MaterialKind.CyberPunk)
@@ -97,16 +102,65 @@ public sealed class GpuPresentationHostController : IDisposable
         _startupGuard = startupGuard ?? GpuStartupGuard.Shared;
         _windowAdapter = windowAdapter ?? new Win32PresentationWindowAdapter();
         _handleGeneration = handleGeneration ?? WindowHandleGeneration.Instance;
+        _powerMode = powerMode;
+        _onBattery = onBattery;
         _scheduler = new FrameScheduler(_runtimeSettings.TargetFramesPerSecond);
         _ownerThreadId = Environment.CurrentManagedThreadId;
         _timer = new System.Windows.Forms.Timer { Interval = 8 };
         _timer.Tick += OnTimerTick;
+        _form.VisibleChanged += OnFormVisibleChanged;
     }
 
     public bool IsActive =>
         !_disposed &&
         _renderer is not null &&
         _sessionOwner.Session?.State == RenderLifecycleState.Running;
+
+    /// <summary>
+    /// 注入当前电源/低功耗上下文；由组合根在设置或供电状态变化时调用。
+    /// 隐藏窗口会暂停计时器，显示后恢复；不把 0 FPS 传给 FrameScheduler。
+    /// </summary>
+    public void UpdatePowerContext(PowerMode mode, bool onBattery)
+    {
+        ThrowIfDisposed();
+        EnsureOwnerThread();
+        _powerMode = mode;
+        _onBattery = onBattery;
+        ApplyPowerCadence();
+    }
+
+    private void OnFormVisibleChanged(object? sender, EventArgs e) => ApplyPowerCadence();
+
+    private void ApplyPowerCadence()
+    {
+        if (_disposed || !IsActive)
+        {
+            return;
+        }
+
+        DisplayCadence cadence = PowerPolicy.ResolveDisplay(
+            _powerMode,
+            _onBattery,
+            _form.Visible,
+            _runtimeSettings.TargetFramesPerSecond);
+
+        if (cadence.Paused)
+        {
+            _timer.Stop();
+            return;
+        }
+
+        if (cadence.Fps != _scheduler.TargetFramesPerSecond)
+        {
+            _scheduler.UpdateTargetFramesPerSecond(cadence.Fps);
+        }
+
+        if (!_timer.Enabled)
+        {
+            _scheduler.Reset();
+            _timer.Start();
+        }
+    }
 
     public bool NeedsRestart =>
         !_disposed &&
@@ -393,6 +447,7 @@ public sealed class GpuPresentationHostController : IDisposable
             _suspended = false;
             _scheduler.Reset();
             _timer.Start();
+            ApplyPowerCadence();
             if (!liveBackgroundAllowed || _liveCaptureStarted)
             {
                 _lastErrorCode = null;
@@ -609,13 +664,16 @@ public sealed class GpuPresentationHostController : IDisposable
             _capturePolicy = WindowCapturePolicy.WdaExcludeFromCapture;
         }
 
+        RenderGenerations nextGenerations =
+            _generations with { Theme = _generations.Theme + 1 };
         try
         {
             _renderer.UpdateConfiguration(
                 material,
                 runtimeSettings,
                 _form.DeviceDpi,
-                normalizedUserScale);
+                normalizedUserScale,
+                nextGenerations);
         }
         catch (Exception exception)
         {
@@ -624,6 +682,7 @@ public sealed class GpuPresentationHostController : IDisposable
             return false;
         }
 
+        _generations = nextGenerations;
         _material = material;
         _liveBackgroundRequested = liveBackgroundRequested;
         _horizontalLayout = horizontalLayout;
@@ -631,6 +690,7 @@ public sealed class GpuPresentationHostController : IDisposable
         _userScale = normalizedUserScale;
         _scheduler.UpdateTargetFramesPerSecond(
             runtimeSettings.TargetFramesPerSecond);
+        ApplyPowerCadence();
         _scene = null;
         try { SetToolbarFixedBackground(); }
         catch (Exception ex)
@@ -1150,6 +1210,7 @@ public sealed class GpuPresentationHostController : IDisposable
         EnsureOwnerThread();
         _disposed = true;
         StopCore();
+        _form.VisibleChanged -= OnFormVisibleChanged;
         _timer.Tick -= OnTimerTick;
         _timer.Dispose();
     }

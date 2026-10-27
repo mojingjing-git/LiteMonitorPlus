@@ -390,6 +390,56 @@ namespace LiteMonitor.Tests
         }
 
         [Fact]
+        public void 投稿资料_TM02元数据写入submission且发布版本与主题格式版本分离()
+        {
+            ThemeDocumentSession session = OpenSession("经典蓝", ClassicJson);
+            string dir = Path.Combine(_outDir, "submission-meta");
+            var metadata = new ThemeSubmissionMetadata
+            {
+                Id = "classic-blue",
+                Name = "经典蓝",
+                NameEn = "Classic Blue",
+                Description = "经典蓝色外观",
+                DescriptionEn = "Classic blue appearance",
+                Author = "Tester",
+                MarketVersion = "2.3.4",
+                License = "MIT"
+            };
+
+            ThemeSubmissionResult result = ThemeExportService.PrepareSubmissionMaterials(session, dir, metadata);
+
+            Assert.True(result.Success, result.Error);
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "submission.json")));
+            JsonElement root = doc.RootElement;
+            Assert.Equal("classic-blue", root.GetProperty("id").GetString());
+            Assert.Equal("Classic Blue", root.GetProperty("name_en").GetString());
+            Assert.Equal("Classic blue appearance", root.GetProperty("description_en").GetString());
+            Assert.Equal("2.3.4", root.GetProperty("market_version").GetString());
+            Assert.Equal("MIT", root.GetProperty("license").GetString());
+            Assert.Equal("Tester", root.GetProperty("author").GetString());
+            Assert.Equal(JsonValueKind.Number, root.GetProperty("version").ValueKind);
+        }
+
+        [Fact]
+        public void 投稿资料_TM02非法投稿ID被拒绝()
+        {
+            ThemeDocumentSession session = OpenSession("经典蓝", ClassicJson);
+            var metadata = new ThemeSubmissionMetadata
+            {
+                Id = "Bad ID",
+                Name = "经典蓝",
+                MarketVersion = "1.0.0",
+                License = "MIT"
+            };
+
+            ThemeSubmissionResult result = ThemeExportService.PrepareSubmissionMaterials(
+                session, Path.Combine(_outDir, "submission-bad-meta"), metadata);
+
+            Assert.False(result.Success);
+            Assert.Contains("投稿 ID", result.Error);
+        }
+
+        [Fact]
         public void 投稿资料_README说明投稿入口且不含发布结论()
         {
             ThemeDocumentSession session = OpenSession("经典蓝", ClassicJson);

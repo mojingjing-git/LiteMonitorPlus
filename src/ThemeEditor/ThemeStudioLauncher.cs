@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using LiteMonitor.Core.Actions.Services;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.Core.Actions;
 
@@ -21,7 +23,7 @@ public static class ThemeStudioLauncher
     }
 
     /// <summary>主窗体应用网关：保存已由工作室完成，这里只负责让主界面生效（N06 三阶段细分）。</summary>
-    private sealed class AppActionsThemeApplyGateway : ThemeStudioForm.IThemeApplyGateway
+    internal sealed class AppActionsThemeApplyGateway : ThemeStudioForm.IThemeApplyGateway
     {
         private readonly Settings _cfg;
         private readonly UIController? _ui;
@@ -36,6 +38,20 @@ public static class ThemeStudioLauncher
 
         public ThemeStudioForm.ThemeApplyResult ApplySavedTheme(string themeName, long revision)
         {
+            // 阶段 0：文件预检（R3/F02）。坏 JSON / 缺失文件不能先持久化再静默套缺省主题。
+            string themePath = System.IO.Path.Combine(ThemeManager.ThemeDir, themeName + ".json");
+            ThemeManager.ThemeLoadResult inspected = ThemeManager.Inspect(themePath, themeName);
+            if (!inspected.Success)
+            {
+                return new ThemeStudioForm.ThemeApplyResult(
+                    Success: false,
+                    Stage: ThemeStudioForm.ThemeApplyStage.ThemeSaved,
+                    Error: "主题文件无效，未写入配置：" + (inspected.Error ?? "未知错误"),
+                    EffectiveTheme: ThemeManager.Current.Name,
+                    Revision: revision
+                );
+            }
+
             // 阶段 1：Settings 持久化
             // ★ R2 整改（计划 §5.1 A-1）：Save() 故意静默（丢弃 TrySave 的 bool），
             //   失败既不抛也不返回 ⇒ 这里必须直接消费 TrySave 的结果，
@@ -73,7 +89,8 @@ public static class ThemeStudioLauncher
             // 阶段 2：实际生效（同名文件变更强制重载，无按 Skin 跳过）
             try
             {
-                AppActions.ApplyThemeAndLayout(_cfg, _ui, _form);
+                ApplyOperationResult apply = AppActions.ApplyThemeAndLayoutWithResult(
+                    _cfg, _ui, _form, revision: revision);
 
                 if (_ui is null)
                 {
@@ -84,7 +101,56 @@ public static class ThemeStudioLauncher
                         Error: "未应用（无运行时宿主）：主题已保存，但没有可渲染的运行时宿主。",
                         EffectiveTheme: _cfg.Skin,
                         EffectiveRoute: "未应用（无运行时宿主）",
-                        Revision: revision
+                        Revision: revision,
+                        Modules: apply.Modules
+                    );
+                }
+
+                if (apply.OverallStatus == ApplyOperationStatus.Failed)
+                {
+                    _cfg.Skin = previousSkin;
+                    _ = _cfg.TrySave();
+                    return new ThemeStudioForm.ThemeApplyResult(
+                        Success: false,
+                        Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
+                        Error: "主题运行时提交失败：" + string.Join("；", apply.Modules
+                            .Where(m => !m.Applied)
+                            .Select(m => m.Module + "：" + (m.FailureReason ?? "失败"))),
+                        EffectiveTheme: previousSkin,
+                        Revision: revision,
+                        Modules: apply.Modules
+                    );
+                }
+
+                ThemeManager.ThemeLoadResult? actual = ThemeManager.LastLoad;
+                if (actual is null || !actual.Success ||
+                    !string.Equals(actual.RequestedName, themeName, StringComparison.Ordinal))
+                {
+                    return new ThemeStudioForm.ThemeApplyResult(
+                        Success: false,
+                        Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
+                        Error: "运行时没有加载请求主题，当前实际主题：" + ThemeManager.Current.Name,
+                        EffectiveTheme: ThemeManager.Current.Name,
+                        EffectiveRoute: "未应用（请求主题未加载）",
+                        Revision: revision,
+                        Modules: apply.Modules
+                    );
+                }
+
+                if (apply.OverallStatus == ApplyOperationStatus.Partial)
+                {
+                    string failed = string.Join("；", apply.Modules
+                        .Where(m => !m.Applied)
+                        .Select(m => m.Module + "：" + (m.FailureReason ?? "失败")));
+                    return new ThemeStudioForm.ThemeApplyResult(
+                        Success: false,
+                        Partial: true,
+                        Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
+                        Error: failed,
+                        EffectiveTheme: ThemeManager.Current.Name,
+                        EffectiveRoute: ResolveEffectiveRoute(themeName),
+                        Revision: revision,
+                        Modules: apply.Modules
                     );
                 }
 
@@ -93,14 +159,31 @@ public static class ThemeStudioLauncher
                     Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
                     EffectiveTheme: _cfg.Skin,
                     EffectiveRoute: ResolveEffectiveRoute(themeName),
-                    Revision: revision
+                    Revision: revision,
+                    Modules: apply.Modules
                 );
             }
             catch (Exception ex)
             {
-                // ★ R3 整改（计划 §5.1 A-4 修法 3）：运行时应用失败 ⇒ 新主题并未生效，
-                //   仍然生效的是旧主题。回滚内存值并尽力把磁盘拉回一致，
-                //   报告的生效主题必须是「实际仍在生效」的那个，而不是被改写过的请求值。
+                // R3/F02：主题可能已加载、后续菜单/任务栏阶段才失败；此时必须如实报 Partial，
+                // 不能回滚 Skin 后声称旧主题仍在生效。
+                ThemeManager.ThemeLoadResult? actual = ThemeManager.LastLoad;
+                bool themeApplied = actual is { Success: true } &&
+                    string.Equals(actual.RequestedName, themeName, StringComparison.Ordinal);
+                if (themeApplied)
+                {
+                    return new ThemeStudioForm.ThemeApplyResult(
+                        Success: false,
+                        Partial: true,
+                        Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
+                        Error: "主题已生效，但后续模块失败：" + ex.Message,
+                        EffectiveTheme: ThemeManager.Current.Name,
+                        EffectiveRoute: ResolveEffectiveRoute(themeName),
+                        Revision: revision
+                    );
+                }
+
+                // 新主题并未真正加载 ⇒ 仍然生效的是旧主题；回滚内存值并尽力把磁盘拉回一致。
                 _cfg.Skin = previousSkin;
                 _ = _cfg.TrySave();
                 return new ThemeStudioForm.ThemeApplyResult(

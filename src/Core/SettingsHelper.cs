@@ -9,6 +9,23 @@ using LiteMonitor.src.Plugins;
 
 namespace LiteMonitor
 {
+    /// <summary>
+    /// S01：保存结果分类（<see cref="SettingsHelper.TrySaveWithOutcome"/> 用）。
+    /// 让「凭据保护失败」从一般写入失败里显式区分出来传递给调用方，
+    /// 避免任何界面把它当成功或只给笼统的"保存失败"。
+    /// </summary>
+    internal enum SettingsSaveOutcome
+    {
+        /// <summary>已写入磁盘。</summary>
+        Saved,
+        /// <summary>被 <c>GlobalBlockSave</c> 阻止（测试/收尾场景禁止保存）。</summary>
+        Blocked,
+        /// <summary>凭据 DPAPI 保护失败：整体保存取消，磁盘未动（绝不落明文）。</summary>
+        CredentialProtectionFailed,
+        /// <summary>序列化或磁盘 IO 失败。</summary>
+        WriteFailed
+    }
+
     public static class SettingsHelper
     {
         // Cache path
@@ -30,6 +47,9 @@ namespace LiteMonitor
 
         private static readonly object _ioLock = new object();
         public static string FilePath => CachedPath;
+
+        /// <summary>备份文件探测接缝（internal）：测试断言「保护失败 ⇒ 备份字节不动」用。</summary>
+        internal static string BackupProbePath => BackupPath;
 
         // Global block save lock
         private static bool _globalBlockSave;
@@ -247,12 +267,23 @@ namespace LiteMonitor
         /// </remarks>
         internal static bool TrySave(this Settings settings)
         {
+            return TrySaveWithOutcome(settings) == SettingsSaveOutcome.Saved;
+        }
+
+        /// <summary>
+        /// S01：带结果分类的保存。磁盘语义与 <see cref="TrySave"/> 完全一致
+        /// （成功才落盘、失败不抛异常），只是把失败原因显式分类交给调用方；
+        /// 「凭据保护失败」时序列化中止、主文件与备份都不动（不落明文），
+        /// 原因文本见 <see cref="LastCredentialProtectionError"/>（不含凭据值）。
+        /// </summary>
+        internal static SettingsSaveOutcome TrySaveWithOutcome(this Settings settings)
+        {
             try
             {
                 BeforeSaveGateForTests?.Invoke();
-                lock (_ioLock) return TrySaveLocked(settings);
+                lock (_ioLock) return TrySaveOutcomeLocked(settings);
             }
-            catch { return false; }
+            catch { return SettingsSaveOutcome.WriteFailed; }
         }
 
         // These seams only observe the production critical sections in regression tests.
@@ -260,9 +291,30 @@ namespace LiteMonitor
         internal static Action? BeforeSettingsSerializeForTests { get; set; }
         internal static Action<string>? MarketRecordMutationForTests { get; set; }
 
+        /// <summary>
+        /// S01：最近一次「凭据保护失败」的原因文本（只含参数名与底层原因，**绝不含凭据值**）。
+        /// 供 UI 在保存失败时展示；每次进入凭据保护失败分支时覆盖。
+        /// </summary>
+        internal static string? LastCredentialProtectionError { get; set; }
+
+        /// <summary>在异常链上找 <see cref="SecretProtectionFailureException"/>（System.Text.Json 可能再包一层）。</summary>
+        private static SecretProtectionFailureException? FindCredentialProtectionFailure(Exception ex)
+        {
+            for (Exception? e = ex; e != null; e = e.InnerException)
+            {
+                if (e is SecretProtectionFailureException spf) return spf;
+            }
+            return null;
+        }
+
         private static bool TrySaveLocked(Settings settings)
         {
-            if (_globalBlockSave) return false;
+            return TrySaveOutcomeLocked(settings) == SettingsSaveOutcome.Saved;
+        }
+
+        private static SettingsSaveOutcome TrySaveOutcomeLocked(Settings settings)
+        {
+            if (_globalBlockSave) return SettingsSaveOutcome.Blocked;
 
             try
             {
@@ -280,7 +332,7 @@ namespace LiteMonitor
                     try
                     {
                         AtomicWrite(json);
-                        return true;
+                        return SettingsSaveOutcome.Saved;
                     }
                     catch (Exception ex) when (attempt < 2 &&
                         ex is IOException or UnauthorizedAccessException)
@@ -289,10 +341,18 @@ namespace LiteMonitor
                     }
                 }
             }
+            catch (Exception ex) when (FindCredentialProtectionFailure(ex) != null)
+            {
+                // ★ S01：凭据保护失败 —— 序列化已中止，主文件与备份都未动（绝不落明文）。
+                //   记录原因文本（只含参数名与底层原因）并把结果显式归类给调用方。
+                LastCredentialProtectionError = FindCredentialProtectionFailure(ex)!.Message;
+                CleanupTempFile();
+                return SettingsSaveOutcome.CredentialProtectionFailed;
+            }
             catch
             {
                 CleanupTempFile();
-                return false;
+                return SettingsSaveOutcome.WriteFailed;
             }
         }
 

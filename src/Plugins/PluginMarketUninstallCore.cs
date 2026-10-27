@@ -23,6 +23,8 @@ namespace LiteMonitor.src.Plugins
         /// （主题没有内置常量表："内置 = 无安装记录"，NotManaged 已覆盖）；
         /// <paramref name="contentIdentityMatches"/> 决定"文件内容与记录身份一致"的判据
         /// （插件 = 内容 id 匹配；主题 = JSON 可解析，完整性由记录摘要比对兜底，F16）。
+        /// <paramref name="faultInjector"/> 仅测试用：在事务边界间注入
+        /// <see cref="MarketInstallCrashException"/> 模拟进程强杀（LM-008 安装侧同构）。
         /// </summary>
         internal static bool Uninstall(
             MarketPluginEntry? entry,
@@ -31,14 +33,15 @@ namespace LiteMonitor.src.Plugins
             Action<string> removeRecord,
             HashSet<string>? builtinIds,
             Func<string, string, bool>? contentIdentityMatches,
-            out MarketErrorReason reason)
+            out MarketErrorReason reason,
+            Action<string>? faultInjector = null)
         {
             if (findRecord == null) throw new ArgumentNullException(nameof(findRecord));
             if (removeRecord == null) throw new ArgumentNullException(nameof(removeRecord));
 
             lock (PluginMarketInstallCore.TransactionGate)
                 return UninstallLocked(entry, pluginsDirectory, findRecord, removeRecord,
-                    builtinIds, contentIdentityMatches, out reason);
+                    builtinIds, contentIdentityMatches, faultInjector, out reason);
         }
 
         private static bool UninstallLocked(
@@ -48,6 +51,7 @@ namespace LiteMonitor.src.Plugins
             Action<string> removeRecord,
             HashSet<string>? builtinIds,
             Func<string, string, bool>? contentIdentityMatches,
+            Action<string>? faultInjector,
             out MarketErrorReason reason)
         {
             if (!TryCreatePlan(
@@ -61,10 +65,18 @@ namespace LiteMonitor.src.Plugins
                 return false;
 
             PluginUninstallPlan plan = createdPlan!;
+            // [S03] 卸载事务化：写前日志 → 备份 → 删载荷 → 删记录（提交点）→ 清理。
+            // 进程在任一边界被强杀后，由 PluginMarketInstallCore 的启动恢复对账收尾。
+            // 安装事务与卸载事务共用同一 pending 日志，双方都不得越过对方的在途事务。
             PluginMarketInstallCore.EnsureNoPendingInstall(pluginsDirectory, plan.RecordId);
-            string backupName = Path.GetFileName(plan.TargetPath) + "." + Guid.NewGuid().ToString("N") + ".uninstall";
+
+            string targetName = Path.GetFileName(plan.TargetPath);
+            string txId = Guid.NewGuid().ToString("N");
+            // 备份名必须与安装事务同构（targetName + "." + txId + ".bak"）：
+            // TryResolveTransactionPaths 的一致性校验按该形状重建路径（R04）。
+            string backupName = targetName + "." + txId + ".bak";
             if (!PluginMarketInstallCore.TryResolveDirectChildPath(
-                    pluginsDirectory, Path.GetFileName(plan.TargetPath), out _, out _) ||
+                    pluginsDirectory, targetName, out _, out _) ||
                 !PluginMarketInstallCore.TryResolveDirectChildPath(
                     pluginsDirectory, backupName, out string backupPath, out _))
             {
@@ -73,23 +85,79 @@ namespace LiteMonitor.src.Plugins
             }
 
             bool hadFile = File.Exists(plan.TargetPath);
+            // TryCreatePlan 已确认记录存在；此处再取一次是为拿到旧记录摘要。
+            MarketPluginRecord? recordForSha = findRecord(plan.RecordId);
+            string previousRecordSha = recordForSha?.Sha256 ?? "";
+            if (!PluginMarket.IsUsableSha256(previousRecordSha))
+            {
+                reason = MarketErrorReason.RecordCorrupted;
+                return false;
+            }
+
+            MarketInstallTransaction tx = new()
+            {
+                TxId = txId,
+                PluginId = plan.RecordId,
+                Target = targetName,
+                // Stage 文件在卸载事务中永不创建，但路径重建校验要求字段形状一致。
+                Stage = targetName + "." + txId + ".stage",
+                Backup = backupName,
+                Sha256 = previousRecordSha,
+                Operation = "uninstall",
+                RecoveryVersion = 1,
+                HadTarget = hadFile,
+                PreviousFileSha256 = hadFile ? PluginMarketInstallCore.ComputeFileSha(plan.TargetPath) : "",
+                PreviousRecordSha256 = previousRecordSha
+            };
+
+            // [S03] ① 意图写入：提交点之前唯一持久化事实。此后任一点强杀，
+            // 启动恢复都能按 journal 把系统对账回一致状态。
+            PluginMarketInstallCore.AppendPending(pluginsDirectory, tx);
+            faultInjector?.Invoke("afterJournal");
+
             if (hadFile) File.Copy(plan.TargetPath, backupPath, overwrite: false);
+            faultInjector?.Invoke("afterBackup");
             try
             {
+                // ② 载荷删除 → ③ 记录移除（提交点：安装记录持久化移除）。
                 if (hadFile) File.Delete(plan.TargetPath);
+                faultInjector?.Invoke("afterPayloadDelete");
                 removeRecord(plan.RecordId);
+                faultInjector?.Invoke("afterRecord");
+
+                // ④ 清理：提交点之后，残留备份与日志条目都只是垃圾；
+                // 任一清理步骤失败都不回滚（启动恢复幂等收尾）。
+                // MarketInstallCrashException（模拟强杀）不在此吞：它必须穿透，
+                // 让调用方看到"进程死于该边界"，与真实强杀语义一致。
+                try
+                {
+                    if (hadFile) File.Delete(backupPath);
+                    faultInjector?.Invoke("afterBackupDelete");
+                    PluginMarketInstallCore.RemovePending(pluginsDirectory, txId);
+                }
+                catch (Exception ex) when (ex is not MarketInstallCrashException)
+                {
+                    // Uninstall is durable; leftovers are recoverable garbage handled by startup recovery.
+                }
+                return true;
+            }
+            catch (MarketInstallCrashException)
+            {
+                // 模拟进程被杀：不做回滚，保留写前日志，交给启动恢复（与安装事务同一契约）。
+                throw;
             }
             catch
             {
                 // Strict record removal restores its own memory on save failure.
                 // Restore the payload too, retaining the copy if restoration fails.
-                if (hadFile) MarketFileIo.MoveAtomic(backupPath, plan.TargetPath);
+                if (hadFile && File.Exists(backupPath)) MarketFileIo.MoveAtomic(backupPath, plan.TargetPath);
+                try { PluginMarketInstallCore.RemovePending(pluginsDirectory, txId); }
+                catch
+                {
+                    // 回滚路径的 journal 残留交给启动恢复对账幂等处理（记录仍在 ⇒ 恢复载荷分支）。
+                }
                 throw;
             }
-
-            // The uninstall is durable; a leftover .uninstall file is only garbage.
-            try { if (hadFile) File.Delete(backupPath); } catch { }
-            return true;
         }
 
         internal static bool TryCreatePlan(

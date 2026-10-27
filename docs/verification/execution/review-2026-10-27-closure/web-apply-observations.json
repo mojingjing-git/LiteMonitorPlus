@@ -1,0 +1,21 @@
+{
+  "results": [
+    {
+      "Module": "WebServer",
+      "Applied": false,
+      "SavedState": "applied",
+      "EffectiveState": null,
+      "FailureReason": "\u5C40\u57DF\u7F51\u6A21\u5F0F\u5FC5\u987B\u8BBE\u7F6E\u8BBF\u95EE\u53E3\u4EE4\uFF1A\u7F51\u9875\u670D\u52A1\u5DF2\u505C\u6B62\uFF08\u4E0D\u4F1A\u4EE5\u65E0\u53E3\u4EE4\u65B9\u5F0F\u7EE7\u7EED\u5BF9\u5C40\u57DF\u7F51\u76D1\u542C\uFF09\u3002",
+      "ModuleRevision": 0,
+      "Retryable": true
+    }
+  ],
+  "running": false,
+  "actual": {
+    "ServiceRunning": false,
+    "Restarted": false,
+    "RejectedLanWithoutPassword": true,
+    "RejectedExternalWithoutPassword": false,
+    "ErrorMessage": "\u5C40\u57DF\u7F51\u6A21\u5F0F\u5FC5\u987B\u8BBE\u7F6E\u8BBF\u95EE\u53E3\u4EE4\uFF1A\u7F51\u9875\u670D\u52A1\u5DF2\u505C\u6B62\uFF08\u4E0D\u4F1A\u4EE5\u65E0\u53E3\u4EE4\u65B9\u5F0F\u7EE7\u7EED\u5BF9\u5C40\u57DF\u7F51\u76D1\u542C\uFF09\u3002"
+  }
+}

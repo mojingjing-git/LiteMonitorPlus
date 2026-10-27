@@ -26,6 +26,18 @@ public sealed class RenderingContractTests
     }
 
     [Fact]
+    public void SessionIdentityAllowsThemeRevisionButRejectsSessionChanges()
+    {
+        RenderGenerations current = new(1, 2, 3, 4, 5);
+        RenderGenerations themeAdvanced = current with { Theme = 2 };
+        RenderGenerations sizeChanged = current with { Size = 4 };
+
+        Assert.True(current.HasSameSessionIdentity(themeAdvanced));
+        Assert.False(current.HasSameSessionIdentity(sizeChanged));
+        Assert.False(current.CanAccept(themeAdvanced));
+    }
+
+    [Fact]
     public void SceneSnapshotCanRepresentMissingAndNormalMetrics()
     {
         SceneSnapshot snapshot = new(

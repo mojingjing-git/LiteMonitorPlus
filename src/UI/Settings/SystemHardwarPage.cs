@@ -669,6 +669,9 @@ namespace LiteMonitor.src.UI.SettingsPage
                     // 上限不在这里夹紧 —— 下拉的选项本身已按实际卡数收窄, 用户选不超;
                     // 真正的夹紧由 Task 5.5 的 GpuItemSync.Ensure(cfg, availableGpuCount) 在保存时完成。
                     Config.MonitoredGpuCount = Math.Max(1, MetricUtils.ParseInt(v));
+                    // R16：数量增加时增量补齐逐卡温度规则，保留已有规则和事件状态。
+                    LiteMonitor.src.Core.Alerts.AlertRuleMigration.SyncGpuRules(
+                        Config, Config.MonitoredGpuCount);
                 }
             );
             group.AddHint(LanguageManager.T("Menu.GpuMonitorCountTip"));

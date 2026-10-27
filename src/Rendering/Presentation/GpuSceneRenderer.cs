@@ -241,11 +241,17 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
         MaterialKind material,
         MaterialRuntimeSettings runtimeSettings,
         int dpi,
-        float userScale)
+        float userScale,
+        RenderGenerations generations)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(runtimeSettings);
         _deviceService.ProbeOwnershipFromCurrentThread();
+        if (!_generations.HasSameSessionIdentity(generations))
+        {
+            throw new InvalidOperationException(
+                "The renderer session identity does not match the update request.");
+        }
         if (material is not MaterialKind.LiquidGlass and not MaterialKind.CyberPunk)
         {
             throw new ArgumentOutOfRangeException(nameof(material));
@@ -279,6 +285,7 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
         _runtimeSettings = runtimeSettings;
         _dpi = dpi;
         _userScale = userScale;
+        _generations = generations;
         previous?.Dispose();
     }
 

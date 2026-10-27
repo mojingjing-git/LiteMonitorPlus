@@ -1,0 +1,132 @@
+{
+  "id": "vps_traffic",
+  "dynamic_host": true,
+  "meta": {
+    "name": "VPS 流量额度",
+    "name_en": "VPS Traffic Quota",
+    "version": "1.0.0",
+    "author": "wrz20",
+    "description": "读取自建 VPS 的月度流量看板（1TB 额度），显示剩余额度、已用百分比、今日用量与按日均推算的可用天数。数据口径为网卡双向（rx+tx），与服务商计费一致。",
+    "description_en": "Reads the monthly traffic dashboard of your own VPS (1 TB quota) and shows remaining quota, used percentage, today's usage and the estimated days left based on the daily average. Figures are interface-level rx+tx, matching provider billing."
+  },
+  "inputs": [
+    {
+      "key": "name",
+      "label": "显示名称",
+      "label_en": "Display name",
+      "type": "text",
+      "default": "VPS1",
+      "placeholder": "VPS1",
+      "placeholder_en": "VPS1",
+      "scope": "target"
+    },
+    {
+      "key": "host",
+      "label": "看板域名",
+      "label_en": "Dashboard host",
+      "type": "text",
+      "default": "stats1.20000102.online",
+      "placeholder": "stats1.20000102.online",
+      "placeholder_en": "stats1.20000102.online",
+      "scope": "target"
+    },
+    {
+      "key": "token",
+      "label": "访问令牌",
+      "label_en": "Access token",
+      "type": "text",
+      "default": "",
+      "placeholder": "tf_...",
+      "placeholder_en": "tf_...",
+      "scope": "global"
+    }
+  ],
+  "execution": {
+    "type": "chain",
+    "interval": 300,
+    "min_interval": 60,
+    "steps": [
+      {
+        "id": "traffic",
+        "url": "https://{{host}}/api",
+        "method": "GET",
+        "headers": {
+          "X-API-Token": "{{token}}"
+        },
+        "response_format": "json",
+        "cache_minutes": 0,
+        "extract": {
+          "remain_gb": "remain_gb",
+          "used_gb": "used_gb",
+          "today_gb": "today_gb",
+          "used_pct": "used_pct",
+          "days_left": "days_left",
+          "limit_gb": "limit_gb"
+        },
+        "process": [
+          {
+            "var": "pct_color",
+            "source": "used_pct",
+            "function": "threshold_switch",
+            "value_map": {
+              "0": "0",
+              "70": "1",
+              "90": "2"
+            }
+          },
+          {
+            "var": "days_color",
+            "source": "days_left",
+            "function": "threshold_switch",
+            "value_map": {
+              "0": "2",
+              "3": "1",
+              "7": "0"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "outputs": [
+    {
+      "key": "remain",
+      "label": "{{name ?? 'VPS'}} 剩余",
+      "label_en": "{{name ?? 'VPS'}} left",
+      "short_label": "剩",
+      "short_label_en": "Left",
+      "format_val": "{{remain_gb}}",
+      "unit": "GB",
+      "color": "{{pct_color}}"
+    },
+    {
+      "key": "used",
+      "label": "{{name ?? 'VPS'}} 已用",
+      "label_en": "{{name ?? 'VPS'}} used",
+      "short_label": "用",
+      "short_label_en": "Used",
+      "format_val": "{{used_pct}}",
+      "unit": "%",
+      "color": "{{pct_color}}"
+    },
+    {
+      "key": "today",
+      "label": "今日用量",
+      "label_en": "Today",
+      "short_label": "今",
+      "short_label_en": "Day",
+      "format_val": "{{today_gb}}",
+      "unit": "GB"
+    },
+    {
+      "key": "days",
+      "label": "预计可用",
+      "label_en": "Days left",
+      "short_label": "天",
+      "short_label_en": "Days",
+      "format_val": "{{days_left}}",
+      "unit": "天",
+      "color": "{{days_color}}"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using LiteMonitor.ThemeEditor;
 using Xunit;
@@ -52,6 +53,11 @@ namespace LiteMonitor.Tests
 
         /// <summary>场景 2：每多少次编辑切换一次合并键（→ 期望 100 个可撤销事务）。</summary>
         private const int EditsPerTransaction = 10;
+
+        /// <summary>C03：子进程隔离标记；父测试只拉起子 testhost，不在父进程内跑 200 次 GPU 切换。</summary>
+        private const string C03ChildEnv = "LITEMONITOR_C03_CHILD";
+        private const string C03SentinelEnv = "LITEMONITOR_C03_SENTINEL";
+        private const int C03ChildTimeoutMs = 9 * 60 * 1000;
 
         /// <summary>场景 3：主题打开／切换次数。</summary>
         private const int ThemeOpenIterations = 200;
@@ -362,8 +368,40 @@ namespace LiteMonitor.Tests
         [Fact]
         public void 场景4_真实GPU主题真实目标切换200次_主效果与兼容外观交替_资源增量不累积()
         {
+            if (Environment.GetEnvironmentVariable(C03ChildEnv) == "1")
+            {
+                RunScenario4Body();
+                return;
+            }
+
+            RunScenario4InChildProcess();
+        }
+
+        [Fact]
+        [Trait("C03", "Child")]
+        public void C03_Child_场景4_真实GPU切换200次_进程隔离()
+        {
+            if (Environment.GetEnvironmentVariable(C03ChildEnv) != "1")
+            {
+                return;
+            }
+
+            string? sentinel = Environment.GetEnvironmentVariable(C03SentinelEnv);
+            if (!string.IsNullOrWhiteSpace(sentinel))
+            {
+                File.WriteAllText(sentinel, DateTimeOffset.UtcNow.ToString("O"));
+            }
+
+            RunScenario4Body();
+        }
+
+        private void RunScenario4Body()
+        {
             string themesDir = ResolveGpuThemesDirectory();
             ThemeDocumentStore.SetThemeDirForTests(themesDir);
+            Settings settings = Settings.Load();
+            bool originalGpuEffects = settings.GpuThemeEffectsEnabled;
+            settings.GpuThemeEffectsEnabled = true;
             try
             {
                 ScenarioMeasurement measurement = Measure("S4-gpu-target-switch-200", 200, checkpoint =>
@@ -378,6 +416,25 @@ namespace LiteMonitor.Tests
                         // ★ E-2：真实 GPU 主题 —— 目标切换才会真的走 GPU 渲染往返。
                         form.OpenThemeForTesting(GpuThemeName);
                         Application.DoEvents();
+
+                        ThemePreviewControl preview = form.PreviewControlForTesting
+                            ?? throw new Xunit.Sdk.XunitException("场景4：ThemeStudioForm 未创建预览控件。");
+                        for (int wait = 0; wait < 250 && !preview.IsGpuPreviewActive; wait++)
+                        {
+                            Thread.Sleep(20);
+                            Application.DoEvents();
+                        }
+                        Assert.True(
+                            preview.IsGpuPreviewActive,
+                            "场景4 必须先走真实 GPU：IsGpuPreviewActive=false，" +
+                            "error=" + (preview.GpuPreviewError ?? "<null>") +
+                            ", GpuThemeEffectsEnabled=" + settings.GpuThemeEffectsEnabled);
+                        Assert.True(
+                            preview.PresentedFrameCount > 0,
+                            "场景4 未观察到 GPU 呈现帧，不能把 GDI 回退资源数据当作 GPU 压力基线。");
+
+                        int devicesBefore = preview.DeviceCreationCount;
+                        int framesBefore = preview.PresentedFrameCount;
 
                         for (int i = 1; i <= 200; i++)
                         {
@@ -395,6 +452,12 @@ namespace LiteMonitor.Tests
                             }
                         }
 
+                        Assert.True(
+                            preview.PresentedFrameCount > framesBefore,
+                            "场景4 的 200 次切换期间 GPU 呈现帧没有推进：" +
+                            framesBefore + " -> " + preview.PresentedFrameCount);
+                        Assert.Equal(devicesBefore, preview.DeviceCreationCount);
+
                         form.Close();
                         Application.DoEvents();
                     });
@@ -406,8 +469,85 @@ namespace LiteMonitor.Tests
             }
             finally
             {
+                settings.GpuThemeEffectsEnabled = originalGpuEffects;
                 ThemeDocumentStore.SetThemeDirForTests(null);
             }
+        }
+
+        /// <summary>
+        /// C03：把同一测试程序集作为子 testhost 启动，只跑 C03_Child 用例。
+        /// 超时直接 Kill 整个进程树，GPU/D3D 线程随进程回收，不留在父 testhost。
+        /// </summary>
+        private static void RunScenario4InChildProcess()
+        {
+            // N02：直接跑当前测试输出目录里的程序集，而不是让 dotnet test 回退到默认 bin/Release。
+            string assembly = Path.Combine(AppContext.BaseDirectory, "LiteMonitor.Tests.dll");
+            if (!File.Exists(assembly))
+            {
+                throw new FileNotFoundException("C03 找不到当前测试程序集。", assembly);
+            }
+
+            string sentinel = Path.Combine(
+                Path.GetTempPath(),
+                "litemonitor-c03-" + Guid.NewGuid().ToString("N") + ".ok");
+            var psi = new ProcessStartInfo("dotnet")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = AppContext.BaseDirectory
+            };
+            psi.ArgumentList.Add("vstest");
+            psi.ArgumentList.Add(assembly);
+            psi.ArgumentList.Add("--TestCaseFilter:C03=Child");
+            psi.Environment[C03ChildEnv] = "1";
+            psi.Environment[C03SentinelEnv] = sentinel;
+
+            try
+            {
+                using var process = Process.Start(psi)
+                    ?? throw new InvalidOperationException("无法启动 C03 子 testhost。");
+                Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+                Task<string> stderr = process.StandardError.ReadToEndAsync();
+
+                if (!process.WaitForExit(C03ChildTimeoutMs))
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { }
+                    try { process.WaitForExit(10_000); } catch { }
+                    throw new TimeoutException(
+                        "C03 子 testhost 超过 " + (C03ChildTimeoutMs / 1000) +
+                        " 秒未完成，已 Kill 进程树；GPU 切换线程不会滞留在父 testhost。");
+                }
+
+                string output = stdout.GetAwaiter().GetResult() + Environment.NewLine +
+                                stderr.GetAwaiter().GetResult();
+                if (!File.Exists(sentinel))
+                {
+                    throw new Xunit.Sdk.XunitException(
+                        "C03 子进程零匹配（未执行 C03_Child），exit=" + process.ExitCode +
+                        "；拒绝把零测试当成功。" + Environment.NewLine + Tail(output, 6000));
+                }
+                if (process.ExitCode != 0)
+                {
+                    throw new Xunit.Sdk.XunitException(
+                        "C03 子 testhost 失败，exit=" + process.ExitCode + Environment.NewLine +
+                        Tail(output, 6000));
+                }
+            }
+            finally
+            {
+                try { File.Delete(sentinel); } catch { }
+            }
+        }
+
+        private static string Tail(string text, int maxChars)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= maxChars)
+            {
+                return text;
+            }
+            return text[^maxChars..];
         }
 
         /// <summary>★ E-2：真实 GPU 主题夹具目录（与 FlagshipGpuThemeTests 同一解析口径）。</summary>
@@ -443,7 +583,10 @@ namespace LiteMonitor.Tests
             });
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
-            thread.Join(TimeSpan.FromMinutes(2));
+            if (!thread.Join(TimeSpan.FromMinutes(10)))
+            {
+                throw new TimeoutException("STA 测试线程未在 10 分钟内完成。");
+            }
 
             if (captured != null)
             {

@@ -21,7 +21,8 @@ namespace LiteMonitor.Tests
             Assert.Equal(15, props.Count(p => p.JsonPath.StartsWith("color.", StringComparison.Ordinal)));
             Assert.Equal(7, props.Count(p => p.JsonPath.StartsWith("font.", StringComparison.Ordinal)));
             Assert.Equal(15, props.Count(p => p.JsonPath.StartsWith("layout.", StringComparison.Ordinal)));
-            Assert.Equal(8, props.Count(p => p.JsonPath.StartsWith("thresholds.", StringComparison.Ordinal)));
+            // [S05] 阈值不再是可编辑主题属性：状态阈值来自当前生效设置，主题只负责颜色。
+            Assert.DoesNotContain(props, p => p.JsonPath.StartsWith("thresholds.", StringComparison.Ordinal));
             // JSON 键大小写不变式：目录路径必须与模型属性名一致（camelCase），无前后空白
             Assert.All(props, p => Assert.Equal(p.JsonPath.Trim(), p.JsonPath));
             Assert.All(props, p => Assert.False(string.IsNullOrWhiteSpace(p.DisplayName)));
@@ -90,8 +91,9 @@ namespace LiteMonitor.Tests
                 .Select(p => p.JsonPath)
                 .ToArray();
 
-            // TE00 §2.1/§4.2：GPU 主效果与兼容外观共享字体、布局、阈值；
+            // TE00 §2.1/§4.2：GPU 主效果与兼容外观共享字体、布局；
             // 字体仅在 floatingToolbar 下被前景消费，目录层仍标 Shared（由视图过滤）。
+            // [S05] 阈值已从目录移除（状态阈值来自生效设置），不再出现在共享字段里。
             string[] fontPaths =
             [
                 "font.family", "font.valueFamily", "font.title",
@@ -99,8 +101,8 @@ namespace LiteMonitor.Tests
             ];
             Assert.Equal(fontPaths, shared.Take(7).ToArray());
             Assert.Equal(15, shared.Count(p => p.StartsWith("layout.", StringComparison.Ordinal)));
-            Assert.Equal(8, shared.Count(p => p.StartsWith("thresholds.", StringComparison.Ordinal)));
-            Assert.Equal(30, shared.Length);
+            Assert.DoesNotContain(shared, p => p.StartsWith("thresholds.", StringComparison.Ordinal));
+            Assert.Equal(22, shared.Length);
         }
 
         [Fact]

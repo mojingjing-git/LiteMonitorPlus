@@ -431,7 +431,7 @@ jobs:
           $legacy = 'CS0168%3BCS0649%3BCS8632%3BxUnit2031%3BxUnit1030%3BxUnit1031%3BxUnit2013%3BxUnit1026%3BxUnit2000%3BxUnit2012%3BxUnit2017%3BxUnit2020'
           dotnet build LiteMonitor.sln -c Release --no-incremental --nologo `
             -p:TreatWarningsAsErrors=true `
-            -p:WarningsNotAsErrors=$legacy 
+            -p:WarningsNotAsErrors=$legacy `
             -p:NuGetAudit=false
           if ($LASTEXITCODE -ne 0) {
             throw "门禁 2 失败（退出码 $LASTEXITCODE）—— 全解决方案出现了**不在历史抑制清单内**的新警告码，已升级为错误。请修正代码，或在确属历史债务时把对应码登记进本步骤的抑制清单（并同步更新计划文档的燃尽表）。"

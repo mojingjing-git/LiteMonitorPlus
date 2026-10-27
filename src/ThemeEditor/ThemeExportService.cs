@@ -57,6 +57,17 @@ namespace LiteMonitor.ThemeEditor
         Horizontal = 1
     }
 
+    /// <summary>
+    /// 效果图形态。与 <see cref="ThemeExportImageOrientation"/> 分开：
+    /// 旧调用继续按 Vertical/Horizontal；Taskbar 是新形态，不能静默映射成竖向。
+    /// </summary>
+    public enum ThemeExportImageFormFactor
+    {
+        Vertical = 0,
+        Horizontal = 1,
+        Taskbar = 2
+    }
+
     /// <summary>JSON 导出结果。</summary>
     public sealed record ThemeExportResult
     {
@@ -105,6 +116,22 @@ namespace LiteMonitor.ThemeEditor
 
         /// <summary>诊断（路线说明、GPU 不可用原因等）。</summary>
         public IReadOnlyList<string> Diagnostics { get; init; } = Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// TM02：市场投稿元数据（与主题格式 <c>version</c> 分开）。
+    /// 发布版本是市场条目字符串；主题格式版本仍是整数，不能互相推导。
+    /// </summary>
+    public sealed record ThemeSubmissionMetadata
+    {
+        public string Id { get; init; } = string.Empty;
+        public string Name { get; init; } = string.Empty;
+        public string NameEn { get; init; } = string.Empty;
+        public string Description { get; init; } = string.Empty;
+        public string DescriptionEn { get; init; } = string.Empty;
+        public string Author { get; init; } = string.Empty;
+        public string MarketVersion { get; init; } = "1.0.0";
+        public string License { get; init; } = "MIT";
     }
 
     /// <summary>投稿资料准备结果。</summary>
@@ -178,6 +205,12 @@ namespace LiteMonitor.ThemeEditor
 
         /// <summary>横向效果图高度（固定）。</summary>
         public const int HorizontalImageHeight = 120;
+
+        /// <summary>任务栏效果图宽度（固定）。</summary>
+        public const int TaskbarImageWidth = 400;
+
+        /// <summary>任务栏效果图高度（固定，与生产参考任务栏高度一致）。</summary>
+        public const int TaskbarImageHeight = 32;
 
         /// <summary>投稿资料里的最终主题载荷文件名。</summary>
         public const string ThemeJsonFileName = "theme.json";
@@ -281,6 +314,70 @@ namespace LiteMonitor.ThemeEditor
         // ============================================================
 
         /// <summary>
+        /// 按形态导出效果图：Taskbar 走独立的任务栏渲染器，不落入竖向分支。
+        /// 旧 orientation 重载保留，避免破坏既有调用。
+        /// </summary>
+        public static ThemeImageExportResult ExportEffectImage(
+            ThemeDocumentSession session,
+            string path,
+            ImageRoutePreference preference,
+            ThemeExportImageFormFactor formFactor,
+            Settings? taskbarSettings = null,
+            bool taskbarLightMode = false)
+        {
+            if (formFactor == ThemeExportImageFormFactor.Taskbar)
+            {
+                return ExportTaskbarImage(session, path, preference, taskbarSettings, taskbarLightMode);
+            }
+
+            ThemeExportImageOrientation orientation =
+                formFactor == ThemeExportImageFormFactor.Horizontal
+                    ? ThemeExportImageOrientation.Horizontal
+                    : ThemeExportImageOrientation.Vertical;
+            return ExportEffectImage(session, path, preference, orientation);
+        }
+
+        /// <summary>
+        /// 导出任务栏形态效果图（固定输入、固定尺寸；使用任务栏渲染器，不是 GPU 效果图）。
+        /// </summary>
+        public static ThemeImageExportResult ExportTaskbarImage(
+            ThemeDocumentSession session,
+            string path,
+            ImageRoutePreference preference,
+            Settings? taskbarSettings = null,
+            bool taskbarLightMode = false)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("导出路径不能为空。", nameof(path));
+
+            string fullPath = Path.GetFullPath(path);
+            var diagnostics = new List<string>
+            {
+                "任务栏形态由 TaskbarRenderer 固定输入产出；该图不是 GPU 渲染结果。"
+            };
+
+            if (preference == ImageRoutePreference.Gpu)
+            {
+                return new ThemeImageExportResult
+                {
+                    Success = false,
+                    Error = "任务栏形态使用 GDI 任务栏渲染器，不能按 GPU 路线导出。",
+                    Path = fullPath,
+                    Diagnostics = diagnostics
+                };
+            }
+
+            Size size = new(TaskbarImageWidth, TaskbarImageHeight);
+            return RenderTaskbarImage(
+                session.Draft,
+                fullPath,
+                size,
+                taskbarSettings?.DeepClone() ?? new Settings(),
+                taskbarLightMode,
+                diagnostics);
+        }
+
+        /// <summary>
         /// 导出效果图（经典 / GPU / 兼容外观三条路线，路线如实标注）。
         /// </summary>
         /// <param name="session">只读会话（使用其草稿主题渲染，不修改草稿）。</param>
@@ -380,7 +477,8 @@ namespace LiteMonitor.ThemeEditor
         /// </summary>
         /// <param name="session">只读会话（不修改）。</param>
         /// <param name="directory">资料目录（不存在时自动创建）。</param>
-        public static ThemeSubmissionResult PrepareSubmissionMaterials(ThemeDocumentSession session, string directory)
+        public static ThemeSubmissionResult PrepareSubmissionMaterials(
+            ThemeDocumentSession session, string directory, ThemeSubmissionMetadata? metadata = null)
         {
             if (session == null) throw new ArgumentNullException(nameof(session));
             if (string.IsNullOrWhiteSpace(directory)) throw new ArgumentException("资料目录不能为空。", nameof(directory));
@@ -448,6 +546,24 @@ namespace LiteMonitor.ThemeEditor
                 };
             }
 
+            // ②b [S04] 已知颜色字段统一校验（与运行时/主题市场同一校验器）：
+            // 非法颜色阻断投稿资料生成，指向具体字段与原因。
+            IReadOnlyList<string> colorFailures = ThemeColorParser.ValidateTheme(session.Draft);
+            if (colorFailures.Count > 0)
+            {
+                return new ThemeSubmissionResult
+                {
+                    Success = false,
+                    Error = "颜色字段校验未通过：" + string.Join("; ", colorFailures),
+                    Directory = fullDir,
+                    ThemeJsonPath = themeJsonPath,
+                    ThemeRoute = gpuTheme ? ThemeRenderingConfig.GpuBackend : ThemeRenderingConfig.LegacyBackend,
+                    Sha256 = export.Sha256,
+                    ByteCount = export.ByteCount,
+                    Diagnostics = diagnostics
+                };
+            }
+
             // ③ 远程引用自检：主题包不得引用远程资源（市场合同 F7 的同一口径）
             if (ContainsRemoteReference(root))
             {
@@ -478,12 +594,59 @@ namespace LiteMonitor.ThemeEditor
                     "产出（previewRoute=" + preview.Route + "），提交前请人工确认是否接受。");
             }
 
-            // ⑤ submission.json：素材摘要
+            // ⑤ submission.json：素材摘要 + TM02 市场投稿元数据
+            ThemeSubmissionMetadata meta = metadata ?? new ThemeSubmissionMetadata
+            {
+                Id = BuildDefaultSubmissionId(session.ThemeName),
+                Name = ReadString(root, "name") ?? session.ThemeName,
+                NameEn = ReadString(root, "name") ?? session.ThemeName,
+                Author = ReadString(root, "author") ?? string.Empty
+            };
+            if (string.IsNullOrWhiteSpace(meta.Id) || !IsValidSubmissionId(meta.Id))
+            {
+                return new ThemeSubmissionResult
+                {
+                    Success = false,
+                    Error = "投稿 ID 非法：只允许 1–40 个小写字母、数字或连字符，且不能以连字符开头/结尾。",
+                    Directory = fullDir,
+                    ThemeJsonPath = themeJsonPath,
+                    Diagnostics = diagnostics
+                };
+            }
+            if (!IsValidMarketVersion(meta.MarketVersion))
+            {
+                return new ThemeSubmissionResult
+                {
+                    Success = false,
+                    Error = "发布版本非法：必须是 major.minor.patch 三段非负整数。",
+                    Directory = fullDir,
+                    ThemeJsonPath = themeJsonPath,
+                    Diagnostics = diagnostics
+                };
+            }
+            if (string.IsNullOrWhiteSpace(meta.License))
+            {
+                return new ThemeSubmissionResult
+                {
+                    Success = false,
+                    Error = "许可证不能为空。",
+                    Directory = fullDir,
+                    ThemeJsonPath = themeJsonPath,
+                    Diagnostics = diagnostics
+                };
+            }
+
             string submissionPath = Path.Combine(fullDir, SubmissionJsonFileName);
             var submission = new Dictionary<string, object?>
             {
-                ["name"] = ReadString(root, "name") ?? session.ThemeName,
-                ["author"] = ReadString(root, "author") ?? string.Empty,
+                ["id"] = meta.Id,
+                ["name"] = string.IsNullOrWhiteSpace(meta.Name) ? (ReadString(root, "name") ?? session.ThemeName) : meta.Name,
+                ["name_en"] = meta.NameEn,
+                ["description"] = meta.Description,
+                ["description_en"] = meta.DescriptionEn,
+                ["market_version"] = meta.MarketVersion,
+                ["license"] = meta.License,
+                ["author"] = string.IsNullOrWhiteSpace(meta.Author) ? (ReadString(root, "author") ?? string.Empty) : meta.Author,
                 ["version"] = ReadRaw(root, "version"),
                 ["material"] = ReadMaterial(session.Draft),
                 ["route"] = gpuTheme ? ThemeRenderingConfig.GpuBackend : ThemeRenderingConfig.LegacyBackend,
@@ -657,6 +820,72 @@ namespace LiteMonitor.ThemeEditor
                 {
                     Success = false,
                     Error = "经典路线渲染失败：" + ex.Message,
+                    Path = path,
+                    Route = route,
+                    Diagnostics = diagnostics
+                };
+            }
+
+            return DescribeImage(path, route, diagnostics);
+        }
+
+        /// <summary>
+        /// 任务栏经典渲染：固定 400×32 画布，使用任务栏布局和 TaskbarRenderer。
+        /// 不创建控件、不读全局设置、不触碰生产任务栏静态样式。
+        /// </summary>
+        private static ThemeImageExportResult RenderTaskbarImage(
+            Theme theme,
+            string path,
+            Size size,
+            Settings settings,
+            bool lightMode,
+            List<string> diagnostics)
+        {
+            ThemeExportImageRoute route = theme.Rendering?.IsGpuRequested == true
+                ? ThemeExportImageRoute.Fallback
+                : ThemeExportImageRoute.Classic;
+
+            try
+            {
+                string? dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+                using var bitmap = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppPArgb);
+                using (Graphics g = Graphics.FromImage(bitmap))
+                {
+                    g.Clear(lightMode
+                        ? Color.FromArgb(243, 243, 243)
+                        : Color.FromArgb(32, 32, 32));
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+
+                    Theme previewTheme = ThemePreviewControl.CreatePreviewTheme(theme, 1.0f);
+                    List<Column> columns = ThemePreviewScene.BuildColumns(
+                        ThemePreviewScene.CreateMetrics(),
+                        settings.TaskbarSingleLine);
+
+                    // 固定宽度 400，行高由任务栏样式决定；不依赖 DeviceDpi。
+                    var layout = new HorizontalLayout(
+                        previewTheme,
+                        Math.Max(1, size.Width),
+                        LayoutMode.Taskbar,
+                        settings,
+                        null);
+                    layout.Build(columns, Math.Max(TaskbarPreviewControl.ReferenceTaskbarHeight, size.Height));
+
+                    using var styleContext = new TaskbarRenderer.TaskbarStyleContext(settings);
+                    TaskbarRenderer.Render(g, columns, lightMode, styleContext);
+                }
+
+                bitmap.Save(path, ImageFormat.Png);
+            }
+            catch (Exception ex)
+            {
+                TryDeleteFile(path);
+                return new ThemeImageExportResult
+                {
+                    Success = false,
+                    Error = "任务栏效果图渲染失败：" + ex.Message,
                     Path = path,
                     Route = route,
                     Diagnostics = diagnostics
@@ -1018,6 +1247,81 @@ namespace LiteMonitor.ThemeEditor
             sb.AppendLine("- 效果图上的标注与 submission.json 的 previewRoute / previewIsFallback 一致，");
             sb.AppendLine("  标明它是主效果、兼容外观还是 GPU 路线。");
             return sb.ToString();
+        }
+
+        internal static bool TryValidateSubmissionMetadata(ThemeSubmissionMetadata meta, out string error)
+        {
+            if (!IsValidSubmissionId(meta.Id))
+            {
+                error = "投稿 ID 非法：只允许 1–40 个小写字母、数字或连字符，且不能以连字符开头/结尾。";
+                return false;
+            }
+            if (!IsValidMarketVersion(meta.MarketVersion))
+            {
+                error = "发布版本非法：必须是 major.minor.patch 三段非负整数。";
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(meta.License))
+            {
+                error = "许可证不能为空。";
+                return false;
+            }
+            error = string.Empty;
+            return true;
+        }
+
+        internal static ThemeSubmissionMetadata CreateDefaultMetadata(string themeName)
+        {
+            string name = (themeName ?? string.Empty).Trim();
+            if (name.Length == 0) name = "Theme";
+            return new ThemeSubmissionMetadata
+            {
+                Id = BuildDefaultSubmissionId(name),
+                Name = name,
+                NameEn = name,
+                MarketVersion = "1.0.0",
+                License = "MIT"
+            };
+        }
+
+        private static string BuildDefaultSubmissionId(string themeName)
+        {
+            var sb = new StringBuilder();
+            foreach (char ch in (themeName ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) sb.Append(ch);
+                else if (ch == '-' || ch == '_' || ch == ' ') sb.Append('-');
+            }
+            string id = sb.ToString().Trim('-');
+            while (id.Contains("--", StringComparison.Ordinal)) id = id.Replace("--", "-", StringComparison.Ordinal);
+            if (id.Length == 0) id = "theme";
+            if (id.Length > 40) id = id[..40].TrimEnd('-');
+            return id;
+        }
+
+        private static bool IsValidSubmissionId(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id) || id.Length > 40) return false;
+            if (id[0] == '-' || id[^1] == '-') return false;
+            foreach (char ch in id)
+                if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-')) return false;
+            return true;
+        }
+
+        private static bool IsValidMarketVersion(string version)
+        {
+            if (string.IsNullOrWhiteSpace(version)) return false;
+            string[] parts = version.Split('.');
+            if (parts.Length != 3) return false;
+            foreach (string part in parts)
+            {
+                if (part.Length == 0) return false;
+                if (part.Length > 1 && part[0] == '0') return false;
+                if (!int.TryParse(part, System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture, out int value) || value < 0)
+                    return false;
+            }
+            return true;
         }
 
         /// <summary>SHA-256（十六进制小写）。</summary>

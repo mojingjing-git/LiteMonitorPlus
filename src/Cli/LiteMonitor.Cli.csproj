@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ★ CLI 能力（Agent 可复用探测点与工具）· 可行性验证工程
+    ===============================================================
+    形态：独立控制台工程，不进主程序进程。
+    - 刻意**不** ProjectReference 主工程（LiteMonitor.csproj）：
+      主工程是 WinExe + WinForms + System.Drawing，引用它会把 UI 依赖拖进来；
+      L1 层能力应当零依赖、可在无硬件/无窗体环境执行。
+    - 采用「源码共享」模式（与 tools\ThemeMarketValidator 同族）：
+      CLI 与客户端**共用同一份源码**，禁止复制校验规则，避免规则漂移。
+
+    命名空间约束（架构棘轮 scripts\architecture-assert.ps1）：
+    - 本目录 src\Cli ⇒ C-3 期望命名空间 = 'LiteMonitor.Cli' ⇒ 本工程必须声明
+      namespace LiteMonitor.Cli，否则 C-3 计数 +1（棘轮只允许变小）。
+    - 严禁声明 namespace LiteMonitor.src.*（会抬高 C-1 与 C-4 计数）。
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>LiteMonitor.Cli</AssemblyName>
+    <RootNamespace>LiteMonitor.Cli</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!--
+      ★ 必需：ThemeRenderingConfig.Validate() 内部用 #if THEME_MARKET_CLI 切掉
+      LegacyFallbackStyleResolver（它会拖进 System.Drawing + LiteMonitor.src.Core）。
+      缺少本常量 ⇒ CLI 编译直接失败（实测：CS0103 LegacyFallbackStyleResolver）。
+      代价：CLI 模式下 diagnostics 为空 ⇒ **fallbackStyle 诊断项 CLI 不做**（详见 docs）。
+    -->
+    <DefineConstants>$(DefineConstants);THEME_MARKET_CLI</DefineConstants>
+    <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 与客户端共用同一份源码；禁止在 CLI 里复制校验规则。 -->
+    <Compile Include="..\Plugins\ThemeMarketValidator.cs" Link="Shared\ThemeMarketValidator.cs" />
+    <Compile Include="..\Rendering\Configuration\ThemeRenderingConfig.cs" Link="Shared\ThemeRenderingConfig.cs" />
+  </ItemGroup>
+
+  <!--
+    共享进来的 ThemeRenderingConfig.cs 属于「LiteMonitor.Rendering.Configuration」，
+    其余共享文件属于「LiteMonitor.src.Plugins」。二者都**不在**本工程声明的
+    命名空间下 ⇒ 不影响 C-1/C-3/C-4（棘轮按文件文本统计，不按程序集）。
+  -->
+
+</Project>

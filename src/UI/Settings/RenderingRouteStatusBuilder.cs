@@ -27,6 +27,13 @@ namespace LiteMonitor.src.UI.SettingsPage
         /// <summary>GPU 呈现未运行。Detail = 原因码（safe_mode / gpu_effects_opt_in_required / 运行失败码等），可为 null。</summary>
         NotStarted,
 
+        /// <summary>
+        /// 【S06】GPU 启动守卫处于保守状态（上次尝试未确认首帧 / 守卫存储不可用），
+        /// 需要用户显式重试。Detail = 守卫原因码（gpu_startup_guard_*），与
+        /// <see cref="NotStarted"/> 的运行原因并列展示——守卫状态与运行失败是两个事实。
+        /// </summary>
+        GpuGuardConservative,
+
         /// <summary>当前窗口为分层窗口（透明度&lt;100%）——实测不影响实时背景，仅诊断展示。</summary>
         LayeredDiagnostic
     }
@@ -44,7 +51,9 @@ namespace LiteMonitor.src.UI.SettingsPage
         bool LiveBackgroundRequested,
         string? RuntimeFailure,
         string? FallbackCode,
-        bool WindowIsLayered)
+        bool WindowIsLayered,
+        bool GpuGuardConservative = false,
+        string? GpuGuardStatusCode = null)
     {
         /// <summary>Detail 的取值优先级：运行失败码优先于回退原因码。</summary>
         public string? FailureOrFallbackCode => RuntimeFailure ?? FallbackCode;
@@ -84,6 +93,15 @@ namespace LiteMonitor.src.UI.SettingsPage
             {
                 // GPU 已开但宿主未运行：原因码来自期望路由的回退判定或宿主运行失败。
                 lines.Add(new(RenderingRouteStatusKind.NotStarted, s.FailureOrFallbackCode));
+                // 【S06】启动守卫保守状态与运行失败并列展示：守卫说的是"上一次尝试
+                // 没有以首帧收尾 / 状态写不进磁盘"，运行失败说的是"这次为什么没跑起来"。
+                // 两者都是真实原因，缺一不可（R3 §4.1-1.3）。
+                if (s.GpuGuardConservative)
+                {
+                    lines.Add(new(
+                        RenderingRouteStatusKind.GpuGuardConservative,
+                        s.GpuGuardStatusCode ?? "gpu_startup_guard_previous_attempt_unclean"));
+                }
             }
             else
             {

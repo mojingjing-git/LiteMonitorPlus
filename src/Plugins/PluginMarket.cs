@@ -658,6 +658,10 @@ namespace LiteMonitor.src.Plugins
         /// </para>
         /// </summary>
         internal static async Task<byte[]> DownloadBytesAsync(Uri initialUri, CancellationToken ct, TimeSpan deadline)
+            => await DownloadBytesAsync(initialUri, ct, deadline, MaxDownloadBytes).ConfigureAwait(false);
+
+        internal static async Task<byte[]> DownloadBytesAsync(
+            Uri initialUri, CancellationToken ct, TimeSpan deadline, long maxBytes)
         {
             using HttpClient client = CreateDownloadClient();
 
@@ -707,7 +711,7 @@ namespace LiteMonitor.src.Plugins
                             $"下载失败：HTTP {(int)response.StatusCode}");
                     }
 
-                    return await ReadBodyWithLimitAsync(response, token).ConfigureAwait(false);
+                    return await ReadBodyWithLimitAsync(response, token, maxBytes).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested && deadlineCts.IsCancellationRequested)
@@ -759,13 +763,14 @@ namespace LiteMonitor.src.Plugins
         ///   否则这里的正文读取就是无限等待（HttpClient.Timeout 约束不到它）。
         /// </para>
         /// </summary>
-        private static async Task<byte[]> ReadBodyWithLimitAsync(HttpResponseMessage response, CancellationToken ct)
+        private static async Task<byte[]> ReadBodyWithLimitAsync(
+            HttpResponseMessage response, CancellationToken ct, long maxBytes)
         {
             long? declared = response.Content.Headers.ContentLength;
-            if (declared.HasValue && declared.Value > MaxDownloadBytes)
+            if (declared.HasValue && declared.Value > maxBytes)
             {
                 throw new PluginMarketException(MarketErrorReason.Unknown,
-                    $"下载内容 {declared.Value} 字节超过上限 {MaxDownloadBytes} 字节，已中止");
+                    $"下载内容 {declared.Value} 字节超过上限 {maxBytes} 字节，已中止");
             }
 
             using Stream stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
@@ -779,10 +784,10 @@ namespace LiteMonitor.src.Plugins
                 if (read <= 0) break;
 
                 total += read;
-                if (total > MaxDownloadBytes)
+                if (total > maxBytes)
                 {
                     throw new PluginMarketException(MarketErrorReason.Unknown,
-                        $"下载内容超过上限 {MaxDownloadBytes} 字节，已中止");
+                        $"下载内容超过上限 {maxBytes} 字节，已中止");
                 }
 
                 buffer.Write(chunk, 0, read);
@@ -900,6 +905,12 @@ namespace LiteMonitor.src.Plugins
         public bool HadTarget { get; set; }
         public string PreviousFileSha256 { get; set; } = "";
         public string? PreviousRecordSha256 { get; set; }
+        /// <summary>
+        /// [S03] 事务类型："install"（旧日志缺省字段反序列化为空串，按 install 处理）
+        /// 或 "uninstall"。卸载事务的 Sha256 字段语义是**卸载前的旧记录摘要**
+        /// （提交点前的权威判据），与安装事务的"新载荷摘要"不同。
+        /// </summary>
+        public string Operation { get; set; } = "";
     }
 
     /// <summary>写前日志文件的内容</summary>
@@ -1186,6 +1197,18 @@ namespace LiteMonitor.src.Plugins
                  !PluginMarket.IsUsableSha256(record.Sha256)))
                 throw new IOException("The persisted market record is invalid.");
 
+            // [S03] 卸载事务走独立对账分支——必须在安装分支之前分流：
+            // 卸载事务的 Sha256 是"旧记录摘要"，提交点前 record == tx.Sha256 恰好成立，
+            // 却不能按安装语义去 RequireContent 一个已被删除的目标。
+            if (string.Equals(tx.Operation, "uninstall", StringComparison.Ordinal))
+            {
+                ReconcileUninstall(paths, tx, record);
+                // Garbage is removable only after payload and authority agree.
+                DeleteFile(paths.StagePath);
+                DeleteFile(paths.BackupPath);
+                return;
+            }
+
             if (record != null && ShaEquals(record.Sha256, tx.Sha256))
             {
                 RequireContent(paths.TargetPath, tx.Sha256);
@@ -1207,6 +1230,37 @@ namespace LiteMonitor.src.Plugins
             // Garbage is removable only after payload and authority agree.
             DeleteFile(paths.StagePath);
             DeleteFile(paths.BackupPath);
+        }
+
+        /// <summary>
+        /// [S03] 卸载事务对账。提交点 = 安装记录持久化移除：
+        /// 记录仍在 ⇒ 事务未提交 ⇒ 载荷必须恢复存在（目标缺失时把备份原子移回；
+        /// 目标仍在则校验内容一致）；记录已移除 ⇒ 事务已提交 ⇒ 完成卸载，
+        /// 目标若有残留（提交点附近极小窗口内的重建）按防御处理删除。
+        /// 备份与 stage 由调用方尾部统一清理（备份在"恢复载荷"路径里已被 Move 消费）。
+        /// </summary>
+        private static void ReconcileUninstall(
+            TransactionPaths paths,
+            MarketInstallTransaction tx,
+            MarketPluginRecord? record)
+        {
+            if (record != null)
+            {
+                // 提交点前：记录必须仍是卸载时的旧记录，载荷恢复为存在状态。
+                if (!ShaEquals(record.Sha256, tx.Sha256))
+                    throw new IOException("The persisted record changed during an interrupted uninstall.");
+                if (tx.HadTarget && !HasContent(paths.TargetPath, tx.PreviousFileSha256))
+                {
+                    RequireContent(paths.BackupPath, tx.PreviousFileSha256);
+                    MarketFileIo.MoveAtomic(paths.BackupPath, paths.TargetPath);
+                }
+                if (tx.HadTarget) RequireContent(paths.TargetPath, tx.PreviousFileSha256);
+                // HadTarget=false：记录在、载荷本就不存在 ⇒ 状态已一致，无操作。
+            }
+            else
+            {
+                if (File.Exists(paths.TargetPath)) DeleteFile(paths.TargetPath);
+            }
         }
 
         private static void RestorePreviousFiles(TransactionPaths paths, MarketInstallTransaction tx)
@@ -1627,7 +1681,9 @@ namespace LiteMonitor.src.Plugins
             MarketFileIo.MoveAtomic(tmp, path);
         }
 
-        private static void AppendPending(string pluginsDir, MarketInstallTransaction tx)
+        // [S03] 卸载事务（PluginMarketUninstallCore）与安装事务共用同一写前日志，
+        // 这三个方法从 private 放宽为 internal（同程序集内复用，日志格式唯一）。
+        internal static void AppendPending(string pluginsDir, MarketInstallTransaction tx)
         {
             MarketInstallTxnLog log = ReadLog(pluginsDir);
             log.Pending.RemoveAll(t => string.Equals(t.TxId, tx.TxId, StringComparison.OrdinalIgnoreCase));
@@ -1635,7 +1691,7 @@ namespace LiteMonitor.src.Plugins
             WriteLog(pluginsDir, log);
         }
 
-        private static void RemovePending(string pluginsDir, string txId)
+        internal static void RemovePending(string pluginsDir, string txId)
         {
             if (!File.Exists(LogPath(pluginsDir))) return;
 
@@ -1648,7 +1704,7 @@ namespace LiteMonitor.src.Plugins
             WriteLog(pluginsDir, log);
         }
 
-        private static string ComputeFileSha(string path)
+        internal static string ComputeFileSha(string path)
             => PluginMarket.ComputeSha256(MarketFileIo.ReadAllBytesShared(path));
 
         private static bool ShaEquals(string? a, string? b)

@@ -32,6 +32,9 @@ namespace LiteMonitor.ThemeEditor
 
         private int Scale(int value) => (int)Math.Round(value * _dpi / 96.0);
 
+        /// <summary>[S05] 阈值说明里的数值摘要格式（整数或两位小数）。</summary>
+        private static string FormatNumber(double value) => value.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture);
+
         /// <summary>
         /// ★ E-1（G1）：DPI 变化后重算检查器内部固定像素布局。
         /// <para>
@@ -90,8 +93,8 @@ namespace LiteMonitor.ThemeEditor
                     case Label label when label.Tag as string == "group":
                         label.ForeColor = _palette.TextSub;
                         break;
-                    case Label label when label.Tag as string == "shared":
-                        label.ForeColor = _palette.Primary;
+                    case Label label when label.Tag as string == "shared" || label.Tag as string == "thresholds-note":
+                        label.ForeColor = label.Tag as string == "shared" ? _palette.Primary : _palette.TextSub;
                         break;
                     case Label label when label.Tag as string == "name":
                         label.ForeColor = _palette.TextMain;
@@ -293,6 +296,34 @@ namespace LiteMonitor.ThemeEditor
                         y += sharedLabel.Height + Scale(4);
                     }
                 }
+
+                // [S05] 阈值只读说明：主题不再提供阈值编辑入口，状态阈值来自当前生效设置；
+                // 显示实时摘要，避免用户在旧主题 JSON 里找不到阈值字段时产生误解。
+                double loadWarn = 0, loadCrit = 0, tempWarn = 0, tempCrit = 0;
+                try
+                {
+                    (loadWarn, loadCrit) = MetricUtils.GetThresholds("CPU.Load");
+                    (tempWarn, tempCrit) = MetricUtils.GetThresholds("CPU.Temp");
+                }
+                catch
+                {
+                    // 设置不可读时只显示说明文字本身，不拼摘要数值。
+                }
+
+                string thresholdDetail = tempWarn > 0 || loadWarn > 0
+                    ? $"\n当前生效：负载 {FormatNumber(loadWarn)}/{FormatNumber(loadCrit)}，温度 {FormatNumber(tempWarn)}/{FormatNumber(tempCrit)} ℃"
+                    : "";
+                var thresholdNote = new Label
+                {
+                    Text = "状态阈值（负载/温度等）来自当前生效设置，主题只负责颜色。" + thresholdDetail,
+                    Location = new Point(Padding.Left, y + Scale(6)),
+                    Size = new Size(Width - Padding.Horizontal, Scale(44)),
+                    ForeColor = _palette.TextSub,
+                    Font = s_smallFont,
+                    Tag = "thresholds-note",
+                };
+                Controls.Add(thresholdNote);
+                y += thresholdNote.Height + Scale(10);
 
                 // 底部占位，保证滚动到底部时最后一行不被裁切
                 Controls.Add(new Panel { Location = new Point(0, y + 8), Size = new Size(1, 1) });

@@ -193,11 +193,17 @@ namespace LiteMonitor.Tests
             // 前提：主机来自模板变量 ⇒ 不构成显式声明
             Assert.Empty(PluginProcessor.GetDeclaredHosts(tmpl));
 
-            bool ok = await exec.ExecuteInstanceAsync(inst, tmpl);
+            // [S02a] 未声明的目标必须先经用户授权才能发首跳请求；
+            // "原始直连目标"例外只作用于重定向跳，不豁免首跳授权。
+            var origin = new Uri(host.Url).GetLeftPart(UriPartial.Authority);
+            using (new AuthorizedOriginsGrant(inst.Id, origin))
+            {
+                bool ok = await exec.ExecuteInstanceAsync(inst, tmpl);
 
-            Assert.True(ok);
-            Assert.Equal(2, host.RequestCount);
-            Assert.Contains(host.Requests, r => r.Path == "/other");
+                Assert.True(ok);
+                Assert.Equal(2, host.RequestCount);
+                Assert.Contains(host.Requests, r => r.Path == "/other");
+            }
         }
 
         // ==========================================================
@@ -222,11 +228,16 @@ namespace LiteMonitor.Tests
 
             Assert.Empty(PluginProcessor.GetDeclaredHosts(tmpl));
 
-            var ex = await Assert.ThrowsAnyAsync<PluginSandboxException>(
-                () => exec.ExecuteInstanceAsync(inst, tmpl));
+            // [S02a] 首跳目标经用户授权放行，负例仍是"授权过的主机 302 逃逸到未声明主机"。
+            var origin = new Uri(host.Url).GetLeftPart(UriPartial.Authority);
+            using (new AuthorizedOriginsGrant(inst.Id, origin))
+            {
+                var ex = await Assert.ThrowsAnyAsync<PluginSandboxException>(
+                    () => exec.ExecuteInstanceAsync(inst, tmpl));
 
-            Assert.Equal(PluginSandboxReasons.RedirectTargetNotAllowed, ex.Reason);
-            Assert.Equal(0, other.RequestCount);
+                Assert.Equal(PluginSandboxReasons.RedirectTargetNotAllowed, ex.Reason);
+                Assert.Equal(0, other.RequestCount);
+            }
         }
 
         // ==========================================================
@@ -500,7 +511,8 @@ namespace LiteMonitor.Tests
 
             var getClient = typeof(PluginExecutor).GetMethod("GetClient", BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(getClient);
-            var proxyClient = (HttpClient)getClient.Invoke(exec, new object[] { "http://127.0.0.1:1" });
+            // [S02a] GetClient 追加了 instanceId 形参（代理授权闸门）；null = 兼容直调路径。
+            var proxyClient = (HttpClient)getClient.Invoke(exec, new object[] { "http://127.0.0.1:1", null });
             Assert.False(AllowAutoRedirectOf(proxyClient));
         }
 
