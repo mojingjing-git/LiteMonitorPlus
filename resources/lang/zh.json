@@ -91,7 +91,6 @@
     "ThemeMarketThemeContentRejected": "主题内容未通过安全或参数校验，已拒收",
     "ThemeMarketPreviewAction": "预览",
     "ThemeMarketEmpty": "主题市场暂无主题",
-    "RenderingRoute": "渲染路线",
     "RouteSuffixGpu": "（GPU 材质）",
     "RouteSuffixGdi": "（GDI+）",
     "RouteStatus": {

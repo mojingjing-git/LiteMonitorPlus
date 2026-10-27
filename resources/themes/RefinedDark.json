@@ -1,0 +1,56 @@
+{
+  "version": 3,
+  "name": "RefinedDark",
+  "layout": {
+    "rowHeight": 40,
+    "padding": 13,
+    "cornerRadius": 12,
+    "groupRadius": 10,
+    "groupPadding": 8,
+    "groupSpacing": 30,
+    "groupBottom": 0,
+    "groupTitleOffset": 6,
+    "itemGap": 6,
+    "frameStyle": 2,
+    "frameWidth": 1,
+    "frameLength": 0,
+    "scanline": 0,
+    "glow": 0,
+    "grid": 0,
+    "barStyle": 1
+  },
+  "font": {
+    "family": "Microsoft YaHei UI",
+    "valueFamily": "Consolas",
+    "title": 11.0,
+    "group": 10.0,
+    "item": 10.0,
+    "value": 14.0,
+    "bold": true,
+    "scale": 1.0
+  },
+  "color": {
+    "background": "#191C22",
+    "groupBackground": "#2A303A",
+    "border": "#4E5A6B",
+    "shadow": "rgba(255,255,255,0.20)",
+    "textTitle": "#F5F7FA",
+    "textGroup": "#8E99AB",
+    "textPrimary": "#E6EAF0",
+    "textSecondary": "#7C8698",
+    "valueSafe": "#4ADE80",
+    "valueWarn": "#FBBF24",
+    "valueCrit": "#F87171",
+    "barBackground": "#14171C",
+    "barLow": "#4ADE80",
+    "barMid": "#FBBF24",
+    "barHigh": "#F87171"
+  },
+  "backdrop": {
+    "mode": "gradient",
+    "opacity": 0.0,
+    "gradientStart": "#232830",
+    "gradientEnd": "#14171C",
+    "gradientAngle": 90
+  }
+}

@@ -91,7 +91,6 @@
     "ThemeMarketThemeContentRejected": "Themeninhalt hat Sicherheits- oder Parameterprüfung nicht bestanden und wurde abgelehnt",
     "ThemeMarketPreviewAction": "Vorschau",
     "ThemeMarketEmpty": "Noch keine Themen im Markt",
-    "RenderingRoute": "Render-Route",
     "RouteSuffixGpu": " (GPU-Material)",
     "RouteSuffixGdi": " (GDI+)",
     "RouteStatus": {

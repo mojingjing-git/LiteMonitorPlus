@@ -1489,14 +1489,14 @@ namespace LiteMonitor.src.UI.SettingsPage
                 var cfg = Settings.Load();
                 var switchToDefault = new Action(() =>
                 {
-                    cfg.Skin = "DarkFlat_Classic";   // Settings.Skin 的出厂默认（Settings.cs）
+                    cfg.Skin = "RefinedDark";   // Settings.Skin 的出厂默认（Settings.cs）
                     var result = LiteMonitor.src.Core.Actions.AppActions.ApplyThemeAndLayoutWithResult(cfg, UI, MainForm);
                     var runtime = result.Modules.FirstOrDefault(m => string.Equals(m.Module, "ThemeRuntime", StringComparison.Ordinal));
                     if (runtime == null || !runtime.Applied)
                         throw new InvalidOperationException(runtime?.FailureReason ?? result.FailureCode ?? "theme runtime not applied");
                     if (!cfg.TrySave())
                         throw new InvalidOperationException("settings save failed");
-                    Config.Skin = "DarkFlat_Classic";
+                    Config.Skin = "RefinedDark";
                 });
 
                 if (!ThemeMarket.TryUninstall(entry, switchToDefault, out var reason))

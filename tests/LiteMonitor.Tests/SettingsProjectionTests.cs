@@ -46,7 +46,7 @@ namespace LiteMonitor.Tests
         {
             var defaults = SettingsProjection.ToDisplayConfig(new Settings());
             Assert.Equal("", defaults.Language);
-            Assert.Equal("DarkFlat_Classic", defaults.Skin);
+            Assert.Equal("RefinedDark", defaults.Skin);
             Assert.Equal(SettingThemeMode.System, defaults.ThemeMode);  // f14b 字段透传（默认 System）
             Assert.Equal(1000, defaults.UiRefreshMs);
 
@@ -60,6 +60,17 @@ namespace LiteMonitor.Tests
             Assert.Equal("zh-CN", customized.Language);
             Assert.Equal("Dark", customized.ThemeMode.ToString());
             Assert.Equal(500, customized.UiRefreshMs);
+        }
+
+        [Fact]
+        public void GPU渲染路线_出厂默认开启_实时背景与政策保持关闭()
+        {
+            // 选 GPU 材质主题即渲染意图：GPU 效果出厂开启（Settings.cs 出厂默认），
+            // 实时背景与 WDA 捕获政策仍须用户显式操作。
+            var defaults = new Settings();
+            Assert.True(defaults.GpuThemeEffectsEnabled);
+            Assert.False(defaults.GpuLiveBackgroundEnabled);
+            Assert.False(defaults.GpuWdaCapturePolicyAccepted);
         }
 
         [Fact]

@@ -91,7 +91,6 @@
     "ThemeMarketThemeContentRejected": "テーマの内容が安全またはパラメータ検証に失敗したため拒否しました",
     "ThemeMarketPreviewAction": "プレビュー",
     "ThemeMarketEmpty": "テーママーケットにはまだテーマがありません",
-    "RenderingRoute": "描画ルート",
     "RouteSuffixGpu": "（GPUマテリアル）",
     "RouteSuffixGdi": "（GDI+）",
     "RouteStatus": {

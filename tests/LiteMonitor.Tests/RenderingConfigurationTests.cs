@@ -363,14 +363,17 @@ public sealed class RenderingConfigurationTests
         MaterialRuntimeSettings glass = MaterialRuntimeSettings.Create(
             liquid.Rendering,
             MaterialKind.LiquidGlass);
+        // 打包常量基线（2026-10-28 视觉打磨批准）：折射 1.8 / 模糊 14 / 表面不透明度 0.085 /
+        // 阴影 0.42 —— 材质立体感增强；liveBackground 保持打包保守默认 false
+        //（实际桌面捕获只由用户「实时桌面背景」开关驱动，主题位不参与路由）。
         Assert.Equal(26f, glass.CornerRadius);
-        Assert.Equal(1.6f, glass.Refraction);
-        Assert.Equal(8f, glass.BlurRadius);
+        Assert.Equal(1.8f, glass.Refraction);
+        Assert.Equal(14f, glass.BlurRadius);
         Assert.Equal(1f, glass.Thickness);
-        Assert.Equal(0.055f, glass.SurfaceOpacity);
+        Assert.Equal(0.085f, glass.SurfaceOpacity);
         Assert.Equal(1f, glass.Highlight);
         Assert.Equal(1f, glass.CounterHighlight);
-        Assert.Equal(0.34f, glass.Shadow);
+        Assert.Equal(0.42f, glass.Shadow);
         Assert.Equal(0f, glass.ClearCenterRatio);
 
         Theme cyber = JsonSerializer.Deserialize<Theme>(

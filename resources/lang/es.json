@@ -91,7 +91,6 @@
     "ThemeMarketThemeContentRejected": "El contenido del tema no pasó la validación de seguridad o parámetros y fue rechazado",
     "ThemeMarketPreviewAction": "Vista previa",
     "ThemeMarketEmpty": "Aún no hay temas en el mercado",
-    "RenderingRoute": "Ruta de renderizado",
     "RouteSuffixGpu": " (material GPU)",
     "RouteSuffixGdi": " (GDI+)",
     "RouteStatus": {

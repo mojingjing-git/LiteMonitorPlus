@@ -9,6 +9,7 @@ using LiteMonitor.src.UI.Controls;
 using LiteMonitor.src.WebServer;
 using System.Diagnostics;
 using LiteMonitor.src.SystemServices;
+using LiteMonitor.Rendering.Configuration;
 
 namespace LiteMonitor.src.UI.SettingsPage
 {
@@ -17,8 +18,22 @@ namespace LiteMonitor.src.UI.SettingsPage
         private Panel _container;
         private bool _isLoaded = false;
 
-        // ★ GPU 材质渲染卡已迁入「渲染路线」页（RenderingRoutePage，R3 §4.1）；
-        //   GpuStartupRetryRequested 重试申请随迁，由 SettingsForm 从新页读取。
+        // ★ GPU 材质渲染卡已迁回本页（渲染路线交互优化）：主题选择即渲染意图，
+        //   卡片紧随「外观」卡；路线诊断卡在「系统与硬件」页（聚合见 RenderingRouteStatusView）。
+
+        /// <summary>GPU 开关被显式打开后请求一次启动重试（Apply 时由 SettingsForm 消费）。</summary>
+        public bool GpuStartupRetryRequested { get; private set; }
+
+        public void AcknowledgeGpuStartupRetryRequest() => GpuStartupRetryRequested = false;
+
+        /// <summary>【S06】启动守卫重试按钮（仅守卫保守时创建；见 CreateGpuRouteCard）。</summary>
+        private LiteButton? _gpuRetryButton;
+
+        private bool Chinese => (Config.Language ?? string.Empty)
+            .StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+
+        // 迁移自「渲染路线」页的内联双语取词（zh/en 二选一，不经语言文件）。
+        private string GetText(string zh, string en) => Chinese ? zh : en;
 
         public MainPanelPage()
         {
@@ -39,6 +54,7 @@ namespace LiteMonitor.src.UI.SettingsPage
 
             CreateBehaviorCard();
             CreateAppearanceCard();
+            CreateGpuRouteCard();
             CreateHorizontalModeGroup();
             CreateWebCard();
 
@@ -148,8 +164,164 @@ namespace LiteMonitor.src.UI.SettingsPage
             //   配置值由 SettingsHelper 每次加载强制置 false；UIController 的玻璃机器保留
             //   （GDI+ 兜底路径 + 句柄代次消费方，LiveGlassRebuildWiringTests 护栏不因本次改动放宽）。
 
+            // 6. 渲染路线状态行（只读摘要，跟随当前主题与 GPU 运行态刷新；完整诊断卡在「系统与硬件」页）。
+            Label routeStatusLabel = RenderingRouteStatusView.MakeValueLabel();
+            routeStatusLabel.Text = RenderingRouteStatusView.ComposeStatusSummary(Config, UI, MainForm, Chinese);
+            group.AddFullItem(new LiteSettingsItem(
+                GetText("渲染路线", "Rendering route"), routeStatusLabel));
+            RegisterRefresh(() => routeStatusLabel.Text =
+                RenderingRouteStatusView.ComposeStatusSummary(Config, UI, MainForm, Chinese));
+
             AddGroupToPage(group);
 
+        }
+
+        // ================================================================
+        // GPU 材质渲染卡（自「渲染路线」页迁回，行为不变；WDA 首次政策弹窗与
+        // GpuStartupRetryRequested 重试申请随迁 —— 渲染路线交互优化）
+        // ================================================================
+        private void CreateGpuRouteCard()
+        {
+            var group = new LiteSettingsGroup(GetText("GPU 路线（DirectX 11）", "GPU route (DirectX 11)"));
+
+            group.AddToggle(
+                this,
+                GetText("GPU 材质渲染", "GPU material rendering"),
+                () => Config.GpuThemeEffectsEnabled,
+                value =>
+                {
+                    Config.GpuThemeEffectsEnabled = value;
+                    if (value)
+                    {
+                        GpuStartupRetryRequested = true;
+                    }
+                });
+            group.AddHint(GetText(
+                "只对带有 rendering.backend=gpu 的新主题生效；旧主题继续使用原 GDI+ 路径。",
+                "Only new themes with rendering.backend=gpu are affected; legacy themes keep the original GDI+ path."));
+
+            var liveBackground = new LiteCheck(
+                Config.GpuLiveBackgroundEnabled,
+                GetText("启用", "Enable"));
+            liveBackground.CheckedChanged += (_, _) =>
+            {
+                if (IsWriteBackSuppressed)
+                {
+                    return;
+                }
+
+                bool want = liveBackground.Checked;
+                if (want && !Config.GpuWdaCapturePolicyAccepted)
+                {
+                    DialogResult accepted = MessageBox.Show(
+                        FindForm(),
+                        GetText(
+                            "实时玻璃需要使用 Desktop Duplication，并通过 WDA_EXCLUDEFROMCAPTURE 排除整个顶层窗口。\n\n开启后，受支持的系统截图和录屏会看不到 LiteMonitor++。旧主题和固定输入模式不受影响。\n\n是否接受并开启实时背景？",
+                            "Live glass uses Desktop Duplication and excludes the entire top-level window with WDA_EXCLUDEFROMCAPTURE.\n\nWhile active, supported screenshots and recordings will not show LiteMonitor++. Legacy themes and fixed-input mode are unaffected.\n\nAccept and enable live background?"),
+                        GetText("实时玻璃捕获说明", "Live glass capture policy"),
+                        MessageBoxButtons.OKCancel,
+                        MessageBoxIcon.Warning);
+                    if (accepted != DialogResult.OK)
+                    {
+                        using (BeginSuppressWriteBack())
+                        {
+                            liveBackground.Checked = false;
+                        }
+                        return;
+                    }
+
+                    Config.GpuWdaCapturePolicyAccepted = true;
+                }
+
+                Config.GpuLiveBackgroundEnabled = want;
+                if (want)
+                {
+                    GpuStartupRetryRequested = true;
+                }
+            };
+            group.AddItem(new LiteSettingsItem(
+                GetText("实时桌面背景", "Live desktop background"),
+                liveBackground));
+            // ★ 程序化刷新必须包在抑制域内：LiteCheck.Checked 赋值会触发 CheckedChanged，
+            //   不抑制时「取消更改」等回填场景（值由 true 回落 false）会误弹 WDA 确认框。
+            RegisterRefresh(() =>
+            {
+                using (BeginSuppressWriteBack())
+                {
+                    liveBackground.Checked = Config.GpuLiveBackgroundEnabled;
+                }
+            });
+            group.AddHint(GetText(
+                "实时背景与旧 LiveGlassEnabled 完全独立；赛博朋克主题始终为零抓屏。",
+                "Live background is independent from legacy LiveGlassEnabled; cyberpunk always performs zero desktop capture."));
+
+            // ──【S06】启动守卫状态与有界手动重试 ──
+            // 守卫保守（上次尝试未确认首帧 / 守卫存储不可用）时提供显式重试入口：
+            // 复用 GpuStartupRetryRequested + 既有 Apply 编排（SettingsForm 消费 →
+            // AllowGpuStartupRetryAfterExplicitSettingsApply → AllowExplicitManualRetry）。
+            // 一次申请一次尝试；页面刷新（RegisterRefresh）只恢复按钮可用性，不自动重试。
+            if (GpuStartupGuard.Shared.ConservativeForThisProcess)
+            {
+                _gpuRetryButton = new LiteButton(GetText("重试 GPU 渲染", "Retry GPU rendering"));
+                _gpuRetryButton.Click += (_, _) => OnGpuRetryClicked();
+                group.AddItem(new LiteSettingsItem(
+                    GetText("GPU 启动重试", "GPU startup retry"),
+                    _gpuRetryButton));
+                group.AddHint(GetText(
+                    "上次 GPU 尝试未正常收尾（见「渲染路线」状态行）。重试按当前已保存的 GPU 与捕获权限执行，不会开启抓屏，也不会提交其他未保存的更改。",
+                    "The previous GPU attempt did not finish cleanly (see the rendering route status). Retry uses the currently saved GPU and capture permissions, enables no capture, and submits no other pending changes."));
+            }
+
+            group.AddHint(GetText(
+                "此处的重试只作用于主面板的 GPU 启动守卫；主题工作室预览有独立的启动守卫，需要在工作室中单独恢复。",
+                "The retry here applies to the main panel GPU guard only; the theme studio preview has its own startup guard and is recovered separately in the studio."));
+
+            RegisterRefresh(() =>
+            {
+                if (_gpuRetryButton is null)
+                {
+                    return;
+                }
+
+                if (!GpuStartupRetryRequested)
+                {
+                    // 尝试失败后允许再次手动申请（S06 §8.2.6）；成功路径下守卫已清，
+                    // 按钮同样恢复，但卡片只在进页时保守才创建。
+                    _gpuRetryButton.Enabled = true;
+                    _gpuRetryButton.Text = GetText("重试 GPU 渲染", "Retry GPU rendering");
+                }
+            });
+
+            AddGroupToPage(group);
+        }
+
+        /// <summary>
+        /// 【S06】「重试 GPU」点击：确认按已保存权限执行后置位重试申请，
+        /// 由 SettingsForm 在 Apply 时消费（一次申请一次尝试）。
+        /// </summary>
+        private void OnGpuRetryClicked()
+        {
+            if (_gpuRetryButton is null)
+            {
+                return;
+            }
+
+            DialogResult accepted = MessageBox.Show(
+                FindForm(),
+                GetText(
+                    "将按当前已保存的 GPU 与捕获权限重试 GPU 渲染；不会开启抓屏，也不会提交其他未保存的更改。\n\n申请后请点击设置窗口的「应用」生效。",
+                    "GPU rendering will be retried using the currently saved GPU and capture permissions; no capture is enabled and no other pending changes are submitted.\n\nClick Apply in the settings window to take effect."),
+                GetText("重试 GPU 渲染", "Retry GPU rendering"),
+                MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Question);
+            if (accepted != DialogResult.OK)
+            {
+                return;
+            }
+
+            GpuStartupRetryRequested = true;
+            _gpuRetryButton.Enabled = false;
+            _gpuRetryButton.Text = GetText("已申请：点击应用生效", "Requested: click Apply");
         }
 
         private void CreateHorizontalModeGroup()
