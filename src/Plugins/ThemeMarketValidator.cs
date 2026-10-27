@@ -5,7 +5,10 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LiteMonitor.Rendering.Configuration;
+#if !THEME_MARKET_CLI
+// 仅 CLI 共享编译（LiteMonitor.Cli）需要切断：src.Core 的 Theme DTO 会拖入整个主题模型。
 using LiteMonitor.src.Core;
+#endif
 
 namespace LiteMonitor.src.Plugins
 {
@@ -119,10 +122,14 @@ namespace LiteMonitor.src.Plugins
                 // [S04] 已知颜色字段统一校验（与运行时/工作室同一校验器）：
                 // 只校验 color / backdrop / rendering.fallbackStyle 内的已知字段，
                 // 未知扩展字段不按颜色解析（计划 §6.2.4）。
+                // CLI 共享编译不做本项（依赖 src.Core 的 ThemeColorParser；与
+                // fallbackStyle 诊断项在 CLI 缺席的既有取舍一致）。
+#if !THEME_MARKET_CLI
                 IReadOnlyList<string> colorFailures = ThemeColorParser.ValidateThemeJson(root);
                 if (colorFailures.Count > 0)
                     return ThemeMarketValidationResult.Fail("theme_color_invalid",
                         "主题颜色字段未通过校验：" + string.Join("; ", colorFailures));
+#endif
 
                 string normalizedRoute = (route ?? "").Trim().ToLowerInvariant();
                 string normalizedMaterial = (material ?? "").Trim().ToLowerInvariant();
