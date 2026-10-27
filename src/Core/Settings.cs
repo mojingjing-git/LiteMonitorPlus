@@ -17,7 +17,7 @@ namespace LiteMonitor
     public class Settings
     {
         // ====== 基础设置 ======
-        public string Skin { get; set; } = "DarkFlat_Classic";
+        public string Skin { get; set; } = "RefinedDark";
         public bool TopMost { get; set; } = true;
         public bool AutoStart { get; set; } = false;
         public int RefreshMs { get; set; } = 1000;

@@ -1408,7 +1408,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                 var cfg = Settings.Load();
                 var switchToDefault = new Action(() =>
                 {
-                    cfg.Skin = "DarkFlat_Classic";   // Settings.Skin 的出厂默认（Settings.cs）
+                    cfg.Skin = "RefinedDark";   // Settings.Skin 的出厂默认（Settings.cs）
                     cfg.Save();
                     LiteMonitor.src.Core.Actions.AppActions.ApplyThemeAndLayout(cfg, UI, MainForm);
                 });

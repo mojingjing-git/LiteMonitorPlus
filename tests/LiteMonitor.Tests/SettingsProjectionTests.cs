@@ -46,7 +46,7 @@ namespace LiteMonitor.Tests
         {
             var defaults = SettingsProjection.ToDisplayConfig(new Settings());
             Assert.Equal("", defaults.Language);
-            Assert.Equal("DarkFlat_Classic", defaults.Skin);
+            Assert.Equal("RefinedDark", defaults.Skin);
             Assert.Equal(SettingThemeMode.System, defaults.ThemeMode);  // f14b 字段透传（默认 System）
             Assert.Equal(1000, defaults.UiRefreshMs);
 

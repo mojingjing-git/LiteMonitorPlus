@@ -6,16 +6,16 @@
     "backend": "gpu",
     "material": "liquid_glass",
     "parameters": {
-      "liveBackground": false,
+      "liveBackground": true,
       "cornerRadius": 26,
       "thickness": 1,
-      "refraction": 1.6,
-      "blurRadius": 8,
+      "refraction": 1.8,
+      "blurRadius": 14,
       "clearCenterRatio": 0,
-      "surfaceOpacity": 0.055,
+      "surfaceOpacity": 0.085,
       "highlight": 1,
       "counterHighlight": 1,
-      "shadow": 0.34
+      "shadow": 0.42
     },
     "motion": {
       "targetFps": 30,
@@ -27,8 +27,8 @@
       "material": "legacy"
     },
     "fallbackStyle": {
-      "background": "#0A1220",
-      "panelBackground": "#162A42",
+      "background": "#0C1524",
+      "panelBackground": "#1B2F4A",
       "border": "#D8F2FF",
       "text": "#F7FBFF",
       "mutedText": "#B9C8D7",
@@ -85,8 +85,8 @@
     "opacity": 0.08,
     "blur": 0,
     "tint": "rgba(184,217,245,0.08)",
-    "gradientStart": "#1B2C44",
-    "gradientEnd": "#0A1220",
+    "gradientStart": "#22354F",
+    "gradientEnd": "#0C1524",
     "gradientAngle": 90,
     "fps": 2
   }

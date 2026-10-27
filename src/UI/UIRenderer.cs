@@ -164,8 +164,27 @@ namespace LiteMonitor
         /// </summary>
         private static void DrawGroupFill(Graphics g, GroupLayoutInfo gr, Theme t)
         {
-            // 绘制圆角背景
-            UIUtils.FillRoundRect(g, gr.Bounds, t.Layout.GroupRadius, ThemeManager.ParseColor(t.Color.GroupBackground));
+            if (gr.Bounds.Width <= 0 || gr.Bounds.Height <= 0) return;
+
+            Color baseColor = ThemeManager.ParseColor(t.Color.GroupBackground);
+
+            // 卡片纵深：顶部组底色 → 底部轻微暗化的垂直渐变（派生色，不加配置字段）
+            Color bottomColor = Color.FromArgb(baseColor.A,
+                baseColor.R * 92 / 100,
+                baseColor.G * 92 / 100,
+                baseColor.B * 92 / 100);
+
+            using var brush = new System.Drawing.Drawing2D.LinearGradientBrush(
+                gr.Bounds, baseColor, bottomColor, System.Drawing.Drawing2D.LinearGradientMode.Vertical);
+            using var path = UIUtils.RoundRect(gr.Bounds, t.Layout.GroupRadius);
+            g.FillPath(brush, path);
+
+            // 顶部内侧一条微高光，加强卡片"受光"的方向感
+            int sideInset = System.Math.Max(t.Layout.GroupRadius, 2);
+            using var highlight = new Pen(Color.FromArgb(16, Color.White));
+            g.DrawLine(highlight,
+                gr.Bounds.Left + sideInset, gr.Bounds.Top + 1,
+                gr.Bounds.Right - sideInset, gr.Bounds.Top + 1);
         }
 
         /// <summary>

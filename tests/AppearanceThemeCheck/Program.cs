@@ -143,6 +143,15 @@ namespace LiteMonitor.AppearanceThemeCheck
                 .Append("CyberPunk_GPU")
                 .Append("LiquidGlass_GPU")
                 .Append("LiquidGlass_Toolbar_GPU")
+                // ★ GPU 路线后续追加的三个氛围主题（此前漏登记导致文件集合校验红）。
+                .Append("CosmicAurora_Nebula_GPU")
+                .Append("NixieTube_Brass_GPU")
+                .Append("RetroCRT_Phosphor_GPU")
+                // ★ UI 视觉美化轮的新出厂默认主题（精致暗色：渐变底/描边/渐变条）。
+                //   Settings.Skin 的出厂默认（Settings.cs）与它同步。
+                .Append("RefinedDark")
+                // ★ UI 视觉美化轮的赛博 HUD 主题（半透明组块 + 底纹穿透 + 切角外框）。
+                .Append("CyberHud_Neon")
                 .OrderBy(x => x, StringComparer.Ordinal)
                 .ToList();
 
