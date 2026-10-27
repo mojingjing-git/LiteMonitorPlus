@@ -46,6 +46,17 @@ namespace LiteMonitor.src.UI.SettingsPage
         // ★ [F08a] 磁盘探测策略的状态行（当前模式 / 迁移提示 / 降级原因）。
         private Label? _diskProbeStatusLabel;
 
+        // ★ 渲染路线诊断卡（自「渲染路线」页迁入）的三个动态文本位：主题声明路线 / 实际状态 / 多行详情。
+        private Label? _routeThemeLabel;
+        private Label? _routeStatusLabel;
+        private FullWidthDetailRow? _routeDetailRow;
+
+        private bool Chinese => (Config?.Language ?? string.Empty)
+            .StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+
+        // 迁移自「渲染路线」页的内联双语取词（zh/en 二选一，不经语言文件）。
+        private string GetText(string zh, string en) => Chinese ? zh : en;
+
         public SystemHardwarPage()
         {
             this.BackColor = UIColors.MainBg;
@@ -64,6 +75,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             CreateIpExclusionCard();
             CreateCalibrationCard();
             CreateSystemCard();
+            CreateRouteDiagnosticsCard();
         }
 
         // ===========================================================
@@ -766,6 +778,60 @@ namespace LiteMonitor.src.UI.SettingsPage
                 () => Config?.HideTrayIcon ?? false, 
                 v => { if(Config!=null) Config.HideTrayIcon = v; });
             chkTray.CheckedChanged += (s, e) => { if(Config!=null) EnsureSafeVisibility(null, chkTray, null); };
+
+            AddGroupToPage(group);
+        }
+
+        // ===========================================================
+        // 渲染路线诊断卡（自「渲染路线」页迁入；只读陈述事实，原因码真实）
+        // ===========================================================
+
+        /// <summary>
+        /// 路线诊断卡：主题声明路线、实际状态、多行原因码详情。
+        /// <para>★ 本页卡片在**构造期**创建（此时 Config 尚未注入）⇒ 动态文本初值一律为空，
+        /// 真实内容由 RegisterRefresh 闭包在每次 OnShow 时填充（base.OnShow 先于早退执行刷新）。</para>
+        /// </summary>
+        private void CreateRouteDiagnosticsCard()
+        {
+            var group = new LiteSettingsGroup(GetText("渲染路线诊断", "Rendering route diagnostics"));
+
+            // ★ 布局约束（自原页沿用）：LiteSettingsItem 是固定 40px 单行、控件右对齐的两列交替布局；
+            //   本卡所有行一律 AddFullItem（整行独占），值标签单行 + AutoEllipsis，
+            //   多行细节放独立的全行详情块。
+            _routeThemeLabel = RenderingRouteStatusView.MakeValueLabel();
+            group.AddFullItem(new LiteSettingsItem(
+                GetText("主题声明路线", "Theme declared route"),
+                _routeThemeLabel));
+
+            _routeStatusLabel = RenderingRouteStatusView.MakeValueLabel();
+            group.AddFullItem(new LiteSettingsItem(
+                GetText("实际状态", "Actual state"),
+                _routeStatusLabel));
+
+            _routeDetailRow = new FullWidthDetailRow(string.Empty);
+            group.AddFullItem(_routeDetailRow);
+
+            group.AddHint(GetText(
+                "方括号内是真实原因码（如 safe_mode），用于排障；不显示原因的\"已回退\"一律不出现。",
+                "Bracketed codes are real reason codes (e.g. safe_mode) for diagnostics; regressions are never shown without a reason."));
+
+            RegisterRefresh(() =>
+            {
+                if (_routeThemeLabel is not null)
+                {
+                    _routeThemeLabel.Text = RenderingRouteStatusView.ThemeRouteText(Chinese);
+                }
+
+                if (_routeStatusLabel is not null)
+                {
+                    _routeStatusLabel.Text = RenderingRouteStatusView.ComposeStatusSummary(Config, UI, MainForm, Chinese);
+                }
+
+                if (_routeDetailRow is not null)
+                {
+                    _routeDetailRow.DetailText = RenderingRouteStatusView.ComposeStatusDetail(Config, UI, MainForm, Chinese);
+                }
+            });
 
             AddGroupToPage(group);
         }

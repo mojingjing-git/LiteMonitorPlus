@@ -213,7 +213,6 @@ namespace LiteMonitor.src.UI
             
             // 注册所有页面
             AddNav("MainPanel", LanguageManager.T("Menu.MainFormSettings"), new MainPanelPage());
-            AddNav("Rendering", LanguageManager.T("Menu.RenderingRoute"), new RenderingRoutePage());
             AddNav("Taskbar", LanguageManager.T("Menu.TaskbarSettings"), new TaskbarPage());
             AddNav("Monitor", LanguageManager.T("Menu.MonitorItemDisplay"), new MonitorPage());
             AddNav("Threshold", LanguageManager.T("Menu.Thresholds"), new ThresholdPage());
@@ -330,13 +329,13 @@ namespace LiteMonitor.src.UI
             _cfg.Save();
 
             // 4. 应用副作用 (刷新界面)
-            // GPU 开关自 MainPanelPage 迁入「渲染路线」页 ⇒ 重试申请从新页读取，R3 §4.1）。
-            if (_pages.TryGetValue("Rendering", out SettingsPageBase? routePage) &&
-                routePage is RenderingRoutePage renderingPage &&
-                renderingPage.GpuStartupRetryRequested)
+            // GPU 开关卡自「渲染路线」页迁回主面板页（渲染路线交互优化）⇒ 重试申请从 MainPanelPage 读取。
+            if (_pages.TryGetValue("MainPanel", out SettingsPageBase? panelPage) &&
+                panelPage is MainPanelPage mainPanel &&
+                mainPanel.GpuStartupRetryRequested)
             {
                 _ui.AllowGpuStartupRetryAfterExplicitSettingsApply();
-                renderingPage.AcknowledgeGpuStartupRetryRequest();
+                mainPanel.AcknowledgeGpuStartupRetryRequest();
             }
             AppActions.ApplySettingsSelectively(before, _cfg, _mainForm, _ui, autoStartChanged);
 

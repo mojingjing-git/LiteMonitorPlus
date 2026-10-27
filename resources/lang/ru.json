@@ -91,7 +91,6 @@
     "ThemeMarketThemeContentRejected": "Содержимое темы не прошло проверку безопасности или параметров и было отклонено",
     "ThemeMarketPreviewAction": "Просмотр",
     "ThemeMarketEmpty": "В магазине тем пока нет тем",
-    "RenderingRoute": "Маршрут рендеринга",
     "RouteSuffixGpu": " (GPU-материал)",
     "RouteSuffixGdi": " (GDI+)",
     "RouteStatus": {

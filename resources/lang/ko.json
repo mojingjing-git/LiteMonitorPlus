@@ -91,7 +91,6 @@
     "ThemeMarketThemeContentRejected": "테마 콘텐츠가 안전 또는 매개변수 검증에 실패하여 거부되었습니다",
     "ThemeMarketPreviewAction": "미리보기",
     "ThemeMarketEmpty": "테마 마켓에 아직 테마가 없습니다",
-    "RenderingRoute": "렌더링 경로",
     "RouteSuffixGpu": " (GPU 재질)",
     "RouteSuffixGdi": " (GDI+)",
     "RouteStatus": {

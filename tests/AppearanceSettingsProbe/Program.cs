@@ -198,37 +198,39 @@ namespace LiteMonitor.AppearanceSettingsProbe
             }
             Add("AddComboPair 抑制内改不回写", pairF == "orig", "程序化改动不得写回；实际=" + pairF);
 
-            // ---- 「渲染路线」页（R3 §4.1-1.4 / A06 教训）----
-            // 新页属**构造期代码**：SetContext(null MainForm/UI) + OnShow（卡片创建期）不抛，
-            // 且 null 的 MainForm/UI 必须被状态聚合的空传播接住（不得 NRE）。
+            // ---- 主面板页（渲染路线交互优化：GPU 卡宿主；原「渲染路线」页验证段等价改写）----
+            // 构造期代码：SetContext(null MainForm/UI) + OnShow（卡片创建期）不抛，
+            // 且 null 的 MainForm/UI 必须被路线状态聚合的空传播接住（不得 NRE）。
+            // 本页是 GPU 卡 null 传播的唯一自动化验证点（sln 内无对应单测）。
             try
             {
-                var routeCfg = new Settings();
-                var routePage = new LiteMonitor.src.UI.SettingsPage.RenderingRoutePage();
-                routePage.SetContext(routeCfg, null!, null!);
-                routePage.OnShow();
-                Add("RenderingRoutePage 真实构造 + OnShow 不抛", true, "卡片创建期零异常即通过");
+                var panelCfg = new Settings();
+                var panelPage = new LiteMonitor.src.UI.SettingsPage.MainPanelPage();
+                panelPage.SetContext(panelCfg, null!, null!);
+                panelPage.OnShow();
+                Add("MainPanelPage 真实构造 + OnShow 不抛", true, "卡片创建期零异常即通过（含 GPU 卡与路线状态行）");
 
-                // 布局自证：按真实宽度渲染一帧，供目视核对行对齐（AddFullItem 整行、无错位）。
+                // 布局自证：按真实宽度渲染一帧，供目视核对五卡长页行对齐。
                 try
                 {
-                    routePage.Width = 860;
-                    routePage.Height = 460;
-                    routePage.PerformLayout();
-                    using var bmp = new System.Drawing.Bitmap(routePage.Width, routePage.Height);
-                    routePage.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height));
-                    string shotPath = Path.Combine(outDir, "rendering-route-page.png");
+                    panelPage.Width = 860;
+                    panelPage.Height = 760;
+                    panelPage.PerformLayout();
+                    using var bmp = new System.Drawing.Bitmap(panelPage.Width, panelPage.Height);
+                    panelPage.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height));
+                    string shotPath = Path.Combine(outDir, "main-panel-page.png");
+                    Directory.CreateDirectory(Path.GetDirectoryName(shotPath)!);
                     bmp.Save(shotPath, System.Drawing.Imaging.ImageFormat.Png);
-                    Add("RenderingRoutePage 布局截图", true, shotPath);
+                    Add("MainPanelPage 布局截图", true, shotPath);
                 }
                 catch (Exception shotEx)
                 {
-                    Add("RenderingRoutePage 布局截图", false, shotEx.GetType().Name + ": " + shotEx.Message);
+                    Add("MainPanelPage 布局截图", false, shotEx.GetType().Name + ": " + shotEx.Message);
                 }
             }
-            catch (Exception routeEx)
+            catch (Exception panelEx)
             {
-                Add("RenderingRoutePage 真实构造 + OnShow 不抛", false, routeEx.GetType().Name + ": " + routeEx.Message);
+                Add("MainPanelPage 真实构造 + OnShow 不抛", false, panelEx.GetType().Name + ": " + panelEx.Message);
             }
 
             string pairG = "orig";

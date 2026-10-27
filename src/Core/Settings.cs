@@ -68,8 +68,10 @@ namespace LiteMonitor
         public bool LiveGlassHintShown { get; set; } = false;
 
         // ====== GPU 材质主题（独立于旧 LiveGlassEnabled）======
-        // 旧配置没有这些字段时保持 false：启动仍走原 GDI+，不创建 GPU 设备或捕获会话。
-        public bool GpuThemeEffectsEnabled { get; set; } = false;
+        // ★ 出厂默认开启：用户选择 GPU 材质主题即渲染意图，无需先到设置页手动 opt-in。
+        //   GPU 初始化失败由 RenderingRoutePolicy/RenderingTransitionCoordinator 自动回退 GDI+（原因码入状态行）；
+        //   SafeMode 仍优先禁用 GPU。旧版 settings.json 已显式写出的 false 反序列化时覆盖此默认（存量行为不变）。
+        public bool GpuThemeEffectsEnabled { get; set; } = true;
         public bool GpuLiveBackgroundEnabled { get; set; } = false;
         public bool GpuWdaCapturePolicyAccepted { get; set; } = false;
 

@@ -6,7 +6,7 @@
     "backend": "gpu",
     "material": "liquid_glass",
     "parameters": {
-      "liveBackground": true,
+      "liveBackground": false,
       "cornerRadius": 26,
       "thickness": 1,
       "refraction": 1.8,

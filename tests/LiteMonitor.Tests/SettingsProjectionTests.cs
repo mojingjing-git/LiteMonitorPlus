@@ -63,6 +63,17 @@ namespace LiteMonitor.Tests
         }
 
         [Fact]
+        public void GPU渲染路线_出厂默认开启_实时背景与政策保持关闭()
+        {
+            // 选 GPU 材质主题即渲染意图：GPU 效果出厂开启（Settings.cs 出厂默认），
+            // 实时背景与 WDA 捕获政策仍须用户显式操作。
+            var defaults = new Settings();
+            Assert.True(defaults.GpuThemeEffectsEnabled);
+            Assert.False(defaults.GpuLiveBackgroundEnabled);
+            Assert.False(defaults.GpuWdaCapturePolicyAccepted);
+        }
+
+        [Fact]
         public void Web投影_默认关闭_不传播口令明文()
         {
             var defaults = SettingsProjection.ToWebConfig(new Settings());

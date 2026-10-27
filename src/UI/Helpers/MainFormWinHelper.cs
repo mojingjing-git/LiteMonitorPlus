@@ -258,7 +258,8 @@ namespace LiteMonitor.src.UI.Helpers
         /// <para>★ 期望状态 = <c>Opacity &lt; 1 || ClickThrough</c>（合同 §4 步 7 / GPU-003）：
         /// 重建后新 HWND 的 <c>WS_EX_LAYERED</c> 由 <c>CreateParams</c> 按配置决定 ⇒ 旧残留**不继承**。</para>
         /// <para>★ 消费方：<c>RenderingRouteRequest.WindowIsLayered</c>（路由诊断）与
-        /// <c>src/UI/Settings/RenderingRoutePage.cs:207</c>（设置页状态行）。
+        /// <c>src/UI/Settings/RenderingRouteStatusView.cs</c>（设置页状态行，经
+        /// MainPanelPage 摘要行 / SystemHardwarPage 诊断卡消费）。
         /// 注意：<c>RenderingRouteDecision.Errors</c> 目前<b>没有生产消费者</b>，
         /// 状态行走的是本方法这条独立路径。</para>
         /// </summary>

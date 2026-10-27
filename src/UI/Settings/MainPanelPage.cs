@@ -17,8 +17,19 @@ namespace LiteMonitor.src.UI.SettingsPage
         private Panel _container;
         private bool _isLoaded = false;
 
-        // ★ GPU 材质渲染卡已迁入「渲染路线」页（RenderingRoutePage，R3 §4.1）；
-        //   GpuStartupRetryRequested 重试申请随迁，由 SettingsForm 从新页读取。
+        // ★ GPU 材质渲染卡已迁回本页（渲染路线交互优化）：主题选择即渲染意图，
+        //   卡片紧随「外观」卡；路线诊断卡在「系统与硬件」页（聚合见 RenderingRouteStatusView）。
+
+        /// <summary>GPU 开关被显式打开后请求一次启动重试（Apply 时由 SettingsForm 消费）。</summary>
+        public bool GpuStartupRetryRequested { get; private set; }
+
+        public void AcknowledgeGpuStartupRetryRequest() => GpuStartupRetryRequested = false;
+
+        private bool Chinese => (Config.Language ?? string.Empty)
+            .StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+
+        // 迁移自「渲染路线」页的内联双语取词（zh/en 二选一，不经语言文件）。
+        private string GetText(string zh, string en) => Chinese ? zh : en;
 
         public MainPanelPage()
         {
@@ -39,6 +50,7 @@ namespace LiteMonitor.src.UI.SettingsPage
 
             CreateBehaviorCard();
             CreateAppearanceCard();
+            CreateGpuRouteCard();
             CreateHorizontalModeGroup();
             CreateWebCard();
 
@@ -148,8 +160,98 @@ namespace LiteMonitor.src.UI.SettingsPage
             //   配置值由 SettingsHelper 每次加载强制置 false；UIController 的玻璃机器保留
             //   （GDI+ 兜底路径 + 句柄代次消费方，LiveGlassRebuildWiringTests 护栏不因本次改动放宽）。
 
+            // 6. 渲染路线状态行（只读摘要，跟随当前主题与 GPU 运行态刷新；完整诊断卡在「系统与硬件」页）。
+            Label routeStatusLabel = RenderingRouteStatusView.MakeValueLabel();
+            routeStatusLabel.Text = RenderingRouteStatusView.ComposeStatusSummary(Config, UI, MainForm, Chinese);
+            group.AddFullItem(new LiteSettingsItem(
+                GetText("渲染路线", "Rendering route"), routeStatusLabel));
+            RegisterRefresh(() => routeStatusLabel.Text =
+                RenderingRouteStatusView.ComposeStatusSummary(Config, UI, MainForm, Chinese));
+
             AddGroupToPage(group);
 
+        }
+
+        // ================================================================
+        // GPU 材质渲染卡（自「渲染路线」页迁回，行为不变；WDA 首次政策弹窗与
+        // GpuStartupRetryRequested 重试申请随迁 —— 渲染路线交互优化）
+        // ================================================================
+        private void CreateGpuRouteCard()
+        {
+            var group = new LiteSettingsGroup(GetText("GPU 路线（DirectX 11）", "GPU route (DirectX 11)"));
+
+            group.AddToggle(
+                this,
+                GetText("GPU 材质渲染", "GPU material rendering"),
+                () => Config.GpuThemeEffectsEnabled,
+                value =>
+                {
+                    Config.GpuThemeEffectsEnabled = value;
+                    if (value)
+                    {
+                        GpuStartupRetryRequested = true;
+                    }
+                });
+            group.AddHint(GetText(
+                "只对带有 rendering.backend=gpu 的新主题生效；旧主题继续使用原 GDI+ 路径。",
+                "Only new themes with rendering.backend=gpu are affected; legacy themes keep the original GDI+ path."));
+
+            var liveBackground = new LiteCheck(
+                Config.GpuLiveBackgroundEnabled,
+                GetText("启用", "Enable"));
+            liveBackground.CheckedChanged += (_, _) =>
+            {
+                if (IsWriteBackSuppressed)
+                {
+                    return;
+                }
+
+                bool want = liveBackground.Checked;
+                if (want && !Config.GpuWdaCapturePolicyAccepted)
+                {
+                    DialogResult accepted = MessageBox.Show(
+                        FindForm(),
+                        GetText(
+                            "实时玻璃需要使用 Desktop Duplication，并通过 WDA_EXCLUDEFROMCAPTURE 排除整个顶层窗口。\n\n开启后，受支持的系统截图和录屏会看不到 LiteMonitor++。旧主题和固定输入模式不受影响。\n\n是否接受并开启实时背景？",
+                            "Live glass uses Desktop Duplication and excludes the entire top-level window with WDA_EXCLUDEFROMCAPTURE.\n\nWhile active, supported screenshots and recordings will not show LiteMonitor++. Legacy themes and fixed-input mode are unaffected.\n\nAccept and enable live background?"),
+                        GetText("实时玻璃捕获说明", "Live glass capture policy"),
+                        MessageBoxButtons.OKCancel,
+                        MessageBoxIcon.Warning);
+                    if (accepted != DialogResult.OK)
+                    {
+                        using (BeginSuppressWriteBack())
+                        {
+                            liveBackground.Checked = false;
+                        }
+                        return;
+                    }
+
+                    Config.GpuWdaCapturePolicyAccepted = true;
+                }
+
+                Config.GpuLiveBackgroundEnabled = want;
+                if (want)
+                {
+                    GpuStartupRetryRequested = true;
+                }
+            };
+            group.AddItem(new LiteSettingsItem(
+                GetText("实时桌面背景", "Live desktop background"),
+                liveBackground));
+            // ★ 程序化刷新必须包在抑制域内：LiteCheck.Checked 赋值会触发 CheckedChanged，
+            //   不抑制时「取消更改」等回填场景（值由 true 回落 false）会误弹 WDA 确认框。
+            RegisterRefresh(() =>
+            {
+                using (BeginSuppressWriteBack())
+                {
+                    liveBackground.Checked = Config.GpuLiveBackgroundEnabled;
+                }
+            });
+            group.AddHint(GetText(
+                "实时背景与旧 LiveGlassEnabled 完全独立；赛博朋克主题始终为零抓屏。",
+                "Live background is independent from legacy LiveGlassEnabled; cyberpunk always performs zero desktop capture."));
+
+            AddGroupToPage(group);
         }
 
         private void CreateHorizontalModeGroup()
