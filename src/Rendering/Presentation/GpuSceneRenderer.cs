@@ -99,6 +99,24 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
     private GpuOwnedResource<ID3D11ShaderResourceView>? _foregroundView;
     private Direct2DForegroundPainter? _foregroundPainter;
     private DesktopDuplicationFrameSource? _captureSource;
+
+    /// <summary>
+    /// 上一次实时捕获失败的**显示器句柄**。
+    /// <para>★ 为什么记它：实时捕获要按「窗口当前所在显示器」选 DXGI 输出。
+    /// 双屏分属不同 GPU 时，窗口所在显示器可能根本不在渲染适配器的输出列表里
+    /// ⇒ 捕获必然失败（<c>capture_output_not_on_render_adapter</c>）。
+    /// 旧实现里渲染循环每帧都会重试一次（<c>_captureSource == null</c> ⇒ 重试），
+    /// 每 8ms 重建一次捕获对象：CPU 被拖垮，反复的设备查询/创建还可能把 GPU
+    /// 拖进 DEVICE_REMOVED ⇒ **整场降级到 legacy**（用户看到"切液态玻璃就回退"）。
+    /// 记住失败显示器后，同一屏不再重复尝试；换屏时句柄变化 ⇒ 自动允许再试一次。</para>
+    /// </summary>
+    private IntPtr _liveCaptureFailedMonitor;
+
+    /// <summary>上一次实时捕获失败的原因码（抑制同屏重试时原样回传）。</summary>
+    private string? _liveCaptureFailureCode;
+
+    /// <summary>上一次实时捕获失败的原因描述。</summary>
+    private string? _liveCaptureFailureMessage;
     private IntPtr _captureMonitor;
 
     // This also remembers a failed output selection: retry on the next
@@ -460,6 +478,15 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
             return true;
         }
 
+        // ★ 同一显示器上已经失败过 ⇒ 不再重复尝试（详见 _liveCaptureFailedMonitor 注释）。
+        //   换屏时 monitor 变化 ⇒ 自动放行再试一次。
+        if (_liveCaptureFailureCode is not null && monitor == _liveCaptureFailedMonitor)
+        {
+            errorCode = _liveCaptureFailureCode;
+            errorMessage = _liveCaptureFailureMessage;
+            return false;
+        }
+
         StopLiveCapture();
         _captureMonitor = monitor;
         try
@@ -484,6 +511,7 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
             {
                 errorCode = "capture_output_not_on_render_adapter";
                 errorMessage = "The current monitor is unavailable on the rendering adapter; fixed material is retained.";
+                RecordLiveCaptureFailure(monitor, errorCode, errorMessage);
                 return false;
             }
             if (!DesktopDuplicationFrameSource.TryCreate(
@@ -494,12 +522,16 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
                     out errorCode,
                     out errorMessage))
             {
+                RecordLiveCaptureFailure(monitor, errorCode, errorMessage);
                 return false;
             }
 
             _generations = generations;
             _captureSource = source;
             _captureSessionsCreated++;
+            _liveCaptureFailedMonitor = IntPtr.Zero;
+            _liveCaptureFailureCode = null;
+            _liveCaptureFailureMessage = null;
             _lastCaptureDiagnostic = new CaptureDiagnostic(
                 source!.State,
                 "capture_started",
@@ -512,8 +544,33 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
         {
             errorCode = "capture_output_selection_failed";
             errorMessage = exception.Message;
+            RecordLiveCaptureFailure(monitor, errorCode, errorMessage);
             return false;
         }
+    }
+
+    /// <summary>
+    /// 记住本次实时捕获失败（同一显示器不再重复尝试）。
+    /// <para>★ 抑制的是「重复重建捕获对象」，不是「放弃液态玻璃」：
+    /// 捕获失败后仍走 **GPU 路线 + 程序化固定材质**，不会降级到 legacy。</para>
+    /// </summary>
+    private void RecordLiveCaptureFailure(IntPtr monitor, string? errorCode, string? errorMessage)
+    {
+        _liveCaptureFailedMonitor = monitor;
+        _liveCaptureFailureCode = errorCode ?? "gpu_capture_start_failed";
+        _liveCaptureFailureMessage = errorMessage;
+    }
+
+    /// <summary>
+    /// 允许在**同一显示器**上重新尝试实时捕获。
+    /// <para>供宿主在「用户主动操作」（切主题 / 重新配置 / 显式重试）后调用，
+    /// 以便环境变化后（例如换了输出接线、驱动重装）能重新捕获。</para>
+    /// </summary>
+    public void ResetLiveCaptureFailure()
+    {
+        _liveCaptureFailedMonitor = IntPtr.Zero;
+        _liveCaptureFailureCode = null;
+        _liveCaptureFailureMessage = null;
     }
 
     public void StopLiveCapture()

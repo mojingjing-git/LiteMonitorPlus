@@ -423,6 +423,9 @@ public sealed class GpuPresentationHostController : IDisposable
             _bindingState = PresentationBindingState.Bound;
             if (liveBackgroundAllowed)
             {
+                // ★ 用户主动启动 ⇒ 允许在同一显示器上再试一次实时捕获
+                //   （渲染循环里的自动重试会被"同屏已失败"的抑制挡住）。
+                activeRenderer.ResetLiveCaptureFailure();
                 if (!activeRenderer.TryStartLiveCapture(
                         _generations,
                         out errorCode,
@@ -566,6 +569,8 @@ public sealed class GpuPresentationHostController : IDisposable
                 return;
             }
             _capturePolicy = WindowCapturePolicy.WdaExcludeFromCapture;
+            // ★ 用户主动恢复 ⇒ 允许在同一显示器上再试一次实时捕获（见 Start() 同名注释）。
+            _renderer.ResetLiveCaptureFailure();
             _liveCaptureStarted = _renderer.TryStartLiveCapture(
                 _generations,
                 out string? errorCode,
@@ -717,6 +722,8 @@ public sealed class GpuPresentationHostController : IDisposable
 
         if (liveBackgroundRequested && !_suspended)
         {
+            // ★ 用户主动重新配置 ⇒ 允许再试一次实时捕获（见 Start() 同名注释）。
+            _renderer.ResetLiveCaptureFailure();
             _liveCaptureStarted = _renderer.TryStartLiveCapture(
                 _generations,
                 out string? captureErrorCode,
