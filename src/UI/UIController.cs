@@ -74,6 +74,20 @@ namespace LiteMonitor
         private string? _gpuFallbackCode;
         private bool _updatingGpuScene;
 
+        // ===== GPU 启动的「延迟一次」重试 =====
+        // ★ 为什么需要：切到 GPU 主题时，旧宿主在**同一个 tick 内**被 Dispose、
+        //   新宿主立刻创建并 Start（ApplyGpuRenderingRoute 的重建路径）。
+        //   DXGI 的设备释放是异步的 —— 新建交换链/设备很可能撞上瞬态错误
+        //   （DXGI_ERROR_DEVICE_REMOVED / STILL_HAVE_PENDING_OPERATIONS 等），
+        //   启动失败 ⇒ 按合同「启动失败立刻回退」降级到 legacy。
+        //   用户侧的观感就是"切液态玻璃就回退"，必须手动把窗口挪到另一块屏
+        //   （触发 DPI 变化 → 句柄重建 → 那时旧设备已释放干净）才恢复。
+        //   这里给它一次**延迟**重试的机会：几百毫秒后设备通常已释放干净。
+        private System.Windows.Forms.Timer? _gpuStartRetryTimer;
+
+        /// <summary>延迟重试预算（每次用户主题切换给一次机会；用掉后仍失败才真正降级）。</summary>
+        private int _gpuStartRetryBudget;
+
         // ================================================================
         // 【GPU T03 / T02 合同】切换协调器 + 清理责任 ledger
         // ================================================================
@@ -602,7 +616,63 @@ namespace LiteMonitor
             //   只有"恢复也失败"（恢复预算耗尽）才落到 legacy 转换。
             if (report.Stage == GpuFailureStage.Runtime) return;
 
+            // ★★ 启动 / 首帧失败 ⇒ 先给一次**延迟**重试的机会 ★★
+            //   切主题时旧 D3D 设备尚未释放干净 ⇒ 瞬态失败（DEVICE_REMOVED 等）；
+            //   延迟几百毫秒再试一次通常就成功了，用户不必手动把窗口挪到另一块屏。
+            //   预算用掉后仍失败 ⇒ 落到下面的正常降级路径（根因码保持不变）。
+            if (report.Stage is GpuFailureStage.Startup or GpuFailureStage.FirstFrame
+                    or GpuFailureStage.RecoveryExhausted &&
+                TryScheduleGpuStartRetry())
+            {
+                return;
+            }
+
             _gpuFailureFallback.Request(report);
+        }
+
+        /// <summary>
+        /// 安排一次**延迟**的 GPU 启动重试。
+        /// <para>★ 返回 <c>true</c> = 已安排（本次失败先不回退）；<c>false</c> = 预算用完 / 不可安排。</para>
+        /// </summary>
+        private bool TryScheduleGpuStartRetry()
+        {
+            if (_disposed || _form.IsDisposed) return false;
+            if (_gpuStartRetryBudget <= 0) return false;
+            if (_gpuStartRetryTimer is not null && _gpuStartRetryTimer.Enabled) return false;
+
+            _gpuStartRetryBudget--;
+            _gpuStartRetryTimer ??= new System.Windows.Forms.Timer { Interval = 400 };
+            _gpuStartRetryTimer.Tick -= OnGpuStartRetryTick;
+            _gpuStartRetryTimer.Tick += OnGpuStartRetryTick;
+            _gpuStartRetryTimer.Start();
+            return true;
+        }
+
+        /// <summary>
+        /// 延迟重试到期：重建 GPU 宿主并再启动一次。
+        /// <para>★ 失败时 <see cref="StartGpuPresentation"/> 会再次上报故障
+        /// ⇒ 走正常降级路径（此时预算已用完 ⇒ 不会再排队重试）。</para>
+        /// </summary>
+        private void OnGpuStartRetryTick(object? sender, EventArgs e)
+        {
+            _gpuStartRetryTimer?.Stop();
+            if (_disposed || _form.IsDisposed) return;
+            if (_gpuRoute?.IsGpu != true) return;
+
+            // 旧宿主已不可用 ⇒ 重新走一遍"停止 → 建宿主 → 启动"。
+            // 此时上一台设备的释放通常已经完成，不再撞瞬态错误。
+            StopGpuPresentation();
+            _transition.NextHostGeneration();
+            _gpuPresentation = CreateGpuPresentationHost(
+                _gpuRoute.EffectiveMaterial,
+                _gpuRoute.CaptureRequested,
+                ThemeManager.Current.Rendering,
+                ThemeManager.Current);
+            if (StartGpuPresentation())
+            {
+                _transition.PublishStable(_gpuRoute.Route);
+                UpdateGpuScene();
+            }
         }
 
         /// <summary>
@@ -1449,6 +1519,10 @@ namespace LiteMonitor
             // ★【合同 §4.6】回到 GPU 路线 ⇒ 派生回退样式**不再**参与渲染（legacy 外观恢复原样）。
             _legacyFallbackTheme = null;
 
+            // ★ 用户主动切到 GPU 主题 ⇒ 给一次延迟重试预算
+            //   （切主题时旧设备未释放干净导致的瞬态启动失败，可延迟重试一次）。
+            _gpuStartRetryBudget = 1;
+
             bool canReconfigure =
                 _gpuPresentation is not null &&
                 (_gpuPresentation.IsActive || _gpuPresentation.IsSuspended);
@@ -2282,6 +2356,11 @@ namespace LiteMonitor
 
             _gpuPresentation?.Dispose();
             _gpuPresentation = null;
+
+            // ★ 停掉延迟重试定时器（关闭过程中不得再重建宿主）。
+            _gpuStartRetryTimer?.Stop();
+            _gpuStartRetryTimer?.Dispose();
+            _gpuStartRetryTimer = null;
 
             // ★★【R02】丢弃排队的故障回退请求 ——
             //   关闭拥有最高优先级（合同 §4 全局约束 / U10）：关闭过程中不得重建 HWND、
