@@ -111,7 +111,8 @@ namespace LiteMonitor.Tests
         }
 
         [Fact]
-        public void 护栏_失败计数阈值必须存在且可读()        {
+        public void 护栏_失败计数阈值必须存在且可读()
+        {
             FieldInfo? field = typeof(GpuPresentationHostController).GetField(
                 "ResizeFailureThreshold",
                 BindingFlags.NonPublic | BindingFlags.Static);
@@ -119,6 +120,44 @@ namespace LiteMonitor.Tests
             Assert.NotNull(field);
             int threshold = (int)field!.GetValue(null)!;
             Assert.True(threshold >= 2, "阈值至少为 2：一次抖动不应立刻降级。");
+        }
+
+        [Fact]
+        public void 护栏_降级恢复必须用当前尺寸而不是旧快照尺寸()
+        {
+            // 背景：切缩放时内容已按**新**缩放算过；若降级恢复把窗口尺寸还原成
+            // 切换前的旧快照高度，内容就会超出窗口底部 ⇒ "底部缺一栏 / 最后一栏半截"。
+            MethodInfo method = typeof(UIController).GetMethod(
+                "RestoreGeometryAfterRecreate",
+                BindingFlags.NonPublic | BindingFlags.Static)!;
+
+            Assert.NotNull(method);
+            IlInspector.Disassembly body = IlInspector.Disassemble(method);
+
+            bool readsCurrentClientSize = false;
+            foreach (IlInspector.IlInstruction instruction in body.Instructions)
+            {
+                if (instruction.OpCode != OpCodes.Call && instruction.OpCode != OpCodes.Callvirt)
+                {
+                    continue;
+                }
+
+                if (instruction.Target is not MethodInfo called)
+                {
+                    continue;
+                }
+
+                if (called.Name == "get_ClientSize" &&
+                    called.DeclaringType?.Name == "Form")
+                {
+                    readsCurrentClientSize = true;
+                }
+            }
+
+            Assert.True(
+                readsCurrentClientSize,
+                "降级恢复必须读取**当前**窗体尺寸（切缩放后已按新缩放算过），" +
+                "不能只还原切换前的旧快照尺寸 —— 否则底部会被裁掉一栏。");
         }
     }
 }

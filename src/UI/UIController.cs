@@ -1856,8 +1856,22 @@ namespace LiteMonitor
             {
                 Screen screen = Screen.FromRectangle(snapshot.Bounds);
                 Rectangle work = screen.WorkingArea;
-                int width = snapshot.Bounds.Width > 0 ? snapshot.Bounds.Width : snapshot.ClientSize.Width;
-                int height = snapshot.Bounds.Height > 0 ? snapshot.Bounds.Height : snapshot.ClientSize.Height;
+
+                // ★★ 尺寸**不再**还原成切换前的旧快照（合同 §4.3 :174 的真实意图）★★
+                //   切缩放时内容已经按**新**缩放算过（窗口高度也随之变过）；
+                //   若此刻把窗口尺寸还原成旧快照的高度，内容就会超出窗口底部
+                //   ⇒ 用户看到"底部缺一栏 / 最后一栏只显示一半"。
+                //   位置仍按快照夹紧（保持用户的摆放），尺寸保留**当前**值，
+                //   随后由 legacy 渲染路径按当前主题 + 当前缩放重算高度（_layoutDirty）。
+                int width = form.ClientSize.Width;
+                int height = form.ClientSize.Height;
+                if (width <= 0 || height <= 0)
+                {
+                    // 句柄重建后拿不到当前尺寸 ⇒ 退回快照尺寸（并记录为降级兜底）。
+                    width = snapshot.Bounds.Width > 0 ? snapshot.Bounds.Width : snapshot.ClientSize.Width;
+                    height = snapshot.Bounds.Height > 0 ? snapshot.Bounds.Height : snapshot.ClientSize.Height;
+                }
+
                 if (width <= 0 || height <= 0) return false;
 
                 int x = Math.Clamp(
