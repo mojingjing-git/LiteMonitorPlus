@@ -709,6 +709,41 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
 
         _deviceService.Context.ClearState();
         _deviceService.Context.Flush();
+
+        // ★★ 两段式改尺寸（复审 B2 方案 A）★★
+        //   旧顺序：先释放全部尺寸相关资源 → 再 ResizeBuffers。
+        //   一旦 ResizeBuffers 抛异常（DXGI_ERROR_INVALID_CALL / DEVICE_REMOVED 等），
+        //   渲染器就停在「半残」状态：_sceneTexture / _foregroundTexture / RTV / 画笔全为 null，
+        //   下一帧 Render 必抛 "not ready to draw"（:554-560）⇒
+        //   一次本可恢复的尺寸抖动会被渲染路径升级成**整场降级**，
+        //   用户看到的就是「液态玻璃突然消失、过一阵才恢复」。
+        //   新顺序：**先让交换链改尺寸，成功后才销毁/重建尺寸相关资源**。
+        //   这些资源不是后备缓冲（后缓冲只在 Render 里 using GetBuffer 现取现放），
+        //   因此释放顺序不影响 ResizeBuffers 的合法性。
+        //   ⇒ ResizeBuffers 失败时旧资源仍在，渲染器仍可按旧尺寸继续画，
+        //     且 _width/_height/_generations 都没动 ⇒ 宿主与渲染器代次不会永久错位。
+        swapChain.ResizeBuffers(
+            2,
+            (uint)physicalWidth,
+            (uint)physicalHeight,
+            Format.B8G8R8A8_UNorm,
+            SwapChainFlags.None).CheckError();
+
+        _width = physicalWidth;
+        _height = physicalHeight;
+        _generations = generations;
+        ReleaseSizeDependentResources();
+        _captureSource?.UpdateGenerations(generations);
+        CreateSizeDependentResources();
+    }
+
+    /// <summary>
+    /// 释放与尺寸相关的 GPU 资源（不含交换链本身）。
+    /// <para>★ 与 <see cref="Resize"/> 的两段式顺序配套：只有在交换链改尺寸**成功之后**才调用，
+    /// 失败路径必须让旧资源保持有效。</para>
+    /// </summary>
+    private void ReleaseSizeDependentResources()
+    {
         _foregroundPainter?.Dispose();
         _foregroundPainter = null;
         _foregroundView?.Dispose();
@@ -721,18 +756,6 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
         _sceneRenderTargetView = null;
         _sceneTexture?.Dispose();
         _sceneTexture = null;
-
-        swapChain.ResizeBuffers(
-            2,
-            (uint)physicalWidth,
-            (uint)physicalHeight,
-            Format.B8G8R8A8_UNorm,
-            SwapChainFlags.None).CheckError();
-        _width = physicalWidth;
-        _height = physicalHeight;
-        _generations = generations;
-        _captureSource?.UpdateGenerations(generations);
-        CreateSizeDependentResources();
     }
 
     public GpuSceneRendererDiagnostics Diagnostics()

@@ -50,6 +50,17 @@ public sealed class GpuPresentationHostController : IDisposable
     private string? _cleanupHandoffError;
 
     /// <summary>
+    /// 连续尺寸同步失败的次数。
+    /// <para>★ 尺寸同步失败**不再立刻拆会话**：渲染器在新的两段式 Resize 下保持完整可用
+    /// （尺寸资源不会被提前释放），所以一次抖动完全可以按旧尺寸继续画。
+    /// 连续失败到阈值才降级，既避免"一次抖动 = 整场降级"，又不掩盖真正的设备故障。</para>
+    /// </summary>
+    private int _resizeFailureCount;
+
+    /// <summary>尺寸同步连续失败多少次才降级会话。</summary>
+    private const int ResizeFailureThreshold = 3;
+
+    /// <summary>
     /// 【R02】呈现失败的**根因码**（第一次失败时写入，之后**永不**被清理诊断顶替）。
     /// <para>★ 合同 §5.3 规则 2 / U11：故障回退必须**保留失败原因**，
     /// 不得把它退化成"普通 fallback code"。</para>
@@ -506,6 +517,8 @@ public sealed class GpuPresentationHostController : IDisposable
         _renderer?.StopLiveCapture();
         _liveCaptureStarted = false;
         _sessionOwner.Session?.Suspend(out _);
+        // 挂起是一个干净的状态点：此前的尺寸失败计数不应带进下一个会话。
+        ResetResizeFailureCount();
     }
 
     public void Resume()
@@ -692,6 +705,8 @@ public sealed class GpuPresentationHostController : IDisposable
             runtimeSettings.TargetFramesPerSecond);
         ApplyPowerCadence();
         _scene = null;
+        // 重新配置成功 ⇒ 新的渲染器/材质接管，旧的尺寸失败计数不再适用。
+        ResetResizeFailureCount();
         try { SetToolbarFixedBackground(); }
         catch (Exception ex)
         {
@@ -743,38 +758,91 @@ public sealed class GpuPresentationHostController : IDisposable
 
     public void NotifySizeChanged()
     {
-        if (_disposed || _renderer is null || !IsActive)
+        if (_disposed || _renderer is null)
         {
             return;
         }
 
-        EnsureOwnerThread();
+        // ★ 线程校验走静默返回（不再抛异常）：
+        //   本方法可能被 WinForms 的 Resize 事件处理器调用，
+        //   异常一旦逃出去就会变成 Application.ThreadException（用户看到"程序遇到问题"）。
+        if (!IsOwnerThread())
+        {
+            return;
+        }
+
         int width = Math.Max(1, _form.ClientSize.Width);
         int height = Math.Max(1, _form.ClientSize.Height);
         if (width == _renderer.Width && height == _renderer.Height)
         {
+            ResetResizeFailureCount();
             return;
         }
 
-        _generations = _generations with { Size = _generations.Size + 1 };
+        // ★ 代次**先算好、暂不推进**：只有 Resize 成功才提交（见下方赋值）。
+        //   旧实现在这里就自增 _generations.Size，而渲染器是在 ResizeBuffers 成功之后才写代次
+        //   ⇒ Resize 一旦失败，宿主与渲染器的尺寸代次就**永久错位**
+        //   （Render 的 CanAccept 必抛、UpdateScene 静默丢弃场景 ⇒ 面板看起来"空掉"）。
+        RenderGenerations generations = _generations with { Size = _generations.Size + 1 };
         try
         {
-            _renderer.Resize(_generations, width, height);
-            SetToolbarFixedBackground();
-            _scene = null;
+            _renderer.Resize(generations, width, height);
         }
         catch (Exception exception)
         {
+            // ★ 尺寸同步失败**不立刻拆会话**：两段式 Resize 保证渲染器仍完整可用，
+            //   它会继续按旧尺寸渲染（画面比例暂时不准，但内容完整、玻璃效果仍在）。
+            _resizeFailureCount++;
             EnterFallback(
                 "gpu_presentation_resize_failed",
                 exception.Message);
-            StopCore();
+            _lastErrorCode = "gpu_presentation_resize_failed";
+            _lastErrorMessage = exception.Message;
+            if (_resizeFailureCount < ResizeFailureThreshold)
+            {
+                return;
+            }
+
+            // 连续失败才降级；根因码保持 resize_failed，不退化成 render_failed。
+            try
+            {
+                StopCore();
+            }
+            catch (Exception stopError)
+            {
+                _lastErrorMessage = stopError.Message;
+            }
 
             // ★【R02】运行故障同样要上报。
             //   ★ 阶段 = Runtime ⇒ 宿主**仍保留**既有的一次自动恢复
             //   （计划 §4.4 :186 "最终失败才进入完整 legacy 切换"）。
             RaisePresentationFailed(DescribeFailure(GpuFailureStage.Runtime));
+            return;
         }
+
+        // ★ Resize 成功 ⇒ 才提交代次（宿主与渲染器始终同代次）。
+        _generations = generations;
+        ResetResizeFailureCount();
+
+        // ★ 工具栏固定背景与尺寸同步是**两件事**：
+        //   它的失败（尺寸超限 / 贴图创建失败）不该被记成 resize 失败、
+        //   更不该触发会话降级 —— 那只是一层装饰背景而已。
+        try
+        {
+            SetToolbarFixedBackground();
+        }
+        catch (Exception exception)
+        {
+            _lastErrorCode = "gpu_presentation_fixed_background_failed";
+            _lastErrorMessage = exception.Message;
+        }
+        _scene = null;
+    }
+
+    /// <summary>尺寸同步失败计数清零（成功路径、Suspend/Resume、停止与释放时都要清）。</summary>
+    private void ResetResizeFailureCount()
+    {
+        _resizeFailureCount = 0;
     }
 
     public void NotifyOutputChanged(bool force = false)
@@ -1070,6 +1138,7 @@ public sealed class GpuPresentationHostController : IDisposable
         _timer.Stop();
         _liveCaptureStarted = false;
         _scene = null;
+        ResetResizeFailureCount();
 
         // 【合同 §6.2 / 裁决 D2 —— GPU-001 的根因修复】
         // 释放宿主持有的会话并把清理责任**移交**出去：
@@ -1193,6 +1262,10 @@ public sealed class GpuPresentationHostController : IDisposable
                 "GPU presentation must be controlled on the UI thread that created it.");
         }
     }
+
+    /// <summary>当前线程是否就是创建宿主的那条 UI 线程（不抛异常的版本）。</summary>
+    private bool IsOwnerThread() =>
+        Environment.CurrentManagedThreadId == _ownerThreadId;
 
     private void ThrowIfDisposed()
     {
