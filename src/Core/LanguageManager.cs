@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 
@@ -37,7 +38,7 @@ namespace LiteMonitor.src.Core
                 var path = Path.Combine(LangDir, $"{langCode}.json");
                 if (!File.Exists(path))
                 {
-                    Console.WriteLine($"[LanguageManager] Missing lang file: {langCode}.json");
+                    Debug.WriteLine($"[LanguageManager] Missing lang file: {langCode}.json");
                     return;
                 }
                 var json = File.ReadAllText(path);
@@ -47,7 +48,7 @@ namespace LiteMonitor.src.Core
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[LanguageManager] Load failed: {ex.Message}");
+                Debug.WriteLine($"[LanguageManager] Load failed: {ex.Message}");
             }
         }
 

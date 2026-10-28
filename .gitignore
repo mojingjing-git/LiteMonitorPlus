@@ -70,6 +70,9 @@ update.zip.backup
 # during an offline restore; the caches are machine-local and must never be committed.
 /.nuget-packages/
 /.dotnet-cli-home/
-/NuGet/Migrations/
+/NuGet/
 restore.binlog
 *.binlog
+
+# Agent session scratch (sub-agent worktrees/notes live under .agents/)
+/.agents/

@@ -583,6 +583,8 @@ namespace LiteMonitor
                     else
                     {
                         // 没有任务栏窗体可恢复 ⇒ 延迟新建一个（等 Explorer 缓口气）。
+                        // 恢复失败必须留痕并再试一次：Explorer 重启后的面板重建是核心 UX，
+                        // 静默失败会让任务栏区域永久消失且没有任何诊断线索。
                         this.BeginInvoke(new Action(async () =>
                         {
                             try
@@ -590,7 +592,19 @@ namespace LiteMonitor
                                 await Task.Delay(3000);
                                 ToggleTaskbar(true);
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                HardwareErrorLog.Write("TaskbarRecovery.DelayedCreate", ex);
+                                try
+                                {
+                                    await Task.Delay(1000);
+                                    ToggleTaskbar(true);
+                                }
+                                catch (Exception retryEx)
+                                {
+                                    HardwareErrorLog.Write("TaskbarRecovery.DelayedCreate.Retry", retryEx);
+                                }
+                            }
                         }));
                     }
                 }

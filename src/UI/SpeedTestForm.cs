@@ -339,7 +339,7 @@ namespace LiteMonitor
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[SpeedTestForm] Local network data update failed: {ex.Message}");
+                Debug.WriteLine($"[SpeedTestForm] Local network data update failed: {ex.Message}");
             }
         }
 

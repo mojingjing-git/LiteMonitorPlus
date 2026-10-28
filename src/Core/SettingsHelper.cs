@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.Plugins;
+using LiteMonitor.src.SystemServices;
 
 namespace LiteMonitor
 {
@@ -283,7 +284,12 @@ namespace LiteMonitor
                 BeforeSaveGateForTests?.Invoke();
                 lock (_ioLock) return TrySaveOutcomeLocked(settings);
             }
-            catch { return SettingsSaveOutcome.WriteFailed; }
+            catch (Exception ex)
+            {
+                // 定时自动保存链没有 UI 提示，写失败若完全静默，用户发现配置丢失时已无现场。
+                HardwareErrorLog.Write("SettingsHelper.TrySaveWithOutcome", ex);
+                return SettingsSaveOutcome.WriteFailed;
+            }
         }
 
         // These seams only observe the production critical sections in regression tests.
@@ -349,8 +355,10 @@ namespace LiteMonitor
                 CleanupTempFile();
                 return SettingsSaveOutcome.CredentialProtectionFailed;
             }
-            catch
+            catch (Exception ex)
             {
+                // 写失败不能完全静默（同 TrySaveWithOutcome：自动保存无 UI 提示）。
+                HardwareErrorLog.Write("SettingsHelper.Save", ex);
                 CleanupTempFile();
                 return SettingsSaveOutcome.WriteFailed;
             }
@@ -642,8 +650,24 @@ namespace LiteMonitor
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
-            // 1. 先写临时文件
-            File.WriteAllText(TempPath, json);
+            // 1. 先写临时文件：WriteThrough + Flush(true) 确保内容真正落盘。
+            //    否则断电窗口内可能出现「主文件已替换、内容还在缓存」的半截状态，
+            //    主文件与备份一起损坏（与 ThemeFileService.SafeWrite 同一防线）。
+            //    ★ StreamWriter 必须 leaveOpen:true —— 它默认连底层流一起 Dispose，
+            //      随后的 fs.Flush(true) 会抛 ObjectDisposedException（实测踩坑）。
+            //    ★ 显式 UTF8Encoding(false)：File.WriteAllText 语义是 UTF-8 **无 BOM**，
+            //      不能用 Encoding.UTF8（带 BOM），否则 settings.json 凭空多出字节头。
+            using (var fs = new FileStream(
+                TempPath, FileMode.Create, FileAccess.Write, FileShare.None,
+                4096, FileOptions.WriteThrough))
+            {
+                using (var writer = new StreamWriter(fs, new System.Text.UTF8Encoding(false), 4096, leaveOpen: true))
+                {
+                    writer.Write(json);
+                    writer.Flush();
+                }
+                fs.Flush(true);
+            }
 
             // 2. 回读校验：落盘内容必须还能解析回配置对象。
             //    校验放在「刷新备份」之前，这样半截内容既不会顶替主文件，也不会污染备份。
@@ -673,7 +697,28 @@ namespace LiteMonitor
                 catch { }
             }
 
-            // 4. 最后替换主文件
+            // 4. 最后替换主文件：File.Replace 在同卷内原子替换（保留原 ACL 元数据），
+            //    平台/文件系统不支持或目标被占用（杀软介入）时退到"移动并覆盖"——
+            //    两条路都**不先删除主文件**，替换失败时旧配置原样还在。
+            if (File.Exists(FilePath))
+            {
+                try
+                {
+                    File.Replace(TempPath, FilePath, null);
+                    return;
+                }
+                catch (PlatformNotSupportedException)
+                {
+                }
+                catch (NotSupportedException)
+                {
+                }
+                catch (IOException)
+                {
+                    // 退到移动覆盖：File.Move(overwrite) 依然是同卷原子替换；
+                    // 仍失败则异常向上抛，主文件保持原样。
+                }
+            }
             File.Move(TempPath, FilePath, true);
         }
 

@@ -111,6 +111,7 @@ namespace LiteMonitor.ThemeEditor
         /// </summary>
         public static Theme LoadTheme(string dir, string name)
         {
+            ValidateThemeName(name);
             string path = Path.Combine(dir, name + ".json");
 
             if (!File.Exists(path))
@@ -151,6 +152,7 @@ namespace LiteMonitor.ThemeEditor
         /// </summary>
         public static void SaveTheme(string dir, string name, Theme theme)
         {
+            ValidateThemeName(name);
             if (!Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
@@ -183,6 +185,7 @@ namespace LiteMonitor.ThemeEditor
         /// <summary>把 JSON 载荷写入指定目录下的主题文件（共用安全写入核心）。</summary>
         public static void WriteThemeJson(string dir, string name, string json)
         {
+            ValidateThemeName(name);
             if (!Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
@@ -211,6 +214,7 @@ namespace LiteMonitor.ThemeEditor
         /// </summary>
         public static void CreateTheme(string dir, string name)
         {
+            ValidateThemeName(name);
             if (!Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
@@ -246,6 +250,8 @@ namespace LiteMonitor.ThemeEditor
         /// </summary>
         public static void DuplicateTheme(string dir, string src, string dst)
         {
+            ValidateThemeName(src);
+            ValidateThemeName(dst);
             if (!Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
@@ -275,6 +281,8 @@ namespace LiteMonitor.ThemeEditor
         /// </summary>
         public static void RenameTheme(string dir, string src, string dst)
         {
+            ValidateThemeName(src);
+            ValidateThemeName(dst);
             string srcPath = Path.Combine(dir, src + ".json");
             string dstPath = Path.Combine(dir, dst + ".json");
 
@@ -301,6 +309,7 @@ namespace LiteMonitor.ThemeEditor
         /// </summary>
         public static void DeleteTheme(string dir, string name)
         {
+            ValidateThemeName(name);
             string path = Path.Combine(dir, name + ".json");
             if (File.Exists(path))
                 File.Delete(path);

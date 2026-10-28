@@ -12,13 +12,13 @@
 
 | 领域 | 核心文档 | 状态 / 目标 |
 |---|---|---|
-| **主题工作室** | [Theme Studio 下一阶段计划](plans/2026-10-26-theme-studio-next-stage-plan.md) | **🔥 进行中**：原生窗口、多形态预览与实机验收 |
-| **主题工作室** | [Theme Studio 重做总方案](plans/2026-10-26-theme-studio-rebuild-plan.md) | 苹果风格工作区与属性目录规范 |
+| **主题工作室** | [Theme Studio 下一阶段计划](plans/2026-10-26-theme-studio-next-stage-plan.md) | **✅ 已交付**：原生窗口、多形态预览与实机验收（Phase A–E 整改已并入 master） |
+| **主题工作室** | [Theme Studio 重做总方案](plans/2026-10-26-theme-studio-rebuild-plan.md) | **✅ 已交付**：苹果风格工作区与属性目录规范 |
 | **主题工作室** | [Theme Studio 优化意向储备](plans/2026-10-26-theme-studio-optimization-intent-plan.md) | 后续功能储备清单 |
 | **进程隔离** | [Plan A：硬件采集进程隔离](plans/2026-10-26-hardware-process-isolation-plan.md) | **I0~I2 已并入 master**，HardwareHost 独立采样子进程 |
 | **架构解耦** | [Plan B：架构解耦与职责整理](plans/2026-10-26-architecture-decoupling-plan.md) | **B0~B3 已并入 master**，B4 推进中 |
 | **工程质量** | [工程改进与测试收口计划](plans/2026-10-26-post-review-engineering-improvement-plan.md) | E00~E08 测试套件与集成基线 |
-| **代码质量** | [可空引用与编译警告治理计划](plans/2026-10-26-nullable-warnings-remediation-plan.md) | **📋 调研完毕待实施**：分 5 批消除 295 个警告，阻断 NRE 崩溃 |
+| **代码质量** | [可空引用与编译警告治理计划](plans/2026-10-26-nullable-warnings-remediation-plan.md) | **✅ 已全量合入 master**：分批消除全部警告，nullable-gate 已进 CI 门禁 |
 | **本地环境** | [Windows 防火墙与权限配置](development-windows-firewall.md) | Web 模块与网络采集本地开发调试说明 |
 
 ---

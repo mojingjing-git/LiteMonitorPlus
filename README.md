@@ -91,7 +91,7 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 | **GPU 固定背景**（枚举 `GpuFixedInput`） | GPU 主题 + 「GPU 材质渲染」开 | 真实玻璃材质（折射/厚度/高光），背景为程序化材质 |
 | **GPU 实时桌面背景**（枚举 `GpuLiveBackground`） | 上一条全部满足 + 「实时桌面背景」开 + WDA 政策已接受 | 玻璃后面是**实时模糊桌面**；透明度 <100%（分层窗口）实测同样可用 |
 
-设置面板 → **「渲染路线」页**：查看当前主题声明路线与实际生效路线（含真实原因码，如 `safe_mode` / `gpu_effects_opt_in_required`），GPU 路线开关也在这里。主题下拉与托盘菜单的主题项都会标注 `（GPU 材质）` / `（GDI+）`。旧版「实时玻璃」开关已移除，由 GPU 路线的「实时桌面背景」替代（旧配置值会在加载时自动迁移为关闭）。
+设置面板 → **主面板页**：GPU 路线开关（材质渲染 / 实时桌面背景）就在主题选择下方，上方的路线状态行实时显示当前主题声明路线与实际生效路线；完整路线诊断卡（含真实原因码，如 `safe_mode` / `gpu_effects_opt_in_required`）在「系统与硬件」页。主题下拉与托盘菜单的主题项都会标注 `（GPU 材质）` / `（GDI+）`。旧版「实时玻璃」开关已移除，由 GPU 路线的「实时桌面背景」替代（旧配置值会在加载时自动迁移为关闭）。
 
 ### 支持矩阵
 
@@ -101,7 +101,7 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 | 运行时 | .NET 8 桌面运行时（发布包为框架依赖） | 无法启动 |
 | 显卡 | 提供 DXGI 适配器且支持 DirectX 11 | 自动回退 GDI+，面板正常显示 |
 | 主题 | 主题 JSON 中 `rendering.backend = "gpu"` | 该主题保持原 GDI+ 外观 |
-| 用户开关 | 设置 → 渲染路线 →「GPU 材质渲染」 | 不开启则不进入 GPU 路线 |
+| 用户开关 | 设置 → 主面板 →「GPU 材质渲染」 | 不开启则不进入 GPU 路线 |
 | 多屏 / 混合 DPI | 支持，可拖到副屏（含负坐标原点） | — |
 | 实时桌面背景 | 需 DXGI Desktop Duplication 与 WDA 支持 | 捕获失败时保留可读的固定材质 |
 
@@ -213,7 +213,11 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 | `UI/UILayout.cs` | 竖屏动态布局计算 |
 | `UI/HorizontalLayout.cs` | 横屏列宽计算、面板总宽度计算 |
 | `UI/Decor/` | GDI+ 装饰层绘制（外框、进度条、几何、纹理缓存） |
-| `UI/Settings/` | 设置面板各分页（主面板、监控项、插件、插件市场、渲染路线、阈值、任务栏、系统与硬件） |
+| `UI/Settings/` | 设置面板各分页（主面板、任务栏、监控项、阈值、系统与硬件、插件、插件市场、主题市场、情景、诊断） |
+| `Core/Actions/` | 应用动作聚合：程序动作、设置切换、Web 端动作 |
+| `Core/Alerts/` | 规则化报警：模型、评估器、运行时与旧阈值迁移 |
+| `Core/Scenarios/` | 情景模式：配置档案、预检、应用协调与投影 |
+| `Core/Trends/` | 趋势数据：短期缓冲、历史存储（V2）与视图指标 |
 | `Core/ThemeManager.cs` | 主题加载、颜色解析、字体构建 |
 | `Core/LanguageManager.cs` | 多语言加载、扁平化 Key 访问 |
 | `Core/Settings.cs` | `settings.json` 配置模型；口令与插件密钥的迁移、加密与落盘 |
@@ -226,8 +230,10 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 | `System/UpdateChecker.cs` | GitHub + 国内双源版本检测、更新元数据签名校验 |
 | `System/AutoStart.cs` | 管理计划任务，实现开机自启 |
 | `Rendering/` | **GPU/D3D11 渲染路线**：契约、配置与路由判定、设备与资源账本、几何、材质、场景、呈现、桌面复制捕获 |
-| `Plugins/` | 插件模型、网络沙箱（方法面/主机白名单/重定向复核/并发上限）、执行器、市场安装与卸载事务 |
+| `Plugins/` | 插件模型、网络沙箱（方法面/主机白名单/重定向复核/并发上限/SSRF 地址策略）、执行器、市场安装与卸载事务 |
 | `ThemeEditor/` | 主题编辑器与主题文件读写服务 |
+| `Diagnostics/` | 诊断中心：事件存储、诊断 Hub 与诊断包收集（含扩展提供程序） |
+| `Cli/`（独立工程 `LiteMonitor.Cli`） | 命令行工具：主题包校验（与主程序共享 `ThemeMarketValidator` 源码）等可脚本化能力 |
 | `UI/AboutForm.cs` | 关于窗口 |
 | `LiteMonitor.Updater/` | 独立更新器：摘要校验、事务替换与失败回滚 |
 

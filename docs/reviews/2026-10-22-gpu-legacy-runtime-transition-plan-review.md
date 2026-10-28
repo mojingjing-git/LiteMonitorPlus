@@ -215,7 +215,7 @@ if (fallbackBackend != LegacyBackend || fallbackMaterial != LegacyMaterial)
 
 1. **未做任何构建、测试或实现修改**——本评审为纯只读核验，符合文档 §3"不停止日常运行实例、不改真实用户配置"。
 2. **未实机验证 flip→GDI 的实际行为**：§3 的结论是**文档依据**，不是本机实测。文档 §2.2 已声明"实机结论仍由 T01 的探针取得"，本评审维持该定性。
-3. **未审查 `docs/superpowers/plans/2026-10-22-performance-sampling-verification.md`**（GPU 非性能收口计划）——文档 §1 称"承接现有 GPU 非性能收口计划"，二者的一致性未核。
+3. **未审查 `docs/superpowers/plans/2026-10-20-performance-sampling-verification.md`**（GPU 非性能收口计划）——文档 §1 称"承接现有 GPU 非性能收口计划"，二者的一致性未核。
 4. **未评估该计划与当前在途修复（S2.x / S3.x）的交叉影响**：本次在途任务不触碰 `src/Rendering/**`、`src/UI/UIController.cs`、`src/UI/MainForm_Transparent.cs`，故**当前无文件所有权冲突**；但 `src/UI/Settings/MainPanelPage.cs` 是文档 §5 T08 与 S2.2 双方都需要接线的地方，**T08 启动前必须与 S2.2 的 owner 串行交接**（文档 §3 已提示"尤其设置页接线需与当前 owner 串行交接"，此处予以确认）。
 
 ---

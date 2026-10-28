@@ -9,6 +9,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Diagnostics;
 using LiteMonitor.Rendering.Configuration;
 
 namespace LiteMonitor.src.Core
@@ -487,6 +488,9 @@ namespace LiteMonitor.src.Core
             if (string.IsNullOrWhiteSpace(name)) return false;
             try
             {
+                // 防御纵深：主题名来自本机 settings.json，可能被手工改成 "..\.." 这类
+                // 路径拼接形式；先消毒，非法名直接按 legacy 处理（走下方 catch）。
+                LiteMonitor.ThemeEditor.ThemeFileService.ValidateThemeName(name);
                 string path = Path.Combine(ThemeDir, $"{name}.json");
                 if (!File.Exists(path)) return false;
 
@@ -594,16 +598,31 @@ namespace LiteMonitor.src.Core
         public static ThemeLoadResult LoadWithResult(string name)
         {
             string path = Path.Combine(ThemeDir, $"{name}.json");
+            try
+            {
+                // 防御纵深：Skin 字段可能被手工改成路径拼接形式；加载的容错契约是
+                // 「失败回缺省主题不抛」，这里同样不抛、也绝不读任意路径的 JSON。
+                LiteMonitor.ThemeEditor.ThemeFileService.ValidateThemeName(name);
+            }
+            catch (ArgumentException)
+            {
+                var invalidNameFallback = new Theme();
+                invalidNameFallback.BuildFonts();
+                Current = invalidNameFallback;
+                LastLoad = new ThemeLoadResult(name, path, null, null, false, true, "invalid theme name");
+                return LastLoad;
+            }
+
             ThemeLoadResult inspected = Inspect(path, name);
             if (inspected.Success && inspected.Theme != null)
             {
                 Current = inspected.Theme;
                 LastLoad = inspected;
-                Console.WriteLine($"[ThemeManager] Loaded theme: {inspected.Theme.Name} (v{inspected.Theme.Version})");
+                Debug.WriteLine($"[ThemeManager] Loaded theme: {inspected.Theme.Name} (v{inspected.Theme.Version})");
                 return inspected;
             }
 
-            Console.WriteLine($"[ThemeManager] Load error: {inspected.Error}");
+            Debug.WriteLine($"[ThemeManager] Load error: {inspected.Error}");
             var fallback = new Theme();
             fallback.BuildFonts();
             Current = fallback;

@@ -1,5 +1,6 @@
 using LiteMonitor.SystemServices; // B3:应用层硬件网关
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Linq;
@@ -558,7 +559,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             catch (Exception ex)
             {
                 // 记录日志，或者只是简单地忽略（硬件读取失败不应该影响用户进入设置）
-                Console.WriteLine("硬件列表加载失败: " + ex.Message);
+                Debug.WriteLine("硬件列表加载失败: " + ex.Message);
             }
             finally
             {
@@ -728,7 +729,8 @@ namespace LiteMonitor.src.UI.SettingsPage
 
             void AddCalib(string key, string unit, Func<float> get, Action<float> set)
             {
-                var input = group.AddDouble(this, "RAW_TITLE_HACK", unit, 
+                // 占位 key（语言表不命中，T() 原样透传）：真实标题随后内联覆盖为 T(key)+suffix
+                var input = group.AddDouble(this, "TITLE_SET_INLINE", unit,
                     () => (int)(get?.Invoke() ?? 0),        
                     v => set?.Invoke((float)(int)v)
                 );

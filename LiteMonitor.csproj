@@ -152,14 +152,13 @@
 	
 <ItemGroup>
   <Compile Remove="LiteMonitor.Updater\**" />
-  <Compile Remove="LiteMonitor.Wpf\**" />
   <Compile Remove="tests\**" />
   <Compile Remove="tools\**" />
   <Compile Remove="docs\**" />
   <!--
     ★ 本地工作区排除（与上面的既有排除同族）★
     SDK 项目的 Compile 默认通配是 **/*.cs，而 Compile Remove 只排除了
-    LiteMonitor.Updater / LiteMonitor.Wpf / tests / tools / docs。
+    LiteMonitor.Updater / tests / tools / docs。
     但本地存在 10+ 个 git worktree 的**全量副本**（.artifacts\ 与 .worktrees\），
     复审暂存目录 .review-scratch\ 里也有 target-src 全量副本。
     ★ .gitignore / .git/info/exclude 只影响 git，**不影响 MSBuild 通配** ⇒
@@ -173,13 +172,11 @@
   <Compile Remove=".review-scratch\**" />
   <Compile Remove="undefined\**" />
   <EmbeddedResource Remove="LiteMonitor.Updater\**" />
-  <EmbeddedResource Remove="LiteMonitor.Wpf\**" />
   <EmbeddedResource Remove="tests\**" />
   <EmbeddedResource Remove="tools\**" />
   <EmbeddedResource Remove="docs\**" />
   <EmbeddedResource Remove="src\Cli\**" />
   <None Remove="LiteMonitor.Updater\**" />
-  <None Remove="LiteMonitor.Wpf\**" />
   <None Remove="tests\**" />
   <None Remove="tools\**" />
   <None Remove="docs\**" />

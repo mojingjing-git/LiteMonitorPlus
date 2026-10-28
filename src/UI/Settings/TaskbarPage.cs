@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Linq; 
 using System.Windows.Forms;
@@ -93,7 +94,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                 // ★ 字体加载失败不该让设置页崩掉。
                 //   async void 的未捕获异常会经 SynchronizationContext 重新抛出 ⇒ 直接崩进程，
                 //   所以这里必须兜住（与 SystemHardwarPage.PopulateAsyncData 同一口径）。
-                Console.WriteLine("字体列表加载失败: " + ex.Message);
+                Debug.WriteLine("字体列表加载失败: " + ex.Message);
             }
             finally
             {

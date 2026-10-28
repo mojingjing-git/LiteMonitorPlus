@@ -75,7 +75,7 @@ Some themes declare `rendering.backend = "gpu"` in their JSON and render the pan
 | **GPU fixed background** (enum `GpuFixedInput`) | GPU theme **and** "GPU material rendering" enabled | Real glass material (refraction / thickness / highlights) over a procedural background |
 | **GPU live desktop background** (enum `GpuLiveBackground`) | Everything above **plus** "Live desktop background" enabled **plus** the WDA policy accepted | A live blurred desktop behind the glass; verified on 2026-10-24 to work even on a layered window (opacity < 100%) |
 
-Settings → **"Rendering route"** shows the theme's declared route and the route actually in effect (including the real reason codes, such as `safe_mode` / `gpu_effects_opt_in_required`), and hosts the GPU route switches. Theme drop-down and tray-menu entries are labelled ` (GPU material)` / ` (GDI+)`. The old "Live glass" switch has been removed; the GPU route's "Live desktop background" replaces it (old config values are migrated to off on load).
+Settings → **Main panel** hosts the GPU route switches ("GPU material rendering" / "Live desktop background") right below the theme selector, with a route status line showing the theme's declared route and the route actually in effect; the full route diagnostics card (including the real reason codes, such as `safe_mode` / `gpu_effects_opt_in_required`) lives on the "System & hardware" page. Theme drop-down and tray-menu entries are labelled ` (GPU material)` / ` (GDI+)`. The old "Live glass" switch has been removed; the GPU route's "Live desktop background" replaces it (old config values are migrated to off on load).
 
 ### Support Matrix
 
@@ -85,7 +85,7 @@ Settings → **"Rendering route"** shows the theme's declared route and the rout
 | Runtime | .NET 8 desktop runtime (the release package is framework-dependent) | Cannot start |
 | GPU | A DXGI adapter with DirectX 11 support | Falls back to GDI+, panel still renders |
 | Theme | Theme JSON declares `rendering.backend = "gpu"` | Theme keeps its original GDI+ look |
-| User switch | Settings → **Rendering route** → "GPU material rendering" | GPU route is not entered |
+| User switch | Settings → **Main panel** → "GPU material rendering" | GPU route is not entered |
 | Multi-monitor / mixed DPI | Supported, including a secondary display with a negative origin | — |
 | Live desktop background | Requires DXGI Desktop Duplication and WDA | On capture failure a readable fixed material is kept |
 
@@ -211,7 +211,11 @@ Source lives under `src/` (paths below are relative to `src/`; `LiteMonitor.Upda
 | `UI/UILayout.cs` | Dynamic vertical layout calculation |
 | `UI/HorizontalLayout.cs` | Column width and total panel width calculation |
 | `UI/Decor/` | GDI+ decoration layer (frame, bars, geometry, texture cache) |
-| `UI/Settings/` | Settings pages (main panel, monitor items, plugins, plugin market, rendering route, thresholds, taskbar, system & hardware) |
+| `UI/Settings/` | Settings pages (main panel, taskbar, monitor items, thresholds, system & hardware, plugins, plugin market, theme market, scenarios, diagnostics) |
+| `Core/Actions/` | App action aggregation: program actions, settings changes, web actions |
+| `Core/Alerts/` | Rule-based alerts: models, evaluator, runtime and legacy threshold migration |
+| `Core/Scenarios/` | Scenario profiles: profiles, preflight, apply coordination and projection |
+| `Core/Trends/` | Trend data: short-term buffer, history store (V2) and view metrics |
 | `Core/ThemeManager.cs` | Load themes, parse colors, build fonts |
 | `Core/LanguageManager.cs` | Localization loader with flattened key access |
 | `Core/Settings.cs` | `settings.json` model; credential migration, encryption and persistence |
@@ -224,8 +228,10 @@ Source lives under `src/` (paths below are relative to `src/`; `LiteMonitor.Upda
 | `System/UpdateChecker.cs` | GitHub + China mirror version checking, update metadata signature verification |
 | `System/AutoStart.cs` | Manages Windows Task Scheduler startup task |
 | `Rendering/` | **GPU/D3D11 rendering route**: contracts, configuration and route decisions, device and resource ledger, geometry, materials, scene, presentation, desktop-duplication capture |
-| `Plugins/` | Plugin model, network sandbox (method set / host allow-list / redirect re-check / concurrency cap), executor, market install and uninstall transactions |
+| `Plugins/` | Plugin model, network sandbox (method set / host allow-list / redirect re-check / concurrency cap / SSRF address policies), executor, market install and uninstall transactions |
 | `ThemeEditor/` | Theme editor and theme file service |
+| `Diagnostics/` | Diagnostics center: event store, diagnostic hub and diagnostic package collection (incl. extended providers) |
+| `Cli/` (separate project `LiteMonitor.Cli`) | Command-line tooling: theme package validation (shares `ThemeMarketValidator` sources with the main app) and other scriptable capabilities |
 | `UI/AboutForm.cs` | About dialog |
 | `LiteMonitor.Updater/` | Standalone updater: digest verification, transactional replacement and rollback on failure |
 

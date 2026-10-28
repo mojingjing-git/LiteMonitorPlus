@@ -1,5 +1,7 @@
 # 三款旗舰级 GPU 着色器主题制作落地计划 (Three Flagship GPU Themes Plan)
 
+> 📌 **2026-10-28 状态注记**：三款旗舰主题（`NixieTube_Brass_GPU`、`CosmicAurora_Nebula_GPU`、`RetroCRT_Phosphor_GPU`）均已入库并通过外观门禁登记。
+
 **日期**：2026-10-26  
 **状态**：已细化执行中 (In Progress)  
 **目标**：基于新完成的 DirectX 11 / Vortice 现代着色器渲染管线，制作并落地三款高度差异化、质感精良的内置 GPU 旗舰主题：

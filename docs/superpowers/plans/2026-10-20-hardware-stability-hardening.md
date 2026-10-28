@@ -115,7 +115,7 @@ M1 中只要当前依赖无法证明能停止全部磁盘监听，就使用应�
 
 ### Task 0 — 固定基线、依赖和可复现证据
 
-**产物：** 新增 verification 记录，建议路径 `docs/verification/2026-10-20-hardware-stability.md`。
+**产物：** 新增 verification 记录，建议路径 `docs/verification/2026-10-20-hardware-stability.md`（该产物最终未生成：本计划 Task 0 未执行，实际基线证据分散于后续 verification 记录）。
 
 - [ ] 记录实际 HEAD、工作区和 LHM/DiskInfoToolkit/相关传递版本、程序集 SHA-256。
 - [ ] 从干净输出目录构建，按现有方式运行相关测试，记录已有失败与环境限制。

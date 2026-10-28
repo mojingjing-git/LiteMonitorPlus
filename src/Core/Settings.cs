@@ -443,46 +443,55 @@ namespace LiteMonitor
         private static Settings? _instance;
 
         // ★★★ 优化 3：改造 Load 方法为单例模式 ★★★
+        // 双检加锁：并发首调（如 UI 初始化与托盘定时器同时触发）不得产生两份实例——
+        // 后写胜出会让先拿到旧引用的调用方在新实例上调用 Save() 时全部丢失。
+        private static readonly object _instanceLock = new object();
+
         public static Settings Load(bool forceReload = false)
         {
             // 如果单例已存在且不强制刷新，直接返回内存对象 (0 IO, 0 GC)
             if (_instance != null && !forceReload) return _instance;
 
-            // 委托给 SettingsHelper 加载
-            // ★ 用局部变量承载，避免后续对可空字段 _instance 的重复解引用（CS8602）
-            Settings loaded = SettingsHelper.Load(forceReload);
-            _instance = loaded;
-
-            // 兼容旧配置：如果 WebServerPassword 为 null，初始化为空字符串
-            if (loaded.WebServerPassword == null)
+            lock (_instanceLock)
             {
-                loaded.WebServerPassword = "";
+                if (_instance != null && !forceReload) return _instance;
+
+                // 委托给 SettingsHelper 加载
+                // ★ 用局部变量承载，避免后续对可空字段 _instance 的重复解引用（CS8602）
+                Settings loaded = SettingsHelper.Load(forceReload);
+                _instance = loaded;
+
+                // 兼容旧配置：如果 WebServerPassword 为 null，初始化为空字符串
+                if (loaded.WebServerPassword == null)
+                {
+                    loaded.WebServerPassword = "";
+                }
+
+                // 兼容旧配置：如果 MarketPlugins 为 null，初始化为空列表
+                if (loaded.MarketPlugins == null)
+                {
+                    loaded.MarketPlugins = new List<MarketPluginRecord>();
+                }
+
+                // 兼容旧配置：如果 Themes（主题市场安装记录）为 null，初始化为空列表
+                if (loaded.Themes == null)
+                {
+                    loaded.Themes = new List<MarketPluginRecord>();
+                }
+
+                // ★ W12：解析监听范围（存量配置保持旧行为，新装默认仅环回）
+                loaded.ResolveWebServerBindMode();
+
+                // ★ W9：插件凭据解密失败的显式处理（禁用受影响实例 + 记录错误，绝不静默变空）
+                loaded.ApplyPluginCredentialState();
+
+                // ★ T05：旧温度告警迁移到规则模型。幂等，且不改变已关闭告警的启用状态。
+                AlertRuleMigration.Apply(loaded, Math.Max(0, loaded.MonitoredGpuCount));
+                // R16：已迁移配置也要跟随当前监控 GPU 数量补齐逐卡规则。
+                AlertRuleMigration.SyncGpuRules(loaded, Math.Max(0, loaded.MonitoredGpuCount));
+
+                return loaded;
             }
-
-            // 兼容旧配置：如果 MarketPlugins 为 null，初始化为空列表
-            if (loaded.MarketPlugins == null)
-            {
-                loaded.MarketPlugins = new List<MarketPluginRecord>();
-            }
-
-            // 兼容旧配置：如果 Themes（主题市场安装记录）为 null，初始化为空列表
-            if (loaded.Themes == null)
-            {
-                loaded.Themes = new List<MarketPluginRecord>();
-            }
-
-            // ★ W12：解析监听范围（存量配置保持旧行为，新装默认仅环回）
-            loaded.ResolveWebServerBindMode();
-
-            // ★ W9：插件凭据解密失败的显式处理（禁用受影响实例 + 记录错误，绝不静默变空）
-            loaded.ApplyPluginCredentialState();
-
-            // ★ T05：旧温度告警迁移到规则模型。幂等，且不改变已关闭告警的启用状态。
-            AlertRuleMigration.Apply(loaded, Math.Max(0, loaded.MonitoredGpuCount));
-            // R16：已迁移配置也要跟随当前监控 GPU 数量补齐逐卡规则。
-            AlertRuleMigration.SyncGpuRules(loaded, Math.Max(0, loaded.MonitoredGpuCount));
-
-            return loaded;
         }
 
         /// <summary>

@@ -202,7 +202,7 @@ reviewer 给出 PASS / NEEDS-REVISION，并列阻断项。主审修订后进行�
 
 - 本计划及独立计划复审报告。
 - `docs/reviews/evidence/gpu-themes/nonperformance-20261022/`：基线、源和产物哈希、用例 manifest、命令、图像/诊断、功能矩阵、ZIP 验证；使用新的尝试目录，保留失败证据。
-- `docs/reviews/2026-10-22-gpu-nonperformance-final-review.md`：独立代码/功能/打包终审与问题闭环。
+- `docs/reviews/2026-10-22-gpu-nonperformance-final-review.md`：独立代码/功能/打包终审与问题闭环（该终审文档最终未单独成文入库，结论见本计划收尾章节与 reviews 目录同期评审）。
 - 本地候选 ZIP、SHA256、短启动/回退说明、性能延期项。
 
 ## 10. 当前进度

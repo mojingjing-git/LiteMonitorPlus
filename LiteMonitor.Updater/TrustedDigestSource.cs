@@ -8,7 +8,7 @@ namespace LiteMonitor.Updater
     /// </summary>
     /// <remarks>
     /// ★ 这个接缝存在的唯一理由是**旧客户端兼容**（背景见
-    ///   docs/plans/2026-10-23-updater-legacy-bridge-design.md）：
+    ///   2026-10-23 更新器旧客户端桥接设计，已归档至本地 docs/archive/legacy-plans/，不入库）：
     ///   旧版主程序用单参数调用更新器（只给 ZIP 路径），而新版更新器要求必须带上期望 SHA-256；
     ///   旧客户端没有"把摘要交给更新器"的机会，于是只能让更新器自己去找那份可信摘要。
     /// ★ 默认实现是 <see cref="NullTrustedDigestSource"/>：永远取不到 ⇒ 单参数调用**仍然被拒绝**。
