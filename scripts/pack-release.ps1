@@ -166,7 +166,32 @@ foreach ($name in @('LICENSE', 'NOTICE')) {
 }
 
 # ----------------------------------------------------------------------
-# 5. 压缩
+# 5. 剔除运行时配置（个人状态绝不随包分发）
+# ----------------------------------------------------------------------
+
+Write-Step "剔除运行时配置（设置 / 流量历史 / 日志）"
+# settings.json 是「便携式配置存 exe 目录」运行时在包目录里生成的，
+# 里面含本机窗口坐标、开机自启开关、DPAPI 加密后的凭据密文与插件密钥；
+# TrafficHistory.json 是本机流量历史。它们都是**个人状态**，
+# 被打进发布包等于把构建机的隐私发给所有下载者，必须在压缩前剔除。
+$runtimeStateFiles = @(
+    'settings.json', 'settings.json.bak', 'settings.json.tmp',
+    'TrafficHistory.json', 'TrafficHistory.json.bak', 'TrafficHistory.json.tmp'
+)
+foreach ($name in $runtimeStateFiles) {
+    $stale = Join-Path $stageDir $name
+    if (Test-Path -LiteralPath $stale) {
+        Remove-Item -LiteralPath $stale -Force
+        Write-Host "    - $name（个人运行时配置，不入包）"
+    }
+}
+Get-ChildItem -LiteralPath $stageDir -Filter '*.log' -File -ErrorAction SilentlyContinue | ForEach-Object {
+    Remove-Item -LiteralPath $_.FullName -Force
+    Write-Host ("    - {0}（运行日志，不入包）" -f $_.Name)
+}
+
+# ----------------------------------------------------------------------
+# 6. 压缩
 # ----------------------------------------------------------------------
 
 Write-Step "压缩发布包"
