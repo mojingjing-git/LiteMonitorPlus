@@ -76,3 +76,6 @@ restore.binlog
 
 # Agent session scratch (sub-agent worktrees/notes live under .agents/)
 /.agents/
+
+# 探针运行输出（截图/诊断 JSON）
+tools/ThemeSwitchReproProbe/output/
