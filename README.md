@@ -91,7 +91,7 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 | **GPU 固定背景**（枚举 `GpuFixedInput`） | GPU 主题 + 「GPU 材质渲染」开 | 真实玻璃材质（折射/厚度/高光），背景为程序化材质 |
 | **GPU 实时桌面背景**（枚举 `GpuLiveBackground`） | 上一条全部满足 + 「实时桌面背景」开 + WDA 政策已接受 | 玻璃后面是**实时模糊桌面**；透明度 <100%（分层窗口）实测同样可用 |
 
-设置面板 → **主面板页**：GPU 路线开关（材质渲染 / 实时桌面背景）就在主题选择下方，上方的路线状态行实时显示当前主题声明路线与实际生效路线；完整路线诊断卡（含真实原因码，如 `safe_mode` / `gpu_effects_opt_in_required`）在「系统与硬件」页。主题下拉与托盘菜单的主题项都会标注 `（GPU 材质）` / `（GDI+）`。旧版「实时玻璃」开关已移除，由 GPU 路线的「实时桌面背景」替代（旧配置值会在加载时自动迁移为关闭）。
+设置面板 → **主面板页**：GPU 路线开关（材质渲染 / 实时桌面背景）就在主题选择下方，上方的路线状态行实时显示当前主题声明路线与实际生效路线；**「渲染路线」页**给出完整诊断（含真实原因码，如 `safe_mode` / `gpu_effects_opt_in_required`）。主题下拉与托盘菜单的主题项都会标注 `（GPU 材质）` / `（GDI+）`。旧版「实时玻璃」开关已移除，由 GPU 路线的「实时桌面背景」替代（旧配置值会在加载时自动迁移为关闭）。
 
 ### 支持矩阵
 
@@ -213,7 +213,7 @@ A lightweight and customizable desktop hardware monitoring tool — real-time mo
 | `UI/UILayout.cs` | 竖屏动态布局计算 |
 | `UI/HorizontalLayout.cs` | 横屏列宽计算、面板总宽度计算 |
 | `UI/Decor/` | GDI+ 装饰层绘制（外框、进度条、几何、纹理缓存） |
-| `UI/Settings/` | 设置面板各分页（主面板、任务栏、监控项、阈值、系统与硬件、插件、插件市场、主题市场、情景、诊断） |
+| `UI/Settings/` | 设置面板各分页（主面板、渲染路线、任务栏、监控项、阈值、系统与硬件、插件、插件市场、主题市场、情景、诊断） |
 | `Core/Actions/` | 应用动作聚合：程序动作、设置切换、Web 端动作 |
 | `Core/Alerts/` | 规则化报警：模型、评估器、运行时与旧阈值迁移 |
 | `Core/Scenarios/` | 情景模式：配置档案、预检、应用协调与投影 |

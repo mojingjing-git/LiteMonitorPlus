@@ -93,6 +93,7 @@
     "ThemeMarketEmpty": "主题市场暂无主题",
     "RouteSuffixGpu": "（GPU 材质）",
     "RouteSuffixGdi": "（GDI+）",
+    "RenderingRoute": "渲染路线",
     "RouteStatus": {
       "LegacyTheme": "当前主题走 GDI+ 旧路线（未声明 GPU 材质）。",
       "GpuRunning": "GPU 材质运行中。",

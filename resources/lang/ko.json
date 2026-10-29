@@ -93,6 +93,7 @@
     "ThemeMarketEmpty": "테마 마켓에 아직 테마가 없습니다",
     "RouteSuffixGpu": " (GPU 재질)",
     "RouteSuffixGdi": " (GDI+)",
+    "RenderingRoute": "렌더링 경로",
     "RouteStatus": {
       "LegacyTheme": "이 테마는 GDI+ 레거시 경로로 렌더링됩니다(GPU 재질 미선언).",
       "GpuRunning": "GPU 재질 실행 중.",

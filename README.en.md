@@ -75,7 +75,7 @@ Some themes declare `rendering.backend = "gpu"` in their JSON and render the pan
 | **GPU fixed background** (enum `GpuFixedInput`) | GPU theme **and** "GPU material rendering" enabled | Real glass material (refraction / thickness / highlights) over a procedural background |
 | **GPU live desktop background** (enum `GpuLiveBackground`) | Everything above **plus** "Live desktop background" enabled **plus** the WDA policy accepted | A live blurred desktop behind the glass; verified on 2026-10-24 to work even on a layered window (opacity < 100%) |
 
-Settings → **Main panel** hosts the GPU route switches ("GPU material rendering" / "Live desktop background") right below the theme selector, with a route status line showing the theme's declared route and the route actually in effect; the full route diagnostics card (including the real reason codes, such as `safe_mode` / `gpu_effects_opt_in_required`) lives on the "System & hardware" page. Theme drop-down and tray-menu entries are labelled ` (GPU material)` / ` (GDI+)`. The old "Live glass" switch has been removed; the GPU route's "Live desktop background" replaces it (old config values are migrated to off on load).
+Settings → **Main panel** hosts the GPU route switches ("GPU material rendering" / "Live desktop background") right below the theme selector, with a route status line showing the theme's declared route and the route actually in effect; the dedicated **"Rendering route"** page carries the full diagnostics (including the real reason codes, such as `safe_mode` / `gpu_effects_opt_in_required`). Theme drop-down and tray-menu entries are labelled ` (GPU material)` / ` (GDI+)`. The old "Live glass" switch has been removed; the GPU route's "Live desktop background" replaces it (old config values are migrated to off on load).
 
 ### Support Matrix
 
@@ -211,7 +211,7 @@ Source lives under `src/` (paths below are relative to `src/`; `LiteMonitor.Upda
 | `UI/UILayout.cs` | Dynamic vertical layout calculation |
 | `UI/HorizontalLayout.cs` | Column width and total panel width calculation |
 | `UI/Decor/` | GDI+ decoration layer (frame, bars, geometry, texture cache) |
-| `UI/Settings/` | Settings pages (main panel, taskbar, monitor items, thresholds, system & hardware, plugins, plugin market, theme market, scenarios, diagnostics) |
+| `UI/Settings/` | Settings pages (main panel, rendering route, taskbar, monitor items, thresholds, system & hardware, plugins, plugin market, theme market, scenarios, diagnostics) |
 | `Core/Actions/` | App action aggregation: program actions, settings changes, web actions |
 | `Core/Alerts/` | Rule-based alerts: models, evaluator, runtime and legacy threshold migration |
 | `Core/Scenarios/` | Scenario profiles: profiles, preflight, apply coordination and projection |

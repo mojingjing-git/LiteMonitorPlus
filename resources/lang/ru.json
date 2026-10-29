@@ -93,6 +93,7 @@
     "ThemeMarketEmpty": "В магазине тем пока нет тем",
     "RouteSuffixGpu": " (GPU-материал)",
     "RouteSuffixGdi": " (GDI+)",
+    "RenderingRoute": "Маршрут рендеринга",
     "RouteStatus": {
       "LegacyTheme": "Эта тема рендерится через унаследованный маршрут GDI+ (GPU-материал не объявлен).",
       "GpuRunning": "GPU-материал работает.",

@@ -93,6 +93,7 @@
     "ThemeMarketEmpty": "テーママーケットにはまだテーマがありません",
     "RouteSuffixGpu": "（GPUマテリアル）",
     "RouteSuffixGdi": "（GDI+）",
+    "RenderingRoute": "レンダリングルート",
     "RouteStatus": {
       "LegacyTheme": "このテーマは GDI+ 旧ルートで描画されます（GPU マテリアル未宣言）。",
       "GpuRunning": "GPU マテリアル実行中。",

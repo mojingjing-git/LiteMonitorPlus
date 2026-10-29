@@ -221,6 +221,9 @@ namespace LiteMonitor.src.UI
             
             // 注册所有页面
             AddNav("MainPanel", LanguageManager.T("Menu.MainFormSettings"), new MainPanelPage());
+            // ★「渲染路线」页：只读状态与诊断（开关在主面板页）。放主面板之后，
+            //   让"改开关"与"看原因码"在同一处可达，不必在两页之间猜。
+            AddNav("Rendering", LanguageManager.T("Menu.RenderingRoute"), new RenderingRoutePage());
             AddNav("Taskbar", LanguageManager.T("Menu.TaskbarSettings"), new TaskbarPage());
             AddNav("Monitor", LanguageManager.T("Menu.MonitorItemDisplay"), new MonitorPage());
             AddNav("Threshold", LanguageManager.T("Menu.Thresholds"), new ThresholdPage());

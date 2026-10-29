@@ -93,6 +93,7 @@
     "ThemeMarketEmpty": "Aún no hay temas en el mercado",
     "RouteSuffixGpu": " (material GPU)",
     "RouteSuffixGdi": " (GDI+)",
+    "RenderingRoute": "Ruta de renderizado",
     "RouteStatus": {
       "LegacyTheme": "Este tema renderiza por la ruta GDI+ heredada (sin material GPU declarado).",
       "GpuRunning": "Material GPU en ejecución.",

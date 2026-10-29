@@ -164,13 +164,9 @@ namespace LiteMonitor.src.UI.SettingsPage
             //   配置值由 SettingsHelper 每次加载强制置 false；UIController 的玻璃机器保留
             //   （GDI+ 兜底路径 + 句柄代次消费方，LiveGlassRebuildWiringTests 护栏不因本次改动放宽）。
 
-            // 6. 渲染路线状态行（只读摘要，跟随当前主题与 GPU 运行态刷新；完整诊断卡在「系统与硬件」页）。
-            Label routeStatusLabel = RenderingRouteStatusView.MakeValueLabel();
-            routeStatusLabel.Text = RenderingRouteStatusView.ComposeStatusSummary(Config, UI, MainForm, Chinese);
-            group.AddFullItem(new LiteSettingsItem(
-                GetText("渲染路线", "Rendering route"), routeStatusLabel));
-            RegisterRefresh(() => routeStatusLabel.Text =
-                RenderingRouteStatusView.ComposeStatusSummary(Config, UI, MainForm, Chinese));
+            // ★ 渲染路线状态行已迁入下方「渲染路线（GPU · DirectX 11）」卡的顶部 ——
+            //   路线状态必须与它的开关同处一张卡：状态在外观卡、开关在另一张卡会让人
+            //   以为"渲染路线页没迁过来"。完整诊断（原因码、守卫状态）在「系统与硬件」页。
 
             AddGroupToPage(group);
 
@@ -182,7 +178,19 @@ namespace LiteMonitor.src.UI.SettingsPage
         // ================================================================
         private void CreateGpuRouteCard()
         {
-            var group = new LiteSettingsGroup(GetText("GPU 路线（DirectX 11）", "GPU route (DirectX 11)"));
+            var group = new LiteSettingsGroup(GetText("渲染路线（GPU · DirectX 11）", "Rendering route (GPU · DirectX 11)"));
+
+            // ★ 当前生效路线（只读摘要）：与开关同卡 ⇒ 一眼看清"这个主题走哪条路线"。
+            //   跟随主题切换与 GPU 运行态刷新；完整诊断在「系统与硬件」页。
+            Label routeStatusLabel = RenderingRouteStatusView.MakeValueLabel();
+            routeStatusLabel.Text = RenderingRouteStatusView.ComposeStatusSummary(Config, UI, MainForm, Chinese);
+            group.AddFullItem(new LiteSettingsItem(
+                GetText("当前路线", "Current route"), routeStatusLabel));
+            RegisterRefresh(() => routeStatusLabel.Text =
+                RenderingRouteStatusView.ComposeStatusSummary(Config, UI, MainForm, Chinese));
+            group.AddHint(GetText(
+                "完整诊断（实际生效路线与原因码）在「系统与硬件」页。",
+                "Full diagnostics (effective route and reason codes) are on the System & Hardware page."));
 
             group.AddToggle(
                 this,
