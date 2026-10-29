@@ -1,0 +1,15 @@
+[
+  {
+    "Kind": "Gpu",
+    "Slot": "0",
+    "StableId": "pnp:PCI\\VEN_10DE\u0026DEV_2206\u0026SUBSYS_146D10DE\u0026REV_A1\\4\u002619aa7bb9\u00260\u00260019",
+    "RuntimeId": "/gpu-nvidia/0",
+    "DisplayName": "NVIDIA GeForce RTX 3080",
+    "Manual": false,
+    "Attributes": {
+      "name": "NVIDIA GeForce RTX 3080",
+      "lhmIdentifier": "/gpu-nvidia/0"
+    },
+    "UpdatedTimestamp": 405856598333
+  }
+]

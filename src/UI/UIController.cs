@@ -15,6 +15,7 @@ using LiteMonitor.Rendering.Scene;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -72,6 +73,21 @@ namespace LiteMonitor
         private GpuPresentationHostController? _gpuPresentation;
         private RenderingRouteDecision? _gpuRoute;
         private string? _gpuFallbackCode;
+
+        /// <summary>上一次写入排障日志的状态快照（用于只在状态变化时落一行）。</summary>
+        private string? _lastGpuDiagnosticSnapshot;
+
+        /// <summary>上一次采样到的已呈现帧数（用于判定"呈现停滞"）。</summary>
+        private int _lastPresentedFrameCount;
+
+        /// <summary>上一次呈现有进展的时间点。</summary>
+        private DateTimeOffset _lastPresentProgressUtc = DateTimeOffset.UtcNow;
+
+        /// <summary>呈现停滞自愈预算（避免无限重建）。</summary>
+        private int _presentStallRecoveryBudget = 3;
+
+        /// <summary>两次停滞自愈之间的最小间隔。</summary>
+        private DateTimeOffset _presentStallCooldownUntil = DateTimeOffset.MinValue;
         private bool _updatingGpuScene;
 
         // ===== GPU 启动的「延迟一次」重试 =====
@@ -160,6 +176,113 @@ namespace LiteMonitor
         public string GpuPresentationDiagnosticText() =>
             _gpuPresentation?.PresentationDiagnosticText()
             ?? "GPU 宿主未创建（当前未走 GPU 路线）。";
+
+        /// <summary>
+        /// 【呈现停滞自愈】GPU 路由正确、宿主已激活，但**呈现帧数长时间不增长**
+        /// （用户看不到玻璃画面）⇒ 重建宿主。
+        /// <para>★ 触发条件（全部满足才动手，避免误伤正常场景）：
+        /// 路由为 GPU 且宿主 IsActive；窗口可见且未最小化；宿主未挂起；
+        /// 已呈现帧数连续 2.5 秒没有增长；预算未耗尽；不在冷却期内。</para>
+        /// <para>★ 窗口不可见 / 最小化 / 宿主挂起时**不判定为停滞** ——
+        /// 这些状态下呈现本就会停（省电模式、后台运行）。</para>
+        /// </summary>
+        private void RecoverStalledGpuPresentation()
+        {
+            try
+            {
+                if (_disposed || _form.IsDisposed) return;
+                if (_gpuRoute?.IsGpu != true || _gpuPresentation is null) return;
+                if (!_gpuPresentation.IsActive) return;
+                if (_gpuPresentation.IsSuspended) return;
+                if (!_form.Visible || _form.WindowState == FormWindowState.Minimized) return;
+                if (!_transition.CanStartGpuPresentation) return;
+
+                int frames = _gpuPresentation.PresentedFrameCount;
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+                if (frames != _lastPresentedFrameCount)
+                {
+                    _lastPresentedFrameCount = frames;
+                    _lastPresentProgressUtc = now;
+                    return;
+                }
+
+                if (now - _lastPresentProgressUtc < TimeSpan.FromSeconds(2.5)) return;
+                if (_presentStallRecoveryBudget <= 0) return;
+                if (now < _presentStallCooldownUntil) return;
+
+                _presentStallRecoveryBudget--;
+                _presentStallCooldownUntil = now + TimeSpan.FromSeconds(3);
+                _lastPresentProgressUtc = now;
+                _lastPresentedFrameCount = 0;
+
+                RebuildGpuPresentationHost();
+            }
+            catch (Exception)
+            {
+                // 自愈失败不应让主流程崩掉；真正的失败仍由宿主的失败上报走正常降级路径。
+            }
+        }
+
+        /// <summary>
+        /// 【排障日志】把 GPU 呈现链的关键状态追加到
+        /// <c>%LOCALAPPDATA%\LiteMonitor++\gpu-diagnostics.log</c>。
+        /// <para>
+        /// 仅在状态**变化**时写一行：玻璃"切不出来、拖到另一块屏就好"这类问题
+        /// 只在特定机器上复现（本地多屏 × 实时背景全组合均正常），
+        /// 有这份日志就不必让用户手工抄界面读数——复现后把该文件发回即可定位。
+        /// </para>
+        /// </summary>
+        private void RecordGpuDiagnosticsIfChanged()
+        {
+            try
+            {
+                string screen = "unknown";
+                try
+                {
+                    if (_form.IsHandleCreated)
+                    {
+                        screen = Screen.FromControl(_form).DeviceName;
+                    }
+                }
+                catch (Exception)
+                {
+                    // 取不到屏幕信息不影响日志本身。
+                }
+
+                string snapshot = string.Join(
+                    " | ",
+                    "screen=" + screen,
+                    "loc=" + _form.Location.X + "," + _form.Location.Y,
+                    "size=" + _form.Width + "x" + _form.Height,
+                    "route=" + (_gpuRoute?.Route.ToString() ?? "none"),
+                    "capture=" + (_gpuRoute?.CaptureRequested == true ? "on" : "off"),
+                    "fallback=" + (_gpuFallbackCode ?? "none"),
+                    "diag=" + GpuPresentationDiagnosticText().Replace("\r", " ").Replace("\n", " ; "));
+                if (string.Equals(snapshot, _lastGpuDiagnosticSnapshot, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                _lastGpuDiagnosticSnapshot = snapshot;
+
+                string directory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "LiteMonitor++");
+                Directory.CreateDirectory(directory);
+                string path = Path.Combine(directory, "gpu-diagnostics.log");
+                // 体积控制：超过 512 KB 就重开一份，避免长期运行无限增长。
+                if (File.Exists(path) && new FileInfo(path).Length > 512 * 1024)
+                {
+                    File.WriteAllText(path, string.Empty);
+                }
+                File.AppendAllText(
+                    path,
+                    $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff} {snapshot}{Environment.NewLine}");
+            }
+            catch (Exception)
+            {
+                // 排障日志写失败绝不能影响主流程。
+            }
+        }
 
         public UIController(Settings cfg, Form form)
         {
@@ -669,6 +792,10 @@ namespace LiteMonitor
 
             // 旧宿主已不可用 ⇒ 重新走一遍"停止 → 建宿主 → 启动"。
             // 此时上一台设备的释放通常已经完成，不再撞瞬态错误。
+            // ★ 这里刻意**内联**三步（不抽成共用方法）：
+            //   护栏测试 GpuStartRetryGateTests.护栏_延迟重试到期必须重建宿主而不是复用失败的宿主
+            //   会用 IL 校验本方法内直接出现 Stop/Create/Start 三个调用 ⇒ 抽走会被判失败。
+            //   呈现停滞自愈走 RebuildGpuPresentationHost（同一语义，另一条触发路径）。
             StopGpuPresentation();
             _transition.NextHostGeneration();
             _gpuPresentation = CreateGpuPresentationHost(
@@ -681,6 +808,33 @@ namespace LiteMonitor
                 _transition.PublishStable(_gpuRoute.Route);
                 UpdateGpuScene();
             }
+        }
+
+        /// <summary>
+        /// 重建 GPU 宿主并重新启动（"停止 → 新代次 → 建宿主 → 启动"）。
+        /// <para>★ 两处复用：启动失败的**延迟重试**（fix3）与
+        /// **呈现停滞自愈**（本方法被 <see cref="RecoverStalledGpuPresentation"/> 调用）。</para>
+        /// <returns><c>true</c> = 重建并启动成功。</returns>
+        private bool RebuildGpuPresentationHost()
+        {
+            if (_disposed || _form.IsDisposed) return false;
+            RenderingRouteDecision? route = _gpuRoute;
+            if (route is null || !route.IsGpu) return false;
+
+            StopGpuPresentation();
+            _transition.NextHostGeneration();
+            _gpuPresentation = CreateGpuPresentationHost(
+                route.EffectiveMaterial,
+                route.CaptureRequested,
+                ThemeManager.Current.Rendering,
+                ThemeManager.Current);
+            if (StartGpuPresentation())
+            {
+                _transition.PublishStable(route.Route);
+                UpdateGpuScene();
+                return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -1144,6 +1298,18 @@ namespace LiteMonitor
                 //   ★ 本处是 UI 消息循环（Timer 回调）⇒ 不在 OnPaint / WndProc 销毁回调 /
                 //     GPU 帧绘制栈内（计划 §4.3 :169）。
                 PumpGpuFailureFallback();
+
+                // ★【排障】GPU 呈现链状态**一变**就追加一行本地诊断日志
+                //   （%LOCALAPPDATA%\LiteMonitor++\gpu-diagnostics.log）。
+                //   玻璃"切不出来"这类问题只在特定机器上复现（本地多屏+实时背景全组合
+                //   均正常），有这份日志就不必让用户手工抄界面读数。
+                RecordGpuDiagnosticsIfChanged();
+
+                // ★【自愈】"GPU 路线已激活但一帧都没呈现出来"的停滞恢复：
+                //   用户症状 = 切主题时玻璃出不来，把窗口拖到另一块屏就正常了。
+                //   本地多屏 × 实时背景全组合均正常 ⇒ 依赖特定机器的 DWM/驱动合成时序。
+                //   停滞超时后重建宿主（与"拖屏"等效：迫使 DWM 重新合成表面）。
+                RecoverStalledGpuPresentation();
 
                 // ★★【GPU T03 / 合同 §8.4 / §4.4 / U11】Tick 兜底的**启动守卫** ★★
                 //   既有口径是 `_gpuRoute?.IsGpu == true`（只看期望路由）⇒ 普通 Tick 会把 GPU

@@ -994,6 +994,14 @@ public sealed class GpuPresentationHostController : IDisposable
     public void ResetPerformanceWindows() =>
         _renderer?.ResetPerformanceWindows();
 
+    /// <summary>
+    /// 已呈现帧数（上层据此判定"呈现停滞"）。
+    /// <para>★ 典型症状：宿主 <see cref="IsActive"/> 为真、路由正确，但画面不出现
+    /// （用户表现为"切主题时玻璃出不来，把窗口拖到另一块屏就正常了"）。
+    /// 上层据此在停滞超时后重建宿主，与"拖屏"等效地迫使 DWM 重新合成表面。</para>
+    /// </summary>
+    public int PresentedFrameCount => _renderer?.PresentedFrameCount ?? 0;
+
     public PresentationDiagnostics? PresentationDiagnostics() =>
         _sessionOwner.Session?.Diagnostics(_capturePolicy);
 

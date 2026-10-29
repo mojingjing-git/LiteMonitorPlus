@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    主题切换复现探针（UI 视觉/液态玻璃排查用）。
+    - 场景 A：legacy 主题启动 → **运行中**切到玻璃主题（= 用户报障的动作序列）。
+    - 场景 B：启动即玻璃主题（= 用户"退出重启后能直接切出来"的状态）。
+    每次切换后截图 + 导出 GPU 诊断（激活状态 / 呈现帧数 / 错误码 / 路由 / 捕获状态）。
+    不进 sln；跑完自删 settings.json，避免污染下一次运行环境。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>ThemeSwitchReproProbe</RootNamespace>
+    <AssemblyName>ThemeSwitchReproProbe</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <OutputPath>output\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <NoWarn>$(NoWarn);CS8600;CS8602;CS8603;CS8604;CS8618;CS8619;CS8625</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\LiteMonitor.csproj" />
+  </ItemGroup>
+
+</Project>
