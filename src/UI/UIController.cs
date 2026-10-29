@@ -153,6 +153,14 @@ namespace LiteMonitor
         public bool IsGpuLiveBackgroundRequested => _gpuRoute?.CaptureRequested == true;
         public string? GpuRuntimeFailure => _gpuPresentation?.LastErrorCode ?? _gpuFallbackCode;
 
+        /// <summary>
+        /// 【诊断】GPU 呈现链的真实状态（设置页「渲染路线」页展示）：
+        /// 渲染适配器、是否覆盖窗口所在显示器、呈现帧数、捕获状态与原因码。
+        /// </summary>
+        public string GpuPresentationDiagnosticText() =>
+            _gpuPresentation?.PresentationDiagnosticText()
+            ?? "GPU 宿主未创建（当前未走 GPU 路线）。";
+
         public UIController(Settings cfg, Form form)
         {
             _cfg = cfg;

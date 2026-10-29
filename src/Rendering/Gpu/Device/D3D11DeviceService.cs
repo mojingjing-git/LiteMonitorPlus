@@ -84,7 +84,8 @@ public sealed class D3D11DeviceService : IDisposable
         RenderGenerations generations,
         out D3D11DeviceService? service,
         out string? errorCode,
-        out string? errorMessage)
+        out string? errorMessage,
+        IDXGIAdapter? adapterOverride = null)
     {
         ArgumentNullException.ThrowIfNull(ledger);
 
@@ -100,9 +101,11 @@ public sealed class D3D11DeviceService : IDisposable
                 FeatureLevel.Level_10_1,
                 FeatureLevel.Level_10_0
             ];
+            // ★ 传指定适配器时 DXGI 要求 DriverType 必须是 UNKNOWN
+            //   （驱动类型与显式适配器互斥，否则 D3D11CreateDevice 失败）。
             D3D11.D3D11CreateDevice(
-                null,
-                DriverType.Hardware,
+                adapterOverride,
+                adapterOverride is null ? DriverType.Hardware : DriverType.Unknown,
                 DeviceCreationFlags.BgraSupport,
                 levels,
                 out device,

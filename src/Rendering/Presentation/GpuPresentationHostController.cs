@@ -967,6 +967,30 @@ public sealed class GpuPresentationHostController : IDisposable
     public GpuSceneRendererDiagnostics? Diagnostics() =>
         _renderer?.Diagnostics();
 
+    /// <summary>
+    /// 【诊断】GPU 呈现链的真实状态（供设置页展示）：渲染适配器、呈现帧数、捕获状态与原因码。
+    /// <para>★ 面向用户排障：区分"从未尝试呈现"（呈现尝试 = 0）与
+    /// "呈现了但被别的层盖住"，以及"实时捕获拿不到该屏"（捕获原因码）。</para>
+    /// </summary>
+    public string PresentationDiagnosticText()
+    {
+        GpuSceneRenderer? renderer = _renderer;
+        if (renderer is null)
+        {
+            return "GPU 渲染器未创建（当前未走 GPU 路线）。";
+        }
+
+        GpuSceneRendererDiagnostics diagnostics = renderer.Diagnostics();
+        return string.Join(
+            Environment.NewLine,
+            $"渲染适配器: {diagnostics.AdapterName}",
+            $"适配器覆盖窗口所在显示器: {(renderer.AdapterCoversWindowMonitor() ? "是" : "否")}",
+            $"呈现尝试 / 已呈现: {renderer.PresentAttemptCount} / {renderer.PresentedFrameCount}",
+            $"捕获状态: {diagnostics.CaptureState}",
+            $"捕获原因码: {diagnostics.CaptureCode ?? "（无）"}",
+            $"捕获说明: {diagnostics.CaptureMessage ?? "（无）"}");
+    }
+
     public void ResetPerformanceWindows() =>
         _renderer?.ResetPerformanceWindows();
 

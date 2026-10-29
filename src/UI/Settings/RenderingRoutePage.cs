@@ -41,6 +41,7 @@ namespace LiteMonitor.src.UI.SettingsPage
 
             CreateStatusCard();
             CreateGpuOptionsCard();
+            CreatePresentationDiagnosticsCard();
 
             _container.ResumeLayout();
             _isLoaded = true;
@@ -105,6 +106,33 @@ namespace LiteMonitor.src.UI.SettingsPage
                 liveLabel.Text = Config.GpuLiveBackgroundEnabled
                     ? GetText("已开启", "Enabled")
                     : GetText("已关闭", "Disabled");
+            });
+
+            AddGroupToPage(group);
+        }
+
+        /// <summary>
+        /// GPU 呈现诊断卡：把"画面出不来"的原因变成可核对的事实
+        /// （渲染适配器 / 是否覆盖窗口所在屏 / 呈现帧数 / 捕获状态与原因码）。
+        /// </summary>
+        private void CreatePresentationDiagnosticsCard()
+        {
+            var group = new LiteSettingsGroup(GetText("GPU 呈现诊断", "GPU presentation diagnostics"));
+
+            var detailRow = new FullWidthDetailRow(string.Empty);
+            group.AddFullItem(detailRow);
+
+            group.AddHint(GetText(
+                "「呈现尝试 / 已呈现」为 0 表示 GPU 一帧都没画出来；适配器不覆盖窗口所在显示器时，"
+                + "混合显卡机器上需要把窗口移到该显卡直接驱动的屏幕上，或在系统里调整显示接线。",
+                "A '0 / 0' attempt/presented count means the GPU never drew a frame. "
+                + "When the adapter does not cover the window's monitor (common on hybrid-graphics laptops), "
+                + "move the window to a monitor driven by that adapter, or change the display cabling."));
+
+            RegisterRefresh(() =>
+            {
+                detailRow.DetailText = UI?.GpuPresentationDiagnosticText()
+                    ?? GetText("（未取到渲染控制器）", "(renderer unavailable)");
             });
 
             AddGroupToPage(group);

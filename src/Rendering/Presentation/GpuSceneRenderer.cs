@@ -324,6 +324,27 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
     public int PresentAttemptCount => _presentAttempts;
 
     /// <summary>
+    /// 【诊断】当前渲染适配器是否驱动着窗口所在的显示器。
+    /// <para>★ 关键判据：混合显卡机器上，窗口所在屏可能只接在核显上，
+    /// 而渲染适配器（默认多为独显）不覆盖该屏 ⇒ 交换链无法呈现、实时捕获也拿不到画面。
+    /// 这条判定把"画面出不来"的原因从模糊的"启动失败"变成可核对的事实。</para>
+    /// </summary>
+    public bool AdapterCoversWindowMonitor()
+    {
+        try
+        {
+            using IDXGIDevice dxgiDevice = _deviceService.Device.QueryInterface<IDXGIDevice>();
+            using IDXGIAdapter adapter = dxgiDevice.GetAdapter();
+            return GpuAdapterSelector.AdapterCoversMonitor(
+                adapter,
+                MonitorFromWindow(_windowHandle, 2));
+        }
+        catch (Exception exception) when (exception is SharpGenException or COMException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+    /// <summary>
     /// 【诊断 / 合同 §2 维度 6】合成器已接受的呈现帧数（&gt; 0 ⇒ 已成功呈现）。
     /// </summary>
     public int PresentedFrameCount => _presentedFrames;
@@ -412,15 +433,35 @@ public sealed class GpuSceneRenderer : IDisposable, IFixedBackgroundTarget
             return false;
         }
 
+        // ★ 按窗口所在显示器选择渲染适配器（混合显卡机器的关键）：
+        //   默认适配器（通常独显）可能并不驱动窗口所在屏 ⇒ 交换链呈现不出来、
+        //   Desktop Duplication 也抓不到该屏（capture_output_not_on_render_adapter）。
+        //   现象就是"切液态玻璃没反应，拖到另一块屏才正常"。
+        //   选不到覆盖该屏的适配器时回退默认适配器（保持既有行为，由后续错误码暴露）。
+        IntPtr windowMonitor = MonitorFromWindow(windowHandle, 2);
+        IDXGIAdapter? renderAdapter = null;
+        try
+        {
+            renderAdapter = GpuAdapterSelector.SelectAdapterForMonitor(windowMonitor);
+        }
+        catch (Exception exception) when (exception is SharpGenException or COMException)
+        {
+            renderAdapter = null;
+        }
+
         if (!D3D11DeviceService.TryCreate(
                 ledger,
                 generations,
                 out D3D11DeviceService? deviceService,
                 out errorCode,
-                out errorMessage))
+                out errorMessage,
+                renderAdapter))
         {
+            renderAdapter?.Dispose();
             return false;
         }
+
+        renderAdapter?.Dispose();
 
         try
         {
