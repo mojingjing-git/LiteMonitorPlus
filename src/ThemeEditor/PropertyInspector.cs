@@ -578,6 +578,14 @@ namespace LiteMonitor.ThemeEditor
                 if (_refreshing || _combo is null || _combo.SelectedIndex < 0) return;
                 string? value = _combo.SelectedItem as string;
                 if (value is null) return;
+                // 结构变更会整体重建检查器（Dispose 全部行控件）。下拉展开中的键盘
+                // 导航同样触发本提交——先收起下拉、释放控件的消息状态，再进入异步
+                // 重建，避免稍后的 Dispose 命中仍处于展开/捕获状态的 ComboBox
+                //（原生访问冲突会让整个进程闪退）。
+                if (ChangesPropertyStructure(_p) && _combo.DroppedDown)
+                {
+                    _combo.DroppedDown = false;
+                }
                 Submit(value);
             }
 

@@ -535,6 +535,7 @@
   "LiteMonitor.Tests|LiteMonitor.Tests.FlagshipGpuThemeTests.Theme_FileExists_AndDeserializesSuccessfully": 3,
   "LiteMonitor.Tests|LiteMonitor.Tests.FlagshipGpuThemeTests.Theme_LayoutFontColor_ConformToContract": 3,
   "LiteMonitor.Tests|LiteMonitor.Tests.FlagshipGpuThemeTests.Theme_RenderingValidate_ZeroErrorsAndZeroDiagnostics": 3,
+  "LiteMonitor.Tests|LiteMonitor.Tests.FlagshipGpuThemeTests.\u9884\u8BBE\u4E0B\u62C9\u5C55\u5F00\u4E2D\u5207\u6362\u9009\u9879_\u5F02\u6B65\u91CD\u5EFA\u4E0D\u5D29\u6E83": 1,
   "LiteMonitor.Tests|LiteMonitor.Tests.FontMeasureSafetyTests.\u4E0D\u540C\u5B57\u53F7\u6216\u4E0D\u540C\u5B57\u4F53\u65CF\u843D\u5728\u4E0D\u540C\u7684\u7F13\u5B58\u952E\u4E0A": 1,
   "LiteMonitor.Tests|LiteMonitor.Tests.FontMeasureSafetyTests.\u4E3B\u9898\u4EE3\u6B21\u63A8\u8FDB\u540E\u540C\u4E00\u5B57\u4F53\u7684\u5EA6\u91CF\u6309\u65B0\u4EE3\u6B21\u91CD\u7B97": 1,
   "LiteMonitor.Tests|LiteMonitor.Tests.FontMeasureSafetyTests.\u4E3B\u9898\u5B57\u4F53\u5DF2\u88AB\u91CA\u653E\u65F6\u4E0D\u629B\u5F02\u5E38\u4E14\u4FDD\u7559\u6700\u5C0F\u5E03\u5C40": 1,

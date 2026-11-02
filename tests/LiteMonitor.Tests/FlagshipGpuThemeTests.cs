@@ -391,6 +391,66 @@ public sealed class FlagshipGpuThemeTests : IDisposable
     // ================================================================
 
     [Fact]
+    public void 预设下拉展开中切换选项_异步重建不崩溃()
+    {
+        // 回归：用户在下拉展开状态下切换预设（键盘导航/鼠标点击都会在展开中触发
+        // SelectedIndexChanged）。结构变更的重建异步派发后，回调会 Dispose 全部行控件；
+        // 若提交时下拉仍展开（键盘捕获未释放），Dispose 展开中的 ComboBox 会触发
+        // 原生访问冲突导致整个进程闪退。提交路径必须先收起下拉再进入异步重建。
+        RunSta(() =>
+        {
+            const string themeName = "EditableGpuTheme";
+            string themeDir = Path.Combine(_tempDir, "studio-themes-dd");
+            string recoveryDir = Path.Combine(_tempDir, "studio-recovery-dd");
+            Directory.CreateDirectory(themeDir);
+            Directory.CreateDirectory(recoveryDir);
+            File.WriteAllText(
+                Path.Combine(themeDir, themeName + ".json"),
+                EditableGpuThemeJson,
+                new UTF8Encoding(false));
+
+            ThemeDocumentStore.SetThemeDirForTests(themeDir);
+            ThemeDocumentStore.SetRecoveryDirForTests(recoveryDir);
+            try
+            {
+                using var form = new ThemeStudioForm();
+                form.Show();
+                form.OpenThemeForTesting(themeName);
+                form.SelectTargetForTesting(ThemeEditTarget.GpuMain);
+
+                const string presetPath = "rendering.parameters.visualPreset";
+                PropertyInspector inspector = form.InspectorForTesting;
+                ComboBox combo =
+                    Assert.IsType<ComboBox>(inspector.EditorForTesting(presetPath));
+
+                // 模拟真实用户操作：展开下拉 → 展开中切换到命名预设。
+                combo.DroppedDown = true;
+                Assert.True(combo.DroppedDown, "前提：下拉已展开");
+                combo.SelectedIndex = 1;
+
+                // 泵消息：此时执行异步重建（Dispose 展开中的旧树）。
+                Application.DoEvents();
+                Application.DoEvents();
+
+                ComboBox rebuilt =
+                    Assert.IsType<ComboBox>(inspector.EditorForTesting(presetPath));
+                Assert.Equal(
+                    ThemeRenderingConfig.NebulaAuroraVisualPreset,
+                    rebuilt.SelectedItem);
+                Assert.False(rebuilt.DroppedDown, "重建后的下拉不得保持展开");
+                Assert.Equal(
+                    ThemeRenderingConfig.NebulaAuroraVisualPreset,
+                    form.SessionForTesting!.Draft.Rendering!.Parameters["visualPreset"].GetString());
+            }
+            finally
+            {
+                ThemeDocumentStore.SetThemeDirForTests(null);
+                ThemeDocumentStore.ResetRecoveryDir();
+            }
+        });
+    }
+
+    [Fact]
     public void ThemeStudioVisualPresetChoiceRebuildsPropertiesAcrossResetUndoAndRedo()
     {
         RunSta(() =>
