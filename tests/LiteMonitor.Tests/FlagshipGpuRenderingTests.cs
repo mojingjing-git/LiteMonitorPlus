@@ -34,23 +34,55 @@ public sealed class FlagshipGpuRenderingTests : IDisposable
         Directory.CreateDirectory(_tempDir);
     }
 
-    [Fact]
-    public void 工作室预览诊断_快照与刷新耗时()
+    public static TheoryData<string> StudioGpuThemes => new()
+    {
+        "CosmicAurora_Nebula_GPU",
+        "CyberPunk_GPU",
+        "LiquidGlass_GPU",
+        "LiquidGlass_Toolbar_GPU",
+        "NixieTube_Brass_GPU",
+        "RetroCRT_Phosphor_GPU"
+    };
+
+    [Theory]
+    [MemberData(nameof(StudioGpuThemes))]
+    public void 工作室预览诊断_快照与刷新耗时(string themeName)
     {
         // 诊断探针：导出工作室 GPU 预览的实际渲染帧（供人工比对"预览不对"），
         // 并测量连续 RefreshPreviewNow 的耗时分布（模拟连续编辑的防抖触发）。
         string diagDir = Path.Combine(
             AppContext.BaseDirectory, "..", "..", "..", "..", "TestResults", "studio-preview-diag");
         Directory.CreateDirectory(diagDir);
-        string capturePath = Path.Combine(diagDir, "studio-crt-preview.png");
+        string capturePath = Path.Combine(diagDir, "studio-" + themeName + "-preview.png");
 
         RunSta(() =>
         {
+            var phases = new List<string>();
+            var phaseWatch = System.Diagnostics.Stopwatch.StartNew();
+            string diagPath = Path.Combine(diagDir, themeName + "-diag.txt");
+
+            // 每个阶段即时落盘：STA 线程挂死时，文件里最后一个阶段就是卡点。
+            void Report(string stage)
+            {
+                phases.Add($"{stage}={phaseWatch.ElapsedMilliseconds}ms");
+                File.WriteAllText(diagPath, string.Join(Environment.NewLine, phases));
+                phaseWatch.Restart();
+            }
+
+            // 恢复草稿目录必须隔离：真实用户目录的遗留 recovery 会让 OpenTheme
+            // 弹出无人应答的模态对话框，把 STA 探针挂死。
+            string sandboxRecovery = Path.Combine(diagDir, "recovery");
+            Directory.CreateDirectory(sandboxRecovery);
+            ThemeDocumentStore.SetRecoveryDirForTests(sandboxRecovery);
+
             using var form = new ThemeStudioForm();
             form.Show();
-            form.OpenThemeForTesting("RetroCRT_Phosphor_GPU");
+            Report("form-shown");
+            form.OpenThemeForTesting(themeName);
+            Report("opened");
             form.SelectTargetForTesting(ThemeEditTarget.GpuMain);
             Application.DoEvents();
+            Report("target-selected");
 
             for (int i = 0; i < 100 &&
                 form.PreviewControlForTesting?.IsGpuPreviewActive != true; i++)
@@ -58,8 +90,10 @@ public sealed class FlagshipGpuRenderingTests : IDisposable
                 Thread.Sleep(20);
                 Application.DoEvents();
             }
+            Report("activate-wait");
 
             bool captured = form.PreviewCaptureForTesting(capturePath);
+            Report($"capture={captured}");
             ThemePreviewControl? shell = form.PreviewControlForTesting;
 
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -69,13 +103,14 @@ public sealed class FlagshipGpuRenderingTests : IDisposable
                 Application.DoEvents();
             }
             stopwatch.Stop();
+            Report("20refresh");
 
+            phases.Add(shell?.PreviewDiagnosticsForTesting ?? "<no shell>");
+            phases.Add($"20refresh-total={stopwatch.ElapsedMilliseconds}ms");
+            File.WriteAllText(diagPath, string.Join(Environment.NewLine, phases));
+            ThemeDocumentStore.ResetRecoveryDir();
             Assert.True(captured,
                 $"GPU 预览快照失败: {shell?.PreviewDiagnosticsForTesting ?? "<no shell>"}");
-            File.WriteAllText(
-                Path.Combine(diagDir, "diag.txt"),
-                shell?.PreviewDiagnosticsForTesting + Environment.NewLine +
-                $"20 次刷新耗时: {stopwatch.ElapsedMilliseconds}ms（每次 {stopwatch.ElapsedMilliseconds / 20.0:F1}ms）");
             Assert.True(
                 stopwatch.ElapsedMilliseconds < 2000,
                 $"20 次预览刷新耗时 {stopwatch.ElapsedMilliseconds}ms（每次 {stopwatch.ElapsedMilliseconds / 20.0:F1}ms）");
