@@ -699,11 +699,35 @@ namespace LiteMonitor.ThemeEditor
                 bool layoutDirty = _themeChanged ||
                     Math.Abs(_layoutDpiScale - dpiScale) > 0.01f ||
                     _lastLayoutWidth != content.Width;
-                if (layoutDirty && _layout is not null)
+                if (layoutDirty && _theme is not null)
                 {
                     _layoutDpiScale = dpiScale;
                     _lastLayoutWidth = content.Width;
+
+                    // 生产同源：布局宽度 = 画布客户区像素宽（面板宽度随窗口变化）。
+                    // UILayout 构建于自己的主题副本，必须带着新宽度重建，改 _theme 无效。
+                    Theme layoutTheme = CreatePreviewTheme(_theme, dpiScale);
+                    if (layoutTheme.Layout is not null)
+                    {
+                        layoutTheme.Layout.Width = Math.Max(1, content.Width);
+                    }
+                    _layout = new UILayout(layoutTheme);
                     int builtHeight = _layout.Build(_groups);
+
+                    // 顶部保护：首组面板从布局 Y=Padding 起，面板描边/圆角向上溢出的
+                    // 1-2px 会被位图上缘裁掉（"上半部分吞一点"）。所有组整体下移
+                    // 2×DPI，位图与场景同高——GPU/GDI 共用同一份 groups，两路一致。
+                    int topPad = (int)Math.Ceiling(2 * dpiScale);
+                    if (topPad > 0)
+                    {
+                        foreach (GroupLayoutInfo group in _groups)
+                        {
+                            Rectangle b = group.Bounds;
+                            group.Bounds = new Rectangle(b.X, b.Y + topPad, b.Width, b.Height);
+                        }
+                        builtHeight += topPad;
+                    }
+
                     _lastLayoutHeight = Math.Max(1, builtHeight);
                 }
 
@@ -711,7 +735,7 @@ namespace LiteMonitor.ThemeEditor
                 Theme previewTheme = GetPreviewTheme(dpiScale);
 
                 int bmpH = Math.Max(1, _lastLayoutHeight);
-                var requiredSize = new Size(Math.Max(1, previewTheme.Layout.Width), bmpH);
+                var requiredSize = new Size(Math.Max(1, content.Width), bmpH);
 
                 // ★★★ 核心优化：复用 Bitmap 而非每次新建 ★★★
                 if (_cachedBitmap == null || _lastSize != requiredSize)

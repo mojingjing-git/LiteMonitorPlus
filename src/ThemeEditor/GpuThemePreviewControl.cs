@@ -465,6 +465,14 @@ public sealed class GpuThemePreviewControl : Control
         }
         else
         {
+            // 生产同源（UIController 布局前设置 Layout.Width = 面板实际宽度）：
+            // 面板宽度跟随窗口变化。预览副本独立，这里把副本宽度设为画布客户区像素宽，
+            // 否则卡片固定在主题布局宽度，画布更宽时右侧留白。
+            if (_theme.Layout is not null)
+            {
+                _theme.Layout.Width = Math.Max(1, ClientRectangle.Width);
+            }
+
             UILayout layout = new(_theme);
             layout.Build(_groups);
             _scene = UiSceneSnapshotAdapter.Build(

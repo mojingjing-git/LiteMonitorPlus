@@ -105,6 +105,22 @@ public sealed class FlagshipGpuRenderingTests : IDisposable
             stopwatch.Stop();
             Report("20refresh");
 
+            // 兼容外观目标（GpuFallback）走 GDI 绘制——验证"上半部分吞一点"。
+            form.SelectTargetForTesting(ThemeEditTarget.GpuFallback);
+            Application.DoEvents();
+            Thread.Sleep(200);
+            Application.DoEvents();
+            string fallbackPath = Path.Combine(diagDir, "studio-" + themeName + "-fallback.png");
+            using (Bitmap fallbackShot = new Bitmap(
+                form.PreviewControlForTesting!.ClientSize.Width,
+                form.PreviewControlForTesting.ClientSize.Height))
+            {
+                form.PreviewControlForTesting.DrawToBitmap(fallbackShot,
+                    new Rectangle(Point.Empty, fallbackShot.Size));
+                fallbackShot.Save(fallbackPath, System.Drawing.Imaging.ImageFormat.Png);
+            }
+            Report("fallback-shot");
+
             phases.Add(shell?.PreviewDiagnosticsForTesting ?? "<no shell>");
             phases.Add($"20refresh-total={stopwatch.ElapsedMilliseconds}ms");
             File.WriteAllText(diagPath, string.Join(Environment.NewLine, phases));
