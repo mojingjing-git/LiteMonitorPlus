@@ -28,7 +28,7 @@
     AppearanceBackdropProbe 需要实机抓屏、耗时约 1 分钟，且会**真的捕获屏幕**
     ⇒ 默认不跑，要跑请显式加 -IncludeBackdrop。
 
-    WebProbe 属 Web 修复线（F00 入库）：会**先构建主工程**（LiteMonitor.csproj，
+    WebProbe 属 Web 修复线：会**先构建主工程**（LiteMonitor.csproj，
     同配置），再以沙箱 settings 目录驱动其产物跑 12 用例协议矩阵，
     证据落在 <OutDir>\WebProbe\，不碰用户 settings.json。
 

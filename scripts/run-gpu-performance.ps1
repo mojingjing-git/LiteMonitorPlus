@@ -1,7 +1,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [string]$OutputRoot = "docs/reviews/evidence/gpu-themes/694a8c5/R22/paired-v1",
+    [string]$OutputRoot = ".evidence/gpu-themes/performance",
     [ValidateRange(1, 5)][int]$Rounds = 3,
     [ValidateRange(1, 60)][int]$WarmupSeconds = 10,
     [ValidateRange(10, 300)][int]$SampleSeconds = 30,

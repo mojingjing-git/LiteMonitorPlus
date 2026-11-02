@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit" Version="2.9.2" PrivateAssets="all" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" GeneratePathProperty="true" PrivateAssets="all" />
+    <Reference Include="xunit.runner.utility.netcoreapp10">
+      <HintPath>$(Pkgxunit_runner_visualstudio)\build\net6.0\xunit.runner.utility.netcoreapp10.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>

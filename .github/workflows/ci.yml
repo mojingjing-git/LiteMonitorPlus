@@ -1,16 +1,11 @@
 name: CI
 
 # ============================================================================
-# LiteMonitorPlus 最小可用 CI（审计项 BASE-004 / 假绿禁令 G3）
+# LiteMonitorPlus 最小可用 CI（防假绿门禁）
 #
-# ★ 本仓库此前**完全没有 CI**。在测试工程进入解决方案之前，
-#   `dotnet test LiteMonitor.sln` 会静默空跑并返回退出码 0，
-#   于是"Unit Test"这一步恒为绿，却一个用例都没跑（G3 假绿）。
-#
-# ★ 本工作流的核心不是"跑 dotnet test"，而是**强制校验发现了多少条用例**：
-#   断言脚本 .github/workflows/assert-test-counts.ps1 会逐程序集核对
-#   总计/通过/失败/跳过，任何一个程序集"0 发现"、缺程序集、或总数低于阈值，
-#   都会让 job 以非零退出码失败。
+# PR 运行 Debug/Release 的 1..3 档。目录工具实际发现所有测试并检查固定基线，
+# 然后将所选用例与本次 TRX 逐行核对，拒绝漏跑、重复和跳过。
+# 桌面/硬件/GPU/压力验证见 extended-tests.yml；发布要求离线五档。
 #
 # ★ 行尾说明：本仓库 core.autocrlf=true，且仓库根目录**已有** .gitattributes
 #   （文本 text eol=crlf、二进制 binary、契约夹具区 eol=lf 显式例外）。
@@ -28,7 +23,7 @@ name: CI
 on:
   push:
     branches:
-      - '**'
+      - master
   pull_request:
     branches:
       - '**'
@@ -50,106 +45,10 @@ jobs:
     timeout-minutes: 60
 
     env:
-      # ★★ 用例发现数下限（防假绿的核心阈值）★★
-      #    改动这个值必须是**有意**的（例如新增测试工程后调高），
-      #    绝不允许为了"让流水线变绿"而调低。
-      #    当前基线：1831（1739 + 73 + 19），阈值 1831（**等于**当前实测总数——
-      #    门禁只收紧不放宽：任何用例被删或被跳过都会让本行变红）。
-      #    历史：1185（1153+13+19）/阈值 1150 → 1270（1193+58+19）/阈值 1150
-      #    → 1280（1203+58+19）/阈值 1280（S3.5 + S3.6 + 主审集成落地）
-      #    → 1281（1204+58+19）/阈值 1281（LM-047 原语层夹取 + 1 条护栏用例）
-      #    → 1316（1239+58+19）/阈值 1316（LM-045 两侧逐跳复核 22 条 + owner A 物化 14 条）
-      #    → 1349（1272+58+19）/阈值 1349（GPU T04 清理责任转交 14 条 + GPU T05 回退样式 13 条
-      #      + owner A 接线 5 条 + 裁决 D-H 1 条）
-      #    → 1394（1317+58+19）/阈值 1394（GPU T03 切换协调器 44 条 + 裁决 D-H 钉住用例 1 条）
-      #    → 1396（1319+58+19）/阈值 1396（LM-061/LM-063 护栏盲区修复新增 2 条钉住用例）
-      #    → 1487（1395+73+19）/阈值 1487（审查批 R01~R05 全部修复并集成后：
-      #      主工程 +76（R01 4 + R03 6 + R05 11 + R04 25 + R02 30）、更新器 +15（R05））。
-      #    → 1526（1433+73+19）/阈值 1526（P2 批次 A 全部修复并集成后：主工程 **+39**
-      #      （LM-070 5 + LM-071 5 + LM-072 8 + LM-073 5 + LM-074 12 + LM-093 4））。
-      #    ★ release.yml 的同名阈值必须与本行**逐字一致**（2026-10-23 主审更正 LM-056：
-      #      原先 release.yml 写着 1000 ⇒ 删掉 281 条用例时 CI 会红、**发布流水线却会绿**）。
-      #    → 1530（1438+73+19）/阈值 1530（LM-095 受控重建失败时如实收尾：主工程 +4）。
-      #    → 1547（1455+73+19）/阈值 1547（P2 批次 B 全部修复并集成后：主工程 **+17**
-      #      （LM-075 4 + LM-076 4 + LM-077 3 + LM-078 6；LM-079 三处 StripPort 同构改动不加用例））。
-      #    #    → 1547（1455+73+19）/阈值 1547（P2 批次 B 全部修复并集成后：主工程 **+17**
-      #    #      （LM-075 4 + LM-076 4 + LM-077 3 + LM-078 6；LM-079 三处 StripPort 同构改动不加用例））。
-      #    #    → 1632（1540+73+19）/阈值 1632（P2 批次 C/D/E 全部修复并集成后：主工程 **+85**
-      #    #      （LM-080 6 + LM-094 6 + LM-081 42 + LM-082 4 + LM-083 5 + LM-084 3 + LM-085 4
-      #    #        + LM-086 4 + LM-087 5 + LM-088 3 + LM-089 3；LM-089 只改 release.yml 不加用例数））。
-      #    → 1831（1739+73+19）/阈值 1831（2026-10-24 独立复审修复：主工程 +199
-      #      = GPU 35 + 市场 33 + 指标 56 + 主机 36 + 热加载 15 + IL 13 + 门禁 11；
-      #      Debug / Release 各实测 1830 通过、0 失败、1 指定 E2E 跳过，原 1632 身份保留）。
-      #    → 1862（1770+73+19）/阈值 1862（R3 渲染路线批次：主工程 +31
-      #      = StatusBuilder 10 + 原因码 8 + 主题路线 helper 9 + LiveGlass 迁移 3；
-      #      另有方案 A 改写 1 条守卫（LayeredWindowNeverRequestsWdaExclusion →
-      #      LayeredWindowStillRequestsLiveBackgroundWithDiagnostic + NonLayered 新增 1 条），
-      #      Debug 实测 1769 通过、0 失败、1 指定 E2E 跳过，原 1831 身份保留）。
-      #    → 1876（+14 = 主题市场契约 7 + 主题市场策略 7，均夹具驱动常跑不跳过；
-      #      Debug 实测 1784 通过、0 失败、1 指定 E2E 跳过）。
-      #    → 2028（+152 = W1 批次八包新增用例：F01 WS 升级解析 46 + F03 网络值时效 27
-      #      + F04 任务栏宿主生命周期 12 + F08a 磁盘 CountersOnly 23 + F12 字体测量安全 25
-      #      + F13 插件兜底恢复 19；F09a/F15 为研究/工具包，不加用例数；
-      #      Debug 实测主工程 1936（1935 通过 + 1 指定 E2E 跳过）+ Updater 73 + GPU 19
-      #      = 2028 总计、0 失败）。
-      #    → 2029（+1 = F08a 收尾把磁盘探测策略迁移用例补到 24 条；
-      #      Debug 实测主工程 1937（1936 通过 + 1 指定 E2E 跳过）+ Updater 73 + GPU 19
-      #      = 2029 总计、0 失败）。
-      #    → 2414（+181 = P-B0b 行为 fixture：格式四类×数值域矩阵，期望值实跑固化；
-      #      合并后 master Debug 实测主工程 2322（2315 通过 + 7 本机跳过）+ Updater 73
-      #      + GPU 19 = 2414 总计、0 失败）。
-      #    → 2436（+22 = autohide R2：AutoHideLogic 纯函数核心【泊出/弹出数学、30px 弹出带、
-      #      DPI 现算、看门狗判据、落盘守卫、用户几何复现】；实机冒烟 4 步全过后合入；
-      #      合并后 Debug 实测主工程发现数 2352（2345 执行全通 + 7 跳过）+ Updater 73 + GPU 19 = 2444）。
-      #    → 2504（+58 = P-I2 监督/协议/原子性/百次启停 +33 与 B3 模块服务/选择性应用 +25；
-      #      I2+B3 双包合并后 Debug 实测主工程发现数 2412（2405 执行全通 + 7 跳过）
-      #      + Updater 73 + GPU 19 = 2504）。
-      #    → 2571（+67 = W1 三路：E05 主题接线 5 + E08a 定位器 12 + E00 独立复验 22 + R4 跨帧等
-      #      既有补强；I2+B3 双包合并后实测主工程发现数 2479（2472 执行全通 + 7 跳过）
-      #      + Updater 73 + GPU 19 = 2571）。MUST 清单采纳 E08a 建议（新增 8 类，MIN_COUNT 6→5：
-      #      E05 护栏/原子性各 5 例）。
-      #    → 2686（+115 = W2 双包：E01 快照/目录/需求 34 + E02 命令面语义 13 + 其余收口；
-      #      两包合入后单次串行实测主工程发现数 2594（2587 执行全通 + 7 跳过）
-      #      + Updater 73 + GPU 19 = 2686）。★ 运维约束：多 lane 不可同机并发跑 LHM 测试套件
-      #      （testhost 崩溃/整机进程数断言抖动均为争抢所致，测试执行须串行）。
-      MIN_TEST_TOTAL: 2686
-      # ★ 必须出现的测试程序集。少任何一个都会让断言失败
-      #   （防止某个测试工程悄悄没被测到）。
-      EXPECTED_TEST_ASSEMBLIES: 'LiteMonitor.Tests, LiteMonitor.Updater.Tests, LiteMonitor.GpuNonperformance.Tests'
-
-      # ★ 跳过用例数上限（防"静默跳过"，S4.1 起收紧）。
-      #    允许跳过的**只有**联网 E2E（MarketE2ETests，门控 LITEMONITOR_E2E=1，
-      #    CI 故意不设该变量）—— 插件市场契约用例**不允许**再被跳过。
-      #    接入夹具前基线是 7 条跳过（6 契约 + 1 E2E），现在必须是 1 条。
-      MAX_SKIPPED_TESTS: 1
-
-      # ★ 必须真正执行的测试类（ENV-003 收口）。
-      #    插件市场的 6 条契约用例由 LITEMONITOR_PLUGIN_REPO 门控：
-      #    夹具路径一旦失效，它们会被 xunit 记为 Skipped 而不是失败 ——
-      #    这里把它们钉成硬门禁："必须被发现、必须不少于 6 条、必须一条都没被跳过"。
-      # ★ 必须真正执行的测试类（C-1 / 评审阻断 1）：
-      #   ReviewMarketPersistenceRegressionTests 是持久化事务护栏，其历史间歇失败
-      #   曾被误归因为"环境抖动"——钉进来后任何静默跳过/漏跑都会让门禁直接红。
-      # ★ 主题市场（M6）：ThemeMarketContractTests / ThemeMarketPolicyTests 均为
-      #   夹具驱动常跑（不依赖环境变量门控），各 7 条 ≥ 6 ✓——钉进硬门禁防静默漏跑。
-      MUST_EXECUTE_TEST_CLASS: 'MarketIndexContractTests, ReviewMarketPersistenceRegressionTests, ReviewMarketInstallRaceRegressionTests, ThemeMarketContractTests, ThemeMarketPolicyTests, ReviewFix20261026Tests, E00Verification20261026Tests, I2HostSupervisionTests, I2PipeProtocolTests, I2SnapshotAtomicityTests, SettingsProjectionTests, SettingsModuleServicesTests, E05ThemeWiringGuardTests'
-      MUST_EXECUTE_TEST_CLASS_MIN_COUNT: 5
-
-      # ★ 插件市场契约夹具路径（S4.1 引入，仓库内固定路径）。
-      #    tests/fixtures/plugin-repo 是 awesome-litemonitor-plugins 的最小本地副本，
-      #    让 MarketIndexContractTests 的 6 条用例在 CI 里**真正执行**（而不是被跳过）。
-      #    该目录自带 .gitattributes（*.json text eol=lf），
-      #    保证 index.json 里记录的 sha256 / size 与 plugin.json 的原始字节
-      #    在 Windows runner 上完全一致（否则字节口径对不上，契约必然失败）。
+      # 五档门禁使用固定基线与逐条 TRX 对账（assert-test-tiers.ps1）。
+      # 新入口不允许所选测试出现 Skip，未启用能力另列为排除。
       LITEMONITOR_PLUGIN_REPO: ${{ github.workspace }}/tests/fixtures/plugin-repo
-
-      # ★ 主题市场契约夹具路径（M6，镜像插件口径）。
-      #    ThemeMarketContractTests 主体跑在程序内夹具上；该变量供"真实仓库副本"
-      #    叠加断言使用（仓库侧 themes/ 段上线前该叠加验证自动降级为跳过断言体，
-      #    用例本身仍执行——MUST_EXECUTE 不受影响）。
       LITEMONITOR_THEME_REPO: ${{ github.workspace }}/tests/fixtures/theme-repo
-
-      # ★ 故意**不**设置 LITEMONITOR_E2E=1：联网 E2E 单独跑，不进 PR 门禁。
       DOTNET_NOLOGO: 'true'
       DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
       DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
@@ -167,32 +66,36 @@ jobs:
         run: dotnet restore LiteMonitor.sln
 
       - name: 构建（Debug）
-        run: dotnet build LiteMonitor.sln -c Debug --nologo
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' -Configuration Debug -BaseOutputPath bin/ -BuildOnly
+          if ($LASTEXITCODE -ne 0) { throw "构建或产物身份记录失败（退出码 $LASTEXITCODE）" }
 
-      # ★ 生产主窗体启动检查（R01 引入）★
-      #   纯单测**证明不了**主程序能不能启动。R01 就是一条"主窗体构造即抛
-      #   NullReferenceException"的**启动阻断**缺陷：它一路穿过了全部单测与
-      #   连续 8 次绿色 CI，因为没有任何用例真的构造过生产 MainForm。
+      # ★ 生产主窗体启动检查★
+      # 纯单测**证明不了**主程序能不能启动："主窗体构造即抛
+      #   NullReferenceException"属于**启动阻断**缺陷——它能穿过全部单测，
+      #   因为没有任何用例真的构造过生产 MainForm。
       #   ⇒ 这里真的把生产 MainForm 构造出来（探针场景 `startup`）。
       #   退出码契约（tools/GpuHostLifecycleProbe）：
       #     0 = 构造成功；1 = 构造抛异常（**真实缺陷 ⇒ 本步骤红**）。
       #   该场景刻意**不跑消息循环**（不触发 OnShown）⇒ 网页服务不会开始监听。
-      - name: 生产主窗体启动检查（R01：真实构造 MainForm）
+      - name: 生产主窗体启动检查（真实构造 MainForm）
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          dotnet build tools/GpuHostLifecycleProbe/GpuHostLifecycleProbe.csproj -c Debug --nologo -v quiet
+          # 独立 BaseOutputPath：全局属性级联到全部被引用工程，避免这次构建重写
+          # BuildOnly 记录的构建身份所锚定的根 bin/Debug（check-stamp 会比对产物 hash）。
+          dotnet build tools/GpuHostLifecycleProbe/GpuHostLifecycleProbe.csproj -c Debug --nologo -v quiet -p:BaseOutputPath=bin/probe/
           if ($LASTEXITCODE -ne 0) { throw "探针构建失败（退出码 $LASTEXITCODE）" }
           $out = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\startup-check'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $probe = 'tools\GpuHostLifecycleProbe\bin\Debug\net8.0-windows\GpuHostLifecycleProbe.exe'
+          $probe = 'tools\GpuHostLifecycleProbe\bin\probe\Debug\net8.0-windows\GpuHostLifecycleProbe.exe'
           # ★★ 探针是 WinExe（GUI 子系统）★★：PowerShell 的 `&` 对 GUI 程序
           #   **不等待**、**不更新** $LASTEXITCODE；而上一步 `dotnet build` 恰好把
           #   $LASTEXITCODE 置为 0 ⇒ `&` 之后读到的永远是 0 ⇒ 门禁**恒绿**。
-          #   实测（LM-090）：把 R01 的启动空引用放回去，这条门禁照样判 PASS，
-          #   而探针真实退出码是 1（探针根本没跑完就被判定了）。
+          #   探针真实退出码 1 也会被读成 0（探针根本没跑完就被判定为通过）。
           #   ⇒ 必须用 Start-Process -PassThru + WaitForExit 取**真实**退出码。
-          # ★ 路径含空格时必须**手工加引号**（LM-092）：Start-Process 的 -ArgumentList
+          # 路径含空格时必须**手工加引号**：Start-Process 的 -ArgumentList
           #   **不给**含空格的元素加引号 ⇒ 路径会被拆成多个 argv ⇒ 探针报
           #   "Unknown argument"（退出码 64）⇒ 门禁误报红。GitHub 托管 runner 的
           #   GITHUB_WORKSPACE 无空格，但自托管 runner / 本地含空格路径会命中。
@@ -209,20 +112,20 @@ jobs:
             throw "生产主窗体启动检查失败（退出码 $code）—— 退出码契约：0=构造成功 / 1=MainForm 构造期抛异常 / 2=环境不具备 / 64=参数错误"
           }
 
-      # ★ 第三方组件声明与实际依赖一致（LM-024 护栏，S5.3/S5.3b 引入）★
+      # 第三方组件声明与实际依赖一致★
       #   脚本以**实际解析**的依赖为真值（还原图 + 目标框架冲突消解），
       #   核对 NOTICE 里声明的组件清单：
       #     · 直接依赖漏列 / 版本不符   ⇒ 退出码 1（流水线红）
       #     · 传递依赖漏列 / 版本不符   ⇒ 退出码 1（流水线红）
       #     · 环境受阻（取不到还原图等）⇒ 退出码 3（流水线红，结论不可信时不放行）
-      #   LM-024 的根因就是"手工维护的清单必然漂移"——本步骤把一次性修正
-      #   变成可持续的门禁：以后新增依赖而忘记改 NOTICE，会在这里被挡住。
-      - name: 校验第三方组件声明与实际依赖一致（LM-024 护栏）
+      #   手工维护的清单必然漂移 ⇒ 本步骤把依赖声明与实际依赖的一致性
+      #   变成可持续的门禁：新增依赖而忘记改 NOTICE，会在这里被挡住。
+      - name: Validate dependency manifest
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           & pwsh -NoProfile -File 'scripts/generate-dependency-manifest.ps1' -Mode Check
-          if ($LASTEXITCODE -ne 0) { throw "依赖清单核对失败（退出码 $LASTEXITCODE）" }
+          if ($LASTEXITCODE -ne 0) { throw "Dependency manifest validation failed: exit $LASTEXITCODE" }
 
       - name: 清理历史测试结果
         shell: pwsh
@@ -235,69 +138,43 @@ jobs:
           New-Item -ItemType Directory -Force -Path 'ci-artifacts' | Out-Null
           Write-Host '已清理双配置测试结果目录'
 
-      - name: 运行单元测试
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $log = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\test-Debug.log'
-          foreach ($assembly in @('LiteMonitor.Tests', 'LiteMonitor.Updater.Tests', 'LiteMonitor.GpuNonperformance.Tests')) {
-            $results = Join-Path $env:GITHUB_WORKSPACE "ci-artifacts/test-results/Debug/$assembly"
-            dotnet test "tests/$assembly/$assembly.csproj" -c Debug --nologo --results-directory $results --logger "trx;LogFileName=results.trx" |
-              Tee-Object -FilePath $log -Append
-            $code = $LASTEXITCODE
-            if ($code -ne 0) { throw "Debug $assembly 测试失败（退出码 $code）" }
-          }
-
-      - name: 强制校验测试发现数（防假绿）
+      - name: Run tests (Debug, Tier 3)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $assertArgs = @(
-            '-NoProfile',
-            '-File', '.github/workflows/assert-test-counts.ps1',
-            '-TrxRoot', 'ci-artifacts/test-results/Debug',
-            '-MinTotal', $env:MIN_TEST_TOTAL,
-            '-ExpectedAssembly', $env:EXPECTED_TEST_ASSEMBLIES,
-            '-MaxSkipped', $env:MAX_SKIPPED_TESTS,
-            '-MustExecuteTestClass', $env:MUST_EXECUTE_TEST_CLASS,
-            '-MustExecuteTestClassMinCount', $env:MUST_EXECUTE_TEST_CLASS_MIN_COUNT
-          )
-          # 以子进程方式调用：脚本里的 Set-StrictMode / exit 不会污染本步骤
-          & pwsh @assertArgs
-          if ($LASTEXITCODE -ne 0) { throw "测试发现数断言失败（退出码 $LASTEXITCODE）" }
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' -Tier 3 -Configuration Debug -BaseOutputPath bin/ -NoBuild -ResultsDirectory 'ci-artifacts/test-results/Debug' |
+            Tee-Object -FilePath 'ci-artifacts/test-Debug.log'
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "Debug Tier 3 failed: exit $code" }
+
+      - name: Verify exact test inventory (Debug, Tier 3)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & pwsh -NoProfile -File '.github/workflows/assert-test-tiers.ps1' -ResultsRoot 'ci-artifacts/test-results/Debug' -Configuration Debug -Tier 3 -BaseOutputPath bin/
+          if ($LASTEXITCODE -ne 0) { throw "Debug test inventory verification failed: exit $LASTEXITCODE" }
 
       - name: 构建（Release）
-        run: dotnet build LiteMonitor.sln -c Release --nologo
-
-      - name: 运行单元测试（Release）
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
-          $log = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\test-Release.log'
-          foreach ($assembly in @('LiteMonitor.Tests', 'LiteMonitor.Updater.Tests', 'LiteMonitor.GpuNonperformance.Tests')) {
-            $results = Join-Path $env:GITHUB_WORKSPACE "ci-artifacts/test-results/Release/$assembly"
-            dotnet test "tests/$assembly/$assembly.csproj" -c Release --nologo --results-directory $results --logger "trx;LogFileName=results.trx" |
-              Tee-Object -FilePath $log -Append
-            $code = $LASTEXITCODE
-            if ($code -ne 0) { throw "Release $assembly 测试失败（退出码 $code）" }
-          }
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' -Configuration Release -BaseOutputPath bin/ -BuildOnly
+          if ($LASTEXITCODE -ne 0) { throw "构建或产物身份记录失败（退出码 $LASTEXITCODE）" }
 
-      - name: 强制校验测试发现数（Release）
+      - name: Run tests (Release, Tier 3)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $assertArgs = @(
-            '-NoProfile',
-            '-File', '.github/workflows/assert-test-counts.ps1',
-            '-TrxRoot', 'ci-artifacts/test-results/Release',
-            '-MinTotal', $env:MIN_TEST_TOTAL,
-            '-ExpectedAssembly', $env:EXPECTED_TEST_ASSEMBLIES,
-            '-MaxSkipped', $env:MAX_SKIPPED_TESTS,
-            '-MustExecuteTestClass', $env:MUST_EXECUTE_TEST_CLASS,
-            '-MustExecuteTestClassMinCount', $env:MUST_EXECUTE_TEST_CLASS_MIN_COUNT
-          )
-          & pwsh @assertArgs
-          if ($LASTEXITCODE -ne 0) { throw "Release 测试发现数断言失败（退出码 $LASTEXITCODE）" }
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' -Tier 3 -Configuration Release -BaseOutputPath bin/ -NoBuild -ResultsDirectory 'ci-artifacts/test-results/Release' |
+            Tee-Object -FilePath 'ci-artifacts/test-Release.log'
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "Release Tier 3 failed: exit $code" }
+
+      - name: Verify exact test inventory (Release, Tier 3)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & pwsh -NoProfile -File '.github/workflows/assert-test-tiers.ps1' -ResultsRoot 'ci-artifacts/test-results/Release' -Configuration Release -Tier 3 -BaseOutputPath bin/
+          if ($LASTEXITCODE -ne 0) { throw "Release test inventory verification failed: exit $LASTEXITCODE" }
 
       - name: 读取版本号
         id: version
@@ -330,11 +207,12 @@ jobs:
           "sha256=$sha" >> $env:GITHUB_OUTPUT
 
       - name: 上传测试报告（TRX + 控制台日志）
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: |
-            ci-artifacts/test-results/**/*.trx
+            ci-artifacts/test-results/**
             ci-artifacts/test-*.log
             ci-artifacts/startup-check/**
           if-no-files-found: error
@@ -349,20 +227,19 @@ jobs:
           retention-days: 14
 
   # ══════════════════════════════════════════════════════════════════════
-  # 可空引用门禁（nullable-gate）· 2026-10-26 新增
+  # 可空引用门禁（nullable-gate）
   #
-  # 目的：把「可空引用警告清零」从一次性清理变成**持续可验证的工程不变量**。
-  # 分层设计（详见 docs/plans/2026-10-26-nullable-warnings-remediation-plan.md §5.6）：
+  # 目的：保证「可空引用警告清零」是**持续可验证的工程不变量**。
   #   门禁 1（硬门禁）生产四工程 Release 构建**零警告**
   #             （LiteMonitor / LiteMonitor.Updater / HardwareHost / Contracts）
   #             → 由各 csproj 的 TreatWarningsAsErrors（Release 条件）实现。
   #   门禁 2（防回退）全解决方案**不新增**警告码
-  #             → TreatWarningsAsErrors=true + WarningsNotAsErrors=<历史码清单>：
-  #               历史债务降级为「警告但仍可见」，任何**新增**警告码一律升级为错误。
+  #             → TreatWarningsAsErrors=true + WarningsNotAsErrors=<存量码清单>：
+  #               存量债务降级为「警告但仍可见」，任何**新增**警告码一律升级为错误。
   #
-  # ⚠️ 假绿禁令（沿用本仓库 G3 口径）：
+  # 假绿禁令（当前口径）
   #   · 两条门禁都用 `dotnet build` 的**真实退出码**判定，禁止只看日志里有没有 "warning" 字样；
-  #   · 门禁 2 禁止使用无差别全局 /warnaserror（会误伤历史债务导致门禁永久红灯）；
+  #   · 门禁 2 禁止使用无差别全局 /warnaserror（会误伤存量债务导致门禁永久红灯）；
   #   · 禁止使用 `warnaserror:<code>` 写法 —— 编译器语义是「把这些码当作错误」，
   #     **不是**「豁免这些码」，语义完全相反。
   # ══════════════════════════════════════════════════════════════════════
@@ -394,23 +271,23 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $projects = @(
-            'LiteMonitor.csproj',
-            'LiteMonitor.Updater\LiteMonitor.Updater.csproj',
+            'src\Contracts\LiteMonitor.Contracts.csproj',
             'src\HardwareHost\LiteMonitor.HardwareHost.csproj',
-            'src\Contracts\LiteMonitor.Contracts.csproj'
+            'LiteMonitor.csproj',
+            'LiteMonitor.Updater\LiteMonitor.Updater.csproj'
           )
           foreach ($p in $projects) {
             Write-Host "==> 门禁 1：$p"
             # NU1900 = NuGet 拉取漏洞数据失败（源不可达/离线/缓存过期），属网络环境类告警，
             #   与代码质量无关，会被 -warnaserror 升级为 error 导致门禁「假红」。
-            #   用 -p:NuGetAudit=false 关闭本次构建的漏洞审计来消除 NU1900：
+            #   用 -p:NuGetAudit=false 关闭构建时的漏洞审计以消除 NU1900：
             #   · 不能用 -p:WarningsNotAsErrors=NU1900 —— NuGet 只认 NoWarn / WarningsAsErrors；
             #   · 也不能用 -p:NoWarn=NU1900 —— 它是 MSBuild 全局属性，会覆盖测试工程 csproj 内的
-            #     <NoWarn>$(NoWarn);CS8632</NoWarn>，导致 CS8632 × 263 重新冒头（实测 44 → 307）。
+            #     <NoWarn>$(NoWarn);CS8632</NoWarn>，导致 CS8632 × 263 重新冒头。
             #   · 本作业的「还原依赖」步骤仍开着审计，真实漏洞（NU1902/NU1903）照常可见。
-            dotnet build $p -c Release --no-incremental --nologo -warnaserror '-p:NuGetAudit=false'
+            dotnet build $p -c Release --no-dependencies --no-incremental --nologo -warnaserror '-p:NuGetAudit=false'
             if ($LASTEXITCODE -ne 0) {
-              throw "门禁 1 失败：$p（退出码 $LASTEXITCODE）—— 生产工程在 Release 下出现编译警告，已按 TreatWarningsAsErrors 升级为错误。可空债务清零是本次治理的验收底线，不允许降级放行。"
+              throw "门禁 1 失败：$p（退出码 $LASTEXITCODE）—— 生产工程在 Release 下出现编译警告，已按 TreatWarningsAsErrors 升级为错误。可空债务清零是本门禁的验收底线，不允许降级放行。"
             }
           }
           Write-Host '门禁 1 通过：四个生产工程 Release 构建 0 警告 0 错误。'
@@ -420,13 +297,13 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # ★ 历史债务抑制清单：只登记**确实还存在**的警告码。
-          #   每完成一个 Phase 就从这里移除对应码，门禁 2 随之逐步收紧。
+          # ★ 存量债务抑制清单：只登记**确实还存在**的警告码。
+          #   每清理掉一个存量码，就从这里移除对应码，门禁 2 随之收紧。
           #   · CS0168 / CS0649：测试工程未使用变量 / 未赋值字段（测试代码风格，非可空缺陷）
           #   · CS8632：测试工程 Nullable=disable 下的标注噪音（已在测试 csproj 内 NoWarn）
-          #   · xUnit****：xUnit 分析器规则警告，与可空治理无因果关系
-          #     （登记为独立 Phase 7 技术债，不在本次治理范围内）
-          # ⚠️ 分号必须写成 %3B：MSBuild 用 ";" 分隔多个属性，直接传 ";" 会报
+          #   · xUnit 分析器：xUnit 分析器规则警告，与可空治理无因果关系
+          #     （登记为独立技术债，不在可空治理范围内）
+          # 分号必须写成 %3B：MSBuild 用 ";" 分隔多个属性，直接传 ";" 会报
           #    MSB1006（属性无效），实测确认。
           $legacy = 'CS0168%3BCS0649%3BCS8632%3BxUnit2031%3BxUnit1030%3BxUnit1031%3BxUnit2013%3BxUnit1026%3BxUnit2000%3BxUnit2012%3BxUnit2017%3BxUnit2020'
           dotnet build LiteMonitor.sln -c Release --no-incremental --nologo `
@@ -434,6 +311,6 @@ jobs:
             -p:WarningsNotAsErrors=$legacy `
             -p:NuGetAudit=false
           if ($LASTEXITCODE -ne 0) {
-            throw "门禁 2 失败（退出码 $LASTEXITCODE）—— 全解决方案出现了**不在历史抑制清单内**的新警告码，已升级为错误。请修正代码，或在确属历史债务时把对应码登记进本步骤的抑制清单（并同步更新计划文档的燃尽表）。"
+            throw "门禁 2 失败（退出码 $LASTEXITCODE）—— 全解决方案出现了**不在抑制清单内**的新警告码，已升级为错误。请修正代码，或在确属存量债务时把对应码登记进本步骤的抑制清单。"
           }
           Write-Host '门禁 2 通过：全解决方案未出现新增警告码。'

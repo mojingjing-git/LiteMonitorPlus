@@ -212,7 +212,7 @@ if ($SkipGui) {
 }
 
 function Get-HostSamples {
-    # 本轮启动之后出现的 HardwareHost 进程（监督器重启会换 PID，逐 tick 动态发现）。
+    # 采样启动之后出现的 HardwareHost 进程（监督器重启会换 PID，逐 tick 动态发现）。
     param([int[]]$ExcludePids)
     $found = @(Get-Process -Name 'LiteMonitor.HardwareHost' -ErrorAction SilentlyContinue |
         Where-Object { $ExcludePids -notcontains $_.Id })

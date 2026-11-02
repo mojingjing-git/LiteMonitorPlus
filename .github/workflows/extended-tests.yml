@@ -1,0 +1,91 @@
+name: Extended tests
+
+on:
+  schedule:
+    # Tier 4 nightly coverage only.
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Exact tier to run'
+        type: choice
+        options: ['4', '5']
+        default: '4'
+      network:
+        description: 'Enable network-dependent tests'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extended-tests-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  extended:
+    name: Exact Tier ${{ inputs.tier || '4' }} on a capable runner
+    runs-on: [self-hosted, Windows, X64, LiteMonitor-SystemValidation]
+    timeout-minutes: 240
+    env:
+      TEST_TIER: ${{ inputs.tier || '4' }}
+      TEST_NETWORK: ${{ inputs.network || false }}
+      # 逗号分隔字符串直传 -Capabilities/-RequiredCapabilities（run-tests.ps1 按 ',' 拆分）。
+      # 不能用 PowerShell 数组变量传给 pwsh -File：数组会展开成多个独立参数，
+      # 第一个之后的值变成无主位置参数直接报错。
+      TEST_CAPABILITIES: 'Desktop,Gpu,Hardware'
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore LiteMonitor.sln
+
+      - name: Run exact extended tier
+        shell: pwsh
+        run: |
+          $capabilities = $env:TEST_CAPABILITIES
+          if ([Convert]::ToBoolean($env:TEST_NETWORK)) {
+            $capabilities = "$capabilities,Network"
+          }
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' `
+            -Tier ([int]$env:TEST_TIER) `
+            -ExactTier `
+            -Configuration Release `
+            -BaseOutputPath bin/ `
+            -Capabilities $capabilities `
+            -RequiredCapabilities $capabilities `
+            -ResultsDirectory 'ci-artifacts/test-results/Extended'
+          if ($LASTEXITCODE -ne 0) { throw "Extended Tier $env:TEST_TIER failed: exit $LASTEXITCODE" }
+
+      - name: Verify exact extended tier
+        shell: pwsh
+        run: |
+          $capabilities = $env:TEST_CAPABILITIES
+          if ([Convert]::ToBoolean($env:TEST_NETWORK)) {
+            $capabilities = "$capabilities,Network"
+          }
+          & pwsh -NoProfile -File '.github/workflows/assert-test-tiers.ps1' `
+            -ResultsRoot 'ci-artifacts/test-results/Extended' `
+            -Configuration Release `
+            -Tier ([int]$env:TEST_TIER) `
+            -ExactTier `
+            -BaseOutputPath bin/ `
+            -RequiredCapabilities $capabilities
+          if ($LASTEXITCODE -ne 0) { throw "Extended result verification failed: exit $LASTEXITCODE" }
+
+      - name: Upload extended test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extended-test-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-artifacts/test-results/**
+          if-no-files-found: error
+          retention-days: 14

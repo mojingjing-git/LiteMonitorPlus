@@ -1,9 +1,9 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [string]$ManifestPath = "docs/reviews/evidence/gpu-themes/nonperformance-20261022/qa/nonperformance-manifest.json",
+    [string]$ManifestPath = ".evidence/gpu-themes/nonperformance/qa/nonperformance-manifest.json",
     [string[]]$Groups,
-    [string]$EvidenceRoot = "docs/reviews/evidence/gpu-themes/nonperformance-20261022/qa",
+    [string]$EvidenceRoot = ".evidence/gpu-themes/nonperformance/qa",
     [switch]$PlanOnly,
     [switch]$ListGroups,
     [switch]$AllowGui,

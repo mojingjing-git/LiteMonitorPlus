@@ -2,7 +2,7 @@
 param(
     [switch]$IncludeGpu,
     [switch]$IncludeLiveCapture,
-    [string]$EvidenceRoot = "docs/reviews/evidence/gpu-themes/694a8c5"
+    [string]$EvidenceRoot = ".evidence/gpu-themes/contracts"
 )
 
 $ErrorActionPreference = "Stop"
@@ -94,10 +94,10 @@ try {
 
     $evidence = [ordered]@{
         schemaVersion = 1
-        task = if ($IncludeGpu) { "R08-R13-contracts-and-device" } else { "R10-R17-contracts" }
+        task = if ($IncludeGpu) { "contracts-and-device" } else { "contracts" }
         baselineCommit = "694a8c57d27b628e0edba803e5f24b3ca53dbc5f"
         observedHead = $head
-        executionModel = "DeepSeek V4.1 Flash"
+        executionModel = "manual"
         checkedAt = (Get-Date).ToString("o")
         includeGpu = [bool]$IncludeGpu
         includeLiveCapture = [bool]$IncludeLiveCapture

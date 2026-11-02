@@ -14,7 +14,7 @@
 
 - [ ] 新增/修改测试：
 - [ ] 测试命令与结果：
-- [ ] 证据路径（`docs/verification/execution/<Gate>/`）：
+- [ ] 证据路径（`.evidence/<Gate>/`）：
 - [ ] 失败证据也保留
 
 ## 兼容与安全

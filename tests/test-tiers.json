@@ -1,0 +1,1720 @@
+{
+  "schema": 1,
+  "assemblies": [
+    "LiteMonitor.Tests",
+    "LiteMonitor.Updater.Tests",
+    "LiteMonitor.GpuNonperformance.Tests"
+  ],
+  "classes": [
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.TestTierCatalogTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.AlertEvaluatorTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.AlertRuntimeSnapshotTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.AlertRuntimeTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.AppearanceBackdropSourceTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.AppearanceOptionsTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ApplyOperationResultContractTests",
+      "tier": 1,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ApplicationHardwareRuntimeTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.AutoHideLogicTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.AutoStartMigrationTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.B4PureRulesGuardTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchB1WebSessionCredentialTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchB2PluginHostPolicyTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchCLM080DeclaredHostQueryTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchCLM081RedirectMethodTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchCLM082NativeScopeTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchCLM094DeclaredHostIPv6Tests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchD1MarketRecoveryOrderingTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchD2MarketDownloadDeadlineTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchD3SettingsBackupSanitizeTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchEProbeIsolationGateTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchEProbeScenePumpTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchEProbeSourceHashTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.BatchEReleaseWorkflowGateTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.CapturePolicyCleanupGateTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.CapturePolicyCleanupRegistrationTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.CapturePolicyCleanupUnresolvedGateTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.CommittedMemoryFormattingTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.CommittedMemoryReaderTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.CommittedMemoryWiringTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ControllerProbePolicyTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ControllerProbeSettingsMigrationTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.CpuVoltagePresentationTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.CpuVoltageResolverTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.CpuVoltageWiringTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DemandRegistryContractTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DerivedThemeRuntimeFontTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DeviceDiskSelectionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DeviceIdentityTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DeviceMigrationTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DeviceSlotBindingTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DiagnosticEventStoreContractTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DiagnosticPackageServiceTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DiagnosticPageLifecycleTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DiagnosticProviderContractTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DiagnosticRunMarkerTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DiskProbePolicyTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DiskProbeSettingsMigrationTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DiskUpdateScheduleTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.DynamicHostAuthorizationTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.E00Verification20261026Tests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.E01AdapterCommandSurfaceTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.E01CatalogDemandTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.E01SnapshotPublishingTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.E02ClientSemanticConsistencyTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.E05ThemeWiringGuardTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.FlagshipGpuThemeTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": [
+        {
+          "method": "Theme_DocumentSession_RoundTripSaveAndExport",
+          "tier": 4,
+          "capabilities": [
+            "Desktop"
+          ]
+        },
+        {
+          "method": "ThemeStudioVisualPresetChoiceRebuildsPropertiesAcrossResetUndoAndRedo",
+          "tier": 4,
+          "capabilities": [
+            "Desktop"
+          ]
+        }
+      ]
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.FlagshipGpuRenderingTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop",
+        "Gpu"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.FontMeasureSafetyTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ForegroundDrawListTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ForegroundScaleTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.FpsStateTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuAdapterSelectionGateTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuDeviceContractTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": [
+        {
+          "method": "HardwareDeviceCreatesAndReleasesOffscreenTexture",
+          "tier": 4,
+          "capabilities": [
+            "Desktop",
+            "Gpu"
+          ]
+        },
+        {
+          "method": "PartialRendererInitializationReleasesInventoryAtEveryStagedFailure",
+          "tier": 4,
+          "capabilities": [
+            "Desktop",
+            "Gpu"
+          ]
+        },
+        {
+          "method": "ProductionHostDisposeReturnsEveryLedgerEntryToZero",
+          "tier": 4,
+          "capabilities": [
+            "Desktop",
+            "Gpu"
+          ]
+        }
+      ]
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuFailureFallbackTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuGroupTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuItemSyncTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuKeyTests",
+      "tier": 1,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuPresentationTransitionTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuResizeResilienceGateTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuStartRetryGateTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuStartupGuardAbandonTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuStartupGuardTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuThemeEditorPreflightRegressionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuVramTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.GpuWarmupTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.HardwareRulesGpuNameTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.HardwareCatalogOptionsTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.HardwareSnapshotValueIndexTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.HardwareWiringTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.HttpLifecycleTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.I2HostBinariesLocatorTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.I2HostSelftestTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": [
+        {
+          "method": "真实采样自测_键集合与批次单调",
+          "tier": 4,
+          "capabilities": [
+            "Hardware"
+          ]
+        }
+      ]
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.I2HostSupervisionTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": [
+        {
+          "method": "连续100次启停_无孤儿进程且句柄线程无持续增长",
+          "tier": 5
+        }
+      ]
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.I2PipeEndpointTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.I2PipeProtocolTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.I2SnapshotAtomicityTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.LanguagePackTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.LegacyFallbackThemeRoutingTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.LiveCaptureRetrySuppressionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.LiveGlassLifecycleTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.LiveGlassRebuildWiringTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.LiveGlassSettingMigrationTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MainFormStartupOrderTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MaintenanceScheduleTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MarketE2ETests",
+      "tier": 4,
+      "capabilities": [
+        "Network"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MarketIndexContractTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MarketPageCacheTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MarketPagePerformanceTests",
+      "tier": 5,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MarketUninstallRecoveryTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MarketUninstallSubprocessRecoveryTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MaterialRuntimeMappingTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MaterialSchedulingTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MetricFormatBehaviorFixtureTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MetricItemFormatterTests",
+      "tier": 1,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MetricUtilsGpuKeyTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.MetricUtilsMemoryUnitFormatTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.NetworkCacheWindowTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.NetworkExclusionLifecycleTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.NetworkExclusionRulesTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.NetworkExclusionWiringTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.NetworkSampleFreshnessTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.NetworkTrafficFilterTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.NonPerformanceContractTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PanelGeometryTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginAddressPolicyTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginExecutorSandboxTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginI18nTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginMarketInvalidUrlTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginMarketPolicyTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginMarketRecoveryBoundaryTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginMarketTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginNativeSandboxTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginRedirectSandboxTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginRequestIdentityTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginSandboxLimitsTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PluginSchedulingTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PowerDisplaySchedulerTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PowerPolicyTests",
+      "tier": 1,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.PresentationSessionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.R07AlertSnapshotTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.R10GpuFrameGateTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop",
+        "Gpu"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.R15R16AlertTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.R2PreviewExportRegressionTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.R3ThemeLoadContractTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.RenderingConfigurationTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.RenderingContractTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.RenderingRouteReasonCodeTests",
+      "tier": 1,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.RenderingRouteStatusBuilderTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.RenderingTransitionCoordinatorTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.RenderingTransitionStateTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ReviewFix20261026Tests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ReviewGpuRecoveryRegressionTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ReviewMarketInstallRaceRegressionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ReviewMarketPersistenceRegressionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ReviewMetricPresentationRegressionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ReviewPluginHostNormalizationTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ReviewPluginReloadRegressionTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ReviewReleaseValidationGateTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.RollingTimingWindowTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.SamplingCacheTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.SamplingCoordinatorTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ScenarioApplyCoordinatorTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ScenarioPreflightTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ScenarioProfileStoreTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ScenarioProjectionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ScenarioServiceTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.SceneSnapshotBuilderTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.SecretPersistenceSafetyTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.SettingsApplyResultGuardTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.SettingsModuleServicesTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.SettingsProjectionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.SettingsRecoveryTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.SettingsThemeTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ShortTermTrendBufferTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.TaskbarGeometryTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.TaskbarHostLifecycleTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": [
+        {
+          "method": "重复一百次宿主重建后面板单份且窗口句柄不增长",
+          "tier": 5
+        }
+      ]
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.TaskbarSiblingZOrderTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.TaskbarTopMostWatchdogTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeCheckScheduleTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeColorParserTests",
+      "tier": 1,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeDocumentSessionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeEditorAppearanceTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeExportContractTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeExportServiceTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeFallbackStyleTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeMarketContractTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeMarketPolicyTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeMarketValidatorTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemePreviewServiceGpuSnapshotTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemePropertyCatalogGpuTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemePropertyCatalogTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeRouteHelperTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeSaveTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeSchemaTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeStudioAcceptanceRemediationTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeStudioSaveOrchestrationTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeStudioGpuSessionAndFallbackTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeStudioNextStageWorkflowTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeStudioPreviewFormsTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeStudioResourceTests",
+      "tier": 5,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": [
+        {
+          "method": "C03_Child_场景4_真实GPU切换200次_进程隔离",
+          "capabilities": [
+            "Desktop",
+            "Gpu"
+          ],
+          "harness": true
+        },
+        {
+          "method": "场景2_编辑事务1000次_资源增量不累积",
+          "capabilities": []
+        },
+        {
+          "method": "场景3_主题打开切换200次_资源增量不累积",
+          "capabilities": []
+        },
+        {
+          "method": "场景4_真实GPU主题真实目标切换200次_主效果与兼容外观交替_资源增量不累积",
+          "capabilities": [
+            "Desktop",
+            "Gpu"
+          ]
+        }
+      ]
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeStudioSmokeTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeStudioTaskbarIsolationTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ThemeThresholdsCleanupTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ToolbarNonperformanceContractsTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.ToolbarPreviewSurfaceScalingTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.TrafficDeltaTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.TrendHistoryV2StoreTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.TrendViewMetricsTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.UpdateSignatureTests",
+      "tier": 1,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.UpdaterLegacyBridgeTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.UpdaterRecoveryTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.WebAuthHardeningTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.WebDemandTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.WebDomSanitizationTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.WebPasswordPolicyTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.WebReverseProxyPolicyTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.WebSamplingDemandTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.WebSessionProtocolTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.WebSocketRejectCloseTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.WebSocketUpgradeParseTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.WebThemeCssTests",
+      "tier": 3,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Updater.Tests",
+      "class": "LiteMonitor.Updater.Tests.UpdatePackageBinderTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Updater.Tests",
+      "class": "LiteMonitor.Updater.Tests.UpdaterIntegrityTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": [
+        {
+          "method": "ProductionSizedEntryLimitIsRejectedAndTemporaryDirectoryIsCleaned",
+          "tier": 5
+        },
+        {
+          "method": "OversizedExpansionIsRejectedAndTemporaryDirectoryIsCleaned",
+          "tier": 5
+        },
+        {
+          "method": "FailedUpdateRestoresPreviousVersionAndKeepsRecoveryMaterial",
+          "tier": 3
+        }
+      ]
+    },
+    {
+      "assembly": "LiteMonitor.Updater.Tests",
+      "class": "LiteMonitor.Updater.Tests.UpdaterLegacyBridgeTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Updater.Tests",
+      "class": "LiteMonitor.Updater.Tests.UpdaterRecoveryTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.GpuNonperformance.Tests",
+      "class": "LiteMonitor.Tests.GpuThemeEditorPreflightRegressionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.GpuNonperformance.Tests",
+      "class": "LiteMonitor.Tests.PresentationSessionTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.GpuNonperformance.Tests",
+      "class": "LiteMonitor.Tests.ToolbarNonperformanceContractsTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.SettingsEditingTests",
+      "tier": 2,
+      "capabilities": [],
+      "methods": []
+    },
+    {
+      "assembly": "LiteMonitor.Tests",
+      "class": "LiteMonitor.Tests.SettingsEditingDesktopTests",
+      "tier": 4,
+      "capabilities": [
+        "Desktop"
+      ],
+      "methods": []
+    }
+  ]
+}

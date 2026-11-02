@@ -14,14 +14,12 @@ TrafficHistory.json.bak
 *.log
 
 # Local review and development artifacts
-/docs/reviews/evidence/
-/docs/archive/
 /.review-scratch/
 
 # UI automation helper output: elevated-automation scripts plus ~40MB of
 # screenshot captures used for manual DPI/layout measurement. Machine-local
 # working material only; the reusable DPI probe is kept under
-# docs/verification/theme-studio/measure-dpi.ps1 instead.
+# docs/development/measure-dpi.ps1 instead.
 /.cua-helper/
 
 # Local parallel-development worktrees (owner/verifier flow).
@@ -79,3 +77,6 @@ restore.binlog
 
 # 探针运行输出（截图/诊断 JSON）
 tools/ThemeSwitchReproProbe/output/
+
+# 探针与取证产生的证据目录（不入库）
+/.evidence/

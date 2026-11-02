@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-    E08（完善计划 §12 第二条 / P-E08a）：验证证据收集工具。
-    按 docs/verification/templates/evidence-template.md 的字段口径，收集"机器可推导"的证据字段，
+    验证证据收集工具。
+    按证据模板的字段口径，收集"机器可推导"的证据字段，
     生成 Markdown 骨架供验收报告引用。
 
 .DESCRIPTION

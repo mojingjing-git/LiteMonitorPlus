@@ -1,285 +1,324 @@
 name: Release
 
-# ============================================================================
-# LiteMonitorPlus 发布流程（人工触发）
-#
-# ★ 触发方式：仅 workflow_dispatch（手动）。
-#   ★★ 绝不使用 pull_request / pull_request_target：签名私钥绝不出现在 PR 流程里。
-#      仓库里没有任何自动触发发布的入口 —— 合并到 master 不会自动签名、不会自动发版。
-#   ★★ 额外硬门禁：即使手动派发，选了非 master 分支也会在第一个 job 步骤直接失败。
-#
-# ★ 本流程只做到"把资产准备好并上传到**草稿** Release"：
-#   是否真正公开发布由人工决定 —— softprops/action-gh-release 以 draft: true 运行，
-#   产出的 Release 是草稿（对外不可见），需要人工在 GitHub 上点 Publish 才公开。
-#
-# ★ 密钥处理：
-#   私钥来自 GitHub Secret（UPDATE_SIGNING_KEY_PKCS8，PKCS#8 DER 的 base64），
-#   只写入 runner 临时目录（$env:RUNNER_TEMP，仓库之外），流程结束即删除。
-#   Secret 缺失 / 格式错误 / 与客户端内置公钥不匹配 —— 一律**直接失败**，
-#   绝不跳过、绝不用占位密钥、绝不降级为"未签名发布"。
-# ============================================================================
-
+# Manual release only. The workflow deliberately has no release-on-push path, so a
+# merge cannot expose the update signing secret.
 on:
   workflow_dispatch:
     inputs:
       release_date:
-        description: '发布日期（YYYY-MM-DD，留空则取 UTC 今天）'
+        description: 'Release date in YYYY-MM-DD; defaults to the current UTC date'
         required: false
         type: string
 
-# 默认最小权限；下面 job 里单独提权到 contents: write（仅用于上传 Release 资产）
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  release:
-    name: 构建 / 测试 / 签名 / 上传资产（草稿）
-    # net8.0-windows + x64 + win-x64 RID ⇒ 只能在 Windows runner 上构建
+  fast-validation:
+    name: Hosted Debug and Release Tier 3 validation
     runs-on: windows-latest
-    timeout-minutes: 60
-
+    timeout-minutes: 90
     permissions:
-      contents: write
-
+      contents: read
     env:
-      # 与 ci.yml 完全一致的防假绿阈值，改动必须两处同步。
-      # ★ 2026-10-23 主审更正（LM-056）：本文件原先写着 1000，而 ci.yml 是 1281 ——
-      #   注释声称"完全一致"但**实际不一致** ⇒ 删掉 281 条用例时 CI 会红、**发布流水线却会绿**。
-      #   现按 ci.yml 同步到 1526（1433 + 73 + 19），并把跳过数上限与"必须真正执行的测试类"
-      #   也一并同步（原先本文件连 -MaxSkipped / -MustExecuteTestClass 都没传，
-      #   只依赖脚本默认值 1）。门禁**只收紧不放宽**。
-      #    → 1530（1438+73+19）/阈值 1530（LM-095 受控重建失败时如实收尾：主工程 +4）。
-      #    → 1547（1455+73+19）/阈值 1547（P2 批次 B 全部修复并集成后：主工程 **+17**
-      #      （LM-075 4 + LM-076 4 + LM-077 3 + LM-078 6；LM-079 三处 StripPort 同构改动不加用例））。
-      #    #    → 1547（1455+73+19）/阈值 1547（P2 批次 B 全部修复并集成后：主工程 **+17**
-      #    #      （LM-075 4 + LM-076 4 + LM-077 3 + LM-078 6；LM-079 三处 StripPort 同构改动不加用例））。
-      #    #    → 1632（1540+73+19）/阈值 1632（P2 批次 C/D/E 全部修复并集成后：主工程 **+85**
-      #    #      （LM-080 6 + LM-094 6 + LM-081 42 + LM-082 4 + LM-083 5 + LM-084 3 + LM-085 4
-      #    #        + LM-086 4 + LM-087 5 + LM-088 3 + LM-089 3；LM-089 只改 release.yml 不加用例数））。
-      #    → 1831（1739+73+19）/阈值 1831（2026-10-24 独立复审修复：主工程 +199
-      #      = GPU 35 + 市场 33 + 指标 56 + 主机 36 + 热加载 15 + IL 13 + 门禁 11；
-      #      Debug / Release 各实测 1830 通过、0 失败、1 指定 E2E 跳过，原 1632 身份保留）。
-      #    → 1862（1770+73+19）/阈值 1862（R3 渲染路线批次：主工程 +31
-      #      = StatusBuilder 10 + 原因码 8 + 主题路线 helper 9 + LiveGlass 迁移 3；
-      #    → 1876（+14 = 主题市场契约 7 + 主题市场策略 7，均夹具驱动常跑不跳过；
-      #      Debug 实测 1784 通过、0 失败、1 指定 E2E 跳过）。
-      #    → 2028（+152 = W1 批次八包新增用例：F01 WS 升级解析 46 + F03 网络值时效 27
-      #      + F04 任务栏宿主生命周期 12 + F08a 磁盘 CountersOnly 23 + F12 字体测量安全 25
-      #      + F13 插件兜底恢复 19；F09a/F15 为研究/工具包，不加用例数；
-      #      Debug 实测主工程 1936（1935 通过 + 1 指定 E2E 跳过）+ Updater 73 + GPU 19
-      #      = 2028 总计、0 失败）。
-      #    → 2029（+1 = F08a 收尾把磁盘探测策略迁移用例补到 24 条；
-      #      Debug 实测主工程 1937（1936 通过 + 1 指定 E2E 跳过）+ Updater 73 + GPU 19
-      #      = 2029 总计、0 失败）。
-      #    → 2414（+181 = P-B0b 行为 fixture：格式四类×数值域矩阵，期望值实跑固化；
-      #      合并后 master Debug 实测主工程 2322（2315 通过 + 7 本机跳过）+ Updater 73
-      #      + GPU 19 = 2414 总计、0 失败）。
-      #      ★ 本行与 ci.yml 同名阈值逐字一致（LM-056 教训）。
-      #    → 2414（+181 = P-B0b 行为 fixture：格式四类×数值域矩阵，期望值实跑固化；
-      #      合并后 master Debug 实测主工程 2322（2315 通过 + 7 本机跳过）+ Updater 73
-      #      + GPU 19 = 2414 总计、0 失败）。
-      #    → 2436（+22 = autohide R2：AutoHideLogic 纯函数核心【泊出/弹出数学、30px 弹出带、
-      #      DPI 现算、看门狗判据、落盘守卫、用户几何复现】；实机冒烟 4 步全过后合入；
-      #      合并后 Debug 实测主工程发现数 2352（2345 执行全通 + 7 跳过）+ Updater 73 + GPU 19 = 2444）。
-      #    → 2504（+58 = P-I2 监督/协议/原子性/百次启停 +33 与 B3 模块服务/选择性应用 +25；
-      #      I2+B3 双包合并后 Debug 实测主工程发现数 2412（2405 执行全通 + 7 跳过）
-      #      + Updater 73 + GPU 19 = 2504）。
-      #    → 2571（+67 = W1 三路：E05 主题接线 5 + E08a 定位器 12 + E00 独立复验 22 + R4 跨帧等
-      #      既有补强；I2+B3 双包合并后实测主工程发现数 2479（2472 执行全通 + 7 跳过）
-      #      + Updater 73 + GPU 19 = 2571）。MUST 清单采纳 E08a 建议（新增 8 类，MIN_COUNT 6→5：
-      #      E05 护栏/原子性各 5 例）。
-      #    → 2686（+115 = W2 双包：E01 快照/目录/需求 34 + E02 命令面语义 13 + 其余收口；
-      #      两包合入后单次串行实测主工程发现数 2594（2587 执行全通 + 7 跳过）
-      #      + Updater 73 + GPU 19 = 2686）。★ 运维约束：多 lane 不可同机并发跑 LHM 测试套件
-      #      （testhost 崩溃/整机进程数断言抖动均为争抢所致，测试执行须串行）。
-      MIN_TEST_TOTAL: 2686
-      #      ★ 本行与 ci.yml 同名阈值逐字一致（LM-056 教训）。
-      EXPECTED_TEST_ASSEMBLIES: 'LiteMonitor.Tests, LiteMonitor.Updater.Tests, LiteMonitor.GpuNonperformance.Tests'
-      # ★ 跳过用例数上限（与 ci.yml 一致）：只允许联网 E2E 被跳过。
-      MAX_SKIPPED_TESTS: 1
-      # ★ 必须真正执行的测试类（与 ci.yml 一致）：插件市场契约用例不得被跳过。
-      # ★ 必须真正执行的测试类（C-1，与 ci.yml 一致）。
-      # ★ 主题市场（M6，与 ci.yml 一致）：两个主题测试类钉进硬门禁。
-      MUST_EXECUTE_TEST_CLASS: 'MarketIndexContractTests, ReviewMarketPersistenceRegressionTests, ReviewMarketInstallRaceRegressionTests, ThemeMarketContractTests, ThemeMarketPolicyTests, ReviewFix20261026Tests, E00Verification20261026Tests, I2HostSupervisionTests, I2PipeProtocolTests, I2SnapshotAtomicityTests, SettingsProjectionTests, SettingsModuleServicesTests, E05ThemeWiringGuardTests'
-      MUST_EXECUTE_TEST_CLASS_MIN_COUNT: 5
       LITEMONITOR_PLUGIN_REPO: ${{ github.workspace }}/tests/fixtures/plugin-repo
-      # ★ 主题市场契约夹具路径（M6，与 ci.yml 一致）。
       LITEMONITOR_THEME_REPO: ${{ github.workspace }}/tests/fixtures/theme-repo
-      # 故意不设置 LITEMONITOR_E2E=1
       DOTNET_NOLOGO: 'true'
       DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
       DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
 
     steps:
-      - name: 仅允许在 master 上发布
+      - name: Require master
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host "GITHUB_REF : $env:GITHUB_REF"
-          Write-Host "GITHUB_SHA : $env:GITHUB_SHA"
           if ($env:GITHUB_REF -ne 'refs/heads/master') {
-            throw "发布流程只允许在 master 分支上运行，当前分支为 $env:GITHUB_REF"
+            throw "Release must run from master; received $env:GITHUB_REF"
           }
 
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 安装 .NET 8 SDK
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: 还原依赖
+      - name: Restore
         run: dotnet restore LiteMonitor.sln
 
-      - name: 构建（Debug）
-        run: dotnet build LiteMonitor.sln -c Debug --nologo
+      - name: Build Debug and record identity
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' -Configuration Debug -BaseOutputPath bin/ -BuildOnly
+          if ($LASTEXITCODE -ne 0) { throw "Debug build failed: exit $LASTEXITCODE" }
 
-      # ★ 生产主窗体启动检查（与 ci.yml **逐字同构**，R01 引入）★
-      #   发布流水线**不能**比 CI 松：LM-056 的教训就是"CI 会红、发布流水线却会绿"。
-      #   R01 是一条"主窗体构造即抛 NullReferenceException"的**启动阻断**缺陷，
-      #   它曾一路穿过全部单测与连续 8 次绿色 CI —— 因为没有任何用例真的构造过
-      #   生产 MainForm。⇒ 发布流水线也必须真的把它构造出来。
-      #   退出码契约（tools/GpuHostLifecycleProbe）：
-      #     0 = 构造成功；1 = 构造抛异常（**真实缺陷 ⇒ 本步骤红**）。
-      #   该场景刻意**不跑消息循环**（不触发 OnShown）⇒ 网页服务不会开始监听。
-      - name: 生产主窗体启动检查（R01：真实构造 MainForm）
+      - name: Production MainForm startup check
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          dotnet build tools/GpuHostLifecycleProbe/GpuHostLifecycleProbe.csproj -c Debug --nologo -v quiet
-          if ($LASTEXITCODE -ne 0) { throw "探针构建失败（退出码 $LASTEXITCODE）" }
-          $out = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\startup-check'
+          # 独立 BaseOutputPath：全局属性级联到全部被引用工程，避免这次构建重写
+          # BuildOnly 记录的构建身份所锚定的根 bin/Debug（check-stamp 会比对产物 hash）。
+          dotnet build tools/GpuHostLifecycleProbe/GpuHostLifecycleProbe.csproj -c Debug --nologo -v quiet -p:BaseOutputPath=bin/probe/
+          if ($LASTEXITCODE -ne 0) { throw "Startup probe build failed: exit $LASTEXITCODE" }
+
+          $out = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts/startup-check'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $probe = 'tools\GpuHostLifecycleProbe\bin\Debug\net8.0-windows\GpuHostLifecycleProbe.exe'
-          # ★★ 探针是 WinExe（GUI 子系统）★★：PowerShell 的 `&` 对 GUI 程序
-          #   **不等待**、**不更新** $LASTEXITCODE；而上一步 `dotnet build` 恰好把
-          #   $LASTEXITCODE 置为 0 ⇒ `&` 之后读到的永远是 0 ⇒ 门禁**恒绿**。
-          #   实测（LM-090）：把 R01 的启动空引用放回去，这条门禁照样判 PASS，
-          #   而探针真实退出码是 1（探针根本没跑完就被判定了）。
-          #   ⇒ 必须用 Start-Process -PassThru + WaitForExit 取**真实**退出码。
-          # ★ 路径含空格时必须**手工加引号**（LM-092）：Start-Process 的 -ArgumentList
-          #   **不给**含空格的元素加引号 ⇒ 路径会被拆成多个 argv ⇒ 探针报
-          #   "Unknown argument"（退出码 64）⇒ 门禁误报红。GitHub 托管 runner 的
-          #   GITHUB_WORKSPACE 无空格，但自托管 runner / 本地含空格路径会命中。
-          $proc = Start-Process -FilePath $probe -ArgumentList @('--scenario=startup', ('"{0}"' -f $out)) -PassThru -WindowStyle Hidden
-          if (-not $proc.WaitForExit(180000)) {
-            try { $proc.Kill() } catch { }
-            throw '生产主窗体启动检查超时（180 s）'
+          $probe = Join-Path $env:GITHUB_WORKSPACE 'tools/GpuHostLifecycleProbe/bin/probe/Debug/net8.0-windows/GpuHostLifecycleProbe.exe'
+          $process = Start-Process -FilePath $probe -ArgumentList @('--scenario=startup', ('"{0}"' -f $out)) -PassThru -WindowStyle Hidden
+          if (-not $process.WaitForExit(180000)) {
+            try { $process.Kill() } catch { }
+            throw 'Startup check timed out after 180 seconds'
           }
-          $code = $proc.ExitCode
-          Write-Host "生产主窗体启动检查退出码: $code"
-          if ($code -ne 0) {
-            $err = Join-Path $out 'startup-error.log'
-            if (Test-Path -LiteralPath $err) { Write-Host '--- startup-error.log ---'; Get-Content -LiteralPath $err }
-            throw "生产主窗体启动检查失败（退出码 $code）—— 退出码契约：0=构造成功 / 1=MainForm 构造期抛异常 / 2=环境不具备 / 64=参数错误"
+          if ($process.ExitCode -ne 0) {
+            $errorLog = Join-Path $out 'startup-error.log'
+            if (Test-Path -LiteralPath $errorLog) {
+              Write-Host '--- startup-error.log ---'
+              Get-Content -LiteralPath $errorLog
+            }
+            throw "Startup check failed with exit code $($process.ExitCode)"
           }
 
-      # ★ 依赖清单门禁（与 ci.yml **逐字同构**，LM-089）★
-      #   发布流水线**不能**比 CI 松：LM-056 的教训就是"CI 会红、发布流水线却会绿"。
-      #   依赖漏列时 CI 会红，而发布流水线若不接这道门，就会照样构建 / 签名 / 上传草稿
-      #   ⇒ 发布准入与 CI 门禁不一致。下面的步骤与 ci.yml 的同名步骤**逐字一致**，
-      #   且位置相同（启动检查之后、跑测试之前）。
-      # ★ 第三方组件声明与实际依赖一致（LM-024 护栏，S5.3/S5.3b 引入）★
-      #   脚本以**实际解析**的依赖为真值（还原图 + 目标框架冲突消解），
-      #   核对 NOTICE 里声明的组件清单：
-      #     · 直接依赖漏列 / 版本不符   ⇒ 退出码 1（流水线红）
-      #     · 传递依赖漏列 / 版本不符   ⇒ 退出码 1（流水线红）
-      #     · 环境受阻（取不到还原图等）⇒ 退出码 3（流水线红，结论不可信时不放行）
-      #   LM-024 的根因就是"手工维护的清单必然漂移"——本步骤把一次性修正
-      #   变成可持续的门禁：以后新增依赖而忘记改 NOTICE，会在这里被挡住。
-      - name: 校验第三方组件声明与实际依赖一致（LM-024 护栏）
+      - name: Validate dependency manifest
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           & pwsh -NoProfile -File 'scripts/generate-dependency-manifest.ps1' -Mode Check
-          if ($LASTEXITCODE -ne 0) { throw "依赖清单核对失败（退出码 $LASTEXITCODE）" }
+          if ($LASTEXITCODE -ne 0) { throw "Dependency manifest validation failed: exit $LASTEXITCODE" }
 
-      - name: 清理历史测试结果
+      - name: Reset test result directory
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $results = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts/test-results'))
           $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
-          $results = [IO.Path]::GetFullPath((Join-Path $workspace 'ci-artifacts/test-results'))
-          if (-not $results.StartsWith($workspace.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw '测试结果目录越界' }
+          if (-not $results.StartsWith($workspace.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Test result path escaped GITHUB_WORKSPACE'
+          }
           if (Test-Path -LiteralPath $results) { Remove-Item -LiteralPath $results -Recurse -Force }
           New-Item -ItemType Directory -Force -Path 'ci-artifacts' | Out-Null
 
-      - name: 运行单元测试
+      - name: Run tests (Debug, Tier 3)
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
-          $log = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\test-Debug.log'
-          foreach ($assembly in @('LiteMonitor.Tests', 'LiteMonitor.Updater.Tests', 'LiteMonitor.GpuNonperformance.Tests')) {
-            $results = Join-Path $env:GITHUB_WORKSPACE "ci-artifacts/test-results/Debug/$assembly"
-            dotnet test "tests/$assembly/$assembly.csproj" -c Debug --nologo --results-directory $results --logger "trx;LogFileName=results.trx" |
-              Tee-Object -FilePath $log -Append
-            $code = $LASTEXITCODE
-            if ($code -ne 0) { throw "Debug $assembly 测试失败（退出码 $code）" }
-          }
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' -Tier 3 -Configuration Debug -BaseOutputPath bin/ -NoBuild -ResultsDirectory 'ci-artifacts/test-results/Debug' |
+            Tee-Object -FilePath 'ci-artifacts/test-Debug.log'
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "Debug Tier 3 failed: exit $code" }
 
-      - name: 强制校验测试发现数（防假绿）
+      - name: Verify exact test inventory (Debug, Tier 3)
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $assertArgs = @(
-            '-NoProfile',
-            '-File', '.github/workflows/assert-test-counts.ps1',
-            '-TrxRoot', 'ci-artifacts/test-results/Debug',
-            '-MinTotal', $env:MIN_TEST_TOTAL,
-            '-ExpectedAssembly', $env:EXPECTED_TEST_ASSEMBLIES,
-            '-MaxSkipped', $env:MAX_SKIPPED_TESTS,
-            '-MustExecuteTestClass', $env:MUST_EXECUTE_TEST_CLASS,
-            '-MustExecuteTestClassMinCount', $env:MUST_EXECUTE_TEST_CLASS_MIN_COUNT
-          )
-          & pwsh @assertArgs
-          if ($LASTEXITCODE -ne 0) { throw "测试发现数断言失败（退出码 $LASTEXITCODE）" }
+          & pwsh -NoProfile -File '.github/workflows/assert-test-tiers.ps1' -ResultsRoot 'ci-artifacts/test-results/Debug' -Configuration Debug -Tier 3 -BaseOutputPath bin/
+          if ($LASTEXITCODE -ne 0) { throw "Debug test inventory verification failed: exit $LASTEXITCODE" }
 
-      - name: 构建（Release）
-        run: dotnet build LiteMonitor.sln -c Release --nologo
-
-      - name: 运行单元测试（Release）
+      - name: Build Release and record identity
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
-          $log = Join-Path $env:GITHUB_WORKSPACE 'ci-artifacts\test-Release.log'
-          foreach ($assembly in @('LiteMonitor.Tests', 'LiteMonitor.Updater.Tests', 'LiteMonitor.GpuNonperformance.Tests')) {
-            $results = Join-Path $env:GITHUB_WORKSPACE "ci-artifacts/test-results/Release/$assembly"
-            dotnet test "tests/$assembly/$assembly.csproj" -c Release --nologo --results-directory $results --logger "trx;LogFileName=results.trx" |
-              Tee-Object -FilePath $log -Append
-            $code = $LASTEXITCODE
-            if ($code -ne 0) { throw "Release $assembly 测试失败（退出码 $code）" }
-          }
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' -Configuration Release -BaseOutputPath bin/ -BuildOnly
+          if ($LASTEXITCODE -ne 0) { throw "Release build failed: exit $LASTEXITCODE" }
 
-      - name: 强制校验测试发现数（Release）
+      - name: Run tests (Release, Tier 3)
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $assertArgs = @(
-            '-NoProfile',
-            '-File', '.github/workflows/assert-test-counts.ps1',
-            '-TrxRoot', 'ci-artifacts/test-results/Release',
-            '-MinTotal', $env:MIN_TEST_TOTAL,
-            '-ExpectedAssembly', $env:EXPECTED_TEST_ASSEMBLIES,
-            '-MaxSkipped', $env:MAX_SKIPPED_TESTS,
-            '-MustExecuteTestClass', $env:MUST_EXECUTE_TEST_CLASS,
-            '-MustExecuteTestClassMinCount', $env:MUST_EXECUTE_TEST_CLASS_MIN_COUNT
-          )
-          & pwsh @assertArgs
-          if ($LASTEXITCODE -ne 0) { throw "Release 测试发现数断言失败（退出码 $LASTEXITCODE）" }
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' -Tier 3 -Configuration Release -BaseOutputPath bin/ -NoBuild -ResultsDirectory 'ci-artifacts/test-results/Release' |
+            Tee-Object -FilePath 'ci-artifacts/test-Release.log'
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "Release Tier 3 failed: exit $code" }
 
-      - name: 读取版本号
+      - name: Verify exact test inventory (Release, Tier 3)
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -File '.github/workflows/assert-test-tiers.ps1' -ResultsRoot 'ci-artifacts/test-results/Release' -Configuration Release -Tier 3 -BaseOutputPath bin/
+          if ($LASTEXITCODE -ne 0) { throw "Release test inventory verification failed: exit $LASTEXITCODE" }
+
+      - name: Upload fast validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-fast-validation
+          path: |
+            ci-artifacts/test-results/**
+            ci-artifacts/test-*.log
+            ci-artifacts/startup-check/**
+          if-no-files-found: error
+          retention-days: 14
+
+  system-validation:
+    name: Capable-runner Tier 4 and Tier 5 validation
+    needs: fast-validation
+    runs-on: [self-hosted, Windows, X64, LiteMonitor-SystemValidation]
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      LITEMONITOR_PLUGIN_REPO: ${{ github.workspace }}/tests/fixtures/plugin-repo
+      LITEMONITOR_THEME_REPO: ${{ github.workspace }}/tests/fixtures/theme-repo
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore LiteMonitor.sln
+
+      - name: Build Release for system validation
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' -Configuration Release -BaseOutputPath bin/ -BuildOnly
+          if ($LASTEXITCODE -ne 0) { throw "Release build failed: exit $LASTEXITCODE" }
+
+      - name: Run tests (Release, exact Tier 4)
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' -Tier 4 -ExactTier -Configuration Release -BaseOutputPath bin/ -NoBuild -ResultsDirectory 'ci-artifacts/test-results/Tier4' -Capabilities Desktop,Gpu,Hardware -RequiredCapabilities Desktop,Gpu,Hardware |
+            Tee-Object -FilePath 'ci-artifacts/test-Tier4.log'
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "System validation Tier 4 failed: exit $code" }
+
+      - name: Verify exact test inventory (Release, exact Tier 4)
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -File '.github/workflows/assert-test-tiers.ps1' -ResultsRoot 'ci-artifacts/test-results/Tier4' -Configuration Release -Tier 4 -ExactTier -BaseOutputPath bin/ -RequiredCapabilities Desktop,Gpu,Hardware
+          if ($LASTEXITCODE -ne 0) { throw "Tier 4 test inventory verification failed: exit $LASTEXITCODE" }
+
+      - name: Run tests (Release, exact Tier 5)
+        shell: pwsh
+        run: |
+          # Tier 5 清单中没有任何 Hardware 能力用例（唯一的 Hardware 用例在 Tier 4），
+          # RequiredCapabilities 带 Hardware 会让目录工具直接抛"无匹配校验"而失败。
+          & pwsh -NoProfile -File 'scripts/run-tests.ps1' -Tier 5 -ExactTier -Configuration Release -BaseOutputPath bin/ -NoBuild -ResultsDirectory 'ci-artifacts/test-results/Tier5' -Capabilities Desktop,Gpu,Hardware -RequiredCapabilities Desktop,Gpu |
+            Tee-Object -FilePath 'ci-artifacts/test-Tier5.log'
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "System validation Tier 5 failed: exit $code" }
+
+      - name: Verify exact test inventory (Release, exact Tier 5)
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -File '.github/workflows/assert-test-tiers.ps1' -ResultsRoot 'ci-artifacts/test-results/Tier5' -Configuration Release -Tier 5 -ExactTier -BaseOutputPath bin/ -RequiredCapabilities Desktop,Gpu
+          if ($LASTEXITCODE -ne 0) { throw "Tier 5 test inventory verification failed: exit $LASTEXITCODE" }
+
+      - name: Read version
         id: version
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $json = Get-Content -LiteralPath 'resources/version.json' -Raw -Encoding UTF8 | ConvertFrom-Json
-          $v = [string]$json.version
-          if ([string]::IsNullOrWhiteSpace($v)) { throw 'resources/version.json 里没有 version 字段' }
-          Write-Host "版本号: $v"
-          "version=$v" >> $env:GITHUB_OUTPUT
+          $versionJson = Get-Content -LiteralPath 'resources/version.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          $version = [string]$versionJson.version
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'resources/version.json has no version' }
+          "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: 确定发布日期
+      - name: Build unsigned release ZIP and SHA-256
+        shell: pwsh
+        env:
+          PACK_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & pwsh -NoProfile -File 'scripts/pack-release.ps1' -Version $env:PACK_VERSION -Brand 'LiteMonitorPlus' -OutDir 'dist'
+          if ($LASTEXITCODE -ne 0) { throw "pack-release.ps1 failed: exit $LASTEXITCODE" }
+
+          $name = "LiteMonitorPlus_v$env:PACK_VERSION-win-x64.zip"
+          $zip = Join-Path 'dist' $name
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw "Release ZIP is missing: $zip" }
+          $sha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item -LiteralPath $zip).Length
+          $manifest = [ordered]@{
+            schemaVersion = 1
+            repository = $env:GITHUB_REPOSITORY
+            commit = $env:GITHUB_SHA
+            ref = $env:GITHUB_REF
+            version = $env:PACK_VERSION
+            file = $name
+            sha256 = $sha256
+            size = $size
+            tiers = @(4, 5)
+            exactTier = $true
+            capabilities = @('Desktop', 'Gpu', 'Hardware')
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath 'dist/validated-release-manifest.json' -Encoding utf8
+          "$sha256  $name" | Set-Content -LiteralPath 'dist/validated-release.sha256' -Encoding ascii
+
+      - name: Upload validated unsigned release
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-release
+          path: |
+            dist/LiteMonitorPlus_v${{ steps.version.outputs.version }}-win-x64.zip
+            dist/validated-release-manifest.json
+            dist/validated-release.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload system validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-system-validation
+          path: |
+            ci-artifacts/test-results/**
+            ci-artifacts/test-*.log
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Verify, sign, and publish the validated artifact
+    needs: [fast-validation, system-validation]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+
+    steps:
+      - name: Require master
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF -ne 'refs/heads/master') {
+            throw "Release must run from master; received $env:GITHUB_REF"
+          }
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Download validated unsigned release
+        uses: actions/download-artifact@v4
+        with:
+          name: validated-release
+          path: dist
+
+      - name: Verify same-commit artifact digest
+        id: artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifestPath = 'dist/validated-release-manifest.json'
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Validated release manifest is missing' }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ([int]$manifest.schemaVersion -ne 1) { throw 'Unsupported validated release manifest schema' }
+          if ([string]$manifest.repository -cne $env:GITHUB_REPOSITORY) { throw 'Validated artifact belongs to another repository' }
+          if ([string]$manifest.commit -cne $env:GITHUB_SHA) { throw 'Validated artifact belongs to another commit' }
+          if ([string]$manifest.ref -cne $env:GITHUB_REF) { throw 'Validated artifact belongs to another ref' }
+          if (-not [bool]$manifest.exactTier -or (@($manifest.tiers) -join ',') -ne '4,5') { throw 'Validated artifact lacks exact Tier 4 and Tier 5 evidence' }
+          if ((@($manifest.capabilities | Sort-Object) -join ',') -ne 'Desktop,Gpu,Hardware') { throw 'Validated artifact lacks required capability evidence' }
+
+          $file = [string]$manifest.file
+          if ([string]::IsNullOrWhiteSpace($file) -or [IO.Path]::GetFileName($file) -cne $file) { throw 'Validated artifact file name is invalid' }
+          $zip = Join-Path 'dist' $file
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw "Validated release ZIP is missing: $zip" }
+          if ([long](Get-Item -LiteralPath $zip).Length -ne [long]$manifest.size) { throw 'Validated release ZIP size does not match its manifest' }
+          $actualSha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -cne [string]$manifest.sha256) { throw 'Validated release ZIP digest does not match its manifest' }
+          "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
+
+      - name: Resolve release date
         id: release_date
         shell: pwsh
         env:
@@ -287,123 +326,76 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $date = ([string]$env:RELEASE_DATE_INPUT).Trim()
-          if ([string]::IsNullOrWhiteSpace($date)) {
-            $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
-          }
-          if ($date -notmatch '^\d{4}-\d{2}-\d{2}$') {
-            throw "发布日期格式必须是 yyyy-MM-dd，收到：$date"
-          }
-          Write-Host "发布日期: $date"
+          if ([string]::IsNullOrWhiteSpace($date)) { $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
+          if ($date -notmatch '^\d{4}-\d{2}-\d{2}$') { throw "Invalid release date: $date" }
           "date=$date" >> $env:GITHUB_OUTPUT
 
-      - name: 打包发布件并计算 SHA-256
-        shell: pwsh
-        env:
-          PACK_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $version = $env:PACK_VERSION
-          & pwsh -NoProfile -File 'scripts/pack-release.ps1' -Version $version -Brand 'LiteMonitorPlus' -OutDir 'dist'
-          if ($LASTEXITCODE -ne 0) { throw "pack-release.ps1 失败（退出码 $LASTEXITCODE）" }
-          $zip = "dist/LiteMonitorPlus_v$version-win-x64.zip"
-          if (-not (Test-Path -LiteralPath $zip)) { throw "发布包缺失: $zip" }
-          $sha = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()
-          $size = (Get-Item -LiteralPath $zip).Length
-          Write-Host "ZIP    : $zip"
-          Write-Host ("大小   : {0:N2} MB" -f ($size / 1MB))
-          Write-Host "SHA256 : $sha"
-
-      - name: 准备签名私钥（仅写入 runner 临时目录）
+      - name: Prepare signing key in runner temp
         shell: pwsh
         env:
           SIGNING_KEY_B64: ${{ secrets.UPDATE_SIGNING_KEY_PKCS8 }}
         run: |
           $ErrorActionPreference = 'Stop'
-          # ★ 私钥缺失 = 直接失败。绝不跳过、绝不用占位密钥、绝不降级成未签名发布。
           if ([string]::IsNullOrWhiteSpace($env:SIGNING_KEY_B64)) {
-            throw '缺少 GitHub Secret UPDATE_SIGNING_KEY_PKCS8（应为 PKCS#8 DER 的 base64）。发布流程必须签名，不允许跳过。'
+            throw 'Missing GitHub secret UPDATE_SIGNING_KEY_PKCS8'
           }
-          $b64 = $env:SIGNING_KEY_B64.Trim()
-          try {
-            $keyBytes = [Convert]::FromBase64String($b64)
-          }
-          catch {
-            throw 'UPDATE_SIGNING_KEY_PKCS8 不是合法的 base64（应为 PKCS#8 DER 的 base64）。'
-          }
-          if ($keyBytes.Length -lt 32) { throw '私钥长度异常，拒绝继续。' }
-          # ★ 只写入 runner 临时目录（仓库之外）：不会被 git 看到，不会进 artifact
+          try { $keyBytes = [Convert]::FromBase64String($env:SIGNING_KEY_B64.Trim()) }
+          catch { throw 'UPDATE_SIGNING_KEY_PKCS8 must be base64-encoded PKCS#8 DER' }
+          if ($keyBytes.Length -lt 32) { throw 'Signing key payload is implausibly short' }
           $keyPath = Join-Path $env:RUNNER_TEMP 'update-signing-key.pkcs8'
-          [System.IO.File]::WriteAllText($keyPath, $b64, (New-Object System.Text.UTF8Encoding($false)))
-          Write-Host "私钥已写入 runner 临时目录: $keyPath"
-          Write-Host "（仓库目录之外，流程结束时删除；内容不会打印）"
-          Write-Host "私钥文件 SHA-256 指纹: $((Get-FileHash -LiteralPath $keyPath -Algorithm SHA256).Hash)"
+          [IO.File]::WriteAllText($keyPath, $env:SIGNING_KEY_B64.Trim(), [Text.UTF8Encoding]::new($false))
 
-      - name: 生成签名后的 version.json
+      - name: Sign validated ZIP
         shell: pwsh
-        env:
-          SIGNING_VERSION: ${{ steps.version.outputs.version }}
-          SIGNING_DATE: ${{ steps.release_date.outputs.date }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $version = $env:SIGNING_VERSION
-          $date = $env:SIGNING_DATE
+          $manifest = Get-Content -LiteralPath 'dist/validated-release-manifest.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          $version = [string]$manifest.version
+          $zip = Join-Path 'dist' ([string]$manifest.file)
           $keyPath = Join-Path $env:RUNNER_TEMP 'update-signing-key.pkcs8'
-          if (-not (Test-Path -LiteralPath $keyPath)) { throw "签名私钥不存在: $keyPath" }
-          $zip = "dist/LiteMonitorPlus_v$version-win-x64.zip"
-          # sign-release.ps1 会校验"私钥 ↔ 客户端内置公钥"是否一致，不一致直接抛错
-          & pwsh -NoProfile -File 'scripts/sign-release.ps1' `
-            -ZipPath $zip `
-            -Version $version `
-            -ReleaseDate $date `
-            -KeyPath $keyPath
-          if ($LASTEXITCODE -ne 0) { throw "sign-release.ps1 失败（退出码 $LASTEXITCODE）" }
+          & pwsh -NoProfile -File 'scripts/sign-release.ps1' -ZipPath $zip -Version $version -ReleaseDate '${{ steps.release_date.outputs.date }}' -KeyPath $keyPath
+          if ($LASTEXITCODE -ne 0) { throw "sign-release.ps1 failed: exit $LASTEXITCODE" }
 
-      - name: 独立复验签名（客户端内置公钥）
+          $signedSha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($signedSha256 -cne [string]$manifest.sha256) {
+            throw 'Signed artifact no longer matches the system-validated digest'
+          }
+
+      - name: Verify signature with embedded public key
         shell: pwsh
-        env:
-          SIGNING_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $version = $env:SIGNING_VERSION
-          & pwsh -NoProfile -File '.github/workflows/verify-release-signature.ps1' `
-            -VersionJsonPath 'resources/version.json' `
-            -ZipPath "dist/LiteMonitorPlus_v$version-win-x64.zip"
-          if ($LASTEXITCODE -ne 0) { throw "签名复验失败（退出码 $LASTEXITCODE）" }
+          $manifest = Get-Content -LiteralPath 'dist/validated-release-manifest.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          $zip = Join-Path 'dist' ([string]$manifest.file)
+          & pwsh -NoProfile -File '.github/workflows/verify-release-signature.ps1' -VersionJsonPath 'resources/version.json' -ZipPath $zip
+          if ($LASTEXITCODE -ne 0) { throw "Signature verification failed: exit $LASTEXITCODE" }
 
-      - name: 上传测试报告与签名后的 version.json
+      - name: Upload release metadata
         uses: actions/upload-artifact@v4
         with:
           name: release-metadata
           path: |
             resources/version.json
-            ci-artifacts/test-results/**/*.trx
-            ci-artifacts/test-*.log
-            ci-artifacts/startup-check/**
+            dist/validated-release-manifest.json
+            dist/validated-release.sha256
           if-no-files-found: error
           retention-days: 14
 
-      - name: 上传发布包到 GitHub Release（草稿，不自动公开）
+      - name: Create draft GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: LiteMonitorPlus v${{ steps.version.outputs.version }}
-          # ★ draft: true —— Release 以草稿形式存在，对外不可见。
-          #   是否发布由人工在 GitHub 页面点 Publish 决定，流水线不会自动公开。
+          tag_name: v${{ steps.artifact.outputs.version }}
+          name: LiteMonitorPlus v${{ steps.artifact.outputs.version }}
           draft: true
           prerelease: false
-          files: dist/LiteMonitorPlus_v${{ steps.version.outputs.version }}-win-x64.zip
+          files: dist/LiteMonitorPlus_v${{ steps.artifact.outputs.version }}-win-x64.zip
           fail_on_unmatched_files: true
 
-      - name: 清理签名私钥
+      - name: Remove signing key
         if: always()
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
           $keyPath = Join-Path $env:RUNNER_TEMP 'update-signing-key.pkcs8'
           if (Test-Path -LiteralPath $keyPath) {
             Remove-Item -LiteralPath $keyPath -Force
-            Write-Host "已删除: $keyPath"
-          }
-          else {
-            Write-Host '私钥文件不存在，无需清理'
           }

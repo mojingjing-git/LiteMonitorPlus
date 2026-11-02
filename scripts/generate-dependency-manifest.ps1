@@ -1,7 +1,7 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-    第三方依赖清单：核对（护栏）与生成（LM-024）。
+    第三方依赖清单：核对（护栏）与生成。
 
 .DESCRIPTION
     NOTICE 里的第三方组件清单过去是纯手工维护的，于是出现过两类漂移：

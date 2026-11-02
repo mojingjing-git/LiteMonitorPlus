@@ -12,7 +12,7 @@
         <sha256>
         <releaseDate>
 
-    刻意不签 changelog（含中文与换行，规范化极易漂移）、不签整段 JSON
+    刻意不签整段 JSON
     （序列化顺序/缩进/行尾任何一处变化都会让签名失效）。
 
     签名算法：ECDSA P-256 + SHA-256，签名格式为 DER SEQUENCE（RFC 3279），
@@ -28,8 +28,10 @@
     发布日期（如 2026-10-21）。它是被签字段，改动会导致验签失败。
 
 .PARAMETER KeyPath
-    PKCS#8 私钥（base64）。默认 <repo>/secrets/update-signing-key.pkcs8。
-    私钥绝不进版本库；.gitignore 已排除 secrets/、*.pkcs8、*.pfx。
+    PKCS#8 私钥（base64）。默认 %LOCALAPPDATA%\LiteMonitor++\signing\update-signing-key.pkcs8。
+    私钥**不放在仓库工作区内**：工作区里的任何文件都可能被同步工具、备份或
+    打包程序带走，私钥放在仓库外才能保证"拿到工作区不等于拿到签名能力"。
+    .gitignore 仍排除 secrets/、*.pkcs8、*.pfx 作为第二道保险。
 
 .PARAMETER VersionJsonPath
     默认 <repo>/resources/version.json。
@@ -56,12 +58,15 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-if (-not $KeyPath) { $KeyPath = Join-Path $repoRoot 'secrets\update-signing-key.pkcs8' }
+if (-not $KeyPath) {
+    # 私钥默认放在仓库外：仓库工作区不是密钥的存放位置。
+    $KeyPath = Join-Path $env:LOCALAPPDATA 'LiteMonitor++\signing\update-signing-key.pkcs8'
+}
 if (-not $VersionJsonPath) { $VersionJsonPath = Join-Path $repoRoot 'resources\version.json' }
 
 if (-not (Test-Path -LiteralPath $ZipPath)) { throw "找不到发布包：$ZipPath" }
 if (-not (Test-Path -LiteralPath $KeyPath)) {
-    throw "找不到签名私钥：$KeyPath`n私钥不进版本库。若已丢失，只能用新密钥重新发布一次客户端（旧客户端会验不过新签名）。"
+    throw "找不到签名私钥：$KeyPath`n私钥不放在仓库内。若已丢失，只能用新密钥重新发布一次客户端（旧客户端会验不过新签名）。"
 }
 if (-not (Test-Path -LiteralPath $VersionJsonPath)) { throw "找不到 version.json：$VersionJsonPath" }
 
@@ -118,7 +123,7 @@ finally {
     $ecdsa.Dispose()
 }
 
-# 5. 回写 version.json。只替换这 4 个键的字符串值，其余内容（changelog、缩进、行尾）原样保留。
+# 5. 回写 version.json。只替换这 4 个键的字符串值，其余内容（缩进、行尾）原样保留。
 #    ★ 要求模板里已有 sha256 / signature 两个占位键：不要在这里做"缺键就插入"，
 #      那需要处理缩进与逗号，容易把 JSON 改成客户端解析不了的样子。
 $json = [IO.File]::ReadAllText($VersionJsonPath)

@@ -12,8 +12,8 @@
       本工程整体 Nullable=disable，但部分测试文件为了表达意图写了 `?` 标注，
       编译器因此报出 263 条 CS8632 噪音 —— 它们不携带任何可空性信息（上下文未启用），
       纯属"遮光板"警告，直接抑制；真正需要治理的是在 Nullable=enable 下暴露的
-      真实可空缺陷（627 条），已登记为独立 Phase 6，不在本次范围内。
-      根治方案（Phase 6）：在测试工程开启 <Nullable>enable</Nullable> 并逐条治理。
+      真实可空缺陷，登记为独立的测试工程治理项，不在本工程范围内。
+      根治方案：在测试工程开启 <Nullable>enable</Nullable> 并逐条治理。
     -->
     <NoWarn>$(NoWarn);CS8632</NoWarn>
   </PropertyGroup>
@@ -28,7 +28,7 @@
     <ProjectReference Include="..\..\LiteMonitor.csproj" />
     <!--
       ★ 探针工程（GpuHostLifecycleProbe，WinExe）作为**被引用工程**接入。
-        理由：LM-086 / LM-087 / LM-088 的回归护栏必须能**真的调用**探针内部的
+        理由：相关回归护栏必须能**真的调用**探针内部的
         "持续送帧通道"（ScenePump）、"隔离门判定"（IsolationGate）与
         "源码漂移比对"（CandidateHashGuard）—— 只读源码文本的断言太弱
         （改个变量名就失效，也测不出"失败会不会被如实报告"）。
@@ -40,6 +40,7 @@
     <!-- [S03] 卸载强杀子进程探针：MarketUninstallRecoveryTests 以子进程方式
          启动它在指定事务边界"被杀"，随后在测试进程内做启动恢复对账。 -->
     <ProjectReference Include="..\..\tools\MarketUninstallCrashProbe\MarketUninstallCrashProbe.csproj" />
+    <ProjectReference Include="..\..\tools\TestSuiteCatalog\TestSuiteCatalog.csproj" />
   </ItemGroup>
 
   <!--

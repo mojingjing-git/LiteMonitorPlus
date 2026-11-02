@@ -5,7 +5,7 @@
 .DESCRIPTION
     来源：feat/r06c-namespace 的 scripts/architecture-assert.ps1（commit 3169dc0），
     2026-10-26 按裁决摘取并适配 master 现状
-    （见 docs/plans/2026-10-26-architecture-decoupling-plan.md §7.1「只摘脚本」）。
+
 
     适配要点：
     - 期望值不硬编码 0，而是与 scripts/architecture-baseline.json 基线比对：
@@ -22,7 +22,7 @@
       pwsh -NoProfile -File scripts/architecture-assert.ps1 -UpdateBaseline  # 以当前实际值刷新基线并退出 0
 
     断言口径：
-      C 组 —— docs/plans/2026-10-24-architecture-debt-requirements.md §3.3
+      C 组 —— 命名空间与目录结构的一致性
       A 组 —— 同文档 §1.3
 
     A-6 / A-7 的"命中"口径：剔除注释与字符串字面量后，命中的是 WinForms / System.Drawing
@@ -45,7 +45,7 @@ $SkipDirs  = @('bin', 'obj', '.git', '.worktrees')
 $BS        = [char]92
 $LF        = [char]10
 
-# ── 目录 → 命名空间 的历史差异白名单（需求 C4：必须显式记录，不得靠约定俗成）────────
+# ── 目录 → 命名空间 的差异白名单（必须显式记录，不得靠约定俗成）────────
 $NamespaceWhitelist = @{
     'src/System'                   = 'LiteMonitor.SystemServices'
     'src/System/HardwareServices'  = 'LiteMonitor.SystemServices'
@@ -65,7 +65,7 @@ $UiControlTypes  = @('Label','Panel','Control','Application','Timer')
 $DrawingTypes    = @('Graphics','Brush','Pen','Image')
 
 function Test-SkippedPath {
-    # 以「相对仓库根」的路径分段判定，避免把位于 .worktrees 下的 worktree 自身全部排除
+    # 以「相对仓库根」的路径分段判定，避免把派生副本目录自身全部排除
     param([string] $FullPath)
     $rel = $FullPath.Substring($Root.Length).TrimStart([char]92, [char]47)
     foreach ($seg in $rel.Split([char]92)) {
@@ -228,7 +228,7 @@ function Add-Assertion {
 $files = Get-AllCSharpFiles
 Write-Host ("扫描文件: " + $files.Count + " 个 .cs（根目录 " + $Root + "）")
 
-# ── C-1 / C-2：命名空间前缀与裸命名空间 ────────────────────────────────────────
+# ── 命名空间前缀与裸命名空间 ────────────────────────────────────────────────
 $c1 = 0; $c2 = 0; $c4 = 0; $c3Files = New-Object System.Collections.Generic.List[string]
 foreach ($f in $files) {
     $text = [System.IO.File]::ReadAllText($f)
@@ -281,7 +281,7 @@ function Get-UsingCount {
 
 $corePaths = @($coreFiles)
 function Get-UsingCount2 {
-    # 新旧两套命名空间前缀各查一遍再合并（master 现状为 LiteMonitor.src.*，B5 统一后为 LiteMonitor.*）
+    # 新旧两套命名空间前缀各查一遍再合并（master 现状为 LiteMonitor.src.*，命名空间统一后为 LiteMonitor.*）
     param([string[]] $Paths, [string] $Ns1, [string] $Ns2)
     $r1 = Get-UsingCount $Paths $Ns1
     $r2 = Get-UsingCount $Paths $Ns2
@@ -379,7 +379,7 @@ if ($failed -eq 0) {
     exit 0
 }
 if ($WarnOnly) {
-    Write-Host '警告档：存在未通过的架构断言（不阻断 CI），须在对应 B 阶段内转绿。'
+    Write-Host '警告档：存在未通过的架构断言（不阻断 CI），须在对应的治理项内转绿。'
     exit 0
 }
 Write-Host '架构断言失败。'

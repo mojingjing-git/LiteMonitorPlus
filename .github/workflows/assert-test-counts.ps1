@@ -22,8 +22,9 @@
       4. 存在失败用例即失败
       5. 全部用例都被跳过（实际执行数为 0）即失败 —— "跑了 1000 条其实一条没执行"
          与"没发现"同样是假绿
-      6. ★ 跳过用例总数 <= -MaxSkipped（默认 1）—— 跳过必须**有上限**。
-         允许跳过的只有联网 E2E（MarketE2ETests，门控 LITEMONITOR_E2E=1）。
+      6. ★ 跳过用例总数 <= -MaxSkipped（默认 2）—— 跳过必须**有上限**。
+         允许跳过的只有两类依赖外部环境的门禁：联网 E2E（MarketE2ETests，
+         门控 LITEMONITOR_E2E=1）与真实 GPU 出帧门禁。
          S4.1 之前这条是缺失的：插件市场的 6 条契约用例长期被记为 Skipped，
          流水线照样是绿的（ENV-003）。
       7. ★ -MustExecuteTestClass 指定的测试类必须**真正执行**：
@@ -81,8 +82,8 @@ param(
         'LiteMonitor.GpuNonperformance.Tests'
     ),
 
-    # ★ 跳过用例数上限。默认 1 = 只允许联网 E2E 被跳过。
-    [int]$MaxSkipped = 1,
+    # ★ 跳过用例数上限。默认 2 = 只允许联网 E2E 与真实 GPU 出帧门禁被跳过。
+    [int]$MaxSkipped = 2,
 
     # ★ 必须真正执行（不允许被跳过）的测试类。
     [string[]]$MustExecuteTestClass = @(),
@@ -280,7 +281,7 @@ if ($reports.Count -eq 0) {
 }
 
 # 同一程序集出现多份 TRX ⇒ 计数被重复累加/新旧混杂 ⇒ 任何"总数达标"都不可信。
-# 【C-1 / 评审阻断 1】因此这里**不再"取最后一次 + 警告"**（那是旧行为，已废止）：
+# 因此这里**不再"取最后一次 + 警告"**（那是旧行为，已废止）：
 #   重复时由下方 $duplicated 分支直接 FAIL（exit 4），让这类状态现形，
 #   而不是挑一份好看的糊弄过去。
 # 本段只做**按程序集分组**，供 $duplicated 判定与失败时逐条列出。
@@ -321,7 +322,7 @@ if ($mustExecClasses.Count -gt 0) {
 }
 
 if ($duplicated) {
-    # 【C-1 / 评审阻断 1】同一程序集多份 TRX 一律 **FAIL**（原为"取最后一次+警告"）：
+    # 同一程序集多份 TRX 一律 **FAIL**（原为"取最后一次+警告"）：
     #   多份 TRX 意味着测试输出目录没清干净或重复执行 —— 计数被重复累加/新旧混杂时，
     #   任何"总数达标"都不可信。让这类状态现形，而不是挑一份好看的。
     Write-Host ''
@@ -403,18 +404,22 @@ if ($sumTotal -lt $MinTotal) {
 
 # ★ 跳过总数上限（收紧项）。跳过数只允许减少，不允许增加。
 if ($sumSkipped -gt $MaxSkipped) {
-    $problems.Add("被跳过的用例共 $sumSkipped 条，超过上限 $MaxSkipped —— 允许跳过的只有联网 E2E（MarketE2ETests）；契约用例被跳过属于门禁失效。")
+    $problems.Add("被跳过的用例共 $sumSkipped 条，超过上限 $MaxSkipped —— 允许跳过的只有联网 E2E（MarketE2ETests）与真实 GPU 出帧门禁；契约用例被跳过属于门禁失效。")
 }
 
 # 数量上限不能证明跳过的是被授权的用例：精确核对程序集及用例身份。
-$allowedSkippedTest = 'LiteMonitor.Tests.MarketE2ETests.端到端_拉索引_安装_校验_卸载'
+# 允许跳过的只有两类依赖外部环境的门禁：联网 E2E 与真实 GPU 出帧门禁。
+$allowedSkippedTests = @(
+    'LiteMonitor.Tests.MarketE2ETests.端到端_拉索引_安装_校验_卸载',
+    'LiteMonitor.Tests.R10GpuFrameGateTests.R10_真实GPU_首帧与目标切换后持续出帧_且不重建设备'
+)
 foreach ($r in $selected) {
     if ($r.Skipped -ne $r.SkippedTests.Count) {
         $problems.Add("程序集 '$($r.Assembly)' 的跳过计数与明细不符，无法验证允许跳过的用例身份。")
     }
     foreach ($t in $r.SkippedTests) {
-        if ($r.Assembly -ine 'LiteMonitor.Tests' -or $t.Name -cne $allowedSkippedTest) {
-            $problems.Add("未获允许的跳过用例：[$($r.Assembly)] $($t.Name) —— 仅指定联网 E2E 可以跳过。")
+        if ($r.Assembly -ine 'LiteMonitor.Tests' -or ($allowedSkippedTests -cnotcontains $t.Name)) {
+            $problems.Add("未获允许的跳过用例：[$($r.Assembly)] $($t.Name) —— 仅指定联网 E2E 与真实 GPU 出帧门禁可以跳过。")
         }
     }
 }

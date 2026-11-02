@@ -234,8 +234,8 @@ namespace LiveCheck
         /// </summary>
         /// <remarks>
         /// ★ 为什么必须用标题精确匹配：
-        ///   启动顺序是 ApplicationConfiguration.Initialize() → DriverInstaller.CheckPawnIOBeforeHardware()
-        ///   （内部用模态 UpdateDialog **阻塞**）→ Application.Run(new MainForm())。
+///   启动顺序是 ApplicationConfiguration.Initialize() → DriverInstaller.CheckPawnIOBeforeHardware()
+///   （内部用模态 UpdateDialog **阻塞**）→ Application.Run(new MainForm())。
         ///   PawnIO 缺失/升级时，驱动安装对话框**与主窗体同属一个进程**，
         ///   只按"面积最大"会把那个对话框当成主窗体，报出它的 DPI 与客户区。
         ///   主工程已把主窗体标题固定成精确的 "LiteMonitor++"（见 MainForm_Transparent.cs），
@@ -628,7 +628,7 @@ Write-Host @'
     7. 亮色背景下文字/告警数值可读，扫描线与辉光没糊住数字
     8. 当前不应出现任何实时玻璃效果（M2 未接入主面板）
 
-    完整清单：docs/superpowers/plans/2026-10-20-appearance-a14-live-checklist.md
+
 '@ -ForegroundColor Cyan
 
 Write-Host '已启动。关闭主界面即可退出。' -ForegroundColor Green
