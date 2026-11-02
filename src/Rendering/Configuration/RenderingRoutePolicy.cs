@@ -82,7 +82,8 @@ public static class RenderingRoutePolicy
             _ => MaterialKind.Legacy
         };
 
-        if (materialKind == MaterialKind.CyberPunk)
+        if (materialKind == MaterialKind.CyberPunk ||
+            UsesFixedNamedVisualPreset(configuration))
         {
             return new RenderingRouteDecision(
                 RenderingRoute.GpuFixedInput,
@@ -137,6 +138,33 @@ public static class RenderingRoutePolicy
             CaptureRequested: true,
             FallbackCode: null,
             errors);
+    }
+
+    private static bool UsesFixedNamedVisualPreset(
+        ThemeRenderingConfig configuration)
+    {
+        if (configuration.Parameters is not { } parameters ||
+            !parameters.TryGetValue(
+                "visualPreset",
+                out System.Text.Json.JsonElement value) ||
+            value.ValueKind != System.Text.Json.JsonValueKind.String)
+        {
+            return false;
+        }
+
+        string? preset = value.GetString()?.Trim();
+        return string.Equals(
+                   preset,
+                   ThemeRenderingConfig.NebulaAuroraVisualPreset,
+                   StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(
+                   preset,
+                   ThemeRenderingConfig.NixieBrassVisualPreset,
+                   StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(
+                   preset,
+                   ThemeRenderingConfig.CrtPhosphorVisualPreset,
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private static RenderingRouteDecision Legacy(string? fallbackCode) =>

@@ -54,7 +54,7 @@ public sealed class MainFormStartupOrderTests
             "初始化顺序错误：`_winHelper` 的赋值在 IL 偏移 " + assignOffset +
             "，而 `new UIController(...)` 在偏移 " + createOffset +
             "。UIController 构造函数会经 ApplyTheme → ApplyGpuRenderingRoute 读 `_winHelper`" +
-            "（MainForm.IsWindowLayered），晚赋值就是**启动即崩**的空引用（R01）。");
+            "（MainForm.IsWindowLayered），晚赋值就是**启动即崩**的空引用。");
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public sealed class MainFormStartupOrderTests
                 Assert.True(
                     assignedAt >= 0 && assignedAt < instruction.Offset,
                     "MainForm 构造函数在 IL 偏移 " + instruction.Offset + " 读取 `_winHelper`，" +
-                    "但此前没有对它的赋值（R01）。");
+                    "但此前没有对它的赋值。");
             }
         }
     }

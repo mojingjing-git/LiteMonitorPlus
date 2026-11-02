@@ -175,6 +175,16 @@ namespace LiteMonitor.src.UI.SettingsPage
             // Subclasses (like PluginPage) can override it for post-save logic.
         }
 
+        /// <summary>Collect only editable values; no persistence or runtime side effects.</summary>
+        public virtual void CollectDraftEdits() { }
+
+        public void ApplyCommittedSettings(Settings committed)
+        {
+            var draft = Config;
+            try { Config = committed; Save(); }
+            finally { Config = draft; }
+        }
+
         protected void ClearAndDispose(Control.ControlCollection controls)
         {
             // Clear pending actions whenever we destroy the UI controls

@@ -1,6 +1,6 @@
 # AppearanceSettingsProbe —— W3「设置页意外回写」缺陷包的防回退探针
 
-本工程验证 **W3 缺陷包**（`docs/superpowers/plans/2026-10-21-appearance-w3-writeback-fix.md`）的防回退门槛，分两组：
+本工程验证外观设置的**写回防回退门槛**（口径见 `docs/specs/theme-system.md`），分两组：
 
 | 组别 | 覆盖 | 判定方式 |
 |---|---|---|
@@ -131,7 +131,7 @@ tests/AppearanceSettingsProbe/output/AppearanceSettingsProbe.exe [--repo-root <�
 
 - 本探针**不能**替代实机端到端复现。W3-1（不可见的「跟随任务栏」复选框）与
   W3-3（设备偏好原值不可用）都需要真实的设置页交互才看得见端到端效果，
-  那部分清单在 `docs/superpowers/plans/2026-10-20-appearance-a14-live-checklist.md`。
+  那部分清单由 `docs/architecture/background-frame.md` 的验收要求给出。
 - `LiteThresholdRow` 的输入框是构造函数的**局部变量**、没有暴露为字段，
   因此「粘贴非法文本不得把阈值改成 0」这条只能靠源码级门槛保证，
   运行时无法直接构造该场景。

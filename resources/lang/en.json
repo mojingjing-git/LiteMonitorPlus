@@ -257,7 +257,7 @@
     "MainForm": "Panel",
     "OnlyShowEnabled": "Enabled Only",
     "HorizontalFollowsTaskbar": "Bar follows taskbar order",
-    "MonitorItemTip": "Tip: Space in Name/Short hides label. Empty resets. Units support {u}+char.",
+    "MonitorItemTip": "Name/short label: space hides, empty resets. Units: choose Auto, Hidden or Custom; custom units support {u}.",
     "__Comment_Page4__": "--- 4. Thresholds ---",
     "Thresholds": "Thresholds",
     "ThresholdsTips": "Bar color changes by threshold",

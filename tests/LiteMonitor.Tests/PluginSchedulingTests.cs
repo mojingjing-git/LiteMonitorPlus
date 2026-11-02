@@ -35,7 +35,7 @@ namespace LiteMonitor.Tests
     /// （旧代次的回调不得重新调度、不得写回结果）。
     /// </para>
     ///
-    /// 覆盖契约 docs/superpowers/plans/2026-10-22-v3-s1-inflight-lease-contract.md §3.5 的
+    /// 并发租约见 docs/architecture/inflight-lease.md：
     /// T1–T8 全部条目，全部为真实执行断言（无跳过、无早退）。
     ///
     /// 时间相关用例全部走可注入接缝（手动驱动计时器 + 可见性探针 + 执行探针），

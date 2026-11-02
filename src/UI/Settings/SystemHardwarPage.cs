@@ -24,8 +24,10 @@ namespace LiteMonitor.src.UI.SettingsPage
         //   编译器看不到这条赋值链，于是在构造函数出口（44 行）报 CS8618。
         //   ★ 运行时它们在构造函数返回前一定已赋值，`= null!` 只是声明占位，运行期行为不变。
         //   ★ 与本文件下方 _cbGpuCount 的既有写法保持一致。
-        private LiteComboBox _cbDisk = null!, _cbNet = null!, _cbGpu = null!, _cbMobo = null!;
+        private LiteComboBox _cbDisk = null!, _cbNet = null!, _cbGpu = null!, _cbMobo = null!, _cbDiskProbe = null!;
         private LiteComboBox _cbFanCpu = null!, _cbFanPump = null!, _cbFanCase = null!;
+        private LiteCheck _ipExclusionToggle = null!;
+        private Label? _runtimeCapabilityLabel;
 
         // ★ [#166] CPU 电压来源下拉（枚举**已发布**的候选，保存稳定传感器标识）
         //   在 CreateSourceCard() 里赋值，同上，用 `= null!` 占位。
@@ -89,7 +91,7 @@ namespace LiteMonitor.src.UI.SettingsPage
         {
             var group = new LiteSettingsGroup(LanguageManager.T("Menu.DiskProbeStrategy"));
 
-            group.AddComboIndex(this, "Menu.DiskProbeMode",
+            _cbDiskProbe = group.AddComboIndex(this, "Menu.DiskProbeMode",
                 new[] {
                     LanguageManager.T("Menu.DiskProbeModeCountersOnly"),
                     LanguageManager.T("Menu.DiskProbeModeSmartAllowed")
@@ -119,6 +121,15 @@ namespace LiteMonitor.src.UI.SettingsPage
         private void RefreshDiskProbeStatus()
         {
             if (_diskProbeStatusLabel == null) return;
+            _cbDiskProbe.Enabled = !HardwareGateway.IsHostMode;
+            if (HardwareGateway.IsHostMode)
+            {
+                _diskProbeStatusLabel.Text = GetText(
+                    "Host 模式暂不支持磁盘探测策略。",
+                    "Disk probe policy is unavailable in Hardware Host mode.");
+                _diskProbeStatusLabel.ForeColor = UIColors.TextWarn;
+                return;
+            }
 
             DiskProbePolicy? policy = HardwareGateway.DiskProbePolicy;
             string stateKey = policy == null ? "Menu.DiskProbeStateCountersOnly" : policy.State switch
@@ -156,7 +167,7 @@ namespace LiteMonitor.src.UI.SettingsPage
         /// </summary>
         private void ApplyDiskProbeModeToRuntime()
         {
-            if (Config == null || !HardwareGateway.IsRegistered) return;
+            if (Config == null || !HardwareGateway.IsRegistered || HardwareGateway.IsHostMode) return;
 
             DiskProbeMode target = Config.DiskProbeMode == (int)DiskProbeMode.SmartAllowed
                 ? DiskProbeMode.SmartAllowed
@@ -189,10 +200,10 @@ namespace LiteMonitor.src.UI.SettingsPage
         {
             var group = new LiteSettingsGroup(LanguageManager.T("Menu.IpTrafficExclusion"));
 
-            var toggle = group.AddToggle(this, "Menu.IpTrafficExclusionEnabled",
+            _ipExclusionToggle = group.AddToggle(this, "Menu.IpTrafficExclusionEnabled",
                 () => Config?.IpTrafficExclusionEnabled ?? false,
                 v => { if (Config != null) Config.IpTrafficExclusionEnabled = v; });
-            toggle.CheckedChanged += (s, e) => RefreshIpExclusionStatus();
+            _ipExclusionToggle.CheckedChanged += (s, e) => RefreshIpExclusionStatus();
 
             // ---- 多行 IP 列表 ----
             var ipPanel = new Panel { Dock = DockStyle.Fill, AutoSize = true, BackColor = Color.White };
@@ -315,6 +326,16 @@ namespace LiteMonitor.src.UI.SettingsPage
         private void RefreshIpExclusionStatus()
         {
             if (_ipStatusLabel == null) { return; }
+            _ipExclusionToggle.Enabled = !HardwareGateway.IsHostMode;
+            if (_ipListBox != null) _ipListBox.Enabled = !HardwareGateway.IsHostMode;
+            if (HardwareGateway.IsHostMode)
+            {
+                _ipStatusLabel.Text = GetText(
+                    "Host 模式暂不支持 IP 流量排除。",
+                    "IP traffic exclusion is unavailable in Hardware Host mode.");
+                _ipStatusLabel.ForeColor = UIColors.TextWarn;
+                return;
+            }
 
             NetworkTrafficExclusionStatus? status = HardwareGateway.TrafficExclusionStatus;
             if (status == null)
@@ -355,18 +376,9 @@ namespace LiteMonitor.src.UI.SettingsPage
             {
                 string strAuto = LanguageManager.T("Menu.Auto");
 
-                // 1. 并行等待所有数据返回 (改走 HardwareMonitor 无参静态 —— B2：UI 侧不再触碰采集器内部对象与锁)
-                // ★ [F07] 磁盘改成 **Label + Value**（值 = 稳定设备身份）——
-                //   同型号的两块盘必须能分别选择，旧实现按显示名去重只剩一块（#538）。
-                var taskDisks = Task.Run(() => HardwareMonitor.ListAllDiskOptions());
-                var taskNets  = Task.Run(() => HardwareMonitor.ListAllNetworks());
-                var taskGpus  = Task.Run(() => HardwareMonitor.ListAllGpuOptions());
-                var taskFans  = Task.Run(() => HardwareMonitor.ListAllFans());
-                var taskMobo  = Task.Run(() => HardwareMonitor.ListAllMoboTemps());
-                // ★ [#166] CPU 电压候选：只读**已发布**的快照（不扫硬件树、不触发采集）
-                var taskCpuVoltage = Task.Run(() => HardwareMonitor.ListCpuVoltageCandidates());
-
-                await Task.WhenAll(taskDisks, taskNets, taskGpus, taskFans, taskMobo, taskCpuVoltage);
+                // The gateway selects process-local discovery or the Host catalog. The settings
+                // page never talks to HardwareMonitor directly.
+                HardwareSelectionOptions options = await HardwareGateway.GetSelectionOptionsAsync();
 
                 // ★ 页面可能在 await 期间被释放（设置窗体关闭 ⇒ DisposeCachedPages 释放全部页面）。
                 //   此时继续操作控件没有意义；而且 async void 的未捕获异常会经
@@ -376,8 +388,8 @@ namespace LiteMonitor.src.UI.SettingsPage
                 // ★ 实际检测到的显卡数量 (用于「监控显卡数量」下拉的上限) ★
                 //   用局部变量承接: 直接写 `taskGpus.Result?.Count` 会把 Result 的可空状态
                 //   污染到下面的 FillGpuSync(_cbGpu, taskGpus.Result, ...) 调用上 (CS8604)。
-                var detectedGpus = taskGpus.Result;
-                _detectedGpuCount = detectedGpus?.Count ?? 0;
+                var detectedGpus = options.Gpus;
+                _detectedGpuCount = detectedGpus.Count;
 
                 // ★ 真实卡数拿到了, 收窄「监控显卡数量」下拉的选项 ★
                 // (构造时只能给满 1..8, 因为此刻硬件还没枚举完)
@@ -540,18 +552,52 @@ namespace LiteMonitor.src.UI.SettingsPage
                 }
 
                 // 3. 瞬间填入所有数据 (因为布局被挂起，用户看不见中间过程)
-                FillDiskSync(_cbDisk, taskDisks.Result, Config.PreferredDisk);
-                FillSync(_cbNet, taskNets.Result, Config.PreferredNetwork);
-                FillGpuSync(_cbGpu, taskGpus.Result, Config.PreferredGpu);
-                FillSync(_cbMobo, taskMobo.Result, Config.PreferredMoboTemp);
+                FillDiskSync(_cbDisk, options.Disks.ToList(), Config.PreferredDisk);
+                FillSync(_cbNet, options.Networks.ToList(), Config.PreferredNetwork);
+                FillGpuSync(_cbGpu, options.Gpus.ToList(), Config.PreferredGpu);
+                FillSync(_cbMobo, options.MoboTemperatures.ToList(), Config.PreferredMoboTemp);
                 
                 // Fan 的数据是复用的
-                FillSync(_cbFanCpu, taskFans.Result, Config.PreferredCpuFan);
-                FillSync(_cbFanPump, taskFans.Result, Config.PreferredCpuPump);
-                FillSync(_cbFanCase, taskFans.Result, Config.PreferredCaseFan);
+                FillSync(_cbFanCpu, options.Fans.ToList(), Config.PreferredCpuFan);
+                FillSync(_cbFanPump, options.Fans.ToList(), Config.PreferredCpuPump);
+                FillSync(_cbFanCase, options.Fans.ToList(), Config.PreferredCaseFan);
 
-                // ★ [#166] CPU 电压来源
-                FillCpuVoltageSync(_cbCpuVoltage, taskCpuVoltage.Result, Config.PreferredCpuVoltageSensor);
+// CPU 电压来源
+                FillCpuVoltageSync(_cbCpuVoltage, options.CpuVoltageCandidates.ToList(), Config.PreferredCpuVoltageSensor);
+
+                if (options.IsHostLimited)
+                {
+                    _cbDisk.Enabled = options.Disks.Count > 0;
+                    _cbNet.Enabled = options.Networks.Count > 0;
+                    _cbGpu.Enabled = options.Gpus.Count > 0;
+                    _cbGpuCount.Enabled = options.Gpus.Count > 0;
+                    _cbMobo.Enabled = options.MoboTemperatures.Count > 0;
+                    _cbFanCpu.Enabled = options.Fans.Count > 0;
+                    _cbFanPump.Enabled = options.Fans.Count > 0;
+                    _cbFanCase.Enabled = options.Fans.Count > 0;
+                    _cbCpuVoltage.Enabled = options.CpuVoltageCandidates.Count > 0;
+
+                    if (_runtimeCapabilityLabel != null)
+                    {
+                        _runtimeCapabilityLabel.Text = GetText(
+                            "Host 模式只使用 Host 发布的硬件目录；没有可用候选的来源已禁用，未支持的指标不会由本地补数。",
+                            "Host mode uses only the Host catalog. Sources without candidates are disabled, and unsupported metrics are not filled locally.");
+                        _runtimeCapabilityLabel.ForeColor = UIColors.TextWarn;
+                    }
+                    string limited = GetText(
+                        "Host 模式当前只提供 CPU/GPU 目录；其余来源保持原值但不可用。",
+                        "Host mode currently exposes only CPU/GPU entries; other sources keep their saved values but are unavailable.");
+                    if (_diskProbeStatusLabel != null)
+                    {
+                        _diskProbeStatusLabel.Text = limited;
+                        _diskProbeStatusLabel.ForeColor = UIColors.TextWarn;
+                    }
+                    if (_ipStatusLabel != null)
+                    {
+                        _ipStatusLabel.Text = limited;
+                        _ipStatusLabel.ForeColor = UIColors.TextWarn;
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -611,6 +657,24 @@ namespace LiteMonitor.src.UI.SettingsPage
             }
         }
 
+        private void RefreshRuntimeCapabilityState()
+        {
+            bool hostMode = HardwareGateway.IsHostMode;
+            if (_cbDiskProbe is not null) _cbDiskProbe.Enabled = !hostMode;
+            if (_ipExclusionToggle is not null) _ipExclusionToggle.Enabled = !hostMode;
+            if (_ipListBox is not null) _ipListBox.Enabled = !hostMode;
+            if (_runtimeCapabilityLabel == null) return;
+
+            _runtimeCapabilityLabel.Text = hostMode
+                ? GetText(
+                    "Host 模式不执行主进程驱动检查；磁盘探测和 IP 流量排除仅保留原配置，不能在本次运行中启用。",
+                    "Host mode does not run the main-process driver check. Disk probing and IP traffic exclusion keep their saved values but cannot be enabled in this run.")
+                : GetText(
+                    "主进程驱动检查可用。",
+                    "The main-process driver check is available.");
+            _runtimeCapabilityLabel.ForeColor = hostMode ? UIColors.TextWarn : UIColors.TextSub;
+        }
+
         private void CreateSourceCard()
         {
             var group = new LiteSettingsGroup(LanguageManager.T("Menu.HardwareSettings"));
@@ -626,6 +690,17 @@ namespace LiteMonitor.src.UI.SettingsPage
             );
 
             // 内存/显存显示模式 (从主界面设置移来)
+            _runtimeCapabilityLabel = new Label
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                Font = UIFonts.Regular(8F),
+                ForeColor = UIColors.TextSub,
+                Padding = new Padding(0, 4, 0, 4),
+            };
+            group.AddFullItem(_runtimeCapabilityLabel);
+            RegisterRefresh(RefreshRuntimeCapabilityState);
+
             string[] memOptions = { LanguageManager.T("Menu.Percent"), LanguageManager.T("Menu.UsedSize") };
             group.AddComboIndex(this, "Menu.MemoryDisplayMode", memOptions,
                 () => Config?.MemoryDisplayMode ?? 0,

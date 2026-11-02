@@ -15,7 +15,7 @@
   </PropertyGroup>
 
   <!--
-    ★ Phase 5 · 强类型编译门禁（仅 Release）。
+    ★ 强类型编译门禁（仅 Release）。
     语义与理由见仓库根 LiteMonitor.csproj 的同名 PropertyGroup 注释；
     本工程是「门禁 1」的三个生产工程之一（零警告硬门禁）。
   -->

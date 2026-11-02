@@ -6,7 +6,7 @@ namespace LiteMonitor.src.SystemServices
 {
     /// <summary>
     /// 磁盘探测模式（P-F08a 止血层）。
-    /// <para><b>背景</b>：取证报告 <c>docs/verification/2026-10-25-TASK-3-crash-hardware.md</c> 确认
+    /// <para><b>根因</b>：硬件采样规范 <c>docs/specs/hardware-sampling.md</c> 与既有取证共同确认，
     /// fork 的 <c>HardwareMonitor</c> 无条件 <c>IsStorageEnabled = true</c>，于是 LHM 0.9.6 在
     /// <c>Computer.Open()</c> 里**创建存储设备组并打开设备句柄**，直接导致：</para>
     /// <list type="bullet">

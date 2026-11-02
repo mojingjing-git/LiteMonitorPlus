@@ -152,7 +152,7 @@ namespace LiteMonitor.Tests
             }
             else
             {
-                Console.WriteLine("[13] 仓库尚未提供 themes 附加段（计划 §6 仓库侧工作未上线）——跳过主题流断言");
+                Console.WriteLine("[13] 仓库尚未提供 themes 附加段（ 仓库侧工作未上线）——跳过主题流断言");
             }
 
             // 清理

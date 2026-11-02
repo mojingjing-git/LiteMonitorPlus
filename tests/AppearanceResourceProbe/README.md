@@ -2,7 +2,7 @@
 
 本工程给 A17 的判据「**无句柄/内存持续增长**」提供测量手段。
 
-> A17 此前没有任何可用的测量手段 —— 这条判据只能靠人工看任务管理器。
+> 该判据缺少自动测量手段 —— 只能靠人工看任务管理器。
 > 本采样器把「句柄 / GDI 对象 / USER 对象 / 内存」变成一条可复核的时间序列。
 
 ## 它做什么
@@ -29,7 +29,7 @@
 # 采样一个正在运行的 LiteMonitor（60 秒，间隔 1 秒）
 tests/AppearanceResourceProbe/output/AppearanceResourceProbe.exe `
     --name LiteMonitor --label "空闲基线" --idle-baseline --duration-sec 60 `
-    --out docs/reviews/evidence/a17-release/idle
+    --out .evidence/release/idle
 
 # 或按 pid
 tests/AppearanceResourceProbe/output/AppearanceResourceProbe.exe --pid 12345 --label "换肤 x30"
@@ -103,7 +103,7 @@ tests/AppearanceResourceProbe/output/AppearanceResourceProbe.exe --pid 12345 --l
 
 - 本工具**只测量，不判定业务语义**。「这个增长是不是 bug」需要人工结合场景判断 ——
   场景清单、靶点与判定标准见
-  `docs/superpowers/plans/2026-10-21-appearance-a17-release-pressure.md`。
+  `docs/architecture/known-gaps.md` 与 `docs/design/gpu-themes/visual-spec.md`。
 - 采样器本身**未**验证「目标进程以管理员身份运行」这一路径
   （自测目标是普通权限的 `explorer.exe`）。实测时若报 `OpenProcess 失败`，用管理员身份重跑即可。
 - 采样期间目标进程必须**保持运行**；进程退出后采样器会保留已采到的样本并继续（读数可能为 0）。

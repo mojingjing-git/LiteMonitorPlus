@@ -114,6 +114,14 @@ namespace LiteMonitor.ThemeEditor
             ThemeApplied
         }
 
+        public enum SettingsRollbackState
+        {
+            NotAttempted,
+            Restored,
+            Failed,
+            Unknown
+        }
+
         /// <summary>应用执行结果细分（N06）。</summary>
         public sealed record ThemeApplyResult(
             bool Success,
@@ -123,7 +131,8 @@ namespace LiteMonitor.ThemeEditor
             string? EffectiveRoute = null,
             long Revision = 0,
             bool Partial = false,
-            IReadOnlyList<ModuleApplyResult>? Modules = null
+            IReadOnlyList<ModuleApplyResult>? Modules = null,
+            SettingsRollbackState SettingsRollback = SettingsRollbackState.NotAttempted
         );
 
         /// <summary>应用依赖注入（重做计划 §8 / N06）：保存完成后的应用动作由宿主提供，编辑器不反射。</summary>
@@ -288,6 +297,7 @@ namespace LiteMonitor.ThemeEditor
                     RefreshPreviewNow();
                 }
             };
+            _inspector.PropertyStructureEdited += (_, _) => RebindInspector();
 
             // === 画布（中栏）===
             var canvas = new Panel { Dock = DockStyle.Fill, BackColor = CanvasBack, Padding = new Padding(Dip(16)) };
@@ -305,7 +315,7 @@ namespace LiteMonitor.ThemeEditor
             };
             _previewPlaceholder = new Label
             {
-                Text = "选择左侧主题开始编辑。\n预览接入（TE04）前显示占位。",
+                Text = "选择左侧主题开始编辑。\n预览接入前显示占位。",
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter,
                 ForeColor = TextMuted,
@@ -865,12 +875,21 @@ namespace LiteMonitor.ThemeEditor
         // 文档操作
         // ============================================================
 
-        private ThemeSaveResult SaveSession()
+        private ThemeSaveResult SaveSession(bool suppressDialogs = false)
         {
             if (_session is null) return new ThemeSaveResult { Success = false, Error = "未打开主题。" };
 
             ThemeSaveResult result = _session.Save();
-            ReportSaveResult(result, saveAction: "保存");
+            if (suppressDialogs)
+            {
+                _statusSaved.Text = result.Success
+                    ? "保存成功。"
+                    : "保存失败：" + (result.Error ?? "未知错误");
+            }
+            else
+            {
+                ReportSaveResult(result, saveAction: "保存");
+            }
             if (result.Success)
             {
                 _recoveryTimer.Stop();
@@ -900,14 +919,14 @@ namespace LiteMonitor.ThemeEditor
             return result;
         }
 
-        private void ApplySession()
+        private void ApplySession(bool suppressSaveDialogs = false)
         {
             if (_session is null) return;
 
             // 有修改时走"保存并应用"顺序；保存失败不进入应用。
             if (_session.IsDirty)
             {
-                ThemeSaveResult saved = SaveSession();
+                ThemeSaveResult saved = SaveSession(suppressSaveDialogs);
                 if (!saved.Success) return;
             }
 
@@ -920,30 +939,47 @@ namespace LiteMonitor.ThemeEditor
             try
             {
                 ThemeApplyResult result = _applyGateway.ApplySavedTheme(_session.ThemeName, _session.Revision);
+                if (!result.Success && !result.Partial)
+                {
+                    _statusSaved.Text = FormatApplyFailureStatus(result);
+                    return;
+                }
+
                 if (result.Success)
                 {
                     _statusSaved.Text = $"已保存并应用（修订 r{result.Revision}，{result.EffectiveRoute ?? "正常生效"}）。";
                 }
-                else if (result.Partial)
+                else
                 {
                     _statusSaved.Text = $"主题已生效（{result.EffectiveTheme ?? "当前主题"}），但部分模块失败：" +
                         (result.Error ?? "可在设置中重试") + "；不存在原子回滚。";
-                }
-                else
-                {
-                    string stageDesc = result.Stage switch
-                    {
-                        ThemeApplyStage.SettingsPersisted => "Settings 持久化失败",
-                        ThemeApplyStage.ThemeApplied => "运行时应用失败",
-                        _ => "保存阶段失败"
-                    };
-                    _statusSaved.Text = $"已保存；{stageDesc}：" + (result.Error ?? "可在设置中重试");
                 }
             }
             catch (Exception ex)
             {
                 _statusSaved.Text = "已保存；应用异常：" + ex.Message;
             }
+        }
+
+        private static string FormatApplyFailureStatus(ThemeApplyResult result)
+        {
+            string stageDescription = result.Stage switch
+            {
+                ThemeApplyStage.SettingsPersisted => "Settings 持久化失败",
+                ThemeApplyStage.ThemeApplied => "运行时应用失败",
+                _ => "应用阶段失败"
+            };
+            string rollbackDescription = result.SettingsRollback switch
+            {
+                SettingsRollbackState.Restored => "；Settings 已回滚到旧主题",
+                SettingsRollbackState.Failed => "；Settings 回滚失败，磁盘可能仍指向新主题",
+                SettingsRollbackState.Unknown => "；Settings 回滚状态未知",
+                _ => string.Empty
+            };
+
+            return $"已保存；{stageDescription}；" +
+                (result.Error ?? "未提供错误信息") +
+                rollbackDescription;
         }
 
         private void ExportThemeJsonAction()
@@ -1079,7 +1115,7 @@ namespace LiteMonitor.ThemeEditor
             if (_session is null) return;
             if (_session.Undo())
             {
-                _inspector.RefreshValues();
+                RebindInspector();
                 OnSessionChanged();
             }
         }
@@ -1089,9 +1125,15 @@ namespace LiteMonitor.ThemeEditor
             if (_session is null) return;
             if (_session.Redo())
             {
-                _inspector.RefreshValues();
+                RebindInspector();
                 OnSessionChanged();
             }
+        }
+
+        private void RebindInspector()
+        {
+            if (_session is null) return;
+            _inspector.Bind(_session, _inspector.Target);
         }
 
         private void OnSessionChanged()
@@ -1593,7 +1635,15 @@ namespace LiteMonitor.ThemeEditor
 
         internal string SavedStatusTextForTesting => _statusSaved.Text ?? "";
 
+        internal ThemeDocumentSession? SessionForTesting => _session;
+
+        internal void UndoForTesting() => Undo();
+
+        internal void RedoForTesting() => Redo();
+
         internal void ApplyForTesting() => ApplySession();
+
+        internal void ApplyWithoutDialogsForTesting() => ApplySession(suppressSaveDialogs: true);
 
         internal void ExportJsonForTesting(string path) => ThemeExportService.ExportJson(_session!, path);
 

@@ -46,14 +46,16 @@ namespace LiteMonitor.ThemeEditor
 
             var list = new List<ThemePropertyDescriptor>();
             string material = NormalizeMaterial(theme.Rendering?.Material);
-            bool toolbar = IsFloatingToolbar(theme);
+            bool namedPreset = IsNamedVisualPreset(theme);
+            bool toolbar = !namedPreset && IsFloatingToolbar(theme);
 
             switch (target)
             {
                 case ThemeEditTarget.GpuMain:
                     list.AddRange(material == ThemeRenderingConfig.CyberPunkMaterial
                         ? BuildCyberPunkMain()
-                        : BuildLiquidGlassMain(toolbar));
+                        : BuildLiquidGlassMain(toolbar, namedPreset));
+                    list.Add(VisualPreset(material));
                     list.AddRange(BuildMotion(material));
                     break;
                 case ThemeEditTarget.GpuFallback:
@@ -68,12 +70,17 @@ namespace LiteMonitor.ThemeEditor
             // 使用固定前景，不得显示主题字体控件。
             IEnumerable<ThemePropertyDescriptor> shared =
                 _classic.Where(p => p.Scope.HasFlag(ThemePropertyScope.Shared));
-            if (target == ThemeEditTarget.GpuMain && !toolbar)
+            if (target == ThemeEditTarget.GpuMain && !toolbar && !namedPreset)
             {
                 shared = shared.Where(p => !p.JsonPath.StartsWith("font.", StringComparison.Ordinal));
             }
 
             list.AddRange(shared);
+            if (target == ThemeEditTarget.GpuMain && namedPreset)
+            {
+                list.AddRange(_classic.Where(
+                    p => p.JsonPath.StartsWith("color.", StringComparison.Ordinal)));
+            }
             return list;
         }
 
@@ -104,11 +111,33 @@ namespace LiteMonitor.ThemeEditor
                 StringComparison.OrdinalIgnoreCase);
         }
 
+        private static bool IsNamedVisualPreset(Theme theme)
+        {
+            string? preset = theme.Rendering is null
+                ? null
+                : ReadParameterString(theme, "visualPreset")?.Trim();
+            return preset is not null &&
+                (string.Equals(
+                    preset,
+                    ThemeRenderingConfig.NebulaAuroraVisualPreset,
+                    StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(
+                    preset,
+                    ThemeRenderingConfig.NixieBrassVisualPreset,
+                    StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(
+                    preset,
+                    ThemeRenderingConfig.CrtPhosphorVisualPreset,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
         // ============================================================
         // liquid_glass（TE00 §2.1 消费清单）
         // ============================================================
 
-        private static IEnumerable<ThemePropertyDescriptor> BuildLiquidGlassMain(bool toolbar)
+        private static IEnumerable<ThemePropertyDescriptor> BuildLiquidGlassMain(
+            bool toolbar,
+            bool namedPreset)
         {
             yield return Param("圆角半径", "cornerRadius", 0, 64, toolbar ? 30 : 26);
             yield return Param("玻璃厚度", "thickness", 0, 8, toolbar ? 8 : 1);
@@ -122,7 +151,10 @@ namespace LiteMonitor.ThemeEditor
             yield return Param("雾化强度", "fogStrength", 0, 1, toolbar ? 0.16 : 0.42);
             yield return Param("染色强度", "tintStrength", 0, 1, toolbar ? 0.038 : 0.055);
             yield return Param("阴影半径", "shadowRadius", 0, 64, toolbar ? 30 : 0);
-            yield return GlassStyle();
+            if (!namedPreset)
+            {
+                yield return GlassStyle();
+            }
         }
 
         // ============================================================
@@ -214,10 +246,143 @@ namespace LiteMonitor.ThemeEditor
                 Choices = choices,
                 Getter = theme => ReadParameterString(theme, "glassStyle") ?? ThemeRenderingConfig.StandardGlassStyle,
                 Setter = (theme, value) => WriteParameter(
-                    theme, "glassStyle", JsonSerializer.SerializeToElement(value as string ?? ThemeRenderingConfig.StandardGlassStyle)),
+                    theme,
+                    "glassStyle",
+                    JsonSerializer.SerializeToElement(ChoiceText(value, choices))),
                 DefaultGetter = () => ThemeRenderingConfig.StandardGlassStyle,
-                ToJson = v => JsonValue.Create(v as string ?? ThemeRenderingConfig.StandardGlassStyle)
+                ToJson = v => JsonValue.Create(ChoiceText(v, choices))
             };
+        }
+
+        private static ThemePropertyDescriptor VisualPreset(string material)
+        {
+            string[] choices = material == ThemeRenderingConfig.LiquidGlassMaterial
+                ? [ThemeRenderingConfig.DefaultVisualPreset,
+                   ThemeRenderingConfig.NebulaAuroraVisualPreset]
+                : [ThemeRenderingConfig.DefaultVisualPreset,
+                   ThemeRenderingConfig.NixieBrassVisualPreset,
+                   ThemeRenderingConfig.CrtPhosphorVisualPreset];
+            return new ThemePropertyDescriptor
+            {
+                DisplayName = "视觉效果预设",
+                JsonPath = "rendering.parameters.visualPreset",
+                Group = "GPU 效果",
+                Scope = ThemePropertyScope.GpuMain,
+                EditorKind = ThemePropertyEditorKind.Choice,
+                Invalidation = ThemePropertyInvalidation.Rendering,
+                Choices = choices,
+                Getter = theme => ReadParameterString(theme, "visualPreset")?.Trim() ??
+                    ThemeRenderingConfig.DefaultVisualPreset,
+                Setter = (theme, value) =>
+                {
+                    theme.Rendering ??= new ThemeRenderingConfig();
+                    string preset = ChoiceText(value, choices);
+                    if (string.Equals(
+                        preset,
+                        ThemeRenderingConfig.DefaultVisualPreset,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        theme.Rendering.Parameters.Remove("visualPreset");
+                        return;
+                    }
+
+                    theme.Rendering.Parameters["visualPreset"] =
+                        JsonSerializer.SerializeToElement(preset);
+                },
+                SideEffects = (session, value) =>
+                {
+                    string preset = ChoiceText(value, choices);
+                    var edits = new List<ThemeFieldEdit>();
+                    if (string.Equals(
+                        preset,
+                        ThemeRenderingConfig.DefaultVisualPreset,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 切回 default：两路恢复为源文件的值（不是覆盖层当前值——否则
+                        // 来回切换后永远回不到源状态）；源无键 → 覆盖层删除标记，
+                        // 载荷对该键是无操作（缺省不物化）。
+                        JsonNode? liveBefore = session.GetSourceValue("rendering.parameters.liveBackground");
+                        edits.Add(new ThemeFieldEdit(
+                            "rendering.parameters.liveBackground", liveBefore,
+                            theme => RestoreParameter(theme, "liveBackground", liveBefore)));
+                        JsonNode? glassBefore = session.GetSourceValue("rendering.parameters.glassStyle");
+                        edits.Add(new ThemeFieldEdit(
+                            "rendering.parameters.glassStyle", glassBefore,
+                            theme => RestoreParameter(theme, "glassStyle", glassBefore)));
+                        return edits;
+                    }
+
+                    // 命名预设关闭实时背景并必须物化 false：nebula 校验强制该项，
+                    // 且无键时运行时 liquid_glass 缺省开启实时背景——缺省不落盘语义在此不适用。
+                    edits.Add(new ThemeFieldEdit(
+                        "rendering.parameters.liveBackground", JsonValue.Create(false),
+                        theme =>
+                        {
+                            theme.Rendering ??= new ThemeRenderingConfig();
+                            theme.Rendering.Parameters["liveBackground"] =
+                                JsonSerializer.SerializeToElement(false);
+                        }));
+                    if (string.Equals(
+                        preset,
+                        ThemeRenderingConfig.NebulaAuroraVisualPreset,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        edits.Add(new ThemeFieldEdit(
+                            "rendering.parameters.glassStyle", null,
+                            theme => theme.Rendering?.Parameters.Remove("glassStyle")));
+                    }
+
+                    return edits;
+                },
+                DefaultGetter = () => ThemeRenderingConfig.DefaultVisualPreset,
+                ToJson = value =>
+                {
+                    string preset = ChoiceText(value, choices);
+                    return string.Equals(
+                        preset,
+                        ThemeRenderingConfig.DefaultVisualPreset,
+                        StringComparison.OrdinalIgnoreCase)
+                        ? null
+                        : JsonValue.Create(preset);
+                }
+            };
+        }
+
+        private static string ChoiceText(object? value, IReadOnlyList<string> choices)
+        {
+            if (value is int index && index >= 0 && index < choices.Count)
+            {
+                return choices[index];
+            }
+
+            if (value is string text)
+            {
+                // 命中后返回规范候选项，避免源 JSON 的大小写/空白漂移被原样写回。
+                for (int i = 0; i < choices.Count; i++)
+                {
+                    if (string.Equals(choices[i], text.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        return choices[i];
+                    }
+                }
+            }
+
+            return choices[0];
+        }
+
+        /// <summary>按快照恢复 rendering.parameters 下的一个参数（null = 恢复为无键）。</summary>
+        private static void RestoreParameter(Theme theme, string key, JsonNode? snapshot)
+        {
+            if (theme.Rendering is null) return;
+
+            if (snapshot is null)
+            {
+                theme.Rendering.Parameters.Remove(key);
+                return;
+            }
+
+            theme.Rendering.Parameters[key] =
+                JsonSerializer.Deserialize<JsonElement>(snapshot.ToJsonString());
         }
 
         private static ThemePropertyDescriptor MotionBool(string display, string key, bool materialDefault)

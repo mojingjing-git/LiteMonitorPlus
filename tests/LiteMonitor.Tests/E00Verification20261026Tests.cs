@@ -610,7 +610,7 @@ namespace LiteMonitor.Tests
                     // 3) 重新泊出（R5 回归核心）：旧缺陷下 _parkedArea 残留 + dock=None
                     //    ⇒ 纯决策恒 None，自动隐藏永久卡死；修复后必须能重新泊出
                     Assert.True(PumpUntil(() => helper.IsHidden, TimeSpan.FromSeconds(6)),
-                        "RestorePos 后自动隐藏未能重新泊出——泊出态退出不完整（R5 回归）");
+                        "RestorePos 后自动隐藏未能重新泊出——泊出态退出不完整");
 
                     // 4) 关闭自动隐藏：恢复泊出前位置并保持可见
                     Point prePark = edgePos; // 第二次泊出前的位置（RestorePos 刚放回的位置）

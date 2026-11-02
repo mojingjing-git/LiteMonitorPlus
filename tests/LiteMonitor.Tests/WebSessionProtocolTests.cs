@@ -724,8 +724,8 @@ namespace LiteMonitor.Tests
             Assert.Contains("WebServerPasswordSalt", main);
             Assert.False(string.IsNullOrEmpty(loaded.WebServerPasswordHash));
 
-            // P2：备份里同样没有明文
             string bak = File.ReadAllText(BackupPath);
+            // P2：备份里同样没有明文
             Assert.DoesNotContain(legacyPassword, bak);
 
             // P5：迁移前后，正确的旧口令仍然可用
@@ -1426,13 +1426,27 @@ namespace LiteMonitor.Tests
                     int n = await stream.ReadAsync(buf.AsMemory(0, buf.Length), cts.Token);
                     if (n <= 0) break;
                     sb.Append(Encoding.UTF8.GetString(buf, 0, n));
+                    string received = sb.ToString();
+                    if (received.Contains("\r\n\r\n", StringComparison.Ordinal) &&
+                        FirstLine(received).StartsWith("HTTP/1.1 101 ", StringComparison.Ordinal))
+                        break;
                 }
             }
-            catch (OperationCanceledException) { }
-            catch (IOException) { }
-            catch (ObjectDisposedException) { }
+            catch (OperationCanceledException ex)
+            {
+                throw new TimeoutException("HTTP response did not complete before the test deadline.", ex);
+            }
 
-            return sb.ToString();
+            string response = sb.ToString();
+            int headerEnd = response.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (headerEnd < 0) throw new IOException("Incomplete HTTP response headers.");
+            if (!FirstLine(response).StartsWith("HTTP/1.1 101 ", StringComparison.Ordinal))
+            {
+                string declared = FindHeaderValue(response[..headerEnd], "Content-Length");
+                if (int.TryParse(declared, out int length) && Encoding.UTF8.GetByteCount(response[(headerEnd + 4)..]) != length)
+                    throw new IOException("Incomplete HTTP response body.");
+            }
+            return response;
         }
 
         private static string FirstLine(string response)

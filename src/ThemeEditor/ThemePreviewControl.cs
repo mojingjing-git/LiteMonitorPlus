@@ -114,6 +114,15 @@ namespace LiteMonitor.ThemeEditor
         /// <summary>GPU 预览实际呈现帧数（R10：门禁必须验证真实出帧，而不是只看资源数量）。</summary>
         public int PresentedFrameCount => _gpuPreview?.PresentedFrameCount ?? 0;
 
+        /// <summary>当前 GPU 预览调度器目标帧率；无 GPU 会话时为 0。</summary>
+        public int TargetFramesPerSecond => _gpuPreview?.TargetFramesPerSecond ?? 0;
+
+        /// <summary>GPU 子控件最后成功保留的主题；仅供测试与 GDI 回退状态独立比较。</summary>
+        internal Theme? CommittedGpuThemeForTesting => _gpuPreview?.CommittedThemeForTesting;
+
+        /// <summary>父控件交给 GDI 路线的实际主题；仅供测试验证失败后的完整回退派生。</summary>
+        internal Theme? GdiRenderedThemeForTesting => _theme;
+
         /// <summary>
         /// 当前预览是否走 GPU 真实渲染（供状态区显示"实际路线"而非声明路线）。
         /// GPU 不可用 / 关闭特效 / 安全模式时恒为 false。

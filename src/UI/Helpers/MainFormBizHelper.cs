@@ -600,7 +600,7 @@ namespace LiteMonitor.src.UI.Helpers
         public void OpenSettings()
         {
             foreach (Form f in Application.OpenForms) { if (f is SettingsForm) { f.Activate(); return; } }
-            new SettingsForm(_cfg, _ui, (MainForm)_form).Show();
+            LiteMonitor.src.UI.SettingsWindowLauncher.Open(_cfg, _ui, (MainForm)_form);
         }
 
         public void OpenTrafficHistory()

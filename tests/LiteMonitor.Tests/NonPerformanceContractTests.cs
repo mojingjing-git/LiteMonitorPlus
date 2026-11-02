@@ -15,7 +15,7 @@ public sealed class NonPerformanceContractTests
     [Fact]
     public void MaterialConstantAbiSlotsAreFrozen()
     {
-        Assert.Equal(384, Marshal.SizeOf<MaterialFrameConstants>());
+        Assert.Equal(464, Marshal.SizeOf<MaterialFrameConstants>());
         Assert.Equal(0, Marshal.OffsetOf<MaterialFrameConstants>(
             nameof(MaterialFrameConstants.Viewport)).ToInt32());
         Assert.Equal(224, Marshal.OffsetOf<MaterialFrameConstants>(
@@ -28,6 +28,16 @@ public sealed class NonPerformanceContractTests
             nameof(MaterialFrameConstants.Motion)).ToInt32());
         Assert.Equal(368, Marshal.OffsetOf<MaterialFrameConstants>(
             nameof(MaterialFrameConstants.State)).ToInt32());
+        Assert.Equal(384, Marshal.OffsetOf<MaterialFrameConstants>(
+            nameof(MaterialFrameConstants.PresetStyle)).ToInt32());
+        Assert.Equal(400, Marshal.OffsetOf<MaterialFrameConstants>(
+            nameof(MaterialFrameConstants.PaletteBase)).ToInt32());
+        Assert.Equal(416, Marshal.OffsetOf<MaterialFrameConstants>(
+            nameof(MaterialFrameConstants.PalettePanel)).ToInt32());
+        Assert.Equal(432, Marshal.OffsetOf<MaterialFrameConstants>(
+            nameof(MaterialFrameConstants.PaletteBorder)).ToInt32());
+        Assert.Equal(448, Marshal.OffsetOf<MaterialFrameConstants>(
+            nameof(MaterialFrameConstants.PaletteAccent)).ToInt32());
     }
 
     [Fact]

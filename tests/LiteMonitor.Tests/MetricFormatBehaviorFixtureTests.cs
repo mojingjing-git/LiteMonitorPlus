@@ -14,8 +14,8 @@ namespace LiteMonitor.Tests
     ///   B1/B2 迁移采集消费方、B4 拆分格式规则时，本文件**必须零修改通过**——
     ///   任何期望值的变化都等于行为变化，需在验收记录里单独说明并经裁决，
     ///   不允许"顺手修正"期望值。
-    /// ★ 疑似 bug 与浮点边界现象清单见 `docs/verification/baseline/` 与
-    ///   `docs/verification/acceptance/B0b-report.md`。
+    ///   ★ 疑似 bug 与浮点边界现象由本测试中的固定输入矩阵覆盖，
+    ///   期望值由同一矩阵冻结；
     ///
     /// 全局状态约定（构造时应用、Dispose 时还原）：
     ///   - 阈值 Load 60/85、Temp 50/70、NetUp 1/2、NetDown 2/8、DiskIO 2/8、

@@ -1,9 +1,11 @@
 using System;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Threading;
 using System.Windows.Forms;
 using LiteMonitor;
+using LiteMonitor.Rendering;
 using LiteMonitor.src.Core;
 using LiteMonitor.ThemeEditor;
 using Xunit;
@@ -66,6 +68,158 @@ namespace LiteMonitor.Tests
                         Assert.True(after > before, $"第 {i + 1} 次切回主效果后没有新帧。");
                     }
 
+                    form.Hide();
+                    Application.DoEvents();
+                    Thread.Sleep(150);
+                    int hiddenBefore = preview.PresentedFrameCount;
+                    Pump(350);
+                    Assert.Equal(hiddenBefore, preview.PresentedFrameCount);
+
+                    form.Show();
+                    Application.DoEvents();
+                    Assert.True(
+                        WaitForGpuActive(preview, TimeSpan.FromSeconds(5)),
+                        "GPU preview did not reactivate after Show().");
+                    int resumeFrames = preview.PresentedFrameCount;
+                    int afterShow = WaitForFrames(
+                        preview,
+                        resumeFrames + 1,
+                        TimeSpan.FromSeconds(5));
+                    Assert.True(afterShow > resumeFrames, "GPU frames did not resume after Show().");
+
+                    preview.Visible = false;
+                    Application.DoEvents();
+                    Thread.Sleep(150);
+                    int parentHiddenBefore = preview.PresentedFrameCount;
+                    Pump(250);
+                    Assert.Equal(parentHiddenBefore, preview.PresentedFrameCount);
+
+                    preview.Visible = true;
+                    Application.DoEvents();
+                    Assert.True(
+                        WaitForGpuActive(preview, TimeSpan.FromSeconds(5)),
+                        "GPU preview did not reactivate after parent visibility returned.");
+                    int parentResumeFrames = preview.PresentedFrameCount;
+                    Assert.True(
+                        WaitForFrames(
+                            preview,
+                            parentResumeFrames + 1,
+                            TimeSpan.FromSeconds(5)) > parentResumeFrames,
+                        "GPU frames did not resume after parent visibility returned.");
+
+                    form.WindowState = FormWindowState.Minimized;
+                    Application.DoEvents();
+                    Thread.Sleep(150);
+                    int minimizedBefore = preview.PresentedFrameCount;
+                    Pump(250);
+                    Assert.Equal(minimizedBefore, preview.PresentedFrameCount);
+
+                    form.WindowState = FormWindowState.Normal;
+                    form.Show();
+                    Application.DoEvents();
+                    Assert.True(
+                        WaitForGpuActive(preview, TimeSpan.FromSeconds(5)),
+                        "GPU preview did not reactivate after restoring the window.");
+                    int minimizedResumeFrames = preview.PresentedFrameCount;
+                    Assert.True(
+                        WaitForFrames(
+                            preview,
+                            minimizedResumeFrames + 1,
+                            TimeSpan.FromSeconds(5)) > minimizedResumeFrames,
+                        "GPU frames did not resume after restoring the window.");
+
+                    Theme original = ThemeFileService.LoadTheme(themesDir, GpuThemeName);
+                    Theme changedFps = AppearanceThemeConfig.CloneConfig(original);
+                    changedFps.Rendering!.Motion["targetFps"] =
+                        System.Text.Json.JsonSerializer.SerializeToElement(2);
+                    preview.SetTheme(changedFps, ThemeEditTarget.GpuMain);
+                    Assert.True(
+                        WaitForGpuActive(preview, TimeSpan.FromSeconds(5)),
+                        "GPU preview did not recover after a valid FPS update.");
+                    Assert.Equal(2, preview.TargetFramesPerSecond);
+
+                    preview.SetTheme(original, ThemeEditTarget.GpuMain);
+                    Assert.True(
+                        WaitForGpuActive(preview, TimeSpan.FromSeconds(5)),
+                        "GPU preview did not recover at the original frame rate.");
+                    Assert.Equal(
+                        original.Rendering!.Motion["targetFps"].GetInt32(),
+                        preview.TargetFramesPerSecond);
+                    int committedFrameBaseline = preview.PresentedFrameCount;
+                    Assert.True(
+                        WaitForFrames(
+                            preview,
+                            committedFrameBaseline + 2,
+                            TimeSpan.FromSeconds(5)) >= committedFrameBaseline + 2,
+                        "No sustained frame baseline before the invalid theme.");
+                    Theme committedBeforeInvalid =
+                        preview.CommittedGpuThemeForTesting ??
+                        throw new InvalidOperationException(
+                            "GPU committed theme was not observable.");
+                    string committedSignatureBeforeInvalid =
+                        ThemeEditHistory.Signature(committedBeforeInvalid);
+
+                    Theme invalid = AppearanceThemeConfig.CloneConfig(original);
+                    invalid.Name = "InvalidAudit";
+                    invalid.Color.Background = "#ABCDEF";
+                    invalid.Rendering!.Parameters["glow"] =
+                        System.Text.Json.JsonSerializer.SerializeToElement(101);
+                    long generationBeforeInvalid = preview.CurrentGeneration;
+                    preview.SetTheme(invalid, ThemeEditTarget.GpuMain);
+                    Application.DoEvents();
+                    Assert.False(preview.IsGpuPreviewActive);
+                    Assert.NotNull(preview.GpuPreviewError);
+                    Assert.Equal(generationBeforeInvalid, preview.CurrentGeneration);
+
+                    Theme committedAfterInvalid =
+                        preview.CommittedGpuThemeForTesting ??
+                        throw new InvalidOperationException(
+                            "GPU committed theme disappeared after an invalid update.");
+                    Assert.Equal(
+                        committedSignatureBeforeInvalid,
+                        ThemeEditHistory.Signature(committedAfterInvalid));
+                    Assert.Equal(
+                        committedBeforeInvalid.Name,
+                        committedAfterInvalid.Name);
+                    Assert.NotEqual(invalid.Name, committedAfterInvalid.Name);
+                    Assert.NotEqual(
+                        invalid.Color.Background,
+                        committedAfterInvalid.Color.Background);
+
+                    Theme expectedGdiFallback =
+                        LegacyFallbackStyleResolver.BuildDerivedTheme(invalid);
+                    Theme actualGdiFallback =
+                        preview.GdiRenderedThemeForTesting ??
+                        throw new InvalidOperationException(
+                            "GDI rendered theme was not observable.");
+                    Assert.Equal(
+                        ThemeEditHistory.Signature(expectedGdiFallback),
+                        ThemeEditHistory.Signature(actualGdiFallback));
+                    Assert.Equal(expectedGdiFallback.Name, actualGdiFallback.Name);
+                    Assert.Equal(
+                        expectedGdiFallback.Color.Background,
+                        preview.RenderedTheme!.Color.Background);
+                    Assert.NotEqual(
+                        invalid.Color.Background,
+                        preview.RenderedTheme!.Color.Background);
+
+                    int failureFrames = preview.PresentedFrameCount;
+                    Pump(750);
+                    Assert.Equal(failureFrames, preview.PresentedFrameCount);
+
+                    preview.SetTheme(original, ThemeEditTarget.GpuMain);
+                    Assert.True(
+                        WaitForGpuActive(preview, TimeSpan.FromSeconds(5)),
+                        "GPU preview did not recover after a valid theme.");
+                    Assert.Null(preview.GpuPreviewError);
+                    Assert.True(preview.CurrentGeneration > generationBeforeInvalid);
+                    Assert.True(
+                        WaitForFrames(
+                            preview,
+                            failureFrames + 1,
+                            TimeSpan.FromSeconds(5)) > failureFrames,
+                        "GPU frames did not resume after the invalid theme was replaced.");
+
                     Assert.Equal(devicesBefore, preview.DeviceCreationCount);
                     form.Close();
                     Application.DoEvents();
@@ -75,6 +229,58 @@ namespace LiteMonitor.Tests
             {
                 cfg.GpuThemeEffectsEnabled = previous;
                 ThemeDocumentStore.SetThemeDirForTests(null);
+            }
+        }
+
+        private static void Pump(int milliseconds)
+        {
+            var watch = Stopwatch.StartNew();
+            while (watch.ElapsedMilliseconds < milliseconds)
+            {
+                Application.DoEvents();
+                Thread.Sleep(10);
+            }
+        }
+
+        [GpuFact]
+        public void R10_RealGpu_HorizontalExportUsesRequestedDimensions()
+        {
+            string themesDir = ResolveGpuThemesDirectory();
+            string outputDir = Path.Combine(
+                Path.GetTempPath(),
+                "litemonitor-r10-export-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(outputDir);
+            ThemeDocumentStore.SetThemeDirForTests(themesDir);
+            try
+            {
+                RunSta(() =>
+                {
+                    ThemeDocumentSession session = ThemeDocumentSession.Open(GpuThemeName);
+                    try
+                    {
+                        string path = Path.Combine(outputDir, "gpu-horizontal.png");
+                        ThemeImageExportResult result = ThemeExportService.ExportEffectImage(
+                            session,
+                            path,
+                            ImageRoutePreference.Gpu,
+                            ThemeExportImageFormFactor.Horizontal);
+
+                        Assert.True(result.Success, result.Error);
+                        Assert.Equal(ThemeExportImageRoute.Gpu, result.Route);
+                        using var image = new Bitmap(path);
+                        Assert.Equal(ThemeExportService.HorizontalImageWidth, image.Width);
+                        Assert.Equal(ThemeExportService.HorizontalImageHeight, image.Height);
+                    }
+                    finally
+                    {
+                        session.Draft.DisposeFonts();
+                    }
+                });
+            }
+            finally
+            {
+                ThemeDocumentStore.SetThemeDirForTests(null);
+                try { Directory.Delete(outputDir, recursive: true); } catch { }
             }
         }
 

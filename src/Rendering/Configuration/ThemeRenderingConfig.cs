@@ -13,6 +13,10 @@ public sealed class ThemeRenderingConfig
     public const string LegacyMaterial = "legacy";
     public const string StandardGlassStyle = "standard";
     public const string FloatingToolbarGlassStyle = "floatingtoolbar";
+    public const string DefaultVisualPreset = "default";
+    public const string NebulaAuroraVisualPreset = "nebulaAurora";
+    public const string NixieBrassVisualPreset = "nixieBrass";
+    public const string CrtPhosphorVisualPreset = "crtPhosphor";
 
     [JsonPropertyName("version")]
     public int Version { get; set; } = CurrentVersion;
@@ -112,6 +116,8 @@ public sealed class ThemeRenderingConfig
             errors.Add("cyber_punk must not request desktop capture.");
         }
 
+        ValidateVisualPreset(backend, material, errors);
+
         ValidateNumber(Parameters, "cornerRadius", 0, 64, errors);
         ValidateNumber(Parameters, "thickness", 0, 8, errors);
         ValidateNumber(Parameters, "refraction", 0, 8, errors);
@@ -176,6 +182,70 @@ public sealed class ThemeRenderingConfig
         values is not null &&
         values.TryGetValue(key, out JsonElement value) &&
         value.ValueKind is JsonValueKind.True or JsonValueKind.False;
+
+    private void ValidateVisualPreset(
+        string backend,
+        string material,
+        List<string> errors)
+    {
+        if (Parameters is null ||
+            !Parameters.TryGetValue("visualPreset", out JsonElement value))
+        {
+            return;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            errors.Add("rendering.parameters.visualPreset must be a string.");
+            return;
+        }
+
+        string preset = value.GetString()?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (preset is not (
+                "default" or
+                "nebulaaurora" or
+                "nixiebrass" or
+                "crtphosphor"))
+        {
+            errors.Add("rendering.parameters.visualPreset is not supported.");
+            return;
+        }
+
+        string expectedMaterial = preset switch
+        {
+            "nebulaaurora" => LiquidGlassMaterial,
+            "nixiebrass" or "crtphosphor" => CyberPunkMaterial,
+            _ => material
+        };
+        // "default" 语义等同缺省（仅清掉命名预设），对 backend/material 不设约束：
+        // legacy 或非 GPU 材质主题显式写 default 不应整份判无效。
+        if (preset != "default" &&
+            (backend != GpuBackend || material != expectedMaterial))
+        {
+            errors.Add(
+                $"rendering.parameters.visualPreset={preset} requires " +
+                $"backend=gpu and material={expectedMaterial}.");
+        }
+
+        if (preset == "nebulaaurora")
+        {
+            if (HasBoolean(Parameters, "liveBackground") &&
+                GetBoolean(Parameters, "liveBackground"))
+            {
+                errors.Add(
+                    "rendering.parameters.visualPreset=nebulaaurora requires liveBackground=false.");
+            }
+
+            if (string.Equals(
+                GetString(Parameters, "glassStyle"),
+                FloatingToolbarGlassStyle,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add(
+                    "rendering.parameters.visualPreset=nebulaaurora does not support floatingToolbar.");
+            }
+        }
+    }
 
     private static bool GetBoolean(Dictionary<string, JsonElement>? values, string key) =>
         values is not null &&

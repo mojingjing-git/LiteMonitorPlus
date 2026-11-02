@@ -42,7 +42,7 @@ namespace LiteMonitor.Tests
         private const string MarkerJson = @"{
   ""schema"": ""liteMonitor.legacyBridge/v1"",
   ""code"": ""missing_digest_rejected"",
-  ""reason"": ""调用方没有提供期望 SHA-256 摘要（LM-016）：本更新器只接受 '<update.zip> <sha256>' 形式。"",
+  ""reason"": ""调用方没有提供期望 SHA-256 摘要：本更新器只接受 '<update.zip> <sha256>' 形式。"",
   ""guidance"": ""自动升级通道与当前版本不兼容，请手动下载新版本。"",
   ""manualDownloadUrl"": ""https://github.com/mojingjing-git/LiteMonitorPlus/releases"",
   ""updaterVersion"": ""2.1"",

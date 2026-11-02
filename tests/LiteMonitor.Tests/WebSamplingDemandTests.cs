@@ -1685,8 +1685,8 @@ namespace LiteMonitor.Tests
             string applier = ExtractMethodBody(code, "ApplyWebDataDemandToHardware");
             Assert.True(applier != null,
                 "LiteWebServer.cs 里找不到默认需求写入实现 ApplyWebDataDemandToHardware");
-            Assert.True(applier.Contains("SetWebDataDemand("),
-                "默认需求写入实现必须调用 SetWebDataDemand（否则 Web 需求永远不会送达采集层）");
+            Assert.True(applier.Contains("HardwareGateway.TrySetWebDataDemand("),
+                "默认需求写入实现必须经 HardwareGateway 写入 keyed Web 需求");
 
             // ② 构造函数必须把默认实现接成兜底（注入为空时用默认实现，不能换成 no-op）
             Assert.True(code.Contains("?? ApplyWebDataDemandToHardware"),
@@ -1707,8 +1707,8 @@ namespace LiteMonitor.Tests
             Assert.True(gatewayPath != null && File.Exists(gatewayPath), "找不到 AppHardwareGateway.cs");
             string gatewayCode = StripComments(File.ReadAllText(gatewayPath));
             string gatewayRequester = ExtractMethodBody(gatewayCode, "RequestSamplingAsync");
-            Assert.True(gatewayRequester != null && gatewayRequester.Contains("UpdateIfDueAsync("),
-                "网关的采样入口必须走 HardwareMonitor.UpdateIfDueAsync（共享限频采样）");
+            Assert.True(gatewayRequester != null && gatewayRequester.Contains(".RequestSamplingAsync("),
+                "网关的采样入口必须委托 IHardwareClient.RequestSamplingAsync");
 
             // ④ ★ F6：语义必须正确 —— 把"是否有需求"**原样**写进采集层。
             //   之前的护栏只查 token 存在性，变异 M11（SetWebDataDemand(!hasDemand) 语义反转）
@@ -1719,10 +1719,10 @@ namespace LiteMonitor.Tests
             //   单测里**无法实例化也无法注入** → 默认 applier 的运行时取值在单测中根本观测不到。
             //   （行为侧的"applier 收到的值"由 LiteWebServer生产接线把Web需求送达采集层 覆盖，
             //     两者互补：行为级盯"接线"，源码级盯"默认实现的语义"。）
-            Assert.False(Regex.IsMatch(applier, @"SetWebDataDemand\(\s*!"),
-                "默认需求写入不得对需求取反（SetWebDataDemand(!hasDemand) 会让语义完全颠倒：有需求时反而缩小采集）");
-            Assert.True(Regex.IsMatch(applier, @"SetWebDataDemand\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\)"),
-                "默认需求写入必须把需求值原样传给 SetWebDataDemand（不能取反、不能传常量）");
+            Assert.False(Regex.IsMatch(applier, @"TrySetWebDataDemand\(\s*!"),
+                "默认需求写入不得对需求取反");
+            Assert.True(Regex.IsMatch(applier, @"TrySetWebDataDemand\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\)"),
+                "默认需求写入必须把需求值原样传给 TrySetWebDataDemand");
         }
 
         [Fact]

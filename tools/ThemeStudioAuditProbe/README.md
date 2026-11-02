@@ -1,44 +1,78 @@
 # ThemeStudioAuditProbe
 
-主题工作室 N00–N10 独立验收的**可复现探针**。它把
-`docs/verification/theme-studio/independent-review/observations.json` 里那 10 条观测点
-（`target_switch` / `focus_property` / `preview_click` / `gpu_background_selection` /
-`dark_mode` / `blocked_save` / `fallback_export` / `gpu_horizontal_export` / `hidden_gpu` /
-`fps_update` / `invalid_update_parent` …）变成一条命令即可重跑的脚本。
-
-## 为什么需要它
-
-独立验收报告（`docs/reviews/2026-10-26-theme-studio-next-stage-acceptance-review.md`）
-的 10 条证据当初只在一次性工作目录里生成，仓库内**没有探针脚本**，因此
-「重跑观测点」无法在仓库内执行 —— 这正是整改计划 §5.0 / §6.3 G-6 的
-「验收报告复验」门禁所要求的义务。本工程是它的入库版本。
+Theme Studio 的可重复人工探针。探针写入隔离的
+`observations.json`，覆盖目标切换、属性聚焦、预览点击、GPU 背景选择、
+暗色模式、阻塞保存、fallback/GPU 导出、隐藏停帧、FPS 更新和父子控件状态等观察点。
 
 ## 用法
 
 ```powershell
-# 输出目录会新建 settings/ themes/ drafts/ 子目录，并写出 observations.json
+# 参数是父目录。探针会新建唯一的 run-<UTC>-<GUID> 子目录，
+# 并在其中创建 settings/resources/drafts 等隔离目录。
 dotnet run --project tools/ThemeStudioAuditProbe -- .tmp\theme-studio-audit
 ```
 
-输出的 `observations.json` 与仓库内既有的
-`docs/verification/theme-studio/independent-review/observations.json` **同构**，可直接逐字段比对。
+探针不清理、覆盖或删除父目录，也不把历史运行目录当作金标准。当前历史缺陷
+证据位于 `.evidence/theme-studio/`，只能用于对比和回归，不能直接改成
+`expected-observations.json`。
 
-TRX 汇总用仓库内的 `docs/verification/theme-studio/independent-review/summarize.py`
-（解析 `results/*.trx`，按程序集汇总执行/通过/失败，并单独统计 ThemeStudio 前缀用例）。
+每次运行至少产出：
 
-## 依赖与约束
+- `observations.json`：观察值、分类汇总、安全门和能力门；
+- `run-metadata.json`：HEAD、候选 index tree、真实 index 前后 SHA、状态摘要哈希、DPI 和程序集 SHA-256；
+- `fallback-export.png`、`gpu-horizontal-export.png`：实际导出的 PNG 和 SHA-256。
 
-- 独立程序集名 `ThemeStudioAuditProbe`（**不与 `LiteMonitor.Tests` 重名**）。
-- 需要访问 `LiteMonitor` 的 internal 测试接缝
+## Git index 隔离
+
+探针先解析并哈希真实 Git index，再复制到自己的临时文件。`status` 和
+`write-tree` 都只使用该副本，并设置 `GIT_OPTIONAL_LOCKS=0`。运行前后真实
+index SHA 必须一致；无法解析、复制、匹配或复核时，探针以非零状态失败，
+不会回退到真实 index。
+
+父目录只接收探针新建的 `run-*` 结果。探针只删除自己的临时 index，
+不递归清理用户目录。
+
+## 安全门与能力门
+
+安全门检查所有返回成功的导出都对应存在、非空、可读取且尺寸正确的 PNG。
+能力门只在具备 `Desktop,Gpu` 环境时要求 `Route=Gpu` 且横排文件为
+400x120。
+
+横排 GPU 导出的分类为：
+
+- `expected`：成功、GPU 路线且尺寸正确；
+- `defect`：成功但文件缺失、损坏、尺寸错误或路线冒充 GPU；
+- `not-proven`：严格 GPU 导出安全失败，例如无 GPU、启动失败或能力缺失。
+
+Auto fallback 的安全成功不能替代 GPU 能力证明。`gpu_probe_exception` 表示
+GPU 观察没有执行，不等于通过。`probe_exit_code=0` 表示探针流程正常结束；
+是否验收仍需结合 `classification_summary`、安全门和能力门判断。
+
+## TRX 汇总
+
+`summarize.py` 接受格式化输入，默认只读取候选 TRX，并可写入来源清单摘要。
+
+```powershell
+python tools/ThemeStudioAuditProbe/summarize.py `
+  --trx-dir .tmp/theme-studio-audit/results `
+  --manifest .tmp/source-manifest.json `
+  --artifact .tmp/theme-studio-audit/LiteMonitor++.dll `
+  --output .tmp/theme-studio-audit/summary.json
+```
+
+`--manifest` 和 `--artifact` 可以省略；不指定 `--output` 时 JSON 写到 stdout。
+
+## 构建约束
+
+- 程序集名称为 `ThemeStudioAuditProbe`，不能并入 `LiteMonitor.Tests` 测试程序集。
+- 它依赖 `LiteMonitor` 的 internal 测试接缝
   （`SettingsHelper.PathOverride`、`ThemeDocumentStore.SetThemeDirForTests` /
-  `SetRecoveryDirForTests`、`SettingsThemeManager.Initialize`）⇒
-  `LiteMonitor.csproj` 里有对应的 `<InternalsVisibleTo Include="ThemeStudioAuditProbe" />`。
-- **不在 `LiteMonitor.sln` 内**，与 `tools/` 下其它探针工程一致；因此不会进入
-  `dotnet build LiteMonitor.sln` / `dotnet test` 的构建面，不会污染 CI 门禁计数。
-- 需要真实 GPU 与交互式桌面会话；无 GPU 环境下 GPU 段会记录
-  `gpu_probe_exception`，其余观测点仍可产出。
+  `SetRecoveryDirForTests`、`SettingsThemeManager.Initialize` 等）。
+- 它不在 `LiteMonitor.sln` 内，避免污染日常 CI 的测试计数。
+- GPU 观察需要真实 GPU 和交互式桌面会话；GPU 不可用时必须记录
+  `gpu_probe_exception`，不能把其余观察视为 GPU 能力已通过。
 
-## DPI 量测
+## DPI 观察
 
-`docs/verification/theme-studio/measure-dpi.ps1` 打印各显示器的有效 DPI 与窗口 DPI，
-用于 N08 矩阵里那些被标为 `NOT-VERIFIED` 的缩放档位（整改计划 E-1）。
+`docs/development/measure-dpi.ps1` 会打印显示器有效 DPI 与窗口 DPI，
+供人工核对缩放场景。

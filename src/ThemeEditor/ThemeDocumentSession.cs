@@ -151,6 +151,51 @@ namespace LiteMonitor.ThemeEditor
             Revision++;
         }
 
+        /// <summary>
+        /// 按属性描述符提交一次编辑：主编辑（ToJson/Setter）加描述符声明的副作用编辑
+        /// 共用一个撤销事务（coalesceKey = 主编辑 JsonPath）。副作用快照在主编辑之后
+        /// 读取——主编辑只写自己的路径，不影响副作用路径的有效值。
+        /// </summary>
+        public void ApplyPropertyEdit(ThemePropertyDescriptor property, object? value)
+        {
+            ArgumentNullException.ThrowIfNull(property);
+            ApplyPropertyCore(property, property.ToJson(value), theme => property.Setter(theme, value), value);
+        }
+
+        /// <summary>
+        /// "恢复默认"：主编辑以删除覆盖（JsonValue=null）提交、草稿回写模型缺省，
+        /// 副作用按缺省值计算——与解析器"删键由模型缺省接管"的语义一致。
+        /// 使用独立撤销事务（<c>$reset:</c> 前缀键）：恢复默认是用户明确的独立操作，
+        /// 撤销时只回退这一步，不与同路径的常规编辑合并。
+        /// </summary>
+        public void ApplyPropertyReset(ThemePropertyDescriptor property)
+        {
+            ArgumentNullException.ThrowIfNull(property);
+            object? modelDefault = property.DefaultGetter();
+            ApplyPropertyCore(property, null, theme => property.Setter(theme, modelDefault), modelDefault,
+                transactionKey: "$reset:" + property.JsonPath);
+        }
+
+        private void ApplyPropertyCore(
+            ThemePropertyDescriptor property,
+            JsonNode? json,
+            Action<Theme> applyDraft,
+            object? sideEffectValue,
+            string? transactionKey = null)
+        {
+            // 主编辑与副作用编辑必须同键，否则会被拆进两个撤销事务。
+            string key = transactionKey ?? property.JsonPath;
+            ApplyEdit(new ThemeFieldEdit(property.JsonPath, json, applyDraft), coalesceKey: key);
+
+            IReadOnlyList<ThemeFieldEdit>? sideEffects = property.SideEffects?.Invoke(this, sideEffectValue);
+            if (sideEffects is null) return;
+
+            foreach (ThemeFieldEdit edit in sideEffects)
+            {
+                ApplyEdit(edit, coalesceKey: key);
+            }
+        }
+
         /// <summary>撤销最近一个事务；无可撤销时返回 false。</summary>
         public bool Undo()
         {
@@ -253,6 +298,10 @@ namespace LiteMonitor.ThemeEditor
 
             return GetSourceValue(_sourceJson, jsonPath)?.DeepClone();
         }
+
+        /// <summary>读取某路径的源 JSON 值（忽略覆盖层）；null = 源无键。供"恢复源状态"类副作用使用。</summary>
+        public JsonNode? GetSourceValue(string jsonPath) =>
+            GetSourceValue(_sourceJson, jsonPath)?.DeepClone();
 
         /// <summary>某路径是否存在显式覆盖（含编辑中的删除标记）。</summary>
         public bool HasOverride(string jsonPath) => _overlay.ContainsKey(jsonPath);

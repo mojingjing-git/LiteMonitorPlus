@@ -29,6 +29,16 @@ namespace LiteMonitor.src.UI
         // 缓存所有页面实例
         private Dictionary<string, SettingsPageBase> _pages = new Dictionary<string, SettingsPageBase>();
         private string _currentKey = "";
+        private SettingsEditState _editState = null!;
+        private LiteButton _applyButton = null!;
+        private Label _editStatus = null!;
+        private bool _refreshingEditor = true;
+        private bool _closeAccepted;
+        private bool _lastApplyComplete = true;
+        private bool _refreshQueued;
+        private readonly HashSet<Control> _trackedControls = new();
+
+        private string EditText(string zh, string en) => (_cfg.Language ?? "").StartsWith("zh", StringComparison.OrdinalIgnoreCase) ? zh : en;
 
         // 恢复 WS_EX_COMPOSITED 以防止闪烁，同时配合页面卸载机制解决卡顿
         protected override CreateParams CreateParams
@@ -127,6 +137,10 @@ namespace LiteMonitor.src.UI
             
             // ★★★ 关键点 1：构造时就初始化所有页面 ★★★
             InitPages(); 
+            _editState = new SettingsEditState(_draftCfg);
+            TrackEditor(_pnlContent);
+            _refreshingEditor = false;
+            RefreshEditStatus();
         }
 
         private void InitializeComponent()
@@ -179,8 +193,11 @@ namespace LiteMonitor.src.UI
             var btnReset = new LiteButton(LanguageManager.T("Menu.Reset"), false) { ForeColor = UIColors.TextWarn };
 
             btnOk.Click += (s, e) => { if (ApplySettings()) { this.DialogResult = DialogResult.OK; this.Close(); } };
-            btnCancel.Click += (s, e) => { this.DialogResult = DialogResult.Cancel; this.Close(); };
+            btnCancel.Click += (s, e) => { this.Close(); };
             btnApply.Click += (s, e) => { ApplySettings(); };
+            _applyButton = btnApply;
+            _editStatus = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = UIUtils.S(new Padding(16, 0, 0, 0)), ForeColor = UIColors.TextSub };
+            pnlBottom.Controls.Add(_editStatus);
             
             btnReset.Click += (s, e) => 
             {
@@ -217,7 +234,7 @@ namespace LiteMonitor.src.UI
             // 当前只在构造时调用一次，这里是防止将来重调时退化成泄漏。
             DisposeCachedPages();
 
-            _pnlNavContainer.Controls.Clear();
+            while (_pnlNavContainer.Controls.Count > 0) _pnlNavContainer.Controls[0].Dispose();
             
             // 注册所有页面
             AddNav("MainPanel", LanguageManager.T("Menu.MainFormSettings"), new MainPanelPage());
@@ -230,6 +247,24 @@ namespace LiteMonitor.src.UI
             AddNav("System", LanguageManager.T("Menu.SystemHardwar"), new SystemHardwarPage());
             AddNav("Plugins", LanguageManager.T("Menu.Plugins"), new PluginPage());
             var marketPage = new PluginMarketPage();
+            marketPage.ImmediateChangeCompleted = field =>
+            {
+                if (IsDisposed) return;
+                _refreshingEditor = true;
+                try
+                {
+                    if (field == "Skin") _draftCfg.Skin = _cfg.Skin;
+                    var live = _cfg.DeepClone();
+                    _draftCfg.Themes = live.Themes;
+                    _draftCfg.MarketPlugins = live.MarketPlugins;
+                    _editState.AcceptField(_draftCfg, field);
+                    _editState.AcceptField(_draftCfg, "Themes");
+                    _editState.AcceptField(_draftCfg, "MarketPlugins");
+                    if (_pages.TryGetValue("MainPanel", out var panel)) panel.OnShow();
+                }
+                finally { _refreshingEditor = false; }
+                RefreshEditStatus();
+            };
             AddNav("PluginMarket", LanguageManager.T("Menu.PluginMarket"), marketPage);
             AddNav("ThemeMarket", LanguageManager.T("Menu.ThemeMarket"), marketPage, MarketCategory.Themes);
             var scenarioPage = new ScenarioPage();
@@ -253,6 +288,10 @@ namespace LiteMonitor.src.UI
 
         internal void SwitchPage(string key, MarketCategory? marketCategory = null)
         {
+            bool wasRefreshing = _refreshingEditor;
+            _refreshingEditor = true;
+            try
+            {
             // 同一市场页实例可挂两个入口；进入前先声明类别，不能依赖上次页签。
             if (marketCategory.HasValue && _pages.TryGetValue(key, out SettingsPageBase? target) &&
                 target is PluginMarketPage marketPage)
@@ -312,10 +351,13 @@ namespace LiteMonitor.src.UI
                 }
                 // ★★★ 核心修复结束 ★★★
             }
+            }
+            finally { _refreshingEditor = wasRefreshing; }
         }
 
         private string? ApplyScenarioFromPage(ScenarioProfile profile)
         {
+            if (!ResolvePendingEdits()) return EditText("已取消切换情景。", "Scenario switch cancelled.");
             var service = new ScenarioService(
                 new ScenarioProfileStore(),
                 candidate => SettingsHelper.TrySave(candidate),
@@ -332,20 +374,24 @@ namespace LiteMonitor.src.UI
             {
                 SettingsChanger.Merge(_draftCfg, _cfg);
                 SettingsThemeManager.SyncFromSettings(_cfg);
+                ReloadEditor("Scenarios");
             }
-
-            if (outcome.Operation.OverallStatus == ApplyOperationStatus.Applied)
-                return null;
 
             var failures = string.Join("; ", outcome.Operation.Modules
                 .Where(module => !module.Applied)
                 .Select(module => module.Module + ": " + (module.FailureReason ?? "failed")));
-            return string.IsNullOrWhiteSpace(failures)
+            string? error = outcome.Operation.OverallStatus == ApplyOperationStatus.Applied ? null : string.IsNullOrWhiteSpace(failures)
                 ? "Scenario apply failed: " + outcome.Operation.OverallStatus
                 : failures;
+            if (_pages.TryGetValue("Scenarios", out var scenario) && scenario is ScenarioPage current)
+                current.ReportApplication(error ?? EditText("已应用：", "Applied: ") + profile.Name, error != null);
+            if (error != null) MessageBox.Show(this, error, EditText("情景未完全生效", "Scenario not fully applied"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return error;
         }
         private bool ApplySettings()
         {
+            if (!HasPendingEdits()) return true;
+            CollectDraftEdits();
             bool oldAutoStart = _cfg.AutoStart;
 
             // 保存逻辑顺序优化；同一实例可注册多个导航键（插件市场/主题市场），按引用只保存一次。
@@ -353,32 +399,24 @@ namespace LiteMonitor.src.UI
             foreach (var kv in _pages)
             {
                 if (kv.Key != "Monitor" && savedPages.Add(kv.Value))
-                    kv.Value.Save();
+                    kv.Value.CollectDraftEdits();
             }
 
             if (_pages.TryGetValue("Monitor", out SettingsPageBase? monitorPage) && savedPages.Add(monitorPage))
             {
-                monitorPage.Save();
+                monitorPage.CollectDraftEdits();
             }
             
             // ★★★ Draft 机制核心：提交事务 ★★★
             // 1. 全局校验 (防止全隐藏死锁)
-            bool noInteractiveWindow = 
-                (_draftCfg.HideMainForm || _draftCfg.ClickThrough) && 
-                (!_draftCfg.ShowTaskbar || _draftCfg.TaskbarClickThrough) &&
-                _draftCfg.HideTrayIcon;
-
-            if (noInteractiveWindow)
-            {
-                // 自动纠正：如果所有可交互入口都被封死（隐藏或穿透+隐藏托盘），强制显示托盘
-                _draftCfg.HideTrayIcon = false;
-                MessageBox.Show("为了防止所有可交互入口都被死锁（隐藏或穿透+隐藏托盘），已强制显示托盘图标。", "LiteMonitor++", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-
             // 2. 先在草稿副本上完成落盘，成功后才提交到 Live Settings。
             //    这样保存失败不会把内存中的 Live 配置改成“未落盘”的状态。
             Settings before = _cfg.CloneForDiff();
             Settings candidate = _draftCfg.DeepClone();
+            candidate = _editState.CreateCandidate(_cfg, candidate);
+            if (SettingsEditState.EnsureInteractiveEntry(candidate))
+                MessageBox.Show(this, EditText("已保留托盘图标，以便重新打开设置。", "The tray icon has been kept visible so settings remain accessible."), "LiteMonitor++", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
 
             // 2.5 ★★★ [多显卡] 落盘前先同步显卡监控项 ★★★
             //     必须在保存之前 —— ApplyAllSettings 里那一次 Ensure
@@ -434,11 +472,19 @@ namespace LiteMonitor.src.UI
                 }
             }
             var applyResults = AppActions.ApplySettingsSelectivelyWithResults(before, _cfg, _mainForm, _ui, autoStartChanged);
+            var pageErrors = new List<string>();
+            foreach (var page in _pages.Values.Distinct())
+            {
+                if (page is MonitorPage) continue;
+                try { page.ApplyCommittedSettings(_cfg); }
+                catch (Exception ex) { pageErrors.Add(page.GetType().Name + ": " + ex.Message); }
+            }
             var failedModules = applyResults.Where(r => !r.Applied).ToList();
-            if (failedModules.Count > 0)
+            _lastApplyComplete = failedModules.Count == 0 && pageErrors.Count == 0;
+            if (!_lastApplyComplete)
             {
                 string detail = string.Join("\n", failedModules.Select(r =>
-                    string.IsNullOrWhiteSpace(r.FailureReason) ? r.Module : $"{r.Module}: {r.FailureReason}"));
+                    string.IsNullOrWhiteSpace(r.FailureReason) ? r.Module : $"{r.Module}: {r.FailureReason}").Concat(pageErrors));
                 MessageBox.Show(
                     LanguageManager.T("SettingsApplyPartial") + "\n\n" + detail,
                     "LiteMonitor++",
@@ -452,7 +498,90 @@ namespace LiteMonitor.src.UI
 
             // E05：保存成功 ⇒ 主题状态机提交到新模式（预览态落成为已提交；无变化时为幂等空操作）
             SettingsThemeManager.SyncFromSettings(_cfg);
+            ReloadEditor(_currentKey);
+            _editStatus.Text = _lastApplyComplete ? EditText("已保存并应用", "Saved and applied") : EditText("已保存，部分功能未生效", "Saved; some changes could not be applied");
+            return _lastApplyComplete;
+        }
+
+        private void CollectDraftEdits()
+        {
+            foreach (var page in _pages.Values.Distinct()) page.CollectDraftEdits();
+        }
+
+        private bool HasPendingEdits()
+        {
+            CollectDraftEdits();
+            return _editState.HasChanges(_draftCfg) || _pages.Values.OfType<MainPanelPage>().Any(p => p.GpuStartupRetryRequested);
+        }
+
+        private void RefreshEditStatus()
+        {
+            if (_editState == null || IsDisposed) return;
+            bool pending = HasPendingEdits();
+            _applyButton.Enabled = pending;
+            _editStatus.Text = pending ? EditText("有未保存的更改", "Unsaved changes") : EditText("没有未保存的更改", "No unsaved changes");
+        }
+
+        private void TrackEditor(Control control)
+        {
+            if (!_trackedControls.Add(control)) return;
+            control.ControlAdded += (_, e) => { if (e.Control != null) TrackEditor(e.Control); };
+            void Changed(object? sender, EventArgs e)
+            {
+                if (_refreshingEditor || !control.ContainsFocus && control is not Button and not LiteColorPicker) return;
+                var page = FindPage(control);
+                if (page?.IsWriteBackSuppressed == true) return;
+                if (page is MonitorPage monitor) monitor.NoteUserEdit(control);
+                if (_refreshQueued || !IsHandleCreated) return;
+                _refreshQueued = true;
+                BeginInvoke((Action)(() => { _refreshQueued = false; if (!IsDisposed) RefreshEditStatus(); }));
+            }
+            if (control is TextBoxBase) control.TextChanged += Changed;
+            if (control is CheckBox check) check.CheckedChanged += Changed;
+            if (control is ComboBox combo) combo.SelectedIndexChanged += Changed;
+            if (control is NumericUpDown number) number.ValueChanged += Changed;
+            if (control is TrackBar slider) slider.ValueChanged += Changed;
+            if (control is LiteColorPicker picker) picker.ColorChanged += Changed;
+            if (control is Button button) button.Click += Changed;
+            foreach (Control child in control.Controls) TrackEditor(child);
+        }
+
+        private static SettingsPageBase? FindPage(Control control)
+        {
+            for (Control? parent = control; parent != null; parent = parent.Parent)
+                if (parent is SettingsPageBase page) return page;
+            return null;
+        }
+
+        private bool ResolvePendingEdits()
+        {
+            if (!HasPendingEdits()) return true;
+            var choice = MessageBox.Show(this,
+                EditText("有未保存的更改。\n是：保存并应用后继续\n否：放弃更改后继续\n取消：返回编辑", "There are unsaved changes.\nYes: save and apply, then continue\nNo: discard and continue\nCancel: return to editing"),
+                EditText("未保存的更改", "Unsaved changes"), MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (choice == DialogResult.Cancel) return false;
+            if (choice == DialogResult.Yes) return ApplySettings();
+            ReloadEditor(_currentKey);
             return true;
+        }
+
+        private void ReloadEditor(string page)
+        {
+            _refreshingEditor = true;
+            try
+            {
+                foreach (var old in _pages.Values.Distinct()) old.OnHide();
+                _pnlContent.Controls.Clear();
+                _draftCfg = _cfg.DeepClone();
+                _currentKey = "";
+                InitPages();
+                _trackedControls.RemoveWhere(c => c.IsDisposed);
+                _editState.Accept(_draftCfg);
+                if (_pages.ContainsKey(page)) SwitchPage(page);
+                TrackEditor(_pnlContent);
+            }
+            finally { _refreshingEditor = false; }
+            RefreshEditStatus();
         }
 
         // ── E05：明暗主题接线 ──────────────────────────────────────────────────
@@ -482,6 +611,11 @@ namespace LiteMonitor.src.UI
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (e.CloseReason == CloseReason.UserClosing && !_closeAccepted && _editState != null)
+            {
+                if (!ResolvePendingEdits()) { e.Cancel = true; return; }
+                _closeAccepted = true;
+            }
             // E05：取消/关闭（含保存后关闭——此时已提交，为幂等空操作）丢弃未保存预览
             SettingsThemeManager.CancelPreview();
             base.OnFormClosing(e);

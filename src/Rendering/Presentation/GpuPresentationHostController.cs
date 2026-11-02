@@ -105,9 +105,11 @@ public sealed class GpuPresentationHostController : IDisposable
 
         _form = form;
         _material = material;
-        _liveBackgroundRequested = liveBackgroundRequested;
         _horizontalLayout = horizontalLayout;
         _runtimeSettings = MaterialRuntimeSettings.Create(renderingConfig, material, theme);
+        _liveBackgroundRequested =
+            liveBackgroundRequested &&
+            _runtimeSettings.VisualPreset == GpuVisualPreset.Default;
         _userScale =
             float.IsFinite(userScale) && userScale > 0 ? userScale : 1f;
         _startupGuard = startupGuard ?? GpuStartupGuard.Shared;
@@ -614,6 +616,10 @@ public sealed class GpuPresentationHostController : IDisposable
     {
         ThrowIfDisposed();
         EnsureOwnerThread();
+        MaterialRuntimeSettings runtimeSettings =
+            MaterialRuntimeSettings.Create(renderingConfig, material, theme);
+        liveBackgroundRequested &=
+            runtimeSettings.VisualPreset == GpuVisualPreset.Default;
 
         // ★【LM-073 / 合同 §6.2 INV-6 / §4.5 :202】取得 WDA 所有权前必须过**同一个**闸门。
         //   闸门被放在"宿主是否可重配置"判定**之前**：闸门回答的是"能否取得 WDA 所有权"，
@@ -650,8 +656,6 @@ public sealed class GpuPresentationHostController : IDisposable
             return false;
         }
 
-        MaterialRuntimeSettings runtimeSettings =
-            MaterialRuntimeSettings.Create(renderingConfig, material, theme);
         float normalizedUserScale =
             float.IsFinite(userScale) && userScale > 0 ? userScale : 1f;
 

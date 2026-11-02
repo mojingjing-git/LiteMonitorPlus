@@ -259,13 +259,13 @@ namespace LiteMonitor.Tests
         // ================================================================
 
         /// <summary>
-        /// 若本地存在签名私钥，验证它确实对应客户端内置的公钥。
+        /// 若显式提供签名私钥，验证它确实对应客户端内置的公钥。
         /// </summary>
         /// <remarks>
         /// ★ 这是发布端的"防呆"：用错密钥签名，现象只出现在用户那边（"更新源不可信"），
         ///   发布端毫无感知。scripts/sign-release.ps1 里也有同样的自检，
         ///   这里在测试里再钉一次，保证改代码时不会忘记同步密钥。
-        /// ★ 私钥不进版本库（.gitignore 排除 secrets/），所以没有私钥时**跳过**而不是失败。
+        /// ★ 私钥不进版本库；日常测试不读取用户默认签名目录，未显式提供私钥时跳过。
         /// </remarks>
         [Fact]
         public void 本地私钥与内置公钥一致()
@@ -307,9 +307,19 @@ namespace LiteMonitor.Tests
             return Convert.ToBase64String(sig);
         }
 
-        /// <summary>从仓库根向上找 secrets/update-signing-key.pkcs8（找不到返回 null）。</summary>
+        /// <summary>读取显式密钥路径，或兼容查找旧仓库 secrets/ 目录；找不到返回 null。</summary>
         private static string? FindSigningKey()
         {
+            const string overrideVariable = "LITEMONITOR_UPDATE_SIGNING_KEY_PATH";
+            string? overridePath = Environment.GetEnvironmentVariable(overrideVariable);
+            if (!string.IsNullOrWhiteSpace(overridePath))
+            {
+                overridePath = Environment.ExpandEnvironmentVariables(overridePath.Trim());
+                if (!File.Exists(overridePath))
+                    throw new FileNotFoundException($"{overrideVariable} points to a missing signing key", overridePath);
+                return overridePath;
+            }
+
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
             for (int i = 0; i < 8 && dir != null; i++, dir = dir.Parent)
             {

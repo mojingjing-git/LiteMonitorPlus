@@ -14,7 +14,7 @@ namespace LiteMonitor.src.UI.Controls
         public static readonly int X_COL2 = UIUtils.S(140);
         
         // ★★★ [新增] 单位列 (位于 Name Input 和 Checkbox 之间) ★★★
-        public static readonly int X_COL_UNIT = UIUtils.S(300); 
+        public static readonly int X_COL_UNIT = UIUtils.S(250);
 
         // [需求4] 原有列全部右移
         public static readonly int X_COL3 = UIUtils.S(390); 
@@ -39,6 +39,8 @@ namespace LiteMonitor.src.UI.Controls
         
         // ★★★ [新增] 单位输入框 ★★★
         private LiteUnderlineInput _inputUnit;
+        private ComboBox _unitMode;
+        private bool _syncingUnit;
 
         private LiteCheck _chkPanel;            
         private LiteCheck _chkTaskbar;          
@@ -58,7 +60,18 @@ namespace LiteMonitor.src.UI.Controls
         /// 拿它当基准会把「用户什么都没改」误判成「用户改过」——
         /// 于是每次打开设置页点保存, 都会把自动生成的标签固化成 UserLabel。
         /// </summary>
-        private readonly string _initialName;
+        private string _initialName;
+        private string _initialUserLabel;
+        private string _initialShort;
+        private string _initialStoredShort;
+        internal (string Name, string Stored, string Short, string StoredShort) EditBaseline => (_initialName, _initialUserLabel, _initialShort, _initialStoredShort);
+        internal void SetEditBaseline((string Name, string Stored, string Short, string StoredShort) baseline)
+        {
+            _initialName = baseline.Name;
+            _initialUserLabel = baseline.Stored;
+            _initialShort = baseline.Short;
+            _initialStoredShort = baseline.StoredShort;
+        }
 
         // ★ 这两个事件由外部（Settings/MonitorPage.cs）订阅，是否订阅取决于调用方 ⇒ 可空声明。
         //   触发处本来就用 MoveUp?.Invoke(...) 做了空检查，语义不变。
@@ -69,6 +82,7 @@ namespace LiteMonitor.src.UI.Controls
         public MonitorItemRow(MonitorItemConfig item, bool isTaskbarMode)
         {
             this.Config = item;
+            _initialUserLabel = item.UserLabel;
             this._isTaskbarMode = isTaskbarMode; // 记录模式
             this.Dock = DockStyle.Top;
             this.Height = MonitorLayout.H_ROW;
@@ -118,6 +132,8 @@ namespace LiteMonitor.src.UI.Controls
             if (defShort.StartsWith("Short.")) defShort = item.Key.Split('.')[1]; 
             
             string valShort = !string.IsNullOrEmpty(shortResolved) ? shortResolved : defShort;
+            _initialShort = valShort;
+            _initialStoredShort = item.TaskbarLabel;
             
             _inputShort = new LiteUnderlineInput(valShort, "", "", 80, UIColors.TextMain) 
             { Location = new Point(MonitorLayout.X_COL2, UIUtils.S(8)), Visible = false };
@@ -140,8 +156,28 @@ namespace LiteMonitor.src.UI.Controls
             else displayUnit = userConfig;                   // Custom -> 显示自定义
 
             // 4. 初始化输入框 (Placeholder 设为 defUnit)
-            _inputUnit = new LiteUnderlineInput(displayUnit, "", "", 50, UIColors.TextSub)
-            { Location = new Point(MonitorLayout.X_COL_UNIT, UIUtils.S(8)) };
+            _unitMode = new NoScrollComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Location = new Point(MonitorLayout.X_COL_UNIT, UIUtils.S(8)),
+                Size = new Size(UIUtils.S(74), UIUtils.S(28)),
+                Font = UIFonts.Regular(8F),
+                AccessibleName = "Unit mode"
+            };
+            bool chinese = (Settings.Load().Language ?? "").StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+            _unitMode.Items.AddRange(chinese ? new object[] { "自动", "隐藏", "自定义" } : new object[] { "Auto", "Hidden", "Custom" });
+            _unitMode.SelectedIndex = userConfig == null ? 0 : userConfig == "" ? 1 : 2;
+            _inputUnit = new LiteUnderlineInput(displayUnit, "", "", 60, UIColors.TextSub)
+            { Location = new Point(MonitorLayout.X_COL_UNIT + UIUtils.S(78), UIUtils.S(8)) };
+            _inputUnit.Enabled = _unitMode.SelectedIndex == 2;
+            _unitMode.SelectedIndexChanged += (_, _) =>
+            {
+                if (_syncingUnit) return;
+                _inputUnit.Enabled = _unitMode.SelectedIndex == 2;
+                if (_unitMode.SelectedIndex == 0) _inputUnit.Inner.Text = MetricUtils.GetUnitStr(Config.Key, 0, _isTaskbarMode ? MetricUtils.UnitContext.SettingsTaskbar : MetricUtils.UnitContext.SettingsPanel);
+                else if (_unitMode.SelectedIndex == 1) _inputUnit.Inner.Text = "";
+                else if (string.IsNullOrWhiteSpace(_inputUnit.Inner.Text)) _inputUnit.Inner.Text = MetricUtils.GetUnitStr(Config.Key, 0, _isTaskbarMode ? MetricUtils.UnitContext.SettingsTaskbar : MetricUtils.UnitContext.SettingsPanel);
+            };
             _inputUnit.Inner.Font = UIFonts.Regular(8F);
 
             // 6. Checkboxes
@@ -160,7 +196,7 @@ namespace LiteMonitor.src.UI.Controls
 
             this.Controls.AddRange(new Control[] { 
                 _lblId, _lblName, 
-                _inputName, _inputShort, _inputUnit, // 加在这里
+                _inputName, _inputShort, _unitMode, _inputUnit,
                 _chkPanel, _chkTaskbar, 
                 _btnUp, _btnDown 
             });
@@ -211,6 +247,10 @@ namespace LiteMonitor.src.UI.Controls
             // null -> 默认, "" -> 空格
             string display = (userConfig == null) ? defUnit : (userConfig == "" ? " " : userConfig);
             _inputUnit.Inner.Text = display;
+            _syncingUnit = true;
+            try { _unitMode.SelectedIndex = userConfig == null ? 0 : userConfig == "" ? 1 : 2; }
+            finally { _syncingUnit = false; }
+            _inputUnit.Enabled = _unitMode.SelectedIndex == 2;
             
             ApplyModeVisibility();
         }
@@ -232,7 +272,6 @@ namespace LiteMonitor.src.UI.Controls
             {
                  valName = " ";
                  // 即时反馈
-                 if (_inputName.Inner.Text != valName) _inputName.Inner.Text = valName;
             }
             else
             {
@@ -241,7 +280,6 @@ namespace LiteMonitor.src.UI.Controls
                 if (trimmed != valName) 
                 {
                     valName = trimmed;
-                    _inputName.Inner.Text = valName;
                 }
             }
 
@@ -258,6 +296,7 @@ namespace LiteMonitor.src.UI.Controls
             }
             else if (string.Equals(valName, _initialName, StringComparison.Ordinal))
             {
+                Config.UserLabel = _initialUserLabel;
                 // 用户没动过 -> 保持原状 (原来有自定义名就留着, 没有就继续走自动模式)
             }
             else
@@ -290,7 +329,11 @@ namespace LiteMonitor.src.UI.Controls
             string currentDynamicShort = InfoService.Instance.GetValue("PROP.ShortLabel." + Config.Key);
             if (string.IsNullOrEmpty(currentDynamicShort)) currentDynamicShort = Config.DynamicTaskbarLabel;
 
-            if (valShort == "")
+            if (string.Equals(rawShort, _initialShort, StringComparison.Ordinal))
+            {
+                Config.TaskbarLabel = _initialStoredShort;
+            }
+            else if (valShort == "")
             {
                 Config.TaskbarLabel = "";
             }
@@ -321,31 +364,12 @@ namespace LiteMonitor.src.UI.Controls
             // ★ 运行期事实：下面三个分支分别会赋 null（恢复默认）、""（强制不显示）、val（用户输入），
             //   而 Config.UnitPanel / Config.UnitTaskbar 本身就是 string?（src/Core/Settings.cs:971-972），
             //   所以这里如实声明为可空 —— 原代码赋 null 属于合法语义，不是漏赋值。
-            string? finalVal;
-
-            if (string.IsNullOrEmpty(rawUnit)) 
+            string? finalVal = _unitMode.SelectedIndex switch
             {
-                // 情况1：用户清空输入框 -> 恢复默认 (Auto/null)
-                finalVal = null;
-            }
-            else if (string.IsNullOrWhiteSpace(rawUnit))
-            {
-                // 情况2：用户只输入了空格 (" ") -> 强制不显示 ("")
-                // 这里的逻辑必须保留：纯空格意味着用户想隐藏单位
-                finalVal = "";
-            }
-            else
-            {
-                string val = rawUnit; // 已经是原始值了
-
-                // 情况3：用户输入了内容
-                // 【关键】使用 Ordinal 区分大小写。
-                // 如果用户输入 "{u}/S"，不等于默认的 "{u}/s"，会作为自定义值保存。
-                if (string.Equals(val, defUnit, StringComparison.Ordinal))
-                    finalVal = null;
-                else
-                    finalVal = val;
-            }
+                0 => null,
+                1 => "",
+                _ => string.IsNullOrWhiteSpace(rawUnit) ? defUnit : rawUnit
+            };
 
             if (_isTaskbarMode) Config.UnitTaskbar = finalVal;
             else Config.UnitPanel = finalVal;

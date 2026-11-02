@@ -17,6 +17,8 @@ internal sealed record HostOptions
     public bool TestPattern { get; init; }
     public bool StaleFirst { get; init; }
     public string? Fault { get; init; }
+    /// <summary>Test-pattern late-response only: the parent releases an answer after observing its timeout.</summary>
+    public string? FaultResponseGate { get; init; }
     public int? SelftestRounds { get; init; }
     /// <summary>
     /// 会话纪元（E02 §6.7）：由主程序监督器在每次新会话时递增并经命令行传入；
@@ -50,6 +52,11 @@ internal sealed record HostOptions
                 case "--test-pattern": opt = opt with { TestPattern = true }; break;
                 case "--stale-first": opt = opt with { StaleFirst = true }; break;
                 case "--fault": opt = opt with { Fault = Next() }; break;
+                case "--fault-response-gate":
+                    string? gate = Next();
+                    if (string.IsNullOrWhiteSpace(gate) || !System.IO.Path.IsPathFullyQualified(gate)) return null;
+                    opt = opt with { FaultResponseGate = gate };
+                    break;
                 case "--selftest":
                     string? rounds = Next();
                     if (int.TryParse(rounds, out int n) && n > 0) opt = opt with { SelftestRounds = n };
@@ -59,6 +66,7 @@ internal sealed record HostOptions
         }
         if (opt.SelftestRounds is null && (opt.PipeName is null || opt.SessionToken is null))
             return null;
+        if (opt.FaultResponseGate is not null && (!opt.TestPattern || opt.Fault != "late-response")) return null;
         return opt;
     }
 }
@@ -77,6 +85,7 @@ internal static class Program
                 "usage: LiteMonitor.HardwareHost --pipe <name> --session <token> [--parent-pid <pid>] [--refresh-ms <n>]" +
                 " [--session-epoch <n>]" +
                 " [--test-pattern] [--stale-first] [--fault <fail-fast|crash-after-handshake|hang-sampling|stop-heartbeat|delay-handshake|bad-version|bad-session|late-response|slow-rescan>]" +
+                " [--fault-response-gate <absolute-test-file>]" +
                 " | --selftest <rounds>");
             return ExitArgError;
         }

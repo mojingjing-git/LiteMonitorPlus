@@ -257,7 +257,7 @@
     "Taskbar": "Tray",
     "MainForm": "Panel",
     "OnlyShowEnabled": "Nur aktiviert",
-    "MonitorItemTip": "Tipp: Leerzeichen in Name/Kurz verbirgt Label. Leer setzt zurück. Einheiten: {u}+Zeichen.",
+    "MonitorItemTip": "Name/Kurzname: Leerzeichen blendet aus, leer setzt zurück. Einheiten: Auto, Hidden oder Custom; {u} wird unterstützt.",
     "__Comment_Page4__": "--- 4. Grenzwerte ---",
     "Thresholds": "Grenzwerte",
     "ThresholdsTips": "Balkenfarbe nach Grenzwert",

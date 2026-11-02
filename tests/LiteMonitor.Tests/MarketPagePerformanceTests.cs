@@ -16,7 +16,7 @@ namespace LiteMonitor.Tests
     ///
     /// <para>目标：重复打开的 UI 阻塞 p95 ≤ 100ms。修复前（每次进入页面全量重建 UI）
     /// 这一项必然超标；修复后（内容签名命中 ⇒ 控件零创建零销毁）应当显著下降。
-    /// 同机前后对比数字见 docs/verification/acceptance/F14a-report.md。</para>
+    /// 测试直接使用事件与耗时观测验证缓存命中后的重建成本。</para>
     ///
     /// <para>★ 用 stopwatch 取时序（不是固定 sleep 冒充等待）：用例里没有任何
     /// <c>Thread.Sleep</c>，索引来源是立即完成的 Task ⇒ 全部同步、无真实等待。</para>

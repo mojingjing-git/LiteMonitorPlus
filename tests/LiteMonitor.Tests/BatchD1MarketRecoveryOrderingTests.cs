@@ -73,14 +73,14 @@ namespace LiteMonitor.Tests
 
             Assert.True(recoverOffset >= 0,
                 "PluginManager.LoadPlugins 里找不到对账安装事务的调用（PluginManager.RecoverMarketTransactions）—— " +
-                "恢复必须排在任何加载之前，否则磁盘回滚了而内存里仍跑新版本（LM-083）。");
+                "恢复必须排在任何加载之前，否则磁盘回滚了而内存里仍跑新版本。");
             Assert.True(enumerateOffset >= 0,
                 "PluginManager.LoadPlugins 里找不到插件模板枚举（Directory.GetFiles）—— 护栏前提被破坏。");
 
             Assert.True(recoverOffset < enumerateOffset,
                 "初始化顺序错误：对账安装事务在 IL 偏移 " + recoverOffset +
                 "，而枚举插件模板在偏移 " + enumerateOffset +
-                "。恢复必须排在加载之前 —— 否则磁盘回滚了，内存里跑的却仍是新版本（LM-083）。");
+                "。恢复必须排在加载之前 —— 否则磁盘回滚了，内存里跑的却仍是新版本。");
         }
 
         // ================================================================
@@ -108,7 +108,7 @@ namespace LiteMonitor.Tests
 
             Assert.True(callsMarketRecovery,
                 "PluginManager.RecoverMarketTransactions 必须真的调用 PluginMarket 的安装事务恢复 —— " +
-                "空壳入口等于没恢复（LM-083）。");
+                "空壳入口等于没恢复。");
         }
 
         // ================================================================
@@ -137,7 +137,7 @@ namespace LiteMonitor.Tests
 
             Assert.True(recoverOffset >= 0,
                 "MainForm 构造函数里找不到安装事务恢复的调用（PluginMarket.RecoverInterruptedInstalls）—— " +
-                "恢复必须排在加载与调度之前（LM-083）。");
+                "恢复必须排在加载与调度之前。");
             Assert.True(loadOffset >= 0,
                 "MainForm 构造函数里找不到 PluginManager.LoadPlugins —— 护栏前提被破坏。");
             Assert.True(startOffset >= 0,
@@ -146,11 +146,11 @@ namespace LiteMonitor.Tests
             Assert.True(recoverOffset < loadOffset,
                 "初始化顺序错误：安装事务恢复在 IL 偏移 " + recoverOffset +
                 "，而加载插件在偏移 " + loadOffset +
-                "。先加载再恢复 ⇒ 磁盘回滚了而内存里仍跑新版本（LM-083）。");
+                "。先加载再恢复 ⇒ 磁盘回滚了而内存里仍跑新版本。");
             Assert.True(recoverOffset < startOffset,
                 "初始化顺序错误：安装事务恢复在 IL 偏移 " + recoverOffset +
                 "，而启动插件调度在偏移 " + startOffset +
-                "。调度必须排在恢复之后（LM-083）。");
+                "。调度必须排在恢复之后。");
         }
 
         // ================================================================

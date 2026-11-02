@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 using LiteMonitor.src.Core;
 using LiteMonitor.src.UI.SettingsPage;
@@ -53,6 +54,7 @@ namespace LiteMonitor.ThemeEditor
 
         /// <summary>字段被用户编辑（已提交到会话），参数为失效级别。</summary>
         public event EventHandler<ThemePropertyInvalidation>? PropertyEdited;
+        public event EventHandler? PropertyStructureEdited;
 
         /// <summary>当前会话的草稿对象。</summary>
         public Theme? Draft => _session?.Draft;
@@ -140,6 +142,41 @@ namespace LiteMonitor.ThemeEditor
             }
 
             RefreshOverrideBadges();
+        }
+
+        internal Control? EditorForTesting(string jsonPath)
+        {
+            if (!_rowsByPath.TryGetValue(jsonPath, out List<Control>? rows))
+            {
+                return null;
+            }
+
+            return rows.FirstOrDefault(row => row.Tag is RowState);
+        }
+
+        internal bool ResetPropertyForTesting(string jsonPath)
+        {
+            if (!_rowsByPath.TryGetValue(jsonPath, out List<Control>? rows))
+            {
+                return false;
+            }
+
+            LinkLabel? reset = rows
+                .OfType<LinkLabel>()
+                .FirstOrDefault(link => link.Tag is ThemePropertyDescriptor descriptor &&
+                    string.Equals(descriptor.JsonPath, jsonPath, StringComparison.Ordinal));
+            if (reset is null)
+            {
+                return false;
+            }
+
+            if (reset.Tag is not ThemePropertyDescriptor descriptor)
+            {
+                return false;
+            }
+
+            ResetToDefault(descriptor);
+            return true;
         }
 
         /// <summary>按属性路径聚焦并滚动对应行到可见区域（N05 点选定位）。</summary>
@@ -397,12 +434,9 @@ namespace LiteMonitor.ThemeEditor
             if (_session is null) return;
 
             // "恢复默认"= 删除覆盖（JSON 键消失，由模型缺省接管），
-            // 草稿回写模型默认值，与解析器语义一致（重做计划 §4.2）。
-            object? modelDefault = p.DefaultGetter();
-            _session.ApplyEdit(new ThemeFieldEdit(
-                p.JsonPath,
-                (System.Text.Json.Nodes.JsonNode?)null,
-                theme => p.Setter(theme, modelDefault)));
+            // 草稿回写模型默认值，与解析器语义一致（重做计划 §4.2）；
+            // 副作用编辑按缺省值计算并入同一撤销事务。
+            _session.ApplyPropertyReset(p);
             RefreshValues();
             OnRowCommitted(p);
         }
@@ -419,8 +453,32 @@ namespace LiteMonitor.ThemeEditor
             }
 
             RefreshOverrideBadges();
+            if (ChangesPropertyStructure(p))
+            {
+                // 结构变更会让宿主整体重绑检查器（销毁并重建全部行控件）。
+                // 若在触发本事件的 ComboBox 事件栈内同步执行，等于在事件处理中
+                // Dispose 事件源控件，是 WinForms 已知雷区；有句柄时延迟到消息循环。
+                if (IsHandleCreated)
+                {
+                    BeginInvoke(() => PropertyStructureEdited?.Invoke(this, EventArgs.Empty));
+                }
+                else
+                {
+                    PropertyStructureEdited?.Invoke(this, EventArgs.Empty);
+                }
+            }
             PropertyEdited?.Invoke(this, p.Invalidation);
         }
+
+        private static bool ChangesPropertyStructure(ThemePropertyDescriptor p) =>
+            string.Equals(
+                p.JsonPath,
+                "rendering.parameters.visualPreset",
+                StringComparison.Ordinal) ||
+            string.Equals(
+                p.JsonPath,
+                "rendering.parameters.glassStyle",
+                StringComparison.Ordinal);
 
         private void RefreshOverrideBadges()
         {
@@ -483,9 +541,10 @@ namespace LiteMonitor.ThemeEditor
                             break;
                         case ComboBox combo:
                         {
-                            int index = value is int i
-                                ? combo.Items.IndexOf(i.ToString(System.Globalization.CultureInfo.InvariantCulture))
-                                : -1;
+                            string? text = Convert.ToString(
+                                value,
+                                System.Globalization.CultureInfo.InvariantCulture);
+                            int index = text is null ? -1 : FindChoiceIndex(combo, text);
                             combo.SelectedIndex = index;
                             break;
                         }
@@ -505,35 +564,51 @@ namespace LiteMonitor.ThemeEditor
                 if (_refreshing || _textBox is null) return;
                 string text = _textBox.Text;
                 object? parsed = ParseNumberOrText(text);
-                Submit(parsed, _p.ToJson(parsed));
+                Submit(parsed);
             }
 
             public void CommitCheck()
             {
                 if (_refreshing || _checkBox is null) return;
-                Submit(_checkBox.Checked, _p.ToJson(_checkBox.Checked));
+                Submit(_checkBox.Checked);
             }
 
             public void CommitChoice()
             {
                 if (_refreshing || _combo is null || _combo.SelectedIndex < 0) return;
-                int value = _combo.SelectedIndex;
-                Submit(value, _p.ToJson(value));
+                string? value = _combo.SelectedItem as string;
+                if (value is null) return;
+                Submit(value);
             }
 
-            private void Submit(object? value, System.Text.Json.Nodes.JsonNode? json)
+            private void Submit(object? value)
             {
                 ThemeDocumentSession? session = _session;
                 if (session is null) return;
 
-                session.ApplyEdit(new ThemeFieldEdit(
-                    _p.JsonPath,
-                    json,
-                    theme => _p.Setter(theme, value)));
+                // 主编辑与描述符声明的副作用编辑（如预设联动 liveBackground/glassStyle）
+                // 由会话统一提交进同一撤销事务。
+                session.ApplyPropertyEdit(_p, value);
                 _onCommitted(_p);
             }
 
             private static object? ParseNumberOrText(string text) => text;
+
+            private static int FindChoiceIndex(ComboBox combo, string text)
+            {
+                for (int index = 0; index < combo.Items.Count; index++)
+                {
+                    if (string.Equals(
+                        combo.Items[index] as string,
+                        text,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        return index;
+                    }
+                }
+
+                return -1;
+            }
         }
     }
 

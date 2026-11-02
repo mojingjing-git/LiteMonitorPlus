@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
+using System.Windows.Forms;
 using LiteMonitor.Rendering;
 using LiteMonitor.Rendering.Configuration;
 using LiteMonitor.src.Core;
@@ -107,7 +109,9 @@ public sealed class FlagshipGpuThemeTests : IDisposable
         });
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        thread.Join(TimeSpan.FromMinutes(2));
+        Assert.True(
+            thread.Join(TimeSpan.FromMinutes(2)),
+            "STA test thread did not terminate within two minutes.");
 
         if (captured != null)
         {
@@ -120,10 +124,13 @@ public sealed class FlagshipGpuThemeTests : IDisposable
     // ================================================================
 
     [Theory]
-    [InlineData("NixieTube_Brass_GPU", "cyber_punk")]
-    [InlineData("CosmicAurora_Nebula_GPU", "liquid_glass")]
-    [InlineData("RetroCRT_Phosphor_GPU", "cyber_punk")]
-    public void Theme_FileExists_AndDeserializesSuccessfully(string themeName, string expectedMaterial)
+    [InlineData("NixieTube_Brass_GPU", "cyber_punk", "nixieBrass")]
+    [InlineData("CosmicAurora_Nebula_GPU", "liquid_glass", "nebulaAurora")]
+    [InlineData("RetroCRT_Phosphor_GPU", "cyber_punk", "crtPhosphor")]
+    public void Theme_FileExists_AndDeserializesSuccessfully(
+        string themeName,
+        string expectedMaterial,
+        string expectedVisualPreset)
     {
         Theme theme = LoadThemeFromFile(themeName);
 
@@ -133,6 +140,9 @@ public sealed class FlagshipGpuThemeTests : IDisposable
         Assert.Equal(ThemeRenderingConfig.CurrentVersion, theme.Rendering.Version);
         Assert.Equal(ThemeRenderingConfig.GpuBackend, theme.Rendering.Backend);
         Assert.Equal(expectedMaterial, theme.Rendering.Material);
+        Assert.Equal(
+            expectedVisualPreset,
+            theme.Rendering.Parameters["visualPreset"].GetString());
     }
 
     // ================================================================
@@ -380,10 +390,192 @@ public sealed class FlagshipGpuThemeTests : IDisposable
     // 工具方法
     // ================================================================
 
+    [Fact]
+    public void ThemeStudioVisualPresetChoiceRebuildsPropertiesAcrossResetUndoAndRedo()
+    {
+        RunSta(() =>
+        {
+            const string themeName = "EditableGpuTheme";
+            string themeDir = Path.Combine(_tempDir, "studio-themes");
+            string recoveryDir = Path.Combine(_tempDir, "studio-recovery");
+            Directory.CreateDirectory(themeDir);
+            Directory.CreateDirectory(recoveryDir);
+            File.WriteAllText(
+                Path.Combine(themeDir, themeName + ".json"),
+                EditableGpuThemeJson,
+                new UTF8Encoding(false));
+            File.WriteAllText(
+                Path.Combine(themeDir, "CaseNebulaTheme.json"),
+                CaseVariantNebulaJson,
+                new UTF8Encoding(false));
+            File.WriteAllText(
+                Path.Combine(themeDir, "CaseToolbarTheme.json"),
+                CaseVariantToolbarJson,
+                new UTF8Encoding(false));
+
+            ThemeDocumentStore.SetThemeDirForTests(themeDir);
+            ThemeDocumentStore.SetRecoveryDirForTests(recoveryDir);
+            try
+            {
+                using var form = new ThemeStudioForm();
+                form.Show();
+                form.OpenThemeForTesting(themeName);
+                form.SelectTargetForTesting(ThemeEditTarget.GpuMain);
+
+                const string presetPath = "rendering.parameters.visualPreset";
+                PropertyInspector inspector = form.InspectorForTesting;
+                ComboBox initial =
+                    Assert.IsType<ComboBox>(inspector.EditorForTesting(presetPath));
+                Assert.Equal(ThemeRenderingConfig.DefaultVisualPreset, initial.SelectedItem);
+                Assert.NotNull(inspector.EditorForTesting("rendering.parameters.glassStyle"));
+                Assert.Null(inspector.EditorForTesting("font.family"));
+
+                TextBox continuous =
+                    Assert.IsType<TextBox>(
+                        inspector.EditorForTesting("rendering.parameters.cornerRadius"));
+                continuous.Focus();
+                continuous.SelectAll();
+                continuous.SelectedText = "3";
+                Assert.Same(
+                    continuous,
+                    inspector.EditorForTesting("rendering.parameters.cornerRadius"));
+                Assert.True(continuous.Focused, "The first numeric edit must keep the TextBox focused.");
+                continuous.Text = continuous.Text + "2";
+                Assert.Same(
+                    continuous,
+                    inspector.EditorForTesting("rendering.parameters.cornerRadius"));
+                Assert.True(continuous.Focused, "Continuous numeric editing must keep the same focused TextBox.");
+                Assert.Equal("32", continuous.Text);
+
+                initial.SelectedItem = ThemeRenderingConfig.NebulaAuroraVisualPreset;
+                // 结构变更的重绑已改为异步派发（避免在 ComboBox 事件栈内销毁事件源控件）；
+                // 泵一次消息让检查器完成重建后再断言新控件树。
+                Application.DoEvents();
+
+                ComboBox named =
+                    Assert.IsType<ComboBox>(inspector.EditorForTesting(presetPath));
+                Assert.Equal(ThemeRenderingConfig.NebulaAuroraVisualPreset, named.SelectedItem);
+                Assert.Null(inspector.EditorForTesting("rendering.parameters.glassStyle"));
+                Assert.NotNull(inspector.EditorForTesting("font.family"));
+                Assert.NotNull(inspector.EditorForTesting("color.background"));
+
+                Assert.True(inspector.ResetPropertyForTesting(presetPath));
+                Application.DoEvents();
+                ComboBox reset =
+                    Assert.IsType<ComboBox>(inspector.EditorForTesting(presetPath));
+                Assert.Equal(ThemeRenderingConfig.DefaultVisualPreset, reset.SelectedItem);
+                Assert.NotNull(inspector.EditorForTesting("rendering.parameters.glassStyle"));
+                Assert.Null(inspector.EditorForTesting("font.family"));
+
+                form.UndoForTesting();
+                ComboBox undo =
+                    Assert.IsType<ComboBox>(inspector.EditorForTesting(presetPath));
+                Assert.Equal(ThemeRenderingConfig.NebulaAuroraVisualPreset, undo.SelectedItem);
+                Assert.NotNull(inspector.EditorForTesting("font.family"));
+                Assert.Null(inspector.EditorForTesting("rendering.parameters.glassStyle"));
+
+                form.RedoForTesting();
+                ComboBox redo =
+                    Assert.IsType<ComboBox>(inspector.EditorForTesting(presetPath));
+                Assert.Equal(ThemeRenderingConfig.DefaultVisualPreset, redo.SelectedItem);
+                Assert.Null(inspector.EditorForTesting("font.family"));
+                Assert.NotNull(inspector.EditorForTesting("rendering.parameters.glassStyle"));
+
+                using var caseForm = new ThemeStudioForm();
+                caseForm.Show();
+                caseForm.OpenThemeForTesting("CaseNebulaTheme");
+                caseForm.SelectTargetForTesting(ThemeEditTarget.GpuMain);
+                PropertyInspector caseNebulaInspector = caseForm.InspectorForTesting;
+                ComboBox caseNebula =
+                    Assert.IsType<ComboBox>(
+                        caseNebulaInspector.EditorForTesting(presetPath));
+                Assert.Equal(
+                    ThemeRenderingConfig.NebulaAuroraVisualPreset,
+                    caseNebula.SelectedItem);
+                Assert.NotNull(caseNebulaInspector.EditorForTesting("font.family"));
+
+                caseForm.OpenThemeForTesting("CaseToolbarTheme");
+                caseForm.SelectTargetForTesting(ThemeEditTarget.GpuMain);
+                PropertyInspector caseToolbarInspector = caseForm.InspectorForTesting;
+                ComboBox caseToolbar =
+                    Assert.IsType<ComboBox>(
+                        caseToolbarInspector.EditorForTesting("rendering.parameters.glassStyle"));
+                Assert.Equal(
+                    ThemeRenderingConfig.FloatingToolbarGlassStyle,
+                    caseToolbar.SelectedItem);
+                Assert.NotNull(caseToolbarInspector.EditorForTesting("font.family"));
+            }
+            finally
+            {
+                ThemeDocumentStore.SetThemeDirForTests(null);
+                ThemeDocumentStore.ResetRecoveryDir();
+            }
+        });
+    }
+
     private static ThemePropertyDescriptor FindProperty(string path) =>
         System.Linq.Enumerable.Single(
             ThemePropertyCatalog.ClassicProperties,
             p => p.JsonPath == path);
+
+    private const string EditableGpuThemeJson = """
+    {
+      "version": 5,
+      "name": "EditableGpuTheme",
+      "rendering": {
+        "version": 1,
+        "backend": "gpu",
+        "material": "liquid_glass",
+        "parameters": {
+          "liveBackground": false
+        },
+        "fallback": {
+          "backend": "legacy",
+          "material": "legacy"
+        }
+      }
+    }
+    """;
+
+    private const string CaseVariantNebulaJson = """
+    {
+      "version": 5,
+      "name": "Case Nebula",
+      "rendering": {
+        "version": 1,
+        "backend": "gpu",
+        "material": "liquid_glass",
+        "parameters": {
+          "liveBackground": false,
+          "visualPreset": "NebulaAurora"
+        },
+        "fallback": {
+          "backend": "legacy",
+          "material": "legacy"
+        }
+      }
+    }
+    """;
+
+    private const string CaseVariantToolbarJson = """
+    {
+      "version": 5,
+      "name": "Case Toolbar",
+      "rendering": {
+        "version": 1,
+        "backend": "gpu",
+        "material": "liquid_glass",
+        "parameters": {
+          "liveBackground": false,
+          "glassStyle": "FloatingToolbar"
+        },
+        "fallback": {
+          "backend": "legacy",
+          "material": "legacy"
+        }
+      }
+    }
+    """;
 
     private static double ContrastRatio(string foreground, string background)
     {

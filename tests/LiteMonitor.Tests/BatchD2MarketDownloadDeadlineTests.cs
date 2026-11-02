@@ -86,7 +86,7 @@ namespace LiteMonitor.Tests
             {
                 Assert.True(ReferenceEquals(finished, download),
                     "正文读取在期限内没有中止（耗时 " + sw.Elapsed.TotalSeconds.ToString("0.0") +
-                    " 秒）—— 没有调用方令牌时下载会无限等待，市场页 _busy 会永久卡死（LM-084）。");
+                    " 秒）—— 没有调用方令牌时下载会无限等待，市场页 _busy 会永久卡死。");
 
                 // 必须是"超时中止"，而且要报得出来（不是静默卡住）
                 PluginMarketException ex = await Assert.ThrowsAsync<PluginMarketException>(
@@ -124,7 +124,7 @@ namespace LiteMonitor.Tests
 
             Assert.True(ReferenceEquals(finished, download),
                 "调用方取消没有中断正文读取（耗时 " + sw.Elapsed.TotalSeconds.ToString("0.0") +
-                " 秒）—— 用户主动取消不得被降级成只能等超时（LM-084）。");
+                " 秒）—— 用户主动取消不得被降级成只能等超时。");
 
             // ★ 取消语义必须保留：抛的是取消异常，而不是"超时"
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await download);
@@ -162,7 +162,7 @@ namespace LiteMonitor.Tests
 
             Assert.True(forwardsToDeadlineOverload,
                 "生产入口 DownloadBytesAsync(Uri, CancellationToken) 必须转调带期限的重载 —— " +
-                "市场页安装走的正是它，漏掉期限就又是无限等待（LM-084）。");
+                "市场页安装走的正是它，漏掉期限就又是无限等待。");
         }
 
         // ================================================================

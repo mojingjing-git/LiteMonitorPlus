@@ -106,13 +106,20 @@ namespace LiteMonitor.Tests
         public void F02_Settings写失败_不进入运行时且回滚Skin()
         {
             string themeName = "r3-save-blocked-" + Guid.NewGuid().ToString("N");
-            string path = Path.Combine(ThemeManager.ThemeDir, themeName + ".json");
+            ThemeDocumentStore.SetThemeDirForTests(_dir);
+            string path = Path.Combine(_dir, themeName + ".json");
             File.WriteAllText(path, JsonSerializer.Serialize(new Theme { Name = themeName, Version = 1 }), new UTF8Encoding(false));
 
+            string settingsDir = Path.Combine(_dir, "settings");
+            string? priorSettingsPath = SettingsHelper.PathOverride;
             var cfg = new Settings { Skin = "original-theme" };
             bool priorBlock = SettingsHelper.GlobalBlockSave;
             try
             {
+                SettingsHelper.PathOverride = settingsDir;
+                cfg.Save();
+                byte[] persistedBefore = File.ReadAllBytes(SettingsHelper.FilePath);
+
                 SettingsHelper.GlobalBlockSave = true;
                 var gateway = new ThemeStudioLauncher.AppActionsThemeApplyGateway(cfg, null!, null!);
                 ThemeStudioForm.ThemeApplyResult result = gateway.ApplySavedTheme(themeName, 7);
@@ -120,11 +127,14 @@ namespace LiteMonitor.Tests
                 Assert.False(result.Success);
                 Assert.Equal(ThemeStudioForm.ThemeApplyStage.SettingsPersisted, result.Stage);
                 Assert.Equal("original-theme", cfg.Skin);
+                Assert.Equal(persistedBefore, File.ReadAllBytes(SettingsHelper.FilePath));
                 Assert.Contains("配置持久化失败", result.Error);
             }
             finally
             {
                 SettingsHelper.GlobalBlockSave = priorBlock;
+                SettingsHelper.PathOverride = priorSettingsPath;
+                ThemeDocumentStore.SetThemeDirForTests(null);
                 try { File.Delete(path); } catch { }
             }
         }

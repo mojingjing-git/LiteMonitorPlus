@@ -95,7 +95,7 @@ internal static class Program
     {
         var form = new Form
         {
-            Text = "LiteMonitor 主题工作室 — 布局原型（TE00）",
+            Text = "LiteMonitor 主题工作室 — 布局原型",
             AutoScaleMode = AutoScaleMode.None,
             Font = new Font("Segoe UI", 9F),
             BackColor = CanvasBack,
@@ -199,7 +199,7 @@ internal static class Program
         };
         var previewTag = new Label
         {
-            Text = "预览占位 — 主效果 · GPU 场景 · 固定输入\n（TE04 接入真实同源渲染）",
+            Text = "预览占位 — 主效果 · GPU 场景 · 固定输入\n",
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = TextMuted,

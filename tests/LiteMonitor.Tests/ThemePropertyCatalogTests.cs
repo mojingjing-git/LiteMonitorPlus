@@ -144,6 +144,44 @@ namespace LiteMonitor.Tests
             }
         }
 
+        [Fact]
+        public void Choice字符串提交_保存为数字节点_不丢键()
+        {
+            // 回归：Choice 编辑器以 SelectedItem 字符串提交（CommitChoice），经典 Choice 的
+            // ToJson 是 JsonNumber——字符串必须还原成数字节点；否则保存链把 null
+            // 当作"删除该键"，layout.frameStyle / layout.barStyle 会被静默丢配置。
+            string dir = Path.Combine(Path.GetTempPath(), "litemonitor-te03-choice-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                const string source = @"{ ""name"": ""T"", ""layout"": { ""frameStyle"": 1 } }";
+                File.WriteAllText(Path.Combine(dir, "T.json"), source);
+                ThemeDocumentStore.SetThemeDirForTests(dir);
+                try
+                {
+                    ThemeDocumentSession session = ThemeDocumentSession.FromSourceBytes(
+                        "T", Path.Combine(dir, "T.json"), System.Text.Encoding.UTF8.GetBytes(source));
+
+                    ThemePropertyDescriptor frameStyle = ThemePropertyCatalog.ClassicProperties
+                        .Single(p => p.JsonPath == "layout.frameStyle");
+                    session.ApplyPropertyEdit(frameStyle, "2");
+
+                    Assert.True(session.Save().Success);
+                    JsonNode saved = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "T.json")))!;
+                    Assert.Equal(2, saved["layout"]!["frameStyle"]!.GetValue<int>());
+                    Assert.Equal(2, Convert.ToInt32(frameStyle.Getter(session.Draft)));
+                }
+                finally
+                {
+                    ThemeDocumentStore.SetThemeDirForTests(null);
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { }
+            }
+        }
+
         private static object ToOriginal(ThemePropertyDescriptor p, JsonNode node) =>
             p.EditorKind switch
             {

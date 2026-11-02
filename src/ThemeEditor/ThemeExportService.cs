@@ -194,6 +194,14 @@ namespace LiteMonitor.ThemeEditor
     /// </summary>
     public static class ThemeExportService
     {
+        internal sealed record GpuRenderAttempt(bool Success, string? Error);
+
+        internal delegate GpuRenderAttempt GpuRenderAttemptForTests(
+            Theme theme,
+            string path,
+            Size size,
+            ThemeExportImageOrientation orientation);
+
         /// <summary>竖向效果图宽度（固定）。</summary>
         public const int VerticalImageWidth = 240;
 
@@ -389,6 +397,27 @@ namespace LiteMonitor.ThemeEditor
             string path,
             ImageRoutePreference preference,
             ThemeExportImageOrientation orientation = ThemeExportImageOrientation.Vertical)
+            => ExportEffectImageCore(session, path, preference, orientation, gpuRenderAttempt: null);
+
+        internal static ThemeImageExportResult ExportEffectImage(
+            ThemeDocumentSession session,
+            string path,
+            ImageRoutePreference preference,
+            ThemeExportImageOrientation orientation,
+            GpuRenderAttemptForTests gpuRenderAttempt)
+            => ExportEffectImageCore(
+                session,
+                path,
+                preference,
+                orientation,
+                gpuRenderAttempt ?? throw new ArgumentNullException(nameof(gpuRenderAttempt)));
+
+        private static ThemeImageExportResult ExportEffectImageCore(
+            ThemeDocumentSession session,
+            string path,
+            ImageRoutePreference preference,
+            ThemeExportImageOrientation orientation,
+            GpuRenderAttemptForTests? gpuRenderAttempt)
         {
             if (session == null) throw new ArgumentNullException(nameof(session));
             if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("导出路径不能为空。", nameof(path));
@@ -438,11 +467,35 @@ namespace LiteMonitor.ThemeEditor
                     fullPath, size, orientation, ThemeExportImageRoute.Fallback, diagnostics);
             }
 
-            bool gpuOk = TryRenderGpuImage(theme, fullPath, size, orientation, out string? gpuError);
+            bool gpuOk;
+            string? gpuError;
+            if (gpuRenderAttempt is null)
+            {
+                gpuOk = TryRenderGpuImage(theme, fullPath, size, orientation, out gpuError);
+            }
+            else
+            {
+                GpuRenderAttempt attempt = gpuRenderAttempt(theme, fullPath, size, orientation);
+                gpuOk = attempt.Success;
+                gpuError = attempt.Error;
+            }
             if (gpuOk)
             {
-                diagnostics.Add("效果图由 GPU 渲染器产出（GpuSceneRenderer 固定输入回读）。");
-                return DescribeImage(fullPath, ThemeExportImageRoute.Gpu, diagnostics);
+                ThemeImageExportResult gpuResult = DescribeImage(
+                    fullPath,
+                    ThemeExportImageRoute.Gpu,
+                    size,
+                    diagnostics);
+                if (gpuResult.Success)
+                {
+                    diagnostics.Add("效果图由 GPU 渲染器产出（GpuSceneRenderer 固定输入回读）。");
+                    return gpuResult;
+                }
+
+                gpuOk = false;
+                gpuError = gpuResult.Error ?? "GPU 效果图产物校验失败。";
+                diagnostics.Add("GPU 效果图产物校验失败：" + gpuError);
+                TryDeleteFile(fullPath);
             }
 
             // GPU 不可用：按偏好决定"失败"还是"明确标注的兼容外观图"
@@ -826,7 +879,7 @@ namespace LiteMonitor.ThemeEditor
                 };
             }
 
-            return DescribeImage(path, route, diagnostics);
+            return DescribeImage(path, route, size, diagnostics);
         }
 
         /// <summary>
@@ -892,7 +945,7 @@ namespace LiteMonitor.ThemeEditor
                 };
             }
 
-            return DescribeImage(path, route, diagnostics);
+            return DescribeImage(path, route, size, diagnostics);
         }
 
         /// <summary>竖向经典渲染（与竖向主窗口同源）。</summary>
@@ -1051,30 +1104,95 @@ namespace LiteMonitor.ThemeEditor
         private static ThemeImageExportResult DescribeImage(
             string path,
             ThemeExportImageRoute route,
+            Size expectedSize,
             List<string> diagnostics)
         {
-            if (!File.Exists(path))
+            if (!TryReadValidatedImage(path, expectedSize, out byte[]? bytes, out string? error))
             {
                 return new ThemeImageExportResult
                 {
                     Success = false,
-                    Error = "图片文件未生成。",
+                    Error = error ?? "图片产物校验失败。",
                     Path = path,
                     Route = route,
                     Diagnostics = diagnostics
                 };
             }
 
-            byte[] bytes = File.ReadAllBytes(path);
+            byte[] resolvedBytes = bytes!;
             return new ThemeImageExportResult
             {
                 Success = true,
                 Path = path,
-                Sha256 = Sha256Of(bytes),
-                ByteCount = bytes.Length,
+                Sha256 = Sha256Of(resolvedBytes),
+                ByteCount = resolvedBytes.Length,
                 Route = route,
                 Diagnostics = diagnostics
             };
+        }
+
+        /// <summary>
+        /// 验证效果图产物确为本次可读取的 PNG，并匹配请求像素尺寸。
+        /// 仅检查文件存在会让旧文件、损坏文件和错误尺寸产物被误报成功。
+        /// </summary>
+        internal static bool TryValidateImageArtifact(
+            string path,
+            Size expectedSize,
+            out string? error)
+        {
+            return TryReadValidatedImage(path, expectedSize, out _, out error);
+        }
+
+        private static bool TryReadValidatedImage(
+            string path,
+            Size expectedSize,
+            out byte[]? bytes,
+            out string? error)
+        {
+            bytes = null;
+            error = null;
+
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    error = "图片文件未生成或不存在。";
+                    return false;
+                }
+
+                byte[] candidate = File.ReadAllBytes(path);
+                if (candidate.Length == 0)
+                {
+                    error = "图片文件为空。";
+                    return false;
+                }
+
+                using var stream = new MemoryStream(candidate, writable: false);
+                using Image image = Image.FromStream(
+                    stream,
+                    useEmbeddedColorManagement: false,
+                    validateImageData: true);
+                if (image.RawFormat.Guid != ImageFormat.Png.Guid)
+                {
+                    error = "图片产物不是 PNG。";
+                    return false;
+                }
+
+                if (image.Width != expectedSize.Width || image.Height != expectedSize.Height)
+                {
+                    error = $"图片尺寸不匹配：实际 {image.Width}x{image.Height}，" +
+                        $"期望 {expectedSize.Width}x{expectedSize.Height}。";
+                    return false;
+                }
+
+                bytes = candidate;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = "图片产物无法读取或已损坏：" + ex.Message;
+                return false;
+            }
         }
 
         /// <summary>在图上标注渲染路线（图或伴随资料必须能看出这是哪条路线出的图）。</summary>

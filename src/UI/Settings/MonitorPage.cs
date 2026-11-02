@@ -190,6 +190,7 @@ namespace LiteMonitor.src.UI.SettingsPage
         {
             base.OnShow();
             if (Config == null) return;
+            _initialAliases ??= new Dictionary<string, string>(Config.GroupAliases);
 
             // Sync Checkbox if in taskbar tab (in case it was changed in MainPanelPage)
             // ★ W3：同步不限于任务栏标签页 —— 主标签页上这个复选框是不可见的，
@@ -316,6 +317,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                     for (int i = items.Count - 1; i >= 0; i--)
                     {
                         var row = new MonitorItemRow(items[i], true);
+                        KeepRowBaseline(row);
                         row.MoveUp += Row_MoveUp; row.MoveDown += Row_MoveDown;
                         controlsToAdd.Add(row);
                     }
@@ -433,6 +435,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             for (int i = items.Count - 1; i >= 0; i--)
             {
                 var row = new MonitorItemRow(items[i], false);
+                KeepRowBaseline(row);
                 row.MoveUp += Row_MoveUp; row.MoveDown += Row_MoveDown;
                 rows.Add(row);
             }
@@ -535,9 +538,14 @@ namespace LiteMonitor.src.UI.SettingsPage
                     //   (标题从此不再跟随显卡简称变化)。
                     string input = block.Header.InputAlias.Inner.Text.Trim();
                     string initial = block.Header.InputInitial;
+                    if (!_initialGroupText.TryGetValue(block.Header.GroupKey, out var firstText))
+                        _initialGroupText[block.Header.GroupKey] = firstText = initial;
+                    initial = firstText;
 
                     if (string.Equals(input, initial, StringComparison.Ordinal))
                     {
+                        if (_initialAliases != null && _initialAliases.TryGetValue(block.Header.GroupKey, out var originalAlias)) Config.GroupAliases[block.Header.GroupKey] = originalAlias;
+                        else Config.GroupAliases.Remove(block.Header.GroupKey);
                         // 用户没动过 -> GroupAliases 保持原样 (既有的别名不删, 也没有的不加)
                     }
                     else if (!string.IsNullOrEmpty(input))
@@ -576,6 +584,32 @@ namespace LiteMonitor.src.UI.SettingsPage
         }
 
         public override void Save()
+        {
+            CommitMonitorEdits();
+        }
+
+        private bool _hasUserEdits;
+        private readonly Dictionary<string, (string Name, string Stored, string Short, string StoredShort)> _rowBaselines = new();
+        private void KeepRowBaseline(MonitorItemRow row)
+        {
+            if (!_rowBaselines.TryGetValue(row.Config.Key, out var baseline)) _rowBaselines[row.Config.Key] = baseline = row.EditBaseline;
+            row.SetEditBaseline(baseline);
+        }
+        private Dictionary<string, string>? _initialAliases;
+        private readonly Dictionary<string, string> _initialGroupText = new();
+        internal void NoteUserEdit(Control control)
+        {
+            if (control == _chkLinkHorizontal) _hasUserEdits = true;
+            for (Control? parent = control; parent != null && parent != this; parent = parent.Parent)
+                if (parent is MonitorItemRow or MonitorGroupHeader) { _hasUserEdits = true; break; }
+        }
+
+        public override void CollectDraftEdits()
+        {
+            if (_hasUserEdits) CommitMonitorEdits();
+        }
+
+        private void CommitMonitorEdits()
         {
             if (!_isLoaded || Config == null || _workingList == null) return;
             

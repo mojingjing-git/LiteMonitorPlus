@@ -147,6 +147,13 @@ public sealed class GpuThemePreviewControl : Control
     /// </summary>
     public int TargetFramesPerSecond => _scheduler.TargetFramesPerSecond;
 
+    /// <summary>仅供测试区分 GPU renderer 最后成功保留的主题与父控件 GDI 回退主题。</summary>
+    internal Theme CommittedThemeForTesting => _theme;
+
+    /// <summary>当前 renderer 实际分配的场景表面尺寸；未激活时为 null。</summary>
+    internal Size? RenderSurfaceSize =>
+        _renderer is null ? null : new Size(_renderer.Width, _renderer.Height);
+
     public bool UpdateTheme(
         Theme theme,
         List<GroupLayoutInfo>? groups = null,
@@ -530,6 +537,12 @@ public sealed class GpuThemePreviewControl : Control
         {
             return false;
         }
+
+        if (!EnsureRendererSurfaceMatchesControl())
+        {
+            return false;
+        }
+
         try
         {
             _renderer.Render(
@@ -541,10 +554,40 @@ public sealed class GpuThemePreviewControl : Control
             _renderer.CaptureScenePng(pngPath);
             return File.Exists(pngPath);
         }
-        catch
+        catch (Exception ex)
         {
+            _error = "gpu_capture_failed: " + ex.Message;
             return false;
         }
+    }
+
+    private bool EnsureRendererSurfaceMatchesControl()
+    {
+        if (_renderer is null)
+        {
+            _error = "gpu_surface_unavailable";
+            return false;
+        }
+
+        int expectedWidth = Math.Max(1, ClientSize.Width);
+        int expectedHeight = Math.Max(1, ClientSize.Height);
+        if (_renderer.Width != expectedWidth || _renderer.Height != expectedHeight)
+        {
+            ResizeRenderer();
+        }
+
+        if (_renderer is not null &&
+            _renderer.Width == expectedWidth &&
+            _renderer.Height == expectedHeight)
+        {
+            return true;
+        }
+
+        int actualWidth = _renderer?.Width ?? 0;
+        int actualHeight = _renderer?.Height ?? 0;
+        _error = $"gpu_surface_size_mismatch: expected {expectedWidth}x{expectedHeight}, " +
+            $"actual {actualWidth}x{actualHeight}.";
+        return false;
     }
 
     private void Fail(string message)

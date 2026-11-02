@@ -1,8 +1,8 @@
 # AppearanceBackdropProbe —— A06 液态玻璃技术验证探针
 
 > 所属工作包：**A06（玻璃技术验证与路线裁决）**
-> 权威规格：`docs/superpowers/plans/2026-10-20-appearance-agent-execution.md` §4
-> 结果文件：`docs/superpowers/plans/2026-10-20-appearance-a06-glass-validation.md`
+> 权威规格：`docs/architecture/background-frame.md`
+> 材质与模糊半径支持矩阵：`docs/design/gpu-themes/visual-spec.md`
 
 本工程**不是**功能实现，只是一台**取证仪**：它回答"实时玻璃这条路在本机到底走不走得通"，
 产出可复核的本地证据（JSON + PNG）与支持矩阵。

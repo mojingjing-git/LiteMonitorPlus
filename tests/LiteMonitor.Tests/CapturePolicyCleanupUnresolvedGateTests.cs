@@ -574,7 +574,7 @@ public sealed class CapturePolicyCleanupUnresolvedGateTests
             + "① TryReconfigure 拒绝路径（宿主在场）与 ② StartGpuPresentation() 失败分支"
             + "（宿主缺席，用户切回 GPU 主题时必经）—— "
             + "缺② ⇒ 'GPU live 恢复耗尽 ⇒ 切 legacy ⇒ 切回 GPU'这条主流程里"
-            + "明确恢复几乎不可达（LM-074）。");
+            + "明确恢复几乎不可达。");
 
         List<int> beforeStart = scheduleOffsets.FindAll(offset => offset < startAt);
         List<int> afterStart = scheduleOffsets.FindAll(offset => offset > startAt);
@@ -582,17 +582,17 @@ public sealed class CapturePolicyCleanupUnresolvedGateTests
         Assert.True(
             beforeStart.Count == 1,
             "TryReconfigure 拒绝路径的恢复触发必须恰好有一个且排在 StartGpuPresentation **之前** —— "
-            + "先建的那条责任携带**精确原值**（LM-074）。");
+            + "先建的那条责任携带**精确原值**。");
         Assert.True(
             afterStart.Count == 1,
             "StartGpuPresentation() 失败分支必须安排一次明确恢复 —— "
-            + "该分支读的是 _gpuFallbackCode（闸门的 unresolved 拒绝码只在这里出现）（LM-074）。");
+            + "该分支读的是 _gpuFallbackCode（闸门的 unresolved 拒绝码只在这里出现）。");
 
         int fallbackReadAt = FieldReadOffsetOf(body, "_gpuFallbackCode");
         Assert.True(
             fallbackReadAt >= 0 && fallbackReadAt < afterStart[0],
             "StartGpuPresentation() 失败分支的恢复调用必须**读** _gpuFallbackCode —— "
-            + "闸门的 unresolved 拒绝码由 StartGpuPresentation 记进该字段（LM-074）。");
+            + "闸门的 unresolved 拒绝码由 StartGpuPresentation 记进该字段。");
     }
 
     // ================================================================

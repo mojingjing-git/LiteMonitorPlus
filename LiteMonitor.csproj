@@ -10,7 +10,7 @@
     <ApplicationIcon>resources\assets\app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!--
-      ★ DPI 感知等级 = Per-Monitor-V2（2026-10-21 用户拍板，见 docs/superpowers/plans/2026-10-20-appearance-a15-acceptance.md §6）。
+      ★ DPI 感知等级 = Per-Monitor-V2（进程需按显示器分别接收缩放变更）。
 
       为什么要改：
       1. 液态玻璃的抓屏路线（屏幕捕获 + WDA_EXCLUDEFROMCAPTURE）要求进程能拿到**物理像素**坐标；
@@ -45,7 +45,7 @@
   </PropertyGroup>
 
   <!--
-    ★ Phase 5 · 强类型编译门禁（仅 Release）。
+    ★ 强类型编译门禁（仅 Release）。
 
     语义：Release 构建下，本工程内的**任何**编译警告一律升级为**错误**，
     使「可空引用治理」从一次性清理变成**持续可验证的工程不变量**。
@@ -56,9 +56,8 @@
 
     为何写在**本 csproj** 而不是根级 Directory.Build.props：
       根级 props 会被 tests/ 与 tools/ 隐式导入，那里仍有 627 条真实可空债务
-      与 42 条 xUnit 分析器规则警告（分属独立 Phase 6 / Phase 7），
-      一并提升为错误会让门禁永久红灯。详见
-      docs/plans/2026-10-26-nullable-warnings-remediation-plan.md §5.6。
+      与 xUnit 分析器规则警告（分属独立的测试工程治理项），
+      一并提升为错误会让门禁永久红灯。
   -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -159,7 +158,7 @@
     ★ 本地工作区排除（与上面的既有排除同族）★
     SDK 项目的 Compile 默认通配是 **/*.cs，而 Compile Remove 只排除了
     LiteMonitor.Updater / tests / tools / docs。
-    但本地存在 10+ 个 git worktree 的**全量副本**（.artifacts\ 与 .worktrees\），
+    但本地可能存在派生副本的**全量副本**（.artifacts\ 与 .worktrees\），
     复审暂存目录 .review-scratch\ 里也有 target-src 全量副本。
     ★ .gitignore / .git/info/exclude 只影响 git，**不影响 MSBuild 通配** ⇒
       副本里的 src\System\Program.cs、tools\*Probe\Program.cs 全被编译进来，

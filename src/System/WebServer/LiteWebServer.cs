@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Text.Json; // [Fix] Added missing using
 using System.Buffers; // [Optimization] Use ArrayPool
 using LiteMonitor.src.Core;
+using LiteMonitor.Core;
 using LiteMonitor.src.SystemServices;
 using LiteMonitor.src.SystemServices.InfoService;
 using System.Diagnostics;
@@ -476,12 +477,30 @@ namespace LiteMonitor.src.WebServer
 
         private void WriteSnapshotJson(Utf8JsonWriter writer)
         {
-            if (!HardwareGateway.IsRegistered)
+            LiteMonitor.Contracts.IHardwareClient? hardwareClient = HardwareGateway.Client;
+            if (hardwareClient is null)
             {
                 writer.WriteStartObject();
                 writer.WriteEndObject();
                 return;
             }
+
+            LiteMonitor.Contracts.HardwareSnapshot snapshot;
+            try
+            {
+                snapshot = hardwareClient.GetLatestSnapshot();
+            }
+            catch
+            {
+                snapshot = new LiteMonitor.Contracts.HardwareSnapshot(
+                    BatchId: 0,
+                    CatalogVersion: 0,
+                    ConfigRevision: -1,
+                    Samples: Array.Empty<LiteMonitor.Contracts.MetricSample>(),
+                    SamplingDuration: TimeSpan.Zero,
+                    TimestampMonoMs: 0);
+            }
+            var snapshotValues = new HardwareSnapshotValueIndex(snapshot);
 
             // ★★★ 修复：创建列表副本并加锁，防止遍历时 UI 线程修改集合导致崩溃 ★★★
             List<MonitorItemConfig> itemsCopy;
@@ -517,7 +536,7 @@ namespace LiteMonitor.src.WebServer
             // ★ 当前是否有**可信**的 FPS 数据：
             //   有需求但服务刚启动、首帧未到时，hw.Get("FPS") 会返回 0f —— 那是"没有数据"而不是"真的是 0"。
             //   用 HasFpsData 区分两者，前者输出 "--"，后者输出真实的 0。
-            bool hasFpsData = HardwareGateway.HasFpsData;
+            bool hasFpsData = snapshotValues.TryGetValue("FPS", out _);
 
             writer.WriteStartObject();
 
@@ -559,7 +578,9 @@ namespace LiteMonitor.src.WebServer
 
                 WriteSnapshotItemJson(writer, item, displayName, groupId, groupDisplay,
                     groupIndices.TryGetValue(item.UIGroup, out int idx) ? idx : 999,
-                    fpsDemand, hasFpsData, k => HardwareGateway.GetSampleValue(k), k => InfoService.Instance.GetValue(k));
+                    fpsDemand, hasFpsData,
+                    k => snapshotValues.TryGetValue(k, out float value) ? value : null,
+                    k => InfoService.Instance.GetValue(k));
             }
 
             writer.WriteEndArray();

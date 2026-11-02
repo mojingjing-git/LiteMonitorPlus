@@ -35,7 +35,7 @@ public sealed class BatchEProbeIsolationGateTests
         Assert.False(
             result.Passed,
             "配置里开着网页服务 ⇒ 生产 OnShown 一定会开监听 ⇒ 隔离门必须拒绝。" +
-            "只检查'此刻有没有在监听'就是 LM-087 的假绿：门通过，服务照开。");
+            "只检查'此刻有没有在监听'就是 的假绿：门通过，服务照开。");
         Assert.False(result.WebServerDisabledInConfig);
         Assert.Contains(
             "web server",
@@ -67,7 +67,7 @@ public sealed class BatchEProbeIsolationGateTests
         Assert.True(
             RealMainFormScenario.ResolveWebServerEnabled(null),
             "读不到配置时必须按'会启动网页服务'处理（保守）：宁可中止这条 arm，" +
-            "也不许真的开一个局域网监听（LM-087）。");
+            "也不许真的开一个局域网监听。");
         Assert.False(RealMainFormScenario.ResolveWebServerEnabled(false));
         Assert.True(RealMainFormScenario.ResolveWebServerEnabled(true));
     }
@@ -113,7 +113,7 @@ public sealed class BatchEProbeIsolationGateTests
             gateOffset < applicationRunOffset,
             "隔离门必须在 Application.Run（消息循环）**之前**求值：IL 偏移 " + gateOffset +
             " 的隔离门判定晚于偏移 " + applicationRunOffset + " 的 Application.Run —— " +
-            "生产 OnShown 已经跑完、网页服务已经开起来了，拒绝就太晚了（LM-087）。");
+            "生产 OnShown 已经跑完、网页服务已经开起来了，拒绝就太晚了。");
     }
 
     // ---------------------------------------------------------------- 复查

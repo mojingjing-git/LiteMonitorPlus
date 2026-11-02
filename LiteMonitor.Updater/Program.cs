@@ -184,7 +184,7 @@ namespace LiteMonitor.Updater
 
             LogError(
                 targetDir,
-                "[Reject] 拒绝执行：调用方没有提供期望 SHA-256 摘要（LM-016）。" +
+                "[Reject] 拒绝执行：调用方没有提供期望 SHA-256 摘要。" +
                 "本更新器只接受 '<update.zip> <sha256>' 形式；" +
                 "单参数调用（旧版主程序）属于有意的不兼容变更，" +
                 "不会退化成'不校验就继续解压'。未解压任何文件，现有版本未被改动。" +
@@ -195,7 +195,7 @@ namespace LiteMonitor.Updater
             //   等用户装上带本机制的新版本时就能看到"请手动下载新版本"。
             //   写标记失败不改变拒绝结论，只留日志。
             const string reason =
-                "调用方没有提供期望 SHA-256 摘要（LM-016）：本更新器只接受 '<update.zip> <sha256>' 形式；" +
+                "调用方没有提供期望 SHA-256 摘要：本更新器只接受 '<update.zip> <sha256>' 形式；" +
                 "旧版主程序的单参数调用属于有意的不兼容变更，不会退化成'不校验就继续解压'。";
 
             if (LegacyBridgeMarker.TryWrite(
@@ -252,7 +252,7 @@ namespace LiteMonitor.Updater
             {
                 LogError(
                     baseDir,
-                    "[Reject] 拒绝执行：期望 SHA-256 摘要缺失或格式非法（LM-016）。" +
+                    "[Reject] 拒绝执行：期望 SHA-256 摘要缺失或格式非法。" +
                     "「没有摘要」不被解释为「不需要校验」。" +
                     "未解压任何文件，现有版本未被改动。");
                 return ExitIntegrityRejected;
@@ -284,7 +284,7 @@ namespace LiteMonitor.Updater
                 package.Dispose();
                 LogError(
                     baseDir,
-                    "[Reject] 拒绝执行：更新包摘要与期望值不一致（LM-016）。" +
+                    "[Reject] 拒绝执行：更新包摘要与期望值不一致。" +
                     " expected=" + expected.ToLowerInvariant() +
                     " actual=" + actualDigest.ToLowerInvariant() +
                     " 未解压任何文件，现有版本未被改动。");

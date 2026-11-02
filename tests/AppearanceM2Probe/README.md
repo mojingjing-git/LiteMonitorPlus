@@ -1,15 +1,15 @@
-# AppearanceM2Probe —— M2 合同 §9 验收门槛自证探针
+# AppearanceM2Probe —— 实时背景帧合同的验收门槛自证探针
 
-本工程验证 **M2 合同 §9**（`docs/superpowers/plans/2026-10-20-appearance-m2-contract.md`）中的验收门槛，分两组：
+本工程验证**实时背景帧合同**（`docs/architecture/background-frame.md`）中的验收门槛，分两组：
 
 | 组别 | 门槛 | 判定方式 |
 |---|---|---|
 | **源码级** | 第 7 条、第 10 条 | 源码 / csproj 文本扫描 |
 | **运行时** | 第 1、2、3、4、5、6、8、9 条 | 探针自有的**假后端**驱动真实实现 |
 
-> 合同来源：`docs/superpowers/plans/2026-10-20-appearance-m2-contract.md` §9「A15 的验收门槛」。
-> 源码级门槛不依赖捕获后端的任何 API，可与 A15 的实现并行推进、独立验证；
-> 运行时门槛直接跑 A15 落地后的实现（`BackdropCaptureService` / `ScreenCaptureFrameSource` / `BackdropImageProcessor`）。
+> 合同来源：`docs/architecture/background-frame.md` 的「测量口径」与「降级链」两节。
+> 源码级门槛不依赖捕获后端的任何 API，可独立验证；
+> 运行时门槛直接跑生产实现（`BackdropCaptureService` / `ScreenCaptureFrameSource` / `BackdropImageProcessor`）。
 
 > ⚠️ 本工程**不进 sln**（与既有 `AppearanceWiringProbe` / `LiteMonitor.PerformanceProbe` 的惯例一致）。
 > ⚠️ 不新增任何 NuGet 依赖，只引用主项目与 BCL。
@@ -18,12 +18,12 @@
 > ⚠️ 运行时门槛里的"捕获"全部由探针自有的**假后端**现画小位图产生：
 > **绝不**调用 `CopyFromScreen` / `BitBlt` / 任何抓屏 API。
 
-## 两条门槛与 M2 合同 §9 的对应关系
+## 两条源码级门槛的对应关系
 
-| 用例 | 合同 §9 门槛 | 检查方式（合同原文） |
+| 用例 | 合同门槛 | 检查方式（合同原文） |
 |---|---|---|
-| `M2 门槛#7 绘制路径无捕获调用` | **第 7 条** | 源码扫描（`BitBlt`/`CopyFromScreen`/`DXGI` 等零命中） |
-| `M2 门槛#10 无新增 NuGet 依赖` | **第 10 条** | `*.csproj` diff |
+| `第 7 条门槛：绘制路径无捕获调用` | **第 7 条** | 源码扫描（`BitBlt`/`CopyFromScreen`/`DXGI` 等零命中） |
+| `第 10 条门槛：无新增 NuGet 依赖` | **第 10 条** | `*.csproj` diff |
 
 ## 用法
 
@@ -61,7 +61,7 @@ tests/AppearanceM2Probe/output/AppearanceM2Probe.exe [--repo-root <仓库根>] [
 
 | 范围 | 判定 |
 |---|---|
-| `src/System/Backdrop/**`（M2 捕获子系统） | **允许**出现原语（记入证据 `allowedDirectoryHits`） |
+| `src/System/Backdrop/**`（背景捕获子系统） | **允许**出现原语（记入证据 `allowedDirectoryHits`） |
 | `src/Rendering/**`（本轮 GPU 渲染子系统：设备创建、桌面复制、前景绘制、呈现） | **允许**出现原语（记入证据 `allowedDirectoryHits`） |
 | `src/UI/Settings/TaskbarPage.cs`（任务栏页既有取色截图，与外观无关） | **允许**（记入证据 `whitelistHits`） |
 | `src/UI/AppearanceRuntime.cs`、`src/UI/Decor/`、`src/ThemeEditor/`、`src/Core/`、`src/System/Backdrop/BackdropRenderer.cs` | **必须零命中（硬断言）** |
@@ -88,7 +88,7 @@ WDA 排除，都不属于「外观层绕过捕获子系统私自抓屏」，因�
 证据里的 `rawTextMentionCount`（原始文本中的提及数，含注释）与
 `suppressedByCommentStripping`（被注释剔除挡掉的提及数）用于证明剔除逻辑确实生效。
 
-## 用例二：门槛 #10 —— 无新增 NuGet 依赖
+## 用例二：门槛 —— 无新增 NuGet 依赖
 
 - 检查范围：根 `LiteMonitor.csproj` + `src/` 下若存在的独立 `*.csproj`。
 - 基线（恰好等于，多一个或少一个都判失败）：
@@ -110,16 +110,16 @@ WDA 排除，都不属于「外观层绕过捕获子系统私自抓屏」，因�
 
 ### 用例总览
 
-| 用例 | 合同 §9 门槛 | 判定口径（一句话） |
+| 用例 | 合同门槛 | 判定口径（一句话） |
 |---|---|---|
-| `M2 门槛#1 捕获后端 IsPreview=false` | 第 1 条 | `BackdropCaptureService` / `ScreenCaptureFrameSource` 的 `IsPreview` 恒为 `false`；把固定样例图包成帧后端的适配器恒为 `true` |
-| `M2 门槛#2 预览路径后端调用次数=0` | 第 2 条 | 构造带 `previewSource` 的 `AppearanceRuntime` + 计数型假后端，渲染一次后 `TryGetFrame` 调用次数 = 0 且 `Source == PreviewFrame` |
-| `M2 门槛#3 Source 三值语义正确` | 第 3 条 | 真实帧 ⇒ `LiveFrame`；预览固定图 ⇒ `PreviewFrame`；后端不可用 / 无有效帧 ⇒ 走降级链（`Gradient`/`Legacy`）且必须带原因码与可读原因文本 |
-| `M2 门槛#4 代次不匹配的帧被丢弃且被回收` | 第 4 条 | 换掉三个代次后产生的旧代次帧不得被 `TryAcquireFrame` 交给 UI，且必须由服务自己回收（`FramesDroppedStale` 递增 + 存活位图归零） |
-| `M2 门槛#5 pending 最多一份` | 第 5 条 | UI 一帧也不取时连续产出多帧：`PendingFrameCount` 恒 ≤ 1，存活位图数有界，停止后归零 |
-| `M2 门槛#6 取消后恢复显示亲和性` | 第 6 条 | 服务 `Stop`（有上限等待）后，后端 `RestoreDisplayAffinity` 至少被调用一次 |
-| `M2 门槛#8 CPU 与经过时间分别计量` | 第 8 条 | `BackdropServiceMetrics` 上 CPU 口径字段与经过时间口径字段**同时存在且互为不同字段**；两个口径都被分别填值 |
-| `M2 门槛#9 缓冲预算有界` | 第 9 条 | `MaxBufferPixels == 2_000_000`、`MaxBufferBytes == 32 MiB`；超限源图被直接拒绝（先判后分配）；接入预算处理器后服务不发布超限帧并释放它 |
+| `第 1 条门槛 捕获后端 IsPreview=false` | 第 1 条 | `BackdropCaptureService` / `ScreenCaptureFrameSource` 的 `IsPreview` 恒为 `false`；把固定样例图包成帧后端的适配器恒为 `true` |
+| `第 2 条门槛 预览路径后端调用次数=0` | 第 2 条 | 构造带 `previewSource` 的 `AppearanceRuntime` + 计数型假后端，渲染一次后 `TryGetFrame` 调用次数 = 0 且 `Source == PreviewFrame` |
+| `第 3 条门槛 Source 三值语义正确` | 第 3 条 | 真实帧 ⇒ `LiveFrame`；预览固定图 ⇒ `PreviewFrame`；后端不可用 / 无有效帧 ⇒ 走降级链（`Gradient`/`Legacy`）且必须带原因码与可读原因文本 |
+| `第 4 条门槛 代次不匹配的帧被丢弃且被回收` | 第 4 条 | 换掉三个代次后产生的旧代次帧不得被 `TryAcquireFrame` 交给 UI，且必须由服务自己回收（`FramesDroppedStale` 递增 + 存活位图归零） |
+| `第 5 条门槛 pending 最多一份` | 第 5 条 | UI 一帧也不取时连续产出多帧：`PendingFrameCount` 恒 ≤ 1，存活位图数有界，停止后归零 |
+| `第 6 条门槛 取消后恢复显示亲和性` | 第 6 条 | 服务 `Stop`（有上限等待）后，后端 `RestoreDisplayAffinity` 至少被调用一次 |
+| `第 8 条门槛 CPU 与经过时间分别计量` | 第 8 条 | `BackdropServiceMetrics` 上 CPU 口径字段与经过时间口径字段**同时存在且互为不同字段**；两个口径都被分别填值 |
+| `第 9 条门槛 缓冲预算有界` | 第 9 条 | `MaxBufferPixels == 2_000_000`、`MaxBufferBytes == 32 MiB`；超限源图被直接拒绝（先判后分配）；接入预算处理器后服务不发布超限帧并释放它 |
 
 ### 逐条细则
 
@@ -225,7 +225,7 @@ WDA 排除，都不属于「外观层绕过捕获子系统私自抓屏」，因�
   "repoRoot": "…",
   "cases": [
     {
-      "name": "M2 门槛#7 绘制路径无捕获调用",
+      "name": "第 7 条门槛 绘制路径无捕获调用",
       "passed": true,
       "failures": [],
       "details": {
@@ -240,7 +240,7 @@ WDA 排除，都不属于「外观层绕过捕获子系统私自抓屏」，因�
       }
     },
     {
-      "name": "M2 门槛#10 无新增 NuGet 依赖",
+      "name": "第 10 条门槛 无新增 NuGet 依赖",
       "passed": true,
       "failures": [],
       "details": {
@@ -257,11 +257,11 @@ WDA 排除，都不属于「外观层绕过捕获子系统私自抓屏」，因�
 
 ```jsonc
 {
-  "name": "M2 门槛#8 CPU 与经过时间分别计量",
+  "name": "第 8 条门槛 CPU 与经过时间分别计量",
   "passed": true,
   "failures": [],
   "details": {
-    "gate": "M2 合同 §9 第 8 条",
+    "gate": "合同第 8 条",
     "cpuClockFields": [ "CpuMsTotal", "CpuMsPerFrameAvg" ],
     "elapsedClockFields": [ "ElapsedMsLast", "ElapsedMsP95", "ElapsedMsMax", "LastCaptureMs", "…", "MaxExcludeWindowMs" ],
     "metrics.CpuMsTotal": 0.0,

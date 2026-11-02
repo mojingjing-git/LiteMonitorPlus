@@ -72,6 +72,18 @@ public sealed class I2HostSelftestTests
         var (code, _, _) = I2HostBinaries.RunHost(new[] { "--definitely-not-a-flag" });
         Assert.Equal(64, code);
     }
+
+    [Theory]
+    [InlineData(false, "late-response", false)]
+    [InlineData(true, "slow-rescan", false)]
+    [InlineData(true, "late-response", true)]
+    public void ResponseGateRejectsNonSyntheticModesAndRelativePaths(bool synthetic, string fault, bool relative)
+    {
+        var args = new List<string> { "--selftest", "1", "--fault", fault, "--fault-response-gate",
+            relative ? "relative-gate" : Path.Combine(Path.GetTempPath(), "unused-response-gate") };
+        if (synthetic) args.Add("--test-pattern");
+        Assert.Equal(64, I2HostBinaries.RunHost(args).ExitCode);
+    }
 }
 
 /// <summary>
@@ -272,13 +284,13 @@ public sealed class I2HostSupervisionTests
         // 每次重生都带同一 --fault ⇒ 连续失败到阈值后进入 crash-loop 暂停——这是 §6.2 的
         // 正确有界行为；探针的坏状态（state=Ready spawnCount=1 childStillAlive=True）不得再现。
         bool exercised = await WaitUntilAsync(() => client.ReadMetrics().SessionCount >= 2, TimeSpan.FromSeconds(30));
-        Assert.True(exercised, "协议异常后未进行会话回收与重试（R2 回归）");
+        Assert.True(exercised, "协议异常后未进行会话回收与重试");
 
         bool paused = await WaitUntilAsync(() =>
             client.GetHealth().State == HardwareState.Degraded
             && client.GetHealth().DiagnosticReason == "crash-loop-paused", TimeSpan.FromSeconds(30));
         Assert.True(paused, $"state={client.GetHealth().State} reason={client.GetHealth().DiagnosticReason}");
-        Assert.True(HostProcessCount() <= 1, "遗留了故障会话的活子进程（R2 回归）");
+        Assert.True(HostProcessCount() <= 1, "遗留了故障会话的活子进程");
         // 监督循环仍活着（未退出）：暂停态是 RunAsync 的内部分支，客户端契约面继续可用。
         Assert.NotNull(client.CurrentHostPid is null ? (int?)1 : client.CurrentHostPid);
     }

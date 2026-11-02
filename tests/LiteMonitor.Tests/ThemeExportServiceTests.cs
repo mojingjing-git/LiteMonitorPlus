@@ -22,7 +22,7 @@ namespace LiteMonitor.Tests
     /// - 效果图必须带**真实**路线标注（GPU 不可用时不得虚标 GPU）；
     /// - 投稿资料目录齐备，且 README 不含任何"已上架／已发布／已通过校验"式的结论。
     ///
-    /// 依据：docs/plans/2026-10-26-theme-studio-parallel-plan.md Lane B 与风险登记 §4.2/§4.8/§4.9。
+    /// 依据：docs/specs/theme-system.md 中主题导出与投稿边界的现行约束。
     /// </summary>
     public class ThemeExportServiceTests : IDisposable
     {

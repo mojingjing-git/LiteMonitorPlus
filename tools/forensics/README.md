@@ -1,11 +1,11 @@
-# LiteMonitor++ 取证工具集（P-F15）
+# LiteMonitor++ 取证工具集
 
 > **这是工具包，不是修复包。**
 > 本目录**只提供取证能力**：采样、采集、收集、脱敏。
 > 它**不判定**任何上游 issue 是否成立、是否已修复、是否可关闭。
 > 所有「是否泄漏 / 是否归因于本程序 / 是否 GCL 未初始化」的判断，都由拿到数据的人做。
 
-关联工作包：P-F15 ｜ 上游 issue：**#416 / #78 / #582 / #574 / #592**
+关联上游 issue：**#416 / #78 / #582 / #574 / #592**
 
 ---
 
@@ -50,7 +50,7 @@
    避免误伤用户正在跑的实例。
 4. **输出脱敏**：口令 / 票据 / CSRF / 会话 cookie / 机器 GUID / 卷序列号 / 完整设备序列号
    一律替换（`Common.psm1` 的 `Protect-ForensicsText`）。
-5. **证据不进版本库**：默认输出在 `docs/reviews/evidence/forensics/`，该路径被 `.gitignore` 忽略。
+5. **证据不进版本库**：默认输出在 `.evidence/forensics/`，该路径被 `.gitignore` 忽略。
 6. **除 `-EnableLocalDumps` 外不改系统状态**；WER 注册表项写在 `HKCU` 下，可随时用
    `-DisableLocalDumps` 撤销。
 
@@ -271,7 +271,7 @@ PowerShell 7.6.6 · .NET SDK 8.0.426 · `wpr.exe` 存在 · `xperf.exe` / `wpa.e
 pwsh tools/forensics/selftest.ps1 -BuildProbe
 ```
 
-> 实测结果：**通过 8 / 失败 0**（详见 `docs/verification/acceptance/F15-report.md` §3.1）。
+> 该用例集当前**通过 8 / 失败 0**。
 
 | 工具 | 干跑命令 | 实测结果 |
 |---|---|---|
@@ -297,7 +297,7 @@ pwsh tools/forensics/selftest.ps1 -BuildProbe
 | 事项 | 原因 / 归属 |
 |---|---|
 | 72h 长跑的**真实数据** | 需在目标机连续运行 72h（用户/责任人执行） |
-| #416 的**归因结论** | 需要 WPA 火焰图人工判读；P-F15 只提供采集能力 |
+| #416 的**归因结论** | 需要 WPA 火焰图人工判读；本工具集只提供采集能力 |
 | #78 是否**构成泄漏** | 需要长跑曲线人工判读；本包只给测量值与斜率 |
 | #582 的**根因** | 需要报告者提供 `LiteMonitor_Error.log` 附件原文（issue 里附件未取得） |
 | #574 的**异常源** | 需要报告者二进制版本 + 日志全文 + 主题/DPI 切换时序 |

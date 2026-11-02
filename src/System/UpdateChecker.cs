@@ -220,7 +220,7 @@ namespace LiteMonitor
         /// <summary>
         /// 缓存最新版本信息，供菜单等处使用
         /// </summary>
-        public static (string latest, string changelog, string releaseDate)? LatestVersionInfo { get; private set; }
+        public static (string latest, string releaseDate)? LatestVersionInfo { get; private set; }
 
         /// <summary>
         /// 是否发现了新版本
@@ -321,14 +321,13 @@ namespace LiteMonitor
                 }
 
                 string latest = info.Value.latest;
-                string changelog = info.Value.changelog;
                 string releaseDate = info.Value.releaseDate;
                 string current = GetCurrentVersion();
 
                 if (new Version(latest) > new Version(current))
                 {
-                    // 记录发现新版本（LatestVersionInfo 的公开签名保持三元组不变）
-                    LatestVersionInfo = (info.Value.latest, info.Value.changelog, info.Value.releaseDate);
+// 记录发现新版本
+                    LatestVersionInfo = (info.Value.latest, info.Value.releaseDate);
                     // ★ 期望摘要来自已验签的元数据：下载完成后必须拿它比对实际文件
                     LatestZipSha256 = info.Value.sha256;
 
@@ -349,7 +348,7 @@ namespace LiteMonitor
                     {
                         Title = isZh ? "发现新版本！" : "New Version!",
                         VersionLabel = $"LiteMonitor++_v{latest}",
-                        Description = $"更新日志：\n{changelog} \n更新日期：\n{releaseDate}\n\nGitHub：https://github.com/mojingjing-git/LiteMonitorPlus",
+                        Description = $"更新日期：\n{releaseDate}\n\nGitHub：https://github.com/mojingjing-git/LiteMonitorPlus",
                         Urls = sortedUrls.ToArray(),
                         SavePath = Path.Combine(AppContext.BaseDirectory, "resources", "update.zip"),
                         ActionButtonText = "Update",
@@ -408,7 +407,7 @@ namespace LiteMonitor
         // ========================================================
         // 【4】version.json 自动 fallback
         // ========================================================
-       private static async Task<(string latest, string changelog, string releaseDate, string sha256)?> GetVersionInfo()
+       private static async Task<(string latest, string releaseDate, string sha256)?> GetVersionInfo()
             => await GetVersionInfoAsync(VersionJsonUrls);
 
         /// <summary>
@@ -422,7 +421,7 @@ namespace LiteMonitor
         ///   持有底层连接与响应流，JsonDocument 持有从 ArrayPool 租来的缓冲区。
         /// ★ <paramref name="client"/> 与各期限参数只为测试可注入；生产路径全部使用默认值。
         /// </remarks>
-        internal static async Task<(string latest, string changelog, string releaseDate, string sha256)?> GetVersionInfoAsync(
+        internal static async Task<(string latest, string releaseDate, string sha256)?> GetVersionInfoAsync(
             string[] urls,
             HttpClient? client = null,
             TimeSpan? headersTimeout = null,
@@ -483,7 +482,6 @@ namespace LiteMonitor
                     using var doc = JsonDocument.Parse(json);
 
                     string latest = doc.RootElement.GetProperty("version").GetString()!;
-                    string log = doc.RootElement.GetProperty("changelog").GetString()!;
                     string releaseDate = doc.RootElement.GetProperty("releaseDate").GetString()!;
                     //string downloadUrl = doc.RootElement.GetProperty("downloadUrl").GetString()!;
 
@@ -507,7 +505,7 @@ namespace LiteMonitor
 
                     // ---- 成功，立即返回 ----
                     LastFailure = UpdateCheckFailure.None;
-                    return (latest, log, releaseDate, sha256);
+                    return (latest, releaseDate, sha256);
                 }
                 catch (Exception ex)
                 {

@@ -1620,7 +1620,7 @@ namespace LiteMonitor.src.Plugins
                 string path = Path.Combine(pluginsDir, QuarantineLogFileName);
 
                 var header = new StringBuilder();
-                header.Append("===== LiteMonitor 插件市场事务日志隔离（R04 目录边界校验） =====\r\n");
+                header.Append("===== LiteMonitor 插件市场事务日志隔离 =====\r\n");
                 header.Append("隔离时间(UTC): ")
                       .Append(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))
                       .Append("\r\n");

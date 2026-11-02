@@ -38,7 +38,7 @@ namespace LiteMonitor.AppearanceThemeCheck
     /// </summary>
     internal static class Program
     {
-        /// <summary>10 个旧主题的 SHA256 前 16 位基线（来源：docs/superpowers/plans/2026-10-20-appearance-a00-baseline.md）。</summary>
+        /// <summary>10 个内置主题的 SHA256 前 16 位冻结基线。</summary>
         private static readonly (string Name, string Sha16)[] LegacyBaseline =
         {
             ("AuroraDream_Purple", "0D098F3AA66EA7BC"),

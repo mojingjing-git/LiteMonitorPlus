@@ -257,7 +257,7 @@
     "Taskbar": "작업줄",
     "MainForm": "패널",
     "OnlyShowEnabled": "사용중만",
-    "MonitorItemTip": "참고: 이름/약어에 공백 입력 시 라벨 숨김. 이름 삭제 시 기본값 복원. 일부 단위 {u}+문자 지원.",
+    "MonitorItemTip": "이름/약칭: 공백으로 숨기고 비우면 기본값으로 복원합니다. 단위는 Auto/Hidden/Custom 선택, {u} 지원.",
     "__Comment_Page4__": "--- 4. Thresholds ---",
     "Thresholds": "알림 임계값",
     "ThresholdsTips": "바와 숫자 색상이 임계값에 따라 변경",

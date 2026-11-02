@@ -30,6 +30,11 @@ public struct MaterialFrameConstants
     public Vector4 Desktop;
     public Vector4 Window;
     public Vector4 State;
+    public Vector4 PresetStyle;
+    public Vector4 PaletteBase;
+    public Vector4 PalettePanel;
+    public Vector4 PaletteBorder;
+    public Vector4 PaletteAccent;
 }
 
 public readonly record struct SceneMaterialLayout(
@@ -256,11 +261,30 @@ public static class SceneMaterialLayoutBuilder
                 (float)backgroundMode,
                 groups.Length,
                 scale,
-                0)
+                0),
+            // PresetStyle.x = GpuVisualPreset 数值（shader 按字面量 1/2/3 分支，两侧需同步）；
+            // y = nebula 折射 / 其余材质辉光；z = CRT 辉光（当前 shader 仅消费 x/y，
+            // z 为 CRT 辉光预留位，动 shader 前不要删）；w = 赛博切角。
+            PresetStyle = new Vector4(
+                (float)settings.VisualPreset,
+                settings.VisualPreset == GpuVisualPreset.NebulaAurora
+                    ? settings.Refraction
+                    : settings.Glow,
+                settings.VisualPreset == GpuVisualPreset.CrtPhosphor
+                    ? settings.Glow
+                    : 0,
+                settings.PrimaryCut),
+            PaletteBase = ToVector4(settings.PaletteBase),
+            PalettePanel = ToVector4(settings.PalettePanel),
+            PaletteBorder = ToVector4(settings.PaletteBorder),
+            PaletteAccent = ToVector4(settings.PaletteAccent)
         };
         return new SceneMaterialLayout(constants, groups.Length)
         {
             BackgroundMode = backgroundMode
         };
     }
+
+    private static Vector4 ToVector4(RgbaColor color) =>
+        new(color.R, color.G, color.B, color.A);
 }

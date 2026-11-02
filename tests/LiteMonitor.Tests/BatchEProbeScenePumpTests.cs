@@ -47,7 +47,7 @@ public sealed class BatchEProbeScenePumpTests
 
         Assert.True(
             observedCalls > 0,
-            "持续送帧一次都没有发生 —— 探针的'持续场景输入'场景等于没跑（LM-086 假绿）。");
+            "持续送帧一次都没有发生 —— 探针的'持续场景输入'场景等于没跑。");
         Assert.True(
             observedThread.HasValue,
             "送帧回调没有被调用。");
@@ -73,7 +73,7 @@ public sealed class BatchEProbeScenePumpTests
 
         Assert.True(
             experiment.ScenePump.FailureCount > 0,
-            "送帧抛了异常却没有被计数 —— 这正是 LM-086 的假绿：异常被吞掉，实验照样退出 0。");
+            "送帧抛了异常却没有被计数 —— 这正是 的假绿：异常被吞掉，实验照样退出 0。");
         Assert.True(
             experiment.ScenePump.LastFailure is not null &&
             experiment.ScenePump.LastFailure.Contains("UI thread", StringComparison.Ordinal),

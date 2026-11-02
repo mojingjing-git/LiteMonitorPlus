@@ -20,7 +20,7 @@ namespace LiteMonitor.Tests
 {
     /// <summary>
     /// 2026-10-26 审查回归包（R1/R3/R4/R7/R8 + R5 护栏 + R6 Win32 场景）。
-    /// 每项对应 docs/reviews/2026-10-26-post-plan-full-review.md 的探针，转为针对真实接线的自动回归。
+    /// 每项都对应一个可重复运行的缺陷回归，不依赖一次性评审材料。
     /// </summary>
     public class ReviewFix20261026Tests
     {
@@ -78,7 +78,7 @@ namespace LiteMonitor.Tests
             sw.Stop();
 
             Assert.True(sw.ElapsedMilliseconds < 150,
-                $"GetAsync 在 {sw.ElapsedMilliseconds}ms 才返回——调用线程仍在等构建（R3 回归）");
+                $"GetAsync 在 {sw.ElapsedMilliseconds}ms 才返回——调用线程仍在等构建");
             await task; // 构建最终完成
             Assert.Equal(1, cache.BuildCount);
         }

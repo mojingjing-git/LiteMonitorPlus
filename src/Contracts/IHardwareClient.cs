@@ -28,7 +28,7 @@ public interface IHardwareClient : IDisposable
 
     /// <summary>应用采集配置（异步）：返回实际生效 revision 或明确失败；仅相同 revision/内容可合并。</summary>
     Task<SamplingApplyResult> ApplyConfigAsync(SamplingConfig config, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("IHardwareClient v2：由具体客户端实现（P-E02）");
+        => throw new NotSupportedException("IHardwareClient v2：由具体客户端实现");
 
     /// <summary>请求"到期才采"的一次采样（共享唯一协调器，同一采样周期合并）。原 RequestRescanAsync 语义。</summary>
     Task<bool> RequestSamplingAsync(CancellationToken cancellationToken = default)
@@ -36,7 +36,7 @@ public interface IHardwareClient : IDisposable
 
     /// <summary>显式全量重扫（独立操作 ID、有界、状态可查）；不是 UI Tick 的替代品。</summary>
     Task<HardwareOperationResult> RequestFullRescanAsync(CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("IHardwareClient v2：由具体客户端实现（P-E02）");
+        => throw new NotSupportedException("IHardwareClient v2：由具体客户端实现");
 
     /// <summary>按消费者身份登记/更新需求（聚合后交采样协调器；关闭窗口只释放自己的）。</summary>
     void SubmitDemand(string consumerId, SamplingDemand demand)
@@ -44,7 +44,7 @@ public interface IHardwareClient : IDisposable
 
     /// <summary>释放消费者需求；返回是否存在过登记。</summary>
     bool ReleaseDemand(string consumerId)
-        => throw new NotSupportedException("IHardwareClient v2：由具体客户端实现（P-E01 需求租约）");
+        => throw new NotSupportedException("IHardwareClient v2：由具体客户端实现");
 
     // ── 兼容桥（既有成员；撤除阶段：ApplyConfig→E03、RequestRescanAsync/SubmitDemand→E01-C）──
 

@@ -201,8 +201,8 @@ public sealed class LegacyFallbackThemeRoutingTests
 
         Assert.True(
             guardOffset >= 0,
-            $"UIController.{methodName} 必须先用「目标主题**本身**是不是 GPU 主题」判别（LM-070）——" +
-            "少了这一步，原生旧主题会被套上 GPU 回退的中性默认配色（R06）。");
+            $"UIController.{methodName} 必须先用「目标主题**本身**是不是 GPU 主题」判别——" +
+            "少了这一步，原生旧主题会被套上 GPU 回退的中性默认配色。");
 
         Assert.True(
             buildOffset < 0 || guardOffset < buildOffset,

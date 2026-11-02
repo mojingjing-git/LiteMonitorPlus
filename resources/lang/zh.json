@@ -257,7 +257,7 @@
     "MainForm": "主界面",
     "OnlyShowEnabled": "仅看显示项",
     "HorizontalFollowsTaskbar": "横条模式采用任务栏排序",
-    "MonitorItemTip": "注：名称/简称/单位输入空格即可不显示标签或单位，而清空保存后会恢复默认，部分单位支持占位符{u}+字符",
+    "MonitorItemTip": "名称/简称：输入空格隐藏，清空恢复默认。单位：选择自动、隐藏或自定义；自定义支持 {u} 占位符。",
     "__Comment_Page4__": "--- 4. 告警阈值设置 (ThresholdPage) ---",
     "Thresholds": "告警阈值设置",
     "AlertTemp": "高温报警弹窗",

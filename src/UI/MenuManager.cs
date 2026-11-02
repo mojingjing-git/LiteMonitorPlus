@@ -496,11 +496,7 @@ namespace LiteMonitor
                 try
                 {
                     // 打开设置窗口
-                    using (var f = new LiteMonitor.src.UI.SettingsForm(cfg, ui, form))
-                    {
-                        if (!string.IsNullOrEmpty(targetPage)) f.SwitchPage(targetPage);
-                        f.ShowDialog(form);
-                    }
+                    LiteMonitor.src.UI.SettingsWindowLauncher.Open(cfg, ui, form, targetPage);
                 }
                 catch (Exception ex)
                 {
@@ -676,11 +672,8 @@ namespace LiteMonitor
                 string text = isZh ? $"发现新版本(v{UpdateChecker.LatestVersionInfo?.latest})" : $"New version(v{UpdateChecker.LatestVersionInfo?.latest})";
                 
                 var updateItem = new ToolStripMenuItem(text);
-                // 鼠标停留提示更新日期与内容摘要 (移除加粗和自定义颜色以解决托盘菜单闪烁问题)
-                string? rawLog = UpdateChecker.LatestVersionInfo?.changelog;
-                string logSummary = string.IsNullOrEmpty(rawLog) ? "" : rawLog.Replace("\r", "").Replace("\n", " ");
-                if (logSummary.Length > 45) logSummary = string.Concat(logSummary.AsSpan(0, 45), "...");
-                updateItem.ToolTipText = $"{UpdateChecker.LatestVersionInfo?.releaseDate}: {logSummary}";
+// 鼠标停留提示发布日期
+                updateItem.ToolTipText = UpdateChecker.LatestVersionInfo?.releaseDate ?? "";
                 updateItem.ForeColor = Color.RoyalBlue;
                 updateItem.Font = GetBoldFont(updateItem.Font);
                 

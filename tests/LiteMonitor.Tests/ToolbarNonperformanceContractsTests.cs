@@ -14,8 +14,10 @@ public sealed class ToolbarNonperformanceContractsTests
     {
         string[] slots = ["Viewport", "RootRect", "Panel0", "Panel1", "Panel2", "Panel3",
             "Panel4", "Panel5", "Panel6", "Panel7", "Panel8", "Panel9", "Panel10", "Panel11",
-            "Theme0", "Theme1", "Theme2", "Theme3", "Theme4", "Theme5", "Motion", "Desktop", "Window", "State"];
-        Assert.Equal(384, Marshal.SizeOf<MaterialFrameConstants>());
+            "Theme0", "Theme1", "Theme2", "Theme3", "Theme4", "Theme5", "Motion", "Desktop",
+            "Window", "State", "PresetStyle", "PaletteBase", "PalettePanel", "PaletteBorder",
+            "PaletteAccent"];
+        Assert.Equal(464, Marshal.SizeOf<MaterialFrameConstants>());
         for (int i = 0; i < slots.Length; i++)
             Assert.Equal(i * 16, Marshal.OffsetOf<MaterialFrameConstants>(slots[i]).ToInt32());
     }

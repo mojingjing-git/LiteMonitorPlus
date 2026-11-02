@@ -24,6 +24,19 @@ public enum MaterialKind
     CyberPunk = 2
 }
 
+/// <summary>
+/// GPU 命名视觉预设。数值以 float 传入 shader（MaterialFrameConstants.PresetStyle.x），
+/// HLSL 侧用字面量 1/2/3 分支（SceneMaterial.hlsl 的 RenderPreset 调度）——
+/// 重排或插入成员前必须同步两侧。
+/// </summary>
+public enum GpuVisualPreset
+{
+    Default = 0,
+    NebulaAurora = 1,
+    NixieBrass = 2,
+    CrtPhosphor = 3
+}
+
 public enum RenderLifecycleState
 {
     Disabled,

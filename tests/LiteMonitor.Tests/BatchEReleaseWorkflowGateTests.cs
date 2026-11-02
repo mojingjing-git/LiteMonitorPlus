@@ -22,16 +22,7 @@ namespace LiteMonitor.Tests;
 /// </summary>
 public sealed class BatchEReleaseWorkflowGateTests
 {
-    private const string DependencyGateName = "校验第三方组件声明与实际依赖一致（LM-024 护栏）";
-
-    private static readonly string[] SharedParameters =
-    [
-        "MIN_TEST_TOTAL",
-        "EXPECTED_TEST_ASSEMBLIES",
-        "MAX_SKIPPED_TESTS",
-        "MUST_EXECUTE_TEST_CLASS",
-        "MUST_EXECUTE_TEST_CLASS_MIN_COUNT"
-    ];
+    private const string DependencyGateName = "Validate dependency manifest";
 
     [Fact]
     public void 护栏_发布流水线必须接入与CI逐字一致的依赖清单门禁()
@@ -47,7 +38,7 @@ public sealed class BatchEReleaseWorkflowGateTests
             "ci.yml 里找不到依赖清单门禁 —— 护栏前提被破坏，请同步更新本用例。");
         Assert.True(
             releaseGate.Length > 0,
-            "release.yml 里**没有**依赖清单门禁（LM-089）：CI 会红、发布流水线却照样跑。");
+            "release.yml 里**没有**依赖清单门禁：CI 会红、发布流水线却照样跑。");
 
         Assert.Equal(ciGate.Length, releaseGate.Length);
         for (int index = 0; index < ciGate.Length; index++)
@@ -64,8 +55,8 @@ public sealed class BatchEReleaseWorkflowGateTests
         string[] release = ReadWorkflow("release.yml");
 
         int gate = FindStepIndex(release, DependencyGateName);
-        int test = FindStepIndex(release, "运行单元测试");
-        int pack = FindStepIndex(release, "打包发布件并计算 SHA-256");
+        int test = FindStepIndex(release, "Run tests (Debug, Tier 3)");
+        int pack = FindStepIndex(release, "Build unsigned release ZIP and SHA-256");
 
         Assert.True(gate >= 0, "release.yml 里找不到依赖清单门禁 —— 护栏前提被破坏。");
         Assert.True(test >= 0, "release.yml 里找不到'运行单元测试'步骤 —— 护栏前提被破坏。");
@@ -80,49 +71,22 @@ public sealed class BatchEReleaseWorkflowGateTests
     }
 
     [Fact]
-    public void 护栏_发布流水线的防假绿阈值必须与CI逐字一致()
+    public void 护栏_发布流水线与CI共享五档对账门禁()
     {
         string[] ci = ReadWorkflow("ci.yml");
         string[] release = ReadWorkflow("release.yml");
 
-        foreach (string parameter in SharedParameters)
-        {
-            string ciValue = ReadParameter(ci, parameter);
-            string releaseValue = ReadParameter(release, parameter);
-
-            Assert.True(
-                ciValue.Length > 0,
-                "ci.yml 里读不到参数 " + parameter + " —— 护栏前提被破坏。");
-            Assert.Equal(
-                ciValue,
-                releaseValue);
-        }
+        // 旧计数阈值（MIN_TEST_TOTAL 等）已随 assert-test-counts.ps1 退出工作流；
+        // 现行防假绿由固定基线 + 逐条 TRX 对账保证（assert-test-tiers.ps1 内部锚定
+        // tests/test-tier-baseline.json），两个工作流必须共享同一对账入口。
+        Assert.Contains("assert-test-tiers.ps1", string.Join("\n", ci));
+        Assert.Contains("assert-test-tiers.ps1", string.Join("\n", release));
     }
 
     // ---------------------------------------------------------------- 辅助
 
     private static string[] ReadWorkflow(string fileName) =>
         File.ReadAllLines(Path.Combine(RepositoryRoot(), ".github", "workflows", fileName));
-
-    /// <summary>读出 <c>NAME: value</c> 形式的 env 参数原始文本（逐字比较用）。</summary>
-    private static string ReadParameter(string[] lines, string name)
-    {
-        Regex pattern = new(@"^\s*" + Regex.Escape(name) + @":\s*(.*?)\s*$", RegexOptions.Compiled);
-        List<string> hits = [];
-        foreach (string line in lines)
-        {
-            Match match = pattern.Match(line);
-            if (match.Success)
-            {
-                hits.Add(match.Groups[1].Value);
-            }
-        }
-
-        Assert.True(
-            hits.Count == 1,
-            "参数 " + name + " 在工作流里应当**恰好出现一次**，实际出现 " + hits.Count + " 次。");
-        return hits[0];
-    }
 
     /// <summary>取某个 step 的完整文本块（从 <c>- name:</c> 到下一个 <c>- name:</c> 之前）。</summary>
     private static string[] ExtractStep(string[] lines, string stepName)

@@ -98,4 +98,4 @@ IPv6 : PID(4) size(4) remoteAddr(16) localAddr(16) remotePort(2) localPort(2) [s
 
 ## Decision
 
-See `docs/reviews/evidence/network-exclusion/N0/network-exclusion-backend-decision.md`.
+后端选型与计数口径见 `docs/architecture/network-traffic.md`。

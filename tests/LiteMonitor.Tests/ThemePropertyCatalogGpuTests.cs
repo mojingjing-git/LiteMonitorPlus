@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -51,11 +52,223 @@ namespace LiteMonitor.Tests
     ""fallback"": { ""backend"": ""legacy"", ""material"": ""legacy"" } }
 }";
 
+        private const string CosmicNebula = @"{
+  ""name"": ""CosmicNebula"",
+  ""color"": {
+    ""background"": ""#070A18"",
+    ""groupBackground"": ""rgba(18,24,54,0.14)"",
+    ""textPrimary"": ""#F3F6FD""
+  },
+  ""font"": {
+    ""family"": ""Segoe UI Variable"",
+    ""valueFamily"": ""Cascadia Code""
+  },
+  ""rendering"": { ""version"": 1, ""backend"": ""gpu"", ""material"": ""liquid_glass"",
+    ""parameters"": { ""liveBackground"": false, ""visualPreset"": ""nebulaAurora"" },
+    ""fallback"": { ""backend"": ""legacy"", ""material"": ""legacy"" } }
+}";
+
+        // C2 回归源：实时背景 + 浮动工具栏都开着的 liquid_glass 主题（无预设）。
+        // 选 nebulaAurora 会强制 liveBackground=false 并删除 glassStyle；
+        // 切回 default 后两者必须恢复为这里的源值，否则保存载荷与草稿分叉。
+        private const string LiquidLiveBackground = @"{
+  ""name"": ""实时玻璃"",
+  ""rendering"": { ""version"": 1, ""backend"": ""gpu"", ""material"": ""liquid_glass"",
+    ""parameters"": { ""liveBackground"": true, ""glassStyle"": ""floatingToolbar"", ""cornerRadius"": 20 },
+    ""fallback"": { ""backend"": ""legacy"", ""material"": ""legacy"" } }
+}";
+
         private ThemeDocumentSession Open(string name, string json)
         {
             File.WriteAllText(Path.Combine(_dir, name + ".json"), json, new UTF8Encoding(false));
             return ThemeDocumentSession.FromSourceBytes(
                 name, Path.Combine(_dir, name + ".json"), Encoding.UTF8.GetBytes(json));
+        }
+
+        [Theory]
+        [MemberData(nameof(VisualPresetCases))]
+        public void VisualPresetChoiceOnlyOffersPresetsForCurrentMaterial(
+            string json,
+            string[] expectedChoices)
+        {
+            ThemeDocumentSession s = Open("visual-preset-options", json);
+            ThemePropertyDescriptor preset = ThemePropertyCatalog
+                .GetProperties(s.Draft, ThemeEditTarget.GpuMain)
+                .Single(p => p.JsonPath == "rendering.parameters.visualPreset");
+
+            Assert.Equal(expectedChoices, preset.Choices);
+            Assert.Equal("default", preset.Getter(s.Draft));
+        }
+
+        public static TheoryData<string, string[]> VisualPresetCases => new()
+        {
+            {
+                LiquidStandard,
+                new[] { "default", "nebulaAurora" }
+            },
+            {
+                CyberPunk,
+                new[] { "default", "nixieBrass", "crtPhosphor" }
+            }
+        };
+
+        [Fact]
+        public void NamedPresetUsesThemeFontsAndColorsAndRemovesDefaultOnReset()
+        {
+            ThemeDocumentSession s = Open("visual-preset-write", LiquidStandard);
+            ThemePropertyDescriptor preset = ThemePropertyCatalog
+                .GetProperties(s.Draft, ThemeEditTarget.GpuMain)
+                .Single(p => p.JsonPath == "rendering.parameters.visualPreset");
+
+            s.ApplyPropertyEdit(preset, 1);
+            Assert.Equal(
+                "nebulaAurora",
+                s.Draft.Rendering!.Parameters["visualPreset"].GetString());
+            Assert.False(s.Draft.Rendering.Parameters["liveBackground"].GetBoolean());
+            Assert.DoesNotContain("glassStyle", s.Draft.Rendering.Parameters.Keys);
+            Assert.True(s.Save().Success);
+
+            string[] namedPaths = Paths(s.Draft, ThemeEditTarget.GpuMain);
+            Assert.Contains("font.family", namedPaths);
+            Assert.Contains("font.value", namedPaths);
+            Assert.Contains("color.background", namedPaths);
+            Assert.Contains("color.groupBackground", namedPaths);
+            Assert.Contains("color.textPrimary", namedPaths);
+            Assert.Contains("color.valueWarn", namedPaths);
+            Assert.Contains("color.barLow", namedPaths);
+            Assert.DoesNotContain("rendering.parameters.glassStyle", namedPaths);
+            Assert.Equal(
+                "color.background",
+                ThemePropertyCatalog.ResolvePropertyPath(
+                    s.Draft,
+                    ThemePropertyCatalog.SemanticElementRole.PanelBackground,
+                    ThemeEditTarget.GpuMain));
+
+            s.ApplyPropertyEdit(preset, 0);
+            Assert.True(s.Save().Success);
+            Assert.DoesNotContain("visualPreset", s.Draft.Rendering.Parameters.Keys);
+            JsonNode saved = JsonNode.Parse(
+                File.ReadAllText(Path.Combine(_dir, "visual-preset-write.json")))!;
+            Assert.Null(saved["rendering"]!["parameters"]?["visualPreset"]);
+        }
+
+        private ThemePropertyDescriptor VisualPresetProperty(ThemeDocumentSession session) =>
+            ThemePropertyCatalog
+                .GetProperties(session.Draft, ThemeEditTarget.GpuMain)
+                .Single(p => p.JsonPath == "rendering.parameters.visualPreset");
+
+        [Fact]
+        public void VisualPresetRoundTrip_未保存切回恢复源值_保存后恢复基线()
+        {
+            ThemeDocumentSession s = Open("visual-preset-roundtrip", LiquidLiveBackground);
+            ThemePropertyDescriptor preset = VisualPresetProperty(s);
+
+            // 1) 选预设：草稿即时报约束字段，保存后 payload 必须带上它们（C2 修复点）。
+            s.ApplyPropertyEdit(preset, "nebulaAurora");
+            Assert.False(s.Draft.Rendering!.Parameters["liveBackground"].GetBoolean());
+            Assert.DoesNotContain("glassStyle", s.Draft.Rendering.Parameters.Keys);
+            ThemeSaveResult namedSaved = s.Save();
+            Assert.True(namedSaved.Success,
+                "ERR=" + (namedSaved.Error ?? "<null>") +
+                " DIAG=" + string.Join(",", namedSaved.Diagnostics));
+            JsonNode saved = JsonNode.Parse(
+                File.ReadAllText(Path.Combine(_dir, "visual-preset-roundtrip.json")))!;
+            Assert.Equal("nebulaAurora",
+                saved["rendering"]!["parameters"]!["visualPreset"]!.GetValue<string>());
+            Assert.False(saved["rendering"]!["parameters"]!["liveBackground"]!.GetValue<bool>());
+            Assert.Null(saved["rendering"]!["parameters"]?["glassStyle"]);
+
+            // 2) 未保存回退场景：新会话里选预设后切回 default（不经过保存），
+            //    两路恢复为源文件的值（liveBackground=true、glassStyle=floatingToolbar）。
+            ThemeDocumentSession fresh = Open("visual-preset-roundtrip-2", LiquidLiveBackground);
+            fresh.ApplyPropertyEdit(VisualPresetProperty(fresh), "nebulaAurora");
+            fresh.ApplyPropertyEdit(VisualPresetProperty(fresh), "default");
+            ThemeSaveResult resetSaved = fresh.Save();
+            Assert.True(resetSaved.Success,
+                "ERR=" + (resetSaved.Error ?? "<null>") +
+                " DIAG=" + string.Join(",", resetSaved.Diagnostics));
+            JsonNode restored = JsonNode.Parse(
+                File.ReadAllText(Path.Combine(_dir, "visual-preset-roundtrip-2.json")))!;
+            Assert.Null(restored["rendering"]!["parameters"]?["visualPreset"]);
+            Assert.True(restored["rendering"]!["parameters"]!["liveBackground"]!.GetValue<bool>());
+            Assert.Equal("floatingToolbar",
+                restored["rendering"]!["parameters"]!["glassStyle"]!.GetValue<string>());
+
+            // 3) 保存后再切回：基线已是 Nebula 状态，恢复到最近保存基线（false），不再回更早源值。
+            s.ApplyPropertyEdit(preset, "default");
+            ThemeSaveResult baselineSaved = s.Save();
+            Assert.True(baselineSaved.Success,
+                "ERR=" + (baselineSaved.Error ?? "<null>") +
+                " DIAG=" + string.Join(",", baselineSaved.Diagnostics));
+            JsonNode baseline = JsonNode.Parse(
+                File.ReadAllText(Path.Combine(_dir, "visual-preset-roundtrip.json")))!;
+            Assert.Null(baseline["rendering"]!["parameters"]?["visualPreset"]);
+            Assert.False(baseline["rendering"]!["parameters"]!["liveBackground"]!.GetValue<bool>());
+        }
+
+        [Fact]
+        public void VisualPresetUndo_撤销后保存与源逐字节一致()
+        {
+            string path = Path.Combine(_dir, "visual-preset-undo.json");
+            File.WriteAllText(path, LiquidLiveBackground, new UTF8Encoding(false));
+            byte[] sourceBytes = File.ReadAllBytes(path);
+            ThemeDocumentSession s = ThemeDocumentSession.FromSourceBytes(
+                "visual-preset-undo", path, sourceBytes);
+            ThemePropertyDescriptor preset = VisualPresetProperty(s);
+
+            s.ApplyPropertyEdit(preset, "nebulaAurora");
+            Assert.True(s.IsDirty);
+            Assert.Equal(1, s.UndoCount);
+            Assert.True(s.Undo(), "Undo must pop the merged transaction");
+            Assert.Equal(0, s.UndoCount);
+            ThemeSaveResult undoSaved = s.Save();
+            Assert.True(undoSaved.Success,
+                "ERR=" + (undoSaved.Error ?? "<null>") +
+                " DIAG=" + string.Join(",", undoSaved.Diagnostics));
+
+            // 撤销恢复的是"编辑前有效值"：Before 非空的路径保留覆盖（载荷走补丁序列化，
+            // 非 ASCII 会被转义），因此与源比较语义内容而非逐字节。
+            JsonNode undone = JsonNode.Parse(
+                System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(path)))!;
+            JsonNode source = JsonNode.Parse(LiquidLiveBackground)!;
+            Assert.True(JsonNode.DeepEquals(undone, source),
+                "undone payload must equal source semantically: " + undone.ToJsonString());
+        }
+
+        [Fact]
+        public void VisualPreset保存产物_重新打开_渲染校验通过()
+        {
+            ThemeDocumentSession s = Open("visual-preset-reopen", LiquidLiveBackground);
+            s.ApplyPropertyEdit(VisualPresetProperty(s), "nebulaAurora");
+            Assert.True(s.Save().Success);
+
+            ThemeDocumentSession reopened = ThemeDocumentSession.FromSourceBytes(
+                "visual-preset-reopen",
+                Path.Combine(_dir, "visual-preset-reopen.json"),
+                File.ReadAllBytes(Path.Combine(_dir, "visual-preset-reopen.json")));
+            IReadOnlyList<string> validateErrors =
+                reopened.Draft.Rendering!.Validate(out _);
+            Assert.Empty(validateErrors);
+            Assert.Equal(
+                "nebulaAurora",
+                reopened.Draft.Rendering.Parameters["visualPreset"].GetString());
+            Assert.False(reopened.Draft.Rendering.Parameters["liveBackground"].GetBoolean());
+            Assert.DoesNotContain("glassStyle", reopened.Draft.Rendering.Parameters.Keys);
+        }
+
+        [Fact]
+        public void NebulaPresetExposesTypographyAndThemeColors()
+        {
+            ThemeDocumentSession s = Open("cosmic-nebula", CosmicNebula);
+            string[] paths = Paths(s.Draft, ThemeEditTarget.GpuMain);
+
+            Assert.Contains("rendering.parameters.visualPreset", paths);
+            Assert.Contains("font.family", paths);
+            Assert.Contains("font.valueFamily", paths);
+            Assert.Contains("color.background", paths);
+            Assert.Contains("color.groupBackground", paths);
+            Assert.Contains("color.textPrimary", paths);
+            Assert.DoesNotContain("rendering.parameters.glassStyle", paths);
         }
 
         private static string[] Paths(Theme theme, ThemeEditTarget target) =>

@@ -85,6 +85,13 @@ namespace LiteMonitor.ThemeEditor
 
         /// <summary>把值序列化为 JSON 节点（null 表示删除键）。</summary>
         public required Func<object?, JsonNode?> ToJson { get; init; }
+
+        /// <summary>
+        /// 随主编辑同事务提交的附加编辑（如预设选择联动 liveBackground/glassStyle）。
+        /// 给定会话与提交值，返回附加的 ThemeFieldEdit 列表；null/空 = 无副作用。
+        /// 会话侧用主编辑的 JsonPath 作 coalesceKey 合并，撤销/重做一个整体。
+        /// </summary>
+        public Func<ThemeDocumentSession, object?, IReadOnlyList<ThemeFieldEdit>>? SideEffects { get; init; }
     }
 
     /// <summary>
@@ -109,6 +116,10 @@ namespace LiteMonitor.ThemeEditor
             int i => JsonValue.Create(i),
             double d => JsonValue.Create(d),
             float f => JsonValue.Create(f),
+            // Choice 编辑器以字符串提交索引（CommitChoice 传 SelectedItem）；经典 Choice 的
+            // ToJson 是 JsonNumber，这里必须能还原成数字节点，否则 null 会被保存链当作"删键"。
+            string s when int.TryParse(s, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out int n) => JsonValue.Create(n),
             _ => null
         };
 
@@ -344,7 +355,11 @@ namespace LiteMonitor.ThemeEditor
         /// </summary>
         public static string ResolvePropertyPath(Theme? theme, SemanticElementRole role, ThemeEditTarget target)
         {
-            foreach (string candidate in CandidatePropertyPaths(role, target))
+            bool namedGpuPreset =
+                target == ThemeEditTarget.GpuMain &&
+                theme is not null &&
+                IsNamedVisualPreset(theme);
+            foreach (string candidate in CandidatePropertyPaths(role, target, namedGpuPreset))
             {
                 if (candidate.Length == 0) continue;
                 if (theme is null) return candidate;
@@ -378,7 +393,10 @@ namespace LiteMonitor.ThemeEditor
         ///   没有进度条颜色字段 ⇒ ProgressBar 在该目标下**无可编辑字段**。
         /// </para>
         /// </summary>
-        private static IReadOnlyList<string> CandidatePropertyPaths(SemanticElementRole role, ThemeEditTarget target) =>
+        private static IReadOnlyList<string> CandidatePropertyPaths(
+            SemanticElementRole role,
+            ThemeEditTarget target,
+            bool namedGpuPreset) =>
             target switch
             {
                 ThemeEditTarget.GpuFallback => role switch
@@ -390,6 +408,16 @@ namespace LiteMonitor.ThemeEditor
                     SemanticElementRole.ItemValue => new[] { "rendering.fallbackStyle.text" },
                     // 兼容外观六槽里没有进度条颜色字段 ⇒ 无可编辑字段（不指虚构路径）。
                     SemanticElementRole.ProgressBar => Array.Empty<string>(),
+                    _ => Array.Empty<string>()
+                },
+                ThemeEditTarget.GpuMain when namedGpuPreset => role switch
+                {
+                    SemanticElementRole.PanelBackground => new[] { "color.background" },
+                    SemanticElementRole.GroupHeader => new[] { "color.groupBackground" },
+                    SemanticElementRole.Title => new[] { "color.textTitle" },
+                    SemanticElementRole.ItemLabel => new[] { "color.textSecondary" },
+                    SemanticElementRole.ItemValue => new[] { "color.textPrimary" },
+                    SemanticElementRole.ProgressBar => new[] { "color.barLow" },
                     _ => Array.Empty<string>()
                 },
                 ThemeEditTarget.GpuMain => role switch

@@ -119,6 +119,38 @@ namespace LiteMonitor.Tests
             Assert.NotEqual("wda_capture_policy_unsupported_on_layered_window", decision.FallbackCode);
         }
 
+        [Theory]
+        [InlineData(
+            ThemeRenderingConfig.LiquidGlassMaterial,
+            ThemeRenderingConfig.NebulaAuroraVisualPreset)]
+        [InlineData(
+            ThemeRenderingConfig.CyberPunkMaterial,
+            ThemeRenderingConfig.NixieBrassVisualPreset)]
+        [InlineData(
+            ThemeRenderingConfig.CyberPunkMaterial,
+            ThemeRenderingConfig.CrtPhosphorVisualPreset)]
+        public void NamedVisualPresetsNeverRequestLiveCapture(
+            string material,
+            string preset)
+        {
+            ThemeRenderingConfig configuration = GpuConfig(
+                material,
+                liveBackground: false);
+            configuration.Parameters["visualPreset"] =
+                JsonSerializer.SerializeToElement(preset);
+
+            var decision = RenderingRoutePolicy.Decide(new(
+                Configuration: configuration,
+                GpuEffectsEnabled: true,
+                LiveBackgroundEnabled: true,
+                WdaCapturePolicyAccepted: true,
+                SafeMode: false));
+
+            Assert.Equal(RenderingRoute.GpuFixedInput, decision.Route);
+            Assert.False(decision.CaptureRequested);
+            Assert.Null(decision.FallbackCode);
+        }
+
         [Fact]
         public void FullyQualifiedRequestRoutesToGpuLiveBackgroundWithoutCode()
         {

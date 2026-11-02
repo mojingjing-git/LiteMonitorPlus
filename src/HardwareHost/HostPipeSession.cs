@@ -288,7 +288,17 @@ internal sealed class HostPipeSession
                 {
                     _ = Task.Run(async () =>
                     {
-                        await Task.Delay(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+                        if (_options.FaultResponseGate is string gate)
+                        {
+                            long deadline = Environment.TickCount64 + 30_000;
+                            while (!File.Exists(gate) && !_stopping && Environment.TickCount64 < deadline)
+                                await Task.Delay(10).ConfigureAwait(false);
+                            if (_stopping || !File.Exists(gate)) return;
+                        }
+                        else
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+                        }
                         Respond(requestId, new IpcResponseMessage(true, null, "true"));
                     });
                 }
@@ -298,13 +308,13 @@ internal sealed class HostPipeSession
                 }
                 break;
             }
+            // ── 命令面 ──
             case IpcProtocol.OpGetCatalog:
             {
                 HardwareCatalog catalog = (_sampler ?? new MinimalHardwareSampler(_options.TestPattern)).BuildCatalog();
                 Respond(requestId, new IpcResponseMessage(true, null, JsonSerializer.Serialize(catalog)));
                 break;
             }
-            // ── E02 命令面 ──
             case IpcProtocol.OpSamplingDue:
             {
                 bool triggered = RequestSamplingDue(TimeSpan.FromMilliseconds(

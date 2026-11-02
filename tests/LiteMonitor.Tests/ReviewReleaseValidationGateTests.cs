@@ -50,42 +50,119 @@ public sealed class ReviewReleaseValidationGateTests
     public void 两份流水线分别执行和校验双配置且Release失败会中止(string workflow)
     {
         string text = File.ReadAllText(System.IO.Path.Combine(Root(), ".github", "workflows", workflow));
-        string debug = StepScript(text, "运行单元测试");
-        string release = StepScript(text, "运行单元测试（Release）");
+        string debug = StepScript(text, "Run tests (Debug, Tier 3)");
+        string release = StepScript(text, "Run tests (Release, Tier 3)");
         foreach (var (script, config) in new[] { (debug, "Debug"), (release, "Release") })
         {
-            Assert.Contains("-c " + config, script);
-            Assert.Contains("ci-artifacts/test-results/" + config + "/$assembly", script);
-            foreach (string assembly in Assemblies) Assert.Contains("'" + assembly + "'", script);
+            Assert.Contains("'scripts/run-tests.ps1'", script);
+            Assert.Contains("-Configuration " + config, script);
+            Assert.Contains("-NoBuild", script);
+            Assert.Contains("'ci-artifacts/test-results/" + config + "'", script);
+            Assert.Contains("-Tier 3", script);
             Assert.Contains("$code = $LASTEXITCODE", script);
             Assert.Contains("if ($code -ne 0) { throw", script);
         }
         foreach (var (name, config) in new[]
         {
-            ("强制校验测试发现数（防假绿）", "Debug"),
-            ("强制校验测试发现数（Release）", "Release")
+            ("Verify exact test inventory (Debug, Tier 3)", "Debug"),
+            ("Verify exact test inventory (Release, Tier 3)", "Release")
         })
         {
             string gate = StepScript(text, name);
-            Assert.Contains("'-TrxRoot', 'ci-artifacts/test-results/" + config + "'", gate);
-            Assert.Contains("'-MinTotal', $env:MIN_TEST_TOTAL", gate);
-            Assert.Contains("'-ExpectedAssembly', $env:EXPECTED_TEST_ASSEMBLIES", gate);
-            Assert.Contains("'-MaxSkipped', $env:MAX_SKIPPED_TESTS", gate);
-            Assert.Contains("'-MustExecuteTestClass', $env:MUST_EXECUTE_TEST_CLASS", gate);
-            Assert.Contains("'-MustExecuteTestClassMinCount', $env:MUST_EXECUTE_TEST_CLASS_MIN_COUNT", gate);
-            Assert.Contains("& pwsh @assertArgs", gate);
+            Assert.Contains("'.github/workflows/assert-test-tiers.ps1'", gate);
+            Assert.Contains("-ResultsRoot 'ci-artifacts/test-results/" + config + "'", gate);
+            Assert.Contains("-Configuration " + config, gate);
+            Assert.Contains("-Tier 3", gate);
             Assert.Contains("if ($LASTEXITCODE -ne 0)", gate);
         }
+        if (workflow == "release.yml")
+        {
+            Assert.True(text.IndexOf("- name: Verify exact test inventory (Release, Tier 3)", StringComparison.Ordinal) <
+                text.IndexOf("- name: Build unsigned release ZIP and SHA-256", StringComparison.Ordinal));
+        }
+        string runner = File.ReadAllText(System.IO.Path.Combine(Root(), "scripts", "run-tests.ps1"));
+        Assert.Contains("--no-build", runner);
+        Assert.Contains("--settings $settings", runner);
+        Assert.Contains("verify (Join-Path $runDir 'catalog.json')", runner);
 
         // 运行实际工作流的 Release 脚本，用故意失败的命令替代 dotnet，不递归启动构建。
         using var scope = new TemporaryResults();
         Directory.CreateDirectory(System.IO.Path.Combine(scope.Path, "ci-artifacts"));
         string scriptPath = System.IO.Path.Combine(scope.Path, "workflow.ps1");
         File.WriteAllText(scriptPath,
-            "function dotnet { $global:LASTEXITCODE = 7; Write-Output 'synthetic test failure' }\n" + release);
+            "function pwsh { $global:LASTEXITCODE = 7; Write-Output 'synthetic test failure' }\n" + release);
         var result = RunPowerShell(scriptPath, [], scope.Path);
         Assert.NotEqual(0, result.Code);
-        Assert.Contains("退出码 7", result.Output);
+        Assert.Contains("exit 7", result.Output);
+    }
+
+    [Fact]
+    public void Release要求同SHA的精确四档五档产物后才允许签名()
+    {
+        string text = File.ReadAllText(System.IO.Path.Combine(Root(), ".github", "workflows", "release.yml"));
+        string fast = JobBlock(text, "fast-validation", "system-validation");
+        string system = JobBlock(text, "system-validation", "release");
+        string release = JobBlock(text, "release", null);
+
+        Assert.Contains("runs-on: windows-latest", fast);
+        Assert.Contains("-Tier 3 -Configuration Debug", fast);
+        Assert.Contains("-Tier 3 -Configuration Release", fast);
+        Assert.Contains("runs-on: [self-hosted, Windows, X64, LiteMonitor-SystemValidation]", system);
+        Assert.Contains("-Tier 4 -ExactTier", system);
+        Assert.Contains("-Tier 5 -ExactTier", system);
+        Assert.Contains("-Capabilities Desktop,Gpu,Hardware", system);
+        Assert.Contains("-RequiredCapabilities Desktop,Gpu,Hardware", system);
+        Assert.Contains("Build unsigned release ZIP and SHA-256", system);
+        Assert.Contains("validated-release-manifest.json", system);
+        Assert.DoesNotContain("secrets.", system);
+        Assert.DoesNotContain("contents: write", system);
+
+        Assert.Contains("needs: [fast-validation, system-validation]", release);
+        Assert.Contains("actions/download-artifact@v4", release);
+        Assert.Contains("manifest.commit -cne $env:GITHUB_SHA", release);
+        Assert.Contains("Get-FileHash", release);
+        Assert.Contains("scripts/sign-release.ps1", release);
+        Assert.Contains("verify-release-signature.ps1", release);
+        Assert.DoesNotContain("scripts/run-tests.ps1", release);
+        Assert.DoesNotContain("-Tier 5", release);
+    }
+
+    [Fact]
+    public void 扩展测试只使用显式能力Runner且始终精确选档()
+    {
+        string text = File.ReadAllText(System.IO.Path.Combine(Root(), ".github", "workflows", "extended-tests.yml"));
+        Assert.Contains("runs-on: [self-hosted, Windows, X64, LiteMonitor-SystemValidation]", text);
+        Assert.DoesNotContain("runs-on: windows-latest", text);
+        Assert.Contains("options: ['4', '5']", text);
+        Assert.Contains("default: '4'", text);
+        Assert.Contains("-ExactTier", text);
+        Assert.Contains("description: 'Enable network-dependent tests'", text);
+        // 能力是逗号分隔字符串（不能用 PowerShell 数组直传 pwsh -File）；
+        // 联网勾选时在 job 级能力串上追加 Network。
+        Assert.Contains("$capabilities = \"$capabilities,Network\"", text);
+    }
+
+    [Theory]
+    [InlineData("empty")]
+    [InlineData("multiple")]
+    [InlineData("wrong-configuration")]
+    public void 分档门禁拒绝缺失重复及其他配置的目录(string scenario)
+    {
+        using var scope = new TemporaryResults();
+        if (scenario != "empty")
+        {
+            foreach (string name in scenario == "multiple" ? new[] { "one", "two" } : new[] { "one" })
+            {
+                string run = System.IO.Path.Combine(scope.Path, name);
+                Directory.CreateDirectory(run);
+                File.WriteAllText(System.IO.Path.Combine(run, "catalog.json"),
+                    """{"configuration":"Debug","tier":3,"exactTier":false,"baseOutputPath":"bin/"}""");
+            }
+        }
+        var result = RunPowerShell(System.IO.Path.Combine(Root(), ".github", "workflows", "assert-test-tiers.ps1"),
+            ["-ResultsRoot", scope.Path, "-Configuration", "Release", "-Tier", "3"]);
+        Assert.NotEqual(0, result.Code);
+        Assert.Contains(scenario == "wrong-configuration" ? "another configuration" : "exactly one current run", result.Output);
     }
 
     private static string StepScript(string workflow, string step)
@@ -105,6 +182,19 @@ public sealed class ReviewReleaseValidationGateTests
         }
         Assert.NotEmpty(result);
         return string.Join("\n", result);
+    }
+
+    private static string JobBlock(string workflow, string jobName, string? nextJobName)
+    {
+        string text = workflow.Replace("\r\n", "\n");
+        int start = text.IndexOf("\n  " + jobName + ":\n", StringComparison.Ordinal);
+        Assert.True(start >= 0, "Missing workflow job: " + jobName);
+        start++;
+        int end = nextJobName == null
+            ? text.Length
+            : text.IndexOf("\n  " + nextJobName + ":\n", start, StringComparison.Ordinal);
+        Assert.True(end > start, "Missing next workflow job: " + nextJobName);
+        return text[start..end];
     }
 
     private static void WriteResults(string root, string scenario)
@@ -156,7 +246,11 @@ public sealed class ReviewReleaseValidationGateTests
         start.ArgumentList.Add("-File");
         start.ArgumentList.Add(script);
         foreach (string arg in args) start.ArgumentList.Add(arg);
-        if (workspace != null) start.Environment["GITHUB_WORKSPACE"] = workspace;
+        if (workspace != null)
+        {
+            start.Environment["GITHUB_WORKSPACE"] = workspace;
+            start.WorkingDirectory = workspace;
+        }
         using var process = Process.Start(start);
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();

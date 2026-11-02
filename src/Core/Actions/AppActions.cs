@@ -551,7 +551,10 @@ namespace LiteMonitor.src.Core.Actions
 
             // ★★★ [新增] 动态检查硬件开启需求 (热切换) ★★★
             // 如果用户开启了风扇/水泵，自动开启 USB 控制器；反之关闭
-            LiteMonitor.SystemServices.HardwareGateway.RefreshHardwareConfig();
+            if (LiteMonitor.SystemServices.HardwareGateway.SupportsHardwareRefresh)
+            {
+                LiteMonitor.SystemServices.HardwareGateway.RefreshHardwareConfig();
+            }
 
             // 重新计算哪些格子要显示 (主界面和任务栏的数据列都会重建)
             ui?.RebuildLayout();

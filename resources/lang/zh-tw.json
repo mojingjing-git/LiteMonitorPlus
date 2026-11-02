@@ -257,7 +257,7 @@
     "Taskbar": "工作列",
     "MainForm": "主介面",
     "OnlyShowEnabled": "僅看已開啟顯示",
-    "MonitorItemTip": "註：名稱/簡稱輸入空白即可不顯示標籤，名稱全刪儲存後會恢復預設，部分單位支援預留位置{u}+字元",
+    "MonitorItemTip": "名稱/簡稱：輸入空格隱藏，清空恢復預設。單位：選擇自動、隱藏或自訂；自訂支援 {u}。",
     "__Comment_Page4__": "--- 4. 告警閾值設定 (ThresholdPage) ---",
     "Thresholds": "告警閾值設定",
     "AlertTemp": "高溫報警彈窗",

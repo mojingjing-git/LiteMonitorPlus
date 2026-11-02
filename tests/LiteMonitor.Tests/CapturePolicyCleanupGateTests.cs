@@ -253,7 +253,7 @@ public sealed class CapturePolicyCleanupGateTests
             gateAt >= 0,
             "GpuPresentationHostController.NotifyOutputChanged 必须查 WDA 取得闸门 —— "
             + "显示器变化后重新施加 WDA 排除也是'取得所有权'，必须与 Start / TryReconfigure / "
-            + "Resume 共用同一个闸门（LM-073）。");
+            + "Resume 共用同一个闸门。");
         Assert.True(
             applyAt >= 0,
             "GpuPresentationHostController.NotifyOutputChanged 里找不到 SetCapturePolicy —— "
@@ -261,7 +261,7 @@ public sealed class CapturePolicyCleanupGateTests
         Assert.True(
             gateAt < applyAt,
             "闸门检查必须位于 SetCapturePolicy 施加**之前** —— "
-            + "否则同一 HWND 上会叠加第二个 affinity 所有者（LM-073）。");
+            + "否则同一 HWND 上会叠加第二个 affinity 所有者。");
     }
 
     // ================================================================

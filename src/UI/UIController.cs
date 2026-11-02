@@ -12,6 +12,7 @@ using LiteMonitor.Rendering.Configuration;
 using LiteMonitor.Rendering.Contracts;
 using LiteMonitor.Rendering.Presentation;
 using LiteMonitor.Rendering.Scene;
+using LiteMonitor.Core;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -25,15 +26,27 @@ namespace LiteMonitor
     {
         private readonly Settings _cfg;
         private readonly Form _form;
-        private readonly HardwareMonitor _mon;
+        private readonly ApplicationHardwareRuntime _hardwareRuntime;
+        private readonly HardwareMonitor? _mon;
         private readonly LiteMonitor.Contracts.IHardwareClient _hwClient;
         private readonly ShortTermTrendBuffer _trendBuffer = new();
         private readonly System.Windows.Forms.Timer _timer;
+        private HardwareSnapshotValueIndex _snapshotIndex = new(new LiteMonitor.Contracts.HardwareSnapshot(
+            BatchId: 0,
+            CatalogVersion: 0,
+            ConfigRevision: -1,
+            Samples: Array.Empty<LiteMonitor.Contracts.MetricSample>(),
+            SamplingDuration: TimeSpan.Zero,
+            TimestampMonoMs: 0));
+        private int _currentSessionEpoch;
+        private bool _hasSnapshotSession;
+        private long _lastGpuCatalogVersion = -1;
+        private bool _gpuCatalogRefreshInFlight;
 
-        /// <summary>D01：诊断只读采集事实源；不触发采样。</summary>
+        /// <summary>诊断只读采集事实源；不触发采样。</summary>
         public LiteMonitor.Contracts.IHardwareClient HardwareClient => _hwClient;
-        public HardwareSamplingStatistics HardwareSamplingStatistics => _mon.SamplingStatistics;
-        /// <summary>T01/T02：只读秒级趋势缓冲；UI Tick 消费已发布快照，不触发采样。</summary>
+        public HardwareSamplingStatistics? HardwareSamplingStatistics => _hardwareRuntime.SamplingStatistics;
+        /// <summary>只读秒级趋势缓冲；UI Tick 消费已发布快照，不触发采样。</summary>
         public ShortTermTrendBuffer TrendBuffer => _trendBuffer;
 
         private UILayout _layout;
@@ -288,18 +301,15 @@ namespace LiteMonitor
         {
             _cfg = cfg;
             _form = form;
-            _mon = new HardwareMonitor(cfg);
-            // B1/C1 最小接线 + P-I2 构造缝（唯一 UI 例外）：默认路径零行为变化（HardwareClientAdapter
-            // 保持进程内默认，正式发布不自动回退同进程模式，Plan A §9）；--hardware-host /
-            // LITEMONITOR_HARDWARE_HOST=1 时显示链路改经管道客户端取数（_mon 直读点维持进程内现状，见 I2 报告已知边界）。
-            _hwClient = LiteMonitor.SystemServices.Pipe.HardwareHostMode.IsRequested()
-                ? new LiteMonitor.SystemServices.Pipe.PipeHardwareClient(cfg.RefreshMs, fallbackNetworkIp: () => _mon.GetNetworkIP())
-                : new HardwareClientAdapter(_mon, cfg.MonitorItems.Select(x => x.Key).ToList());
-            // B3 阶段三：应用层网关注册（组合根唯一注册点；全部消费方经网关取用，Instance 已降 internal）。
-            // Host 模式下网关的契约面（Client）同样是管道客户端——经网关取数的消费方（传感器窗口）读到 Host 快照。
-            HardwareGateway.Register(_mon, _hwClient);
+            _hardwareRuntime = ApplicationHardwareRuntime.Create(
+                cfg,
+                LiteMonitor.SystemServices.Pipe.HardwareHostMode.IsRequested());
+            _hwClient = _hardwareRuntime.Client;
+            _mon = _hardwareRuntime.LocalMonitor;
+            // 应用层网关注册（组合根唯一注册点；全部消费方经网关取用，Instance 已降 internal）。
+            HardwareGateway.Register(_hwClient, _mon, _hardwareRuntime.HostRequested);
 
-            // B4-1：组合根接线——插件色与配置兜底的全局查询收口到应用层 lambda
+            // 组合根接线——插件色与配置兜底的全局查询收口到应用层 lambda
             // （MetricItem 自身不再引用 InfoService/Settings；ThemeEditor 预览项自动继承同款行为）。
             MetricItem.DefaultPluginColorResolver ??= k => InfoService.Instance.GetValue(k);
             MetricItem.DefaultConfigLookup ??= k => Settings.Load().MonitorItems.FirstOrDefault(x => x.Key == k);
@@ -366,6 +376,7 @@ namespace LiteMonitor
             float userScale = (float)_cfg.UIScale;    
             float finalScale = dpiScale * userScale;
 
+            // ---- 外观运行时（A13）----
             t.Scale(dpiScale, userScale); // Scale 内部现在会自动清理旧缩放字体
 
             // ... 边距修复逻辑 ...
@@ -375,7 +386,6 @@ namespace LiteMonitor
                 _form.ClientSize = new Size(t.Layout.Width, _form.ClientSize.Height);
             }
 
-            // ---- 外观运行时（A13）----
             // ★ DPI 与用户缩放必须与上面 t.Scale(dpiScale, userScale) 用的**同一对值**：
             //   主题里的旧字段已经被 LayoutScale(=dpi*user) 缩放过一次，
             //   而新的外观字段故意没被缩放，要由 options 用同一个系数换算成物理像素。
@@ -1327,30 +1337,41 @@ namespace LiteMonitor
                 // ★ 只请求"到期才采"的一次硬件采集（B2 起统一走 C1 契约入口，委托同一协调器，语义不变）：
                 //   未到期时这里立即返回，不会创建任何硬件任务，
                 //   但下面的取值 / 平滑 / 绘制仍然按界面频率执行。
-                await _hwClient.RequestRescanAsync();
+                await _hwClient.RequestSamplingAsync();
 
                 // ★ 关闭竞态：异步回调回来时窗体/控制器可能已经释放，
                 //   此时不能再触碰界面对象，也不能触发重建。
                 if (_disposed || _form.IsDisposed) return;
 
-                // T01/T02：只消费已发布快照，不触发采样；趋势缓冲失败不得影响 UI。
+                // 只消费已发布快照，不触发采样；本 Tick 的 UI、历史、告警和趋势共享同一批次。
+                LiteMonitor.Contracts.HardwareSnapshot snapshot;
+                bool snapshotReadSucceeded = false;
                 try
                 {
-                    _trendBuffer.Ingest(_hwClient.GetLatestSnapshot(), DateTimeOffset.UtcNow);
+                    snapshot = _hwClient.GetLatestSnapshot();
+                    _snapshotIndex = new HardwareSnapshotValueIndex(snapshot);
+                    ApplySnapshotSession(snapshot);
+                    _trendBuffer.Ingest(snapshot, DateTimeOffset.UtcNow);
+                    snapshotReadSucceeded = true;
                 }
                 catch
                 {
-                    // 诊断/趋势是旁路，不能让采集或绘制停摆。
+                    // 快照读取/趋势是旁路，不能让采集或绘制停摆；本 Tick 保留上一份索引。
+                    snapshot = _snapshotIndex.Snapshot;
                 }
 
                 // ★★★ [多显卡] 实际显卡数少于配置数时 (例如拔掉了第二张卡),
                 // 夹紧配置并重建监控项, 否则会留下一组永远没有数据的空白指标。 ★★★
-                int actualGpuCount = _mon.GetMonitoredGpuCount();
+                int actualGpuCount = _snapshotIndex.GpuCount;
                 if (actualGpuCount > 0 && _cfg.MonitoredGpuCount > actualGpuCount)
                 {
                     GpuItemSync.Ensure(_cfg, availableGpuCount: actualGpuCount);
                     RebuildLayout();
                 }
+                if (snapshotReadSucceeded &&
+                    _hardwareRuntime.HostRequested &&
+                    snapshot.SessionEpoch == _currentSessionEpoch)
+                    QueueGpuMetadataRefresh();
 
                 // ★★★ [按卡拆组] 就地刷新分组标题 ★★★
                 //   面板的分组标题在 BuildMetrics() 里算好并缓存进 GroupLayoutInfo.Label,
@@ -1384,7 +1405,7 @@ namespace LiteMonitor
                         }
                         else
                         {
-                            it.Value = _mon.Get(it.Key);
+                            it.Value = _snapshotIndex.TryGetValue(it.Key, out float value) ? value : null;
                             it.TickSmooth(_cfg.AnimationSpeed);
                         }
                     }
@@ -1408,7 +1429,7 @@ namespace LiteMonitor
                         }
                         else 
                         {
-                            it.Value = _mon.Get(it.Key);
+                            it.Value = _snapshotIndex.TryGetValue(it.Key, out float value) ? value : null;
                             it.TickSmooth(_cfg.AnimationSpeed);
                         }
                     }
@@ -1419,9 +1440,11 @@ namespace LiteMonitor
                 foreach (var col in _hxColsHorizontal) UpdateCol(col);
                 foreach (var col in _hxColsTaskbar) UpdateCol(col);
 
-                HardwareHistoryLogger.RecordSnapshot(_cfg, key => _mon.Get(key));
- 
-                CheckRuleAlerts();
+                if (snapshotReadSucceeded)
+                {
+                    HardwareHistoryLogger.RecordSnapshot(_cfg, _snapshotIndex);
+                    CheckRuleAlerts(snapshot, _snapshotIndex);
+                }
 
                 // 驱动 DashboardService 更新
                 InfoService.Instance.Update();
@@ -1450,6 +1473,7 @@ namespace LiteMonitor
         private void BuildMetrics()
         {
             _groups = new List<GroupLayoutInfo>();
+            RefreshSnapshotIndex();
 
             var activeItems = _cfg.MonitorItems
                 .Where(x => x.VisibleInPanel)
@@ -1511,7 +1535,7 @@ namespace LiteMonitor
                 }
                 else
                 {
-                    float? val = _mon.Get(item.Key);
+                    float? val = _snapshotIndex.TryGetValue(item.Key, out float value) ? value : null;
                     item.Value = val;
                     if (val.HasValue) item.DisplayValue = val.Value;
                 }
@@ -1525,6 +1549,93 @@ namespace LiteMonitor
                 string gName = GroupTitleResolver.Resolve(_cfg, currentGroupKey);
                 gr.Label = gName;
                 _groups.Add(gr);
+            }
+        }
+
+        private void RefreshSnapshotIndex()
+        {
+            try
+            {
+                LiteMonitor.Contracts.HardwareSnapshot snapshot = _hwClient.GetLatestSnapshot();
+                _snapshotIndex = new HardwareSnapshotValueIndex(snapshot);
+                ApplySnapshotSession(snapshot);
+            }
+            catch
+            {
+                // Keep the previous immutable snapshot; an unavailable source produces no fabricated values.
+            }
+        }
+
+        private void ApplySnapshotSession(LiteMonitor.Contracts.HardwareSnapshot snapshot)
+        {
+            if (_hasSnapshotSession && snapshot.SessionEpoch == _currentSessionEpoch) return;
+
+            _hasSnapshotSession = true;
+            _currentSessionEpoch = snapshot.SessionEpoch;
+            _lastGpuCatalogVersion = -1;
+            _gpuLegacyLabelMigrated = false;
+            GpuRegistry.Clear();
+            _alertRuntime.Reset();
+        }
+
+        private void QueueGpuMetadataRefresh()
+        {
+            if (_gpuCatalogRefreshInFlight || !_hasSnapshotSession) return;
+
+            LiteMonitor.Contracts.HardwareSnapshot snapshot = _snapshotIndex.Snapshot;
+            if (snapshot.CatalogVersion == _lastGpuCatalogVersion) return;
+
+            _gpuCatalogRefreshInFlight = true;
+            _ = RefreshGpuMetadataAsync(snapshot.SessionEpoch);
+        }
+
+        private async Task RefreshGpuMetadataAsync(int expectedSessionEpoch)
+        {
+            try
+            {
+                LiteMonitor.Contracts.HardwareCatalog catalog = await _hwClient.GetCatalogAsync();
+                if (_disposed || !_hasSnapshotSession || _currentSessionEpoch != expectedSessionEpoch) return;
+                if (catalog.Version < 0)
+                {
+                    _lastGpuCatalogVersion = catalog.Version;
+                    return;
+                }
+
+                var gpuInfo = new GpuInfo[GpuKey.MaxGpuCount];
+                int index = 0;
+                foreach (LiteMonitor.Contracts.HardwareCatalogEntry entry in catalog.Entries)
+                {
+                    if (index >= gpuInfo.Length) break;
+                    if (entry.SensorType is not null ||
+                        !entry.DeviceType.StartsWith("Gpu", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    gpuInfo[index++] = new GpuInfo
+                    {
+                        ShortName = HardwareRules.GetShortGpuName(entry.Name),
+                        FullName = entry.Name
+                    };
+                }
+
+                GpuRegistry.ReplaceAll(index > 0 ? gpuInfo : null);
+                if (index > 0)
+                {
+                    RefreshPerCardGroupTitles();
+                    MigrateLegacyGpuItemLabels();
+                }
+                _form.Invalidate();
+
+                _lastGpuCatalogVersion = catalog.Version;
+            }
+            catch
+            {
+                // Keep fallback GPU.{index} labels and retry on a later tick.
+            }
+            finally
+            {
+                _gpuCatalogRefreshInFlight = false;
             }
         }
 
@@ -1562,7 +1673,15 @@ namespace LiteMonitor
         /// </summary>
         private void NotifyHardwareErrorOnce()
         {
-            string? err = HardwareMonitor.LastHardwareError;
+            LiteMonitor.Contracts.HardwareHealth health = _hwClient.GetHealth();
+            string? err = health.DiagnosticReason;
+            if (string.IsNullOrWhiteSpace(err) &&
+                health.State is LiteMonitor.Contracts.HardwareState.Degraded
+                    or LiteMonitor.Contracts.HardwareState.Unresponsive
+                    or LiteMonitor.Contracts.HardwareState.Stopped)
+            {
+                err = health.State.ToString();
+            }
 
             // 硬件层已恢复正常（HardwareMonitor 在重建映射表成功后会清空 LastHardwareError）
             // -> 复位通知标记, 以便之后再次失败时能重新提示一次
@@ -1580,8 +1699,7 @@ namespace LiteMonitor
                 string firstLine = err.Split('\n')[0].Trim();
                 MainForm.ShowNotification(
                     "LiteMonitor++ 硬件监控初始化失败",
-                    "所有硬件传感器指标将显示为 0。\r\n\r\n原因: " + firstLine +
-                    "\r\n\r\n完整信息见运行目录下的 LiteMonitor++_HardwareError.log",
+                    "硬件数据当前不可用，相关传感器会显示为空而不是伪造为 0。\r\n\r\n原因: " + firstLine,
                     ToolTipIcon.Error);
             }
             catch { }
@@ -2418,12 +2536,14 @@ namespace LiteMonitor
         private void InitMetricValue(MetricItem? item)
         {
             if (item == null) return;
-            float? val = _mon.Get(item.Key);
+            float? val = _snapshotIndex.TryGetValue(item.Key, out float value) ? value : null;
             item.Value = val;
             if (val.HasValue) item.DisplayValue = val.Value;
         }
         
-        private void CheckRuleAlerts()
+        private void CheckRuleAlerts(
+            LiteMonitor.Contracts.HardwareSnapshot snapshot,
+            HardwareSnapshotValueIndex snapshotValues)
         {
             if (_cfg.AlertRules == null || _cfg.AlertRules.Count == 0) return;
 
@@ -2432,7 +2552,6 @@ namespace LiteMonitor
             {
                 // R07：告警只消费已发布快照的真实批次/源采样身份；
                 // 重复 UI Tick 读取同一快照时 Evaluator 会按 BatchId 丢弃。
-                LiteMonitor.Contracts.HardwareSnapshot snapshot = _hwClient.GetLatestSnapshot();
                 transitions = _alertRuntime.Evaluate(_cfg.AlertRules, snapshot, DateTimeOffset.Now);
             }
             catch
@@ -2484,7 +2603,10 @@ namespace LiteMonitor
 
                 if (transition.Kind == AlertEventKind.Triggered)
                 {
-                    double? value = rule == null ? null : _mon.Get(rule.MetricKey);
+                    double? value = rule != null &&
+                                    snapshotValues.TryGetValue(rule.MetricKey, transition.DeviceId, out float sampleValue)
+                        ? sampleValue
+                        : null;
                     string reading = value.HasValue ? $" {value.Value:F0}" : "";
                     alertLines.Add($"{ruleName}:{reading}（阈值 {rule?.TriggerThreshold:F0}）");
                 }
@@ -2514,9 +2636,8 @@ namespace LiteMonitor
             _disposed = true;
             _timer.Stop();
             _timer.Dispose();
-            HardwareGateway.Unregister();
-            _mon.Dispose();
-            _hwClient.Dispose();
+            HardwareGateway.Unregister(_hwClient);
+            _hardwareRuntime.Dispose();
 
             // 释放外观运行时持有的纹理/画刷/噪点位图。
             // 背景帧与预览源是借用引用，AppearanceRuntime 不会释放它们。

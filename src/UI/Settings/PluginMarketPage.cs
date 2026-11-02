@@ -54,6 +54,7 @@ namespace LiteMonitor.src.UI.SettingsPage
         /// <summary>列表提示行（文案变了要重建：内部标签不可达）。</summary>
         private LiteHintRow? _hintRow;
         private string _hintText = "";
+        private readonly Label _operationNotice = new() { Dock = DockStyle.Top, AutoSize = true, MaximumSize = new Size(UIUtils.S(600), 0), Padding = new Padding(20, 6, 20, 6) };
 
         // ================================================================
         // 列表数据（按资产缓存行）
@@ -154,6 +155,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                 Padding = new Padding(20, 5, 20, 20)
             };
             this.Controls.Add(_container);
+            this.Controls.Add(_operationNotice);
 
             // ---------- 预览窗格宿主（预览生命周期与列表数据解耦）----------
             _previewHost = new Panel
@@ -315,6 +317,9 @@ namespace LiteMonitor.src.UI.SettingsPage
         public override void OnShow()
         {
             base.OnShow();
+            _operationNotice.Text = (Config?.Language ?? LanguageManager.CurrentLang).StartsWith("zh", StringComparison.OrdinalIgnoreCase)
+                ? "安装、卸载和应用主题会立即生效；关闭或取消设置不会撤销这些操作。"
+                : "Install, uninstall and theme application take effect immediately; closing or cancelling settings does not undo them.";
 
             // ★ 页面代次自增：旧代次的异步回调（预览载荷、索引结果）一律不得写入。
             _pageGeneration++;
@@ -896,7 +901,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             _controlsCreated += 1;
 
             // TM05：已安装主题可直接应用；不要求用户先关闭设置再走主界面。
-            var btnApply = new LiteHeaderBtn(LanguageManager.T("Menu.Apply"));
+            var btnApply = new LiteHeaderBtn((Config?.Language ?? LanguageManager.CurrentLang).StartsWith("zh", StringComparison.OrdinalIgnoreCase) ? "立即应用" : "Apply now");
             btnApply.Visible = state == MarketInstallState.Installed;
             btnApply.Click += async (s, e) => await ApplyThemeAsync(entry);
             group.AddHeaderAction(btnApply);
@@ -1394,6 +1399,8 @@ namespace LiteMonitor.src.UI.SettingsPage
         /// TM05：直接把已安装主题应用到运行时。使用 Live Settings 的副本，只改 Skin，
         /// 不把设置页中其他未保存的草稿一并提交；应用成功后只持久化 Skin。
         /// </summary>
+        public Action<string>? ImmediateChangeCompleted { get; set; }
+
         private async Task ApplyThemeAsync(MarketThemeEntry entry)
         {
             if (_busy) return;
@@ -1421,6 +1428,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                 live.Skin = entry.Id;
                 bool saved = live.TrySave();
                 Config.Skin = entry.Id;
+                ImmediateChangeCompleted?.Invoke("Skin");
 
                 if (result.OverallStatus == LiteMonitor.Core.Actions.Services.ApplyOperationStatus.Applied && saved)
                 {
@@ -1458,6 +1466,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             try
             {
                 await ThemeMarket.InstallAsync(entry);
+                ImmediateChangeCompleted?.Invoke("Themes");
                 _statusText = LanguageManager.T("Menu.PluginMarketInstallOk") + PluginI18n.Pick(entry.Name, entry.NameEn);
                 _statusIsError = false;
             }
@@ -1497,6 +1506,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                     if (!cfg.TrySave())
                         throw new InvalidOperationException("settings save failed");
                     Config.Skin = "RefinedDark";
+                    ImmediateChangeCompleted?.Invoke("Skin");
                 });
 
                 if (!ThemeMarket.TryUninstall(entry, switchToDefault, out var reason))
@@ -1507,6 +1517,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                     return Task.CompletedTask;
                 }
 
+                ImmediateChangeCompleted?.Invoke("Themes");
                 _statusText = LanguageManager.T("Menu.PluginMarketUninstallOk") + PluginI18n.Pick(entry.Name, entry.NameEn);
                 _statusIsError = false;
             }
@@ -1531,6 +1542,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             try
             {
                 await PluginMarket.InstallAsync(entry);
+                ImmediateChangeCompleted?.Invoke("MarketPlugins");
 
                 // 重新加载插件模板，新实例会自动出现在「插件管理」页（默认不启用）
                 PluginManager.Instance.LoadPlugins(PluginMarket.PluginsDir);
@@ -1568,6 +1580,7 @@ namespace LiteMonitor.src.UI.SettingsPage
                     return Task.CompletedTask;
                 }
 
+                ImmediateChangeCompleted?.Invoke("MarketPlugins");
                 PluginManager.Instance.LoadPlugins(PluginMarket.PluginsDir);
                 _statusText = LanguageManager.T("Menu.PluginMarketUninstallOk") + PluginI18n.Pick(entry.Name, entry.NameEn);
                 _statusIsError = false;

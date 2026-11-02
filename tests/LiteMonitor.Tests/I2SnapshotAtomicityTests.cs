@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using LiteMonitor.Contracts;
+using LiteMonitor.Core;
 using LiteMonitor.SystemServices.Pipe;
 using Xunit;
 
@@ -41,6 +42,8 @@ public sealed class I2SnapshotAtomicityTests
     private static void AssertBatchConsistent(HardwareSnapshot snapshot)
     {
         Assert.Equal(MinimalSampleCount, snapshot.Samples.Count);
+        var index = new HardwareSnapshotValueIndex(snapshot);
+        Assert.Same(snapshot, index.Snapshot);
         for (int i = 0; i < snapshot.Samples.Count; i++)
         {
             MetricSample s = snapshot.Samples[i];
@@ -48,6 +51,8 @@ public sealed class I2SnapshotAtomicityTests
             float expected = snapshot.BatchId * 1000f + i;
             Assert.Equal(expected, s.Value!.Value);
             Assert.Equal(SampleQuality.Good, s.Quality);
+            Assert.True(index.TryGetGoodValue(s.Key, out float indexedValue));
+            Assert.Equal(expected, indexedValue);
         }
     }
 
@@ -117,11 +122,11 @@ public sealed class I2SnapshotAtomicityTests
     [Fact]
     public async Task 迟到命令响应_按未知请求丢弃_后续命令配对不受影响()
     {
-        // late-response 故障：rescan 应答推迟 10s；客户端 1.2s 超时后先失败，
-        // 迟到应答到达时必须被丢弃并计数，且不占用后续请求的配对。
+        // 应答由父测试放行，必须先观察到真实超时，再验证迟到应答。
+        using var responseGate = new ResponseGate();
         using var client = new PipeHardwareClient(100,
-            supervisorOptions: Options(new[] { "--test-pattern", "--fault", "late-response" },
-                commandTimeout: TimeSpan.FromSeconds(1.2)));
+            supervisorOptions: Options(new[] { "--test-pattern", "--fault", "late-response", "--fault-response-gate", responseGate.Path },
+                commandTimeout: TimeSpan.FromMilliseconds(250)));
         Assert.True(await WaitUntilAsync(() => client.GetLatestSnapshot().Samples.Count > 0, TimeSpan.FromSeconds(20)),
             "未取得首批数据");
 
@@ -129,7 +134,8 @@ public sealed class I2SnapshotAtomicityTests
         Assert.False(await client.RequestRescanAsync());
         Assert.True(client.ReadMetrics().CommandTimeouts >= 1, "超时应计数");
 
-        // 等迟到应答真正到达（10s 故障延迟）后被丢弃。
+        responseGate.Release();
+        // 等实际迟到应答到达并被丢弃，不再为故障注入固定等待 10 秒。
         Assert.True(await WaitUntilAsync(() => client.ReadMetrics().LateResponses >= 1, TimeSpan.FromSeconds(15)),
             $"迟到响应未被丢弃计数：{client.ReadMetrics().LateResponses}");
 
@@ -141,9 +147,10 @@ public sealed class I2SnapshotAtomicityTests
     [Fact]
     public async Task 命令在飞合并_并发重复请求不放大()
     {
+        using var responseGate = new ResponseGate();
         using var client = new PipeHardwareClient(100,
-            supervisorOptions: Options(new[] { "--test-pattern", "--fault", "late-response" },
-                commandTimeout: TimeSpan.FromSeconds(8)));
+            supervisorOptions: Options(new[] { "--test-pattern", "--fault", "late-response", "--fault-response-gate", responseGate.Path },
+                commandTimeout: TimeSpan.FromMilliseconds(250)));
         Assert.True(await WaitUntilAsync(() => client.GetLatestSnapshot().Samples.Count > 0, TimeSpan.FromSeconds(20)),
             "未取得首批数据");
 
@@ -151,8 +158,18 @@ public sealed class I2SnapshotAtomicityTests
         Task<bool>[] calls = Enumerable.Range(0, 5).Select(_ => client.RequestRescanAsync()).ToArray();
         bool[] results = await Task.WhenAll(calls);
         Assert.Equal(5, results.Length); // 全部有界返回（合并/超时均不挂死）
+        Assert.All(results, result => Assert.False(result));
+        Assert.Equal(1, client.ReadMetrics().CommandTimeouts); // 五个等待者只产生一次底层命令。
+        responseGate.Release();
 
         Assert.True(await WaitUntilAsync(() => client.ReadMetrics().LateResponses >= 1, TimeSpan.FromSeconds(15)),
             "迟到响应应至少出现一次（首个请求超时后到达）");
+    }
+
+    private sealed class ResponseGate : IDisposable
+    {
+        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "litemonitor-response-" + Guid.NewGuid().ToString("N") + ".gate");
+        public void Release() => System.IO.File.WriteAllText(Path, "release");
+        public void Dispose() { if (System.IO.File.Exists(Path)) System.IO.File.Delete(Path); }
     }
 }

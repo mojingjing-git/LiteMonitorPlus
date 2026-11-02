@@ -257,7 +257,7 @@
     "Taskbar": "タスクバー",
     "MainForm": "パネル",
     "OnlyShowEnabled": "有効のみ",
-    "MonitorItemTip": "注: 名前/略称にスペースでラベル非表示。空でデフォルト復元。一部単位は{u}+文字対応。",
+    "MonitorItemTip": "名前/略称：スペースで非表示、空欄で既定に戻ります。単位：Auto・Hidden・Custom を選択。{u} に対応。",
     "__Comment_Page4__": "--- 4. 閾値設定 ---",
     "Thresholds": "アラート閾値",
     "ThresholdsTips": "バーと数値の色が閾値に応じて変化",

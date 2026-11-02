@@ -61,7 +61,7 @@ function New-ForensicsOutputDir {
     <#
         建一个证据输出目录并返回其绝对路径。
         默认落在 <仓库根>\docs\reviews\evidence\forensics\<name>-<时间戳>，
-        该目录被 .gitignore 忽略（/docs/reviews/evidence/），**证据不进版本库**。
+        该目录被 .gitignore 忽略（/.evidence/），**证据不进版本库**。
     #>
     [CmdletBinding()]
     param(

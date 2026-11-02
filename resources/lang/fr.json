@@ -257,7 +257,7 @@
     "Taskbar": "Tray",
     "MainForm": "Panel",
     "OnlyShowEnabled": "Actifs seulement",
-    "MonitorItemTip": "Note: Espace ds Nom/Bref cache libellé. Vide réinit. Unités: {u}+car.",
+    "MonitorItemTip": "Nom/abrégé : une espace masque, vider rétablit. Unités : Auto, Hidden ou Custom ; {u} est pris en charge.",
     "__Comment_Page4__": "--- 4. Seuils ---",
     "Thresholds": "Seuils",
     "ThresholdsTips": "Couleur barre selon seuil",

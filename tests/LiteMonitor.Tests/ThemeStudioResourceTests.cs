@@ -38,7 +38,7 @@ namespace LiteMonitor.Tests
     ///   (1) 场景完成（迭代次数达标）；
     ///   (2) 各差值为有限值；
     ///   (3) GDI / USER / 句柄的 **settled 增量**不超过宽松上限（上限 = M1 实测值 + 余量，
-    ///       见 docs/verification/theme-studio/perf-baseline.md「断言与余量」一节）。
+    // 采用冻结的实测基线与固定余量；
     ///   稳定性优先：宁可放宽，也不引入偶发失败。
     /// </summary>
     public class ThemeStudioResourceTests : IDisposable
@@ -77,7 +77,7 @@ namespace LiteMonitor.Tests
         private const int ThemeOpenWarmupIterations = 10;
 
         // ─────────────────────── 宽松上限（M1 参考值 + 余量）───────────────────────
-        // 上限来自 docs/verification/theme-studio/perf-baseline.md 的实测值加余量，
+        // 采用冻结的实测基线与固定余量；
         // 只用于拦截「数量级失控」，不作为验收线。
 
         /// <summary>GDI 对象 settled 增量上限（M1 最大实测 43，出自场景 1 冷启动段）。</summary>

@@ -28,18 +28,64 @@ public static class ThemeStudioLauncher
         private readonly Settings _cfg;
         private readonly UIController? _ui;
         private readonly MainForm _form;
+        private readonly Func<
+            Settings,
+            UIController?,
+            MainForm,
+            long,
+            ApplyOperationResult> _applyRuntime;
+        private readonly Func<Settings, bool> _persistRollback;
+        private readonly bool _hasInjectedRuntime;
 
         public AppActionsThemeApplyGateway(Settings cfg, UIController? ui, MainForm form)
+            : this(
+                cfg,
+                ui,
+                form,
+                (settings, controller, mainForm, revision) =>
+                    AppActions.ApplyThemeAndLayoutWithResult(
+                        settings, controller, mainForm, revision: revision),
+                hasInjectedRuntime: false,
+                persistRollback: null)
         {
-            _cfg = cfg;
+        }
+
+        internal AppActionsThemeApplyGateway(
+            Settings cfg,
+            UIController? ui,
+            MainForm form,
+            Func<Settings, UIController?, MainForm, long, ApplyOperationResult> applyRuntime,
+            Func<Settings, bool>? persistRollback = null)
+            : this(
+                cfg,
+                ui,
+                form,
+                applyRuntime,
+                hasInjectedRuntime: true,
+                persistRollback: persistRollback)
+        {
+        }
+
+        private AppActionsThemeApplyGateway(
+            Settings cfg,
+            UIController? ui,
+            MainForm form,
+            Func<Settings, UIController?, MainForm, long, ApplyOperationResult> applyRuntime,
+            bool hasInjectedRuntime,
+            Func<Settings, bool>? persistRollback)
+        {
+            _cfg = cfg ?? throw new ArgumentNullException(nameof(cfg));
             _ui = ui;
             _form = form;
+            _applyRuntime = applyRuntime ?? throw new ArgumentNullException(nameof(applyRuntime));
+            _hasInjectedRuntime = hasInjectedRuntime;
+            _persistRollback = persistRollback ?? (settings => settings.TrySave());
         }
 
         public ThemeStudioForm.ThemeApplyResult ApplySavedTheme(string themeName, long revision)
         {
             // 阶段 0：文件预检（R3/F02）。坏 JSON / 缺失文件不能先持久化再静默套缺省主题。
-            string themePath = System.IO.Path.Combine(ThemeManager.ThemeDir, themeName + ".json");
+            string themePath = System.IO.Path.Combine(ThemeDocumentStore.ThemeDir, themeName + ".json");
             ThemeManager.ThemeLoadResult inspected = ThemeManager.Inspect(themePath, themeName);
             if (!inspected.Success)
             {
@@ -89,10 +135,9 @@ public static class ThemeStudioLauncher
             // 阶段 2：实际生效（同名文件变更强制重载，无按 Skin 跳过）
             try
             {
-                ApplyOperationResult apply = AppActions.ApplyThemeAndLayoutWithResult(
-                    _cfg, _ui, _form, revision: revision);
+                ApplyOperationResult apply = _applyRuntime(_cfg, _ui, _form, revision);
 
-                if (_ui is null)
+                if (_ui is null && !_hasInjectedRuntime)
                 {
                     // 没有运行时宿主 ⇒ 主题没有被真正应用，不能报「已生效」。
                     return new ThemeStudioForm.ThemeApplyResult(
@@ -108,8 +153,7 @@ public static class ThemeStudioLauncher
 
                 if (apply.OverallStatus == ApplyOperationStatus.Failed)
                 {
-                    _cfg.Skin = previousSkin;
-                    _ = _cfg.TrySave();
+                    ThemeStudioForm.SettingsRollbackState rollback = RollbackSkin(previousSkin);
                     return new ThemeStudioForm.ThemeApplyResult(
                         Success: false,
                         Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
@@ -118,7 +162,8 @@ public static class ThemeStudioLauncher
                             .Select(m => m.Module + "：" + (m.FailureReason ?? "失败"))),
                         EffectiveTheme: previousSkin,
                         Revision: revision,
-                        Modules: apply.Modules
+                        Modules: apply.Modules,
+                        SettingsRollback: rollback
                     );
                 }
 
@@ -126,6 +171,7 @@ public static class ThemeStudioLauncher
                 if (actual is null || !actual.Success ||
                     !string.Equals(actual.RequestedName, themeName, StringComparison.Ordinal))
                 {
+                    ThemeStudioForm.SettingsRollbackState rollback = RollbackSkin(previousSkin);
                     return new ThemeStudioForm.ThemeApplyResult(
                         Success: false,
                         Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
@@ -133,7 +179,8 @@ public static class ThemeStudioLauncher
                         EffectiveTheme: ThemeManager.Current.Name,
                         EffectiveRoute: "未应用（请求主题未加载）",
                         Revision: revision,
-                        Modules: apply.Modules
+                        Modules: apply.Modules,
+                        SettingsRollback: rollback
                     );
                 }
 
@@ -184,20 +231,49 @@ public static class ThemeStudioLauncher
                 }
 
                 // 新主题并未真正加载 ⇒ 仍然生效的是旧主题；回滚内存值并尽力把磁盘拉回一致。
-                _cfg.Skin = previousSkin;
-                _ = _cfg.TrySave();
+                ThemeStudioForm.SettingsRollbackState rollback = RollbackSkin(previousSkin);
                 return new ThemeStudioForm.ThemeApplyResult(
                     Success: false,
                     Stage: ThemeStudioForm.ThemeApplyStage.ThemeApplied,
                     Error: "运行时应用失败：" + ex.Message,
                     EffectiveTheme: previousSkin,
-                    Revision: revision
+                    Revision: revision,
+                    SettingsRollback: rollback
                 );
             }
         }
 
+        /// <summary>回滚到应用前皮肤；持久化失败或异常时如实上报未知/失败状态。</summary>
+        private ThemeStudioForm.SettingsRollbackState RollbackSkin(string previousSkin)
+        {
+            _cfg.Skin = previousSkin;
+            try
+            {
+                return _persistRollback(_cfg)
+                    ? ThemeStudioForm.SettingsRollbackState.Restored
+                    : ThemeStudioForm.SettingsRollbackState.Failed;
+            }
+            catch (Exception ex)
+            {
+                // 回滚状态"未知"本身就是需要诊断的场景，不能静默吞掉。
+                try
+                {
+                    Diagnostics.DiagnosticHub.Current.Record(
+                        "theme-studio",
+                        Diagnostics.DiagnosticSeverity.Error,
+                        "settings-rollback-failed: " + ex.Message);
+                }
+                catch
+                {
+                    // 诊断失败不得影响回滚路径。
+                }
+
+                return ThemeStudioForm.SettingsRollbackState.Unknown;
+            }
+        }
+
         /// <summary>
-        /// 解析「实际生效路线」（R3 整改 · 计划 §5.1 A-4）。
+        /// 解析「实际生效路线」。
         /// <para>判定顺序：</para>
         /// <list type="number">
         ///   <item>主题本身是否请求 GPU —— 不请求则一律经典渲染，<b>与全局开关无关</b>
@@ -210,7 +286,7 @@ public static class ThemeStudioLauncher
         /// 关于单一事实源：协调器 <c>RenderingTransitionCoordinator.ExpectedRoute/EffectiveRoute</c>
         /// 确实更权威，但它的 <c>PublishStable/PublishLegacyFallback</c> 是由 GPU 宿主在渲染线程
         /// 异步发布的（见 <c>UIController</c> 内的 Publish 调用点），本方法紧随
-        /// <c>ApplyThemeAndLayout</c> 同步返回，此刻读取存在竞态 ⇒ 本批不采用（见计划 §8 执行记录）。
+        /// <c>ApplyThemeAndLayout</c> 同步返回，此刻读取存在竞态 ⇒ 本批不采用。
         /// </para>
         /// </summary>
         private string ResolveEffectiveRoute(string themeName)

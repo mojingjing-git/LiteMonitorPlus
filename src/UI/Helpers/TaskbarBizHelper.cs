@@ -426,7 +426,7 @@ namespace LiteMonitor.src.UI.Helpers
                 case 1: try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("taskmgr") { UseShellExecute = true }); } catch { } break;
                 case 2: 
                     foreach (Form f in Application.OpenForms) { if (f is SettingsForm) { f.Activate(); return; } }
-                    new SettingsForm(_cfg, ui, mainForm).Show(); 
+                    LiteMonitor.src.UI.SettingsWindowLauncher.Open(_cfg, ui, mainForm);
                     break;
                 case 3: 
                     foreach (Form f in Application.OpenForms) { if (f is TrafficHistoryForm) { f.Activate(); return; } }

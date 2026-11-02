@@ -2,8 +2,9 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using LiteMonitor.Contracts;
-using LiteMonitor.src.SystemServices;                  // HardwareMonitor/策略类型（现状命名空间）
-using LiteMonitor.src.SystemServices.NetworkTraffic;  // NetworkTrafficExclusionStatus
+using LiteMonitor.Core;
+using LiteMonitor.src.SystemServices;
+using LiteMonitor.src.SystemServices.NetworkTraffic;
 
 namespace LiteMonitor.SystemServices
 {
@@ -15,63 +16,195 @@ namespace LiteMonitor.SystemServices
     /// </summary>
     public static class HardwareGateway
     {
+        private const string WebConsumerId = "web";
+        private static readonly SamplingDemand WebDemand = new(
+            Ui: false,
+            Taskbar: false,
+            Web: true,
+            History: false,
+            SensorWindow: false);
+
         private static volatile HardwareMonitor? _monitor;
         private static volatile IHardwareClient? _client;
+        private static volatile bool _hostRequested;
 
-        public static bool IsRegistered => _monitor != null;
+        public static bool IsRegistered => _client != null;
+
+        public static bool IsHostMode => _hostRequested;
+
+        public static bool SupportsDriverCheck => IsRegistered && !_hostRequested && _monitor != null;
+
+        public static bool SupportsDiskProbe => IsRegistered && !_hostRequested && _monitor != null;
+
+        public static bool SupportsControllerProbe => IsRegistered && !_hostRequested && _monitor != null;
+
+        public static bool SupportsTrafficExclusion => IsRegistered && !_hostRequested && _monitor != null;
+
+        public static bool SupportsHardwareRefresh => IsRegistered && !_hostRequested && _monitor != null;
 
         /// <summary>C1 契约客户端（数据面：快照/目录/配置/需求/健康）。</summary>
         public static IHardwareClient? Client => _client;
 
-        /// <summary>已注册采集器的身份对象（供 Web 需求同步器的目标变更检测，不暴露成员）。</summary>
-        public static object? RegisteredTarget => _monitor;
+        /// <summary>Stable identity used by Web demand synchronization to detect source replacement.</summary>
+        public static object? RegisteredTarget => _client;
 
+        public static void Register(
+            IHardwareClient client,
+            HardwareMonitor? localMonitor = null,
+            bool hostRequested = false)
+        {
+            _client = client ?? throw new ArgumentNullException(nameof(client));
+            _monitor = localMonitor;
+            _hostRequested = hostRequested;
+        }
+
+        /// <summary>Compatibility overload for process-local tests and older composition code.</summary>
         public static void Register(HardwareMonitor monitor, IHardwareClient? client = null)
         {
-            _monitor = monitor ?? throw new ArgumentNullException(nameof(monitor));
-            _client = client;
+            ArgumentNullException.ThrowIfNull(monitor);
+            Register(
+                client ?? new HardwareClientAdapter(monitor),
+                monitor,
+                hostRequested: false);
         }
 
-        public static void Unregister()
+        public static void Unregister(IHardwareClient? expectedClient = null)
         {
+            if (expectedClient is not null && !ReferenceEquals(_client, expectedClient)) return;
+
             _client = null;
             _monitor = null;
+            _hostRequested = false;
         }
 
-        // ── 数据面便捷 ──────────────────────────────────────────────────────────
-        public static string? NetworkIP => _monitor?.GetNetworkIP();
+        public static string? NetworkIP => _client?.GetNetworkIP();
 
-        public static float? GetSampleValue(string key) => _monitor?.Get(key);
+        public static float? GetSampleValue(string key)
+        {
+            IHardwareClient? client = _client;
+            if (client is null) return null;
 
-        public static bool HasFpsData => _monitor?.HasFpsData ?? false;
+            try
+            {
+                var index = new HardwareSnapshotValueIndex(client.GetLatestSnapshot());
+                return index.TryGetValue(key, out float value) ? value : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
 
-        // ── 交互动作（应用层保留） ────────────────────────────────────────────────
-        public static void CleanMemory(Action<int>? onProgress = null) => _monitor?.CleanMemory(onProgress);
+        public static bool HasFpsData
+        {
+            get
+            {
+                IHardwareClient? client = _client;
+                if (client is null) return false;
+
+                try
+                {
+                    return new HardwareSnapshotValueIndex(client.GetLatestSnapshot()).TryGetValue("FPS", out _);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+        }
+
+        public static void CleanMemory(Action<int>? onProgress = null)
+            => SystemOptimizer.CleanMemory(onProgress);
 
         public static Task SmartCheckDriverAsync()
-            => _monitor?.SmartCheckDriver() ?? Task.CompletedTask;
+            => SupportsDriverCheck
+                ? _monitor!.SmartCheckDriver()
+                : Task.CompletedTask;
 
-        // ── 采样协调（Web 需求同步器等） ─────────────────────────────────────────
         public static Task<bool> RequestSamplingAsync(CancellationToken cancellationToken = default)
         {
-            var monitor = _monitor;
-            if (monitor == null) return Task.FromResult(false);
-            return monitor.UpdateIfDueAsync(cancellationToken);
+            IHardwareClient? client = _client;
+            return client is null
+                ? Task.FromResult(false)
+                : client.RequestSamplingAsync(cancellationToken);
         }
+
+        // ── 采样协调（Web 需求同步器等） ─────────────────────────────────────────
 
         /// <summary>采集层尚未注册时返回 false，同步器下一轮重试（保持既有语义）。</summary>
         public static bool TrySetWebDataDemand(bool hasDemand)
         {
-            var monitor = _monitor;
-            if (monitor == null) return false;
-            monitor.SetWebDataDemand(hasDemand);
-            return true;
+            IHardwareClient? client = _client;
+            if (client is null) return false;
+
+            try
+            {
+                if (hasDemand)
+                    client.SubmitDemand(WebConsumerId, WebDemand);
+                else
+                    client.ReleaseDemand(WebConsumerId);
+                return true;
+            }
+            catch (NotSupportedException)
+            {
+                return false;
+            }
         }
 
-        // ── 硬件重配与策略（AppActions / 设置页） ────────────────────────────────
-        public static void RefreshHardwareConfig() => _monitor?.RefreshHardwareConfig();
+        public static void RefreshHardwareConfig()
+        {
+            if (SupportsHardwareRefresh)
+            {
+                _monitor!.RefreshHardwareConfig();
+            }
+        }
 
-        public static int DetectedGpuCount => HardwareMonitor.TryGetDetectedGpuCount();
+        internal static async Task<HardwareSelectionOptions> GetSelectionOptionsAsync(
+            CancellationToken cancellationToken = default)
+        {
+            IHardwareClient? client = _client;
+            if (client is null) return HardwareSelectionOptions.Empty();
+
+            if (_hostRequested)
+            {
+                HardwareCatalog catalog = await client.GetCatalogAsync(cancellationToken).ConfigureAwait(false);
+                return HardwareSelectionOptions.FromCatalog(catalog, hostLimited: true);
+            }
+
+            HardwareMonitor? monitor = _monitor;
+            if (monitor is null) return HardwareSelectionOptions.Empty();
+
+            return await Task.Run(() => new HardwareSelectionOptions(
+                Disks: HardwareMonitor.ListAllDiskOptions(),
+                Networks: HardwareMonitor.ListAllNetworks(),
+                Gpus: HardwareMonitor.ListAllGpuOptions(),
+                Fans: HardwareMonitor.ListAllFans(),
+                MoboTemperatures: HardwareMonitor.ListAllMoboTemps(),
+                CpuVoltageCandidates: HardwareMonitor.ListCpuVoltageCandidates(),
+                IsHostLimited: false), cancellationToken).ConfigureAwait(false);
+        }
+
+        public static int DetectedGpuCount
+        {
+            get
+            {
+                IHardwareClient? client = _client;
+                if (client is not null)
+                {
+                    try
+                    {
+                        int count = new HardwareSnapshotValueIndex(client.GetLatestSnapshot()).GpuCount;
+                        if (count > 0) return count;
+                    }
+                    catch
+                    {
+                        // Fall through to the process-local compatibility source, if present.
+                    }
+                }
+
+                return _monitor is null ? 0 : HardwareMonitor.TryGetDetectedGpuCount();
+            }
+        }
 
         public static DiskProbePolicy? DiskProbePolicy => _monitor?.DiskProbePolicy;
 

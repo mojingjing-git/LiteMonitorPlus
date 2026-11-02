@@ -231,11 +231,21 @@ public sealed class UpdaterIntegrityTests : IDisposable
     [Fact]
     public void TooManyEntriesIsRejectedAndTemporaryDirectoryIsCleaned()
     {
-        int entryCount = ZipExpansionLimits.MaxEntryCount + 1;
-        CreateZipWithManyEntries(entryCount);
+        AssertEntryLimit(4, new UpdaterRunOptions { RestartMain = false, WaitForMainExit = false, MaxZipEntryCount = 3 });
+    }
+
+    [Fact]
+    public void ProductionSizedEntryLimitIsRejectedAndTemporaryDirectoryIsCleaned()
+    {
+        AssertEntryLimit(ZipExpansionLimits.MaxEntryCount + 1, TestOptions);
+    }
+
+    private void AssertEntryLimit(int count, UpdaterRunOptions options)
+    {
+        CreateZipWithManyEntries(count);
         string expectedDigest = Sha256OfFile(_zipPath);
 
-        int exitCode = Program.RunUpdate(_zipPath, expectedDigest, _resourcesDir, TestOptions);
+        int exitCode = Program.RunUpdate(_zipPath, expectedDigest, _resourcesDir, options);
 
         Assert.Equal(Program.ExitUpdateFailed, exitCode);
         Assert.Empty(Directory.GetFiles(_installDir, "file*.txt", SearchOption.AllDirectories));
@@ -243,6 +253,19 @@ public sealed class UpdaterIntegrityTests : IDisposable
         AssertNoInProgressMarker();
         Assert.False(File.Exists(Path.Combine(_installDir, "update_success")));
         Assert.Contains("条目数超限", ReadErrorLog());
+    }
+
+    [Fact]
+    public void SmallSingleEntryExpansionIsRejectedAndTemporaryDirectoryIsCleaned()
+    {
+        CreateZip(("bomb.bin", new string('x', 4096)));
+        var options = new UpdaterRunOptions { RestartMain = false, WaitForMainExit = false, MaxSingleEntryBytes = 1024 };
+        int exitCode = Program.RunUpdate(_zipPath, Sha256OfFile(_zipPath), _resourcesDir, options);
+        Assert.Equal(Program.ExitUpdateFailed, exitCode);
+        Assert.False(File.Exists(Path.Combine(_installDir, "bomb.bin")));
+        AssertNoTemporaryDirectory();
+        AssertNoInProgressMarker();
+        Assert.Contains("超过上限", ReadErrorLog());
     }
 
     [Fact]

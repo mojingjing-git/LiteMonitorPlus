@@ -257,7 +257,7 @@
     "Taskbar": "Трей",
     "MainForm": "Окно",
     "OnlyShowEnabled": "Только вкл",
-    "MonitorItemTip": "Прим: Пробел в Имя/Сокр скрывает метку. Пустое имя сбрасывает. Единицы подд. {u}+символ.",
+    "MonitorItemTip": "Имя/сокращение: пробел скрывает, пустое поле сбрасывает. Единицы: Auto, Hidden или Custom; поддерживается {u}.",
     "__Comment_Page4__": "--- 4. Thresholds ---",
     "Thresholds": "Пороги",
     "ThresholdsTips": "Цвет шкалы по порогу",

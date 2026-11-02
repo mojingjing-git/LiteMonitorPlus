@@ -40,12 +40,12 @@ namespace LiteMonitor.Tests
             Assert.True(
                 CallOffsetOf(body, typeof(UIController), "StopLiveGlassForHandleRecreate") >= 0,
                 "MainForm.OnHandleDestroyed 必须调用 UIController.StopLiveGlassForHandleRecreate（临时停机）—— "
-                + "句柄销毁只停服务、保留配置态开关，重建完成后才按配置恢复（LM-072）。");
+                + "句柄销毁只停服务、保留配置态开关，重建完成后才按配置恢复。");
 
             Assert.True(
                 CallOffsetOf(body, typeof(UIController), "StopLiveGlass") < 0,
                 "MainForm.OnHandleDestroyed 不得调用 UIController.StopLiveGlass（整停）—— "
-                + "整停会把配置态的实时玻璃开关清成 false，重建后永远恢复不了（LM-072）。");
+                + "整停会把配置态的实时玻璃开关清成 false，重建后永远恢复不了。");
         }
 
         /// <summary>
@@ -60,7 +60,7 @@ namespace LiteMonitor.Tests
             Assert.True(
                 CallOffsetOf(body, typeof(UIController), "StopLiveGlass") >= 0,
                 "MainForm.OnFormClosed 是真关闭，必须调用 UIController.StopLiveGlass（整停）—— "
-                + "退出时既停捕获、也把配置态开关清掉（LM-072）。");
+                + "退出时既停捕获、也把配置态开关清掉。");
         }
 
         /// <summary>
@@ -77,7 +77,7 @@ namespace LiteMonitor.Tests
             Assert.True(
                 restoreAt >= 0,
                 "UIController.CompleteLegacyTransition 必须调用 LiveGlassController.RestoreIfEnabled —— "
-                + "受控重建期间捕获服务被临时停机，重建完成（步 6–9）后必须按配置拉回来（LM-072）。");
+                + "受控重建期间捕获服务被临时停机，重建完成（步 6–9）后必须按配置拉回来。");
 
             int publishAt = CallOffsetOf(body, typeof(RenderingTransitionCoordinator), "PublishStable");
             Assert.True(
@@ -87,12 +87,12 @@ namespace LiteMonitor.Tests
             Assert.True(
                 restoreAt > publishAt,
                 "恢复调用必须位于步 6–9 的**收尾处**（步 9 发布稳定状态之后）—— "
-                + "句柄尚未就绪时恢复只会拿到不完整的捕获请求（LM-072）。");
+                + "句柄尚未就绪时恢复只会拿到不完整的捕获请求。");
 
             int configAt = CallOffsetOf(body, typeof(Settings), "get_LiveGlassEnabled");
             Assert.True(
                 configAt >= 0 && configAt < restoreAt,
-                "恢复必须按 _cfg.LiveGlassEnabled 判定（LM-072）—— "
+                "恢复必须按 _cfg.LiveGlassEnabled 判定—— "
                 + "找不到 Settings.LiveGlassEnabled 的读取点，或它出现在恢复调用之后。");
         }
 
@@ -116,7 +116,7 @@ namespace LiteMonitor.Tests
             Assert.True(
                 stopGpuAt < completeAt,
                 "步 3 必须先停 GPU 宿主，步 6–9 才恢复实时玻璃 —— "
-                + "两个捕获所有者并存会重复抓屏、击穿 CPU 预算（合同 §13.2，LM-072）。");
+                + "两个捕获所有者并存会重复抓屏、击穿 CPU 预算（合同 §13.2，）。");
         }
 
         /// <summary>
@@ -146,11 +146,11 @@ namespace LiteMonitor.Tests
                 handleFailedAt >= 0,
                 "UIController.RunGpuToLegacyTransition 的重建失败分支必须调用 "
                 + "LiveGlassController.HandleRecreateFailed —— 否则状态行会一直承诺"
-                + "『重建完成后自动恢复』，而重建已经失败了，承诺永远兑现不了（LM-095）。");
+                + "『重建完成后自动恢复』，而重建已经失败了，承诺永远兑现不了。");
 
             Assert.True(
                 failAt < handleFailedAt,
-                "失败收尾必须发生在失败判定之后 —— 先判失败、再按『句柄是否还在』如实收尾（LM-095）。");
+                "失败收尾必须发生在失败判定之后 —— 先判失败、再按『句柄是否还在』如实收尾。");
 
             // 关闭流程拥有最高优先级：关闭过程中不得把捕获服务拉回来（合同 §4 全局约束 / U10）。
             int closingAt = CallOffsetOf(body, typeof(MainForm), "get_IsClosing");

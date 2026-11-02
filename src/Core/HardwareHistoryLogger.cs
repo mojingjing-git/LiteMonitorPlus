@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using LiteMonitor.Contracts;
+using LiteMonitor.Core;
 using LiteMonitor.src.Core.Trends;
 
 namespace LiteMonitor.src.Core
@@ -187,6 +188,17 @@ namespace LiteMonitor.src.Core
                 _lastSaveTime = now;
                 SaveAsync();
             }
+        }
+
+        /// <summary>
+        /// Records values from one already published snapshot. History accepts only Good samples;
+        /// stale values remain visible to UI, but are not accumulated as fresh history points.
+        /// </summary>
+        internal static void RecordSnapshot(Settings cfg, HardwareSnapshotValueIndex snapshot)
+        {
+            ArgumentNullException.ThrowIfNull(snapshot);
+            RecordSnapshot(cfg, key =>
+                snapshot.TryGetGoodValue(key, out float value) ? value : null);
         }
 
         public static List<HardwareHistoryPoint> GetPoints(DateTime from)

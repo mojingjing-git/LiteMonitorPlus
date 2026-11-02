@@ -7,6 +7,7 @@
     "material": "cyber_punk",
     "parameters": {
       "liveBackground": false,
+      "visualPreset": "nixieBrass",
       "primaryCut": 10,
       "secondaryCut": 6,
       "outlineWidth": 1,
@@ -28,7 +29,7 @@
       "background": "#120E0B",
       "panelBackground": "#1F1712",
       "border": "#8A6538",
-      "text": "#FFA028",
+      "text": "#FFD6A0",
       "mutedText": "#B88652",
       "accent": "#FF5900"
     }
@@ -66,11 +67,11 @@
     "groupBackground": "#1F1712",
     "border": "#8A6538",
     "shadow": "rgba(255,160,40,0.30)",
-    "textTitle": "#FF5900",
+    "textTitle": "#FF7A10",
     "textGroup": "#B88652",
-    "textPrimary": "#FFA028",
+    "textPrimary": "#FFD6A0",
     "textSecondary": "#8A6538",
-    "valueSafe": "#FFA028",
+    "valueSafe": "#FFD6A0",
     "valueWarn": "#FF5900",
     "valueCrit": "#FF2200",
     "barBackground": "#18120D",

@@ -92,7 +92,7 @@ public sealed class CapturePolicyCleanupRegistrationTests
             + "登记进 ledger —— 护栏前提被破坏。");
         Assert.True(
             handoffReadAt < addAt,
-            "兜底路径必须先取 LastCapturePolicyCleanup 再登记进 ledger（LM-093）。");
+            "兜底路径必须先取 LastCapturePolicyCleanup 再登记进 ledger。");
 
         // ── 行为：双路登记的是**同一实例** ⇒ 第二次是幂等 ⇒ 告警通道干净。
         CapturePolicyCleanupLedger ledger = CreateLedger();

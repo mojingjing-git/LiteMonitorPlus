@@ -146,7 +146,7 @@ public sealed class DerivedThemeRuntimeFontTests
         Assert.True(refreshOffset >= 0, "UIController.ApplyTheme 里找不到派生回退主题的重算点。");
         Assert.True(
             disposeOffset > refreshOffset,
-            "旧主题的字体必须在派生回退主题重算**之后**才释放（LM-071）—— " +
+            "旧主题的字体必须在派生回退主题重算**之后**才释放—— " +
             $"否则派生主题仍引用着已被释放的字体（悬垂引用）。当前 dispose@{disposeOffset} / refresh@{refreshOffset}。");
     }
 
@@ -171,7 +171,7 @@ public sealed class DerivedThemeRuntimeFontTests
 
             Assert.False(
                 called.Name is "BuildFonts" or "Scale" or "DisposeFonts",
-                "派生主题**不得**自己 BuildFonts()/Scale()/DisposeFonts()（LM-071）：" +
+                "派生主题**不得**自己 BuildFonts/Scale/DisposeFonts：" +
                 $"BuildDerivedTheme 里出现了对 {called.Name} 的调用。" +
                 "BuildFonts()/Scale() 会二次缩放（且纯 CLR 的协调器拿不到 dpi×user 系数），" +
                 "DisposeFonts() 会释放源主题的字体（共享实例 ⇒ 悬垂引用）。");

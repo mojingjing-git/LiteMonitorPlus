@@ -133,9 +133,10 @@ public sealed class MinimalHardwareSampler : IDisposable
         IHardware? cpu = _computer!.Hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Cpu);
         if (cpu != null)
         {
-            AddSample(samples, "CPU.Load", FirstSensor(cpu, SensorType.Load, "CPU Total"));
-            AddSample(samples, "CPU.Temp", MaxSensor(cpu, SensorType.Temperature));
-            AddSample(samples, "CPU.Clock", MaxSensor(cpu, SensorType.Clock));
+            string stableId = cpu.Identifier.ToString();
+            AddSample(samples, "CPU.Load", FirstSensor(cpu, SensorType.Load, "CPU Total"), stableId);
+            AddSample(samples, "CPU.Temp", MaxSensor(cpu, SensorType.Temperature), stableId);
+            AddSample(samples, "CPU.Clock", MaxSensor(cpu, SensorType.Clock), stableId);
         }
         else
         {
@@ -155,34 +156,35 @@ public sealed class MinimalHardwareSampler : IDisposable
         for (int i = 0; i < gpus.Count; i++)
         {
             string prefix = $"GPU.{i}.";
-            AddSample(samples, prefix + "Load", FirstSensor(gpus[i], SensorType.Load, "GPU Core"));
-            AddSample(samples, prefix + "Temp", MaxSensor(gpus[i], SensorType.Temperature));
-            AddSample(samples, prefix + "Fan", MaxSensor(gpus[i], SensorType.Fan));
+            string stableId = gpus[i].Identifier.ToString();
+            AddSample(samples, prefix + "Load", FirstSensor(gpus[i], SensorType.Load, "GPU Core"), stableId);
+            AddSample(samples, prefix + "Temp", MaxSensor(gpus[i], SensorType.Temperature), stableId);
+            AddSample(samples, prefix + "Fan", MaxSensor(gpus[i], SensorType.Fan), stableId);
             if (i == 0)
             {
                 // i=0 别名与生产 Key 兼容（生产公开 Key "GPU.Load" 恒指首卡，Plan A §4）。
-                AddSample(samples, "GPU.Load", FirstSensor(gpus[i], SensorType.Load, "GPU Core"));
-                AddSample(samples, "GPU.Temp", MaxSensor(gpus[i], SensorType.Temperature));
-                AddSample(samples, "GPU.Fan", MaxSensor(gpus[i], SensorType.Fan));
+                AddSample(samples, "GPU.Load", FirstSensor(gpus[i], SensorType.Load, "GPU Core"), stableId);
+                AddSample(samples, "GPU.Temp", MaxSensor(gpus[i], SensorType.Temperature), stableId);
+                AddSample(samples, "GPU.Fan", MaxSensor(gpus[i], SensorType.Fan), stableId);
             }
         }
     }
 
-    private static void AddSample(List<MetricSample> samples, string key, ISensor? sensor)
+    private static void AddSample(List<MetricSample> samples, string key, ISensor? sensor, string? stableDeviceId)
     {
         if (sensor?.Value.HasValue == true)
         {
             float v = sensor.Value.Value;
-            samples.Add(new MetricSample(key, null, v, null, SampleQuality.Good, null, 0));
+            samples.Add(new MetricSample(key, stableDeviceId, v, null, SampleQuality.Good, null, 0));
         }
         else
         {
-            AddMissing(samples, key);
+            AddMissing(samples, key, stableDeviceId);
         }
     }
 
-    private static void AddMissing(List<MetricSample> samples, string key) =>
-        samples.Add(new MetricSample(key, null, null, null, SampleQuality.Missing, "no-sensor", 0));
+    private static void AddMissing(List<MetricSample> samples, string key, string? stableDeviceId = null) =>
+        samples.Add(new MetricSample(key, stableDeviceId, null, null, SampleQuality.Missing, "no-sensor", 0));
 
     private static ISensor? FirstSensor(IHardware hw, SensorType type, string name) =>
         hw.Sensors.FirstOrDefault(s => s.SensorType == type && s.Name == name)

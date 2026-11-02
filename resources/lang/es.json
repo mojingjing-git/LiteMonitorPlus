@@ -257,7 +257,7 @@
     "Taskbar": "Tray",
     "MainForm": "Panel",
     "OnlyShowEnabled": "Solo activados",
-    "MonitorItemTip": "Tip: Espacio en Nombre/Corto oculta etiqueta. Vacío restaura. Unidades: {u}+car.",
+    "MonitorItemTip": "Nombre/abreviatura: un espacio oculta; vacío restablece. Unidades: Auto, Hidden o Custom; admite {u}.",
     "__Comment_Page4__": "--- 4. Umbrales ---",
     "Thresholds": "Umbrales",
     "ThresholdsTips": "Color barra según umbral",

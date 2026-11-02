@@ -3,7 +3,7 @@
   <!--
     LiteMonitor++ M2 合同「源码级门槛」自证探针。
 
-    覆盖 M2 合同 §9（docs/superpowers/plans/2026-10-20-appearance-m2-contract.md）中
+    覆盖实时背景帧合同（docs/architecture/background-frame.md）中
     两条**与捕获后端实现完全无关**的门槛：
       · 门槛 #7 —— 绘制路径无捕获调用（源码扫描，剔除注释后匹配抓屏 API）
       · 门槛 #10 —— 无新增 NuGet 依赖（*.csproj 扫描）

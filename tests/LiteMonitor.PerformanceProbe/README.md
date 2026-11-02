@@ -1,6 +1,6 @@
 # LiteMonitor++ 性能探针
 
-本目录是 LiteMonitor++ 性能改造计划（`docs/superpowers/plans/2026-10-20-performance-sampling-hardening.md`）
+本目录是 LiteMonitor++ 性能采样硬化工程
 的**可复跑测量工具**。Task 0 用它建立"实施前基线"，Task 2/6 用同一个探针复测"实施后"结果。
 
 探针**不修改任何生产代码**，只引用主项目与已有的 `LibreHardwareMonitorLib`，不新增任何 NuGet 包、

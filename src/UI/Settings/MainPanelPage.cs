@@ -368,7 +368,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             // A. Header with Action Button
             group.AddButton(LanguageManager.T("Menu.WebServerTip"), LanguageManager.T("Menu.OpenWeb"), () => 
             {
-                Core.Actions.WebActions.OpenWebMonitor(Config);
+                OpenRunningWebMonitor();
             });
 
             // B. Settings
@@ -503,8 +503,10 @@ namespace LiteMonitor.src.UI.SettingsPage
             // C. API Link
             //   ★ 旧的 "…/api/snapshot?pwd=123456" 链接已移除（契约 W13：口令不得进 URL）。
             //     网页版现在走「登录 → 主会话 Cookie → 一次性票据」的协议。
-            group.AddLink(isChinese ? "网页版入口（需登录）" : "Web page (sign-in required)",
-                isChinese ? "http://<本机地址>:<端口>/" : "http://<host>:<port>/",
+            group.AddButton(isChinese ? "复制本机访问地址" : "Copy local access address",
+                isChinese ? "复制地址" : "Copy address", CopyRunningWebAddress);
+            group.AddLink(isChinese ? "连接故障排查" : "Connection troubleshooting",
+                isChinese ? "打开防火墙设置与连接指引" : "Open firewall settings and connection guide",
                 () => ShowFirewallHelp(isChinese));
 
             AddGroupToPage(group);
@@ -529,6 +531,31 @@ namespace LiteMonitor.src.UI.SettingsPage
             bool running = server != null && server.IsRunning;
             IPEndPoint? endpoint = server != null && server.IsRunning ? server.CurrentListenEndpoint : null;
             return AppActions.DescribeListenAddress(endpoint, running, Config.WebServerPort, isChinese);
+        }
+
+        private string? RunningWebAddress()
+        {
+            var server = LiteWebServer.Instance;
+            if (server?.IsRunning == true && server.CurrentRunningPort > 0)
+                return $"http://127.0.0.1:{server.CurrentRunningPort}/";
+            MessageBox.Show(FindForm(), GetText("网页版尚未启动。请先启用网页版并应用设置。", "The web monitor is not running. Enable it and apply settings first."), "LiteMonitor++", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return null;
+        }
+
+        private void OpenRunningWebMonitor()
+        {
+            string? address = RunningWebAddress();
+            if (address == null) return;
+            try { Process.Start(new ProcessStartInfo(address) { UseShellExecute = true }); }
+            catch (Exception ex) { MessageBox.Show(FindForm(), ex.Message, "LiteMonitor++"); }
+        }
+
+        private void CopyRunningWebAddress()
+        {
+            string? address = RunningWebAddress();
+            if (address == null) return;
+            try { Clipboard.SetText(address); MessageBox.Show(FindForm(), GetText("已复制本机访问地址。", "Local access address copied."), "LiteMonitor++"); }
+            catch (Exception ex) { MessageBox.Show(FindForm(), ex.Message, "LiteMonitor++"); }
         }
 
         private void ShowFirewallHelp(bool isChinese)

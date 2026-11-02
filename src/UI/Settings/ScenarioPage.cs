@@ -23,6 +23,11 @@ namespace LiteMonitor.src.UI.SettingsPage
         private readonly ScenarioService _service = new();
 
         public Func<ScenarioProfile, string?>? ApplyHandler { get; set; }
+        public void ReportApplication(string message, bool failed)
+        {
+            _status.Text = message;
+            _status.ForeColor = failed ? Color.Firebrick : Color.DimGray;
+        }
 
         public ScenarioPage()
         {
@@ -48,6 +53,8 @@ namespace LiteMonitor.src.UI.SettingsPage
             var create = MakeButton("New", 76);
             var preview = MakeButton("Preview", 86);
             _apply = MakeButton("Apply", 76);
+            _apply.Text = (LanguageManager.CurrentLang ?? "").StartsWith("zh", StringComparison.OrdinalIgnoreCase) ? "立即应用" : "Apply now";
+            _apply.Width = 92;
             _rename = MakeButton("Rename", 84);
             _delete = MakeButton("Delete", 80);
             refresh.Click += (_, _) => Reload();
@@ -184,6 +191,7 @@ namespace LiteMonitor.src.UI.SettingsPage
             var profile = Selected;
             if (profile == null || ApplyHandler == null) return;
             string? error = ApplyHandler(profile);
+            if (IsDisposed) return;
             if (error == null)
             {
                 Reload();

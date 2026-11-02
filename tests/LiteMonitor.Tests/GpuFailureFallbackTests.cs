@@ -389,7 +389,7 @@ public sealed class GpuFailureFallbackTests
         Assert.True(
             CallsOn(method, "RecordBindingState", typeof(RenderingTransitionCoordinator)),
             "故障调度入口必须把**本代次**的 HWND 呈现历史写进协调器 —— " +
-            "是否受控重建 HWND 的判据只读这一份历史（计划 §4.1 :123-126）。");
+            "是否受控重建 HWND 的判据只读这一份历史。");
     }
 
     [Fact]
@@ -510,7 +510,7 @@ public sealed class GpuFailureFallbackTests
             "只做 Invalidate 不会走完整的 legacy 转换流程，也不按呈现历史决定是否重建 HWND。");
         Assert.False(
             Calls(method, "Invalidate"),
-            "启动失败**不得**再只补一次 Invalidate（R02 缺陷的原始写法）。");
+            "启动失败**不得**再只补一次 Invalidate。");
     }
 
     [Fact]
@@ -521,7 +521,7 @@ public sealed class GpuFailureFallbackTests
         Assert.True(
             Calls(method, "RequiresControlledRecreate"),
             "UIController 的重建判据必须转发给协调器 —— " +
-            "两条路径各写一份判据必然漂移（R02 的对称性要求）。");
+            "两条路径各写一份判据必然漂移。");
     }
 
     [Fact]
@@ -540,7 +540,7 @@ public sealed class GpuFailureFallbackTests
             Assert.False(
                 Calls(method, forbidden),
                 "宿主的故障路径**不得**自己做窗口操作 —— " +
-                "它可能在 GPU 帧绘制栈内被调用（计划 §4.3 :169）。");
+                "它可能在 GPU 帧绘制栈内被调用。");
         }
     }
 
