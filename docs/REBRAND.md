@@ -1,8 +1,6 @@
 # LiteMonitor++ 重品牌化与合规手册
 
-> 本文档是 `docs/superpowers/plans/2026-10-20-rebrand-compliance.md` 的**落地版速查手册**：
-> 记录最终定案的品牌名、三张替换映射表、替换执行规则、发布打包流程与发布前 checklist。
-> 计划文档记录「为什么这么做」，本文档记录「现在是什么、怎么做」。
+> 本文档是品牌与发布合规的速查手册：记录定案的品牌名、三张映射表、替换执行规则、发布打包流程与发布前检查清单。
 
 ---
 
@@ -21,8 +19,7 @@
 - 但 **GitHub 仓库名与 URL 不允许 `+`**（已实测全站 0 个含 `+` 的仓库），所以仓库用 `LiteMonitorPlus`；
 - 已有 `Codex++` / `Notepad++` 这类后缀式命名的先例，**`+` 不构成商标侵权**。
 
-**命名空间 `LiteMonitor` 刻意不改**：89/89 个 `.cs` 文件都要动，改完永久失去与上游 merge 的能力，
-而收益只有崩溃堆栈里的一个字符串；品牌带 `Lite` 前缀后，命名空间反而与品牌自洽。
+**命名空间 `LiteMonitor` 刻意不改**：改动会波及全部源文件并使与上游的合并能力丧失，收益只有崩溃堆栈里的一个字符串；品牌带 `Lite` 前缀后，命名空间与品牌自洽。
 
 ---
 
@@ -33,19 +30,19 @@
 | A1 | 语言包标题（9 个） | `⚡️LiteMonitor` | `⚡️LiteMonitor++` | `resources/lang/*.json:2` |
 | A2 | 关于菜单（中） | `关于 LiteMonitor` | `关于 LiteMonitor++` | `resources/lang/zh.json` |
 | A3 | 关于菜单（繁） | `關於 LiteMonitor` | `關於 LiteMonitor++` | `resources/lang/zh-tw.json` |
-| A4 | 关于窗口标题 | `⚡️LiteMonitor` | `⚡️LiteMonitor++` | `src/UI/AboutForm.cs:46` |
-| A5 | 关于窗口「官网」 | `LiteMonitor.cn` | `上游项目: litemonitor.cn` | `src/UI/AboutForm.cs:82,93`（**上游链接按致谢义务保留**） |
-| A6 | 关于窗口 GitHub | `github.com/Diorser/LiteMonitor` | `github.com/mojingjing-git/LiteMonitorPlus` | `src/UI/AboutForm.cs:104,115,140` |
+| A4 | 关于窗口标题 | `⚡️LiteMonitor` | `⚡️LiteMonitor++` | `src/UI/AboutForm.cs` |
+| A5 | 关于窗口「官网」 | `LiteMonitor.cn` | `上游项目: litemonitor.cn` | `src/UI/AboutForm.cs`（**上游链接按致谢义务保留**） |
+| A6 | 关于窗口 GitHub | `github.com/Diorser/LiteMonitor` | `github.com/mojingjing-git/LiteMonitorPlus` | `src/UI/AboutForm.cs` |
 | A7 | 托盘提示 | `LiteMonitor` | `LiteMonitor++` | `src/UI/Helpers/MainFormBizHelper.cs` |
 | A8 | 更新弹窗标题（托盘） | `⚡️LiteMonitor_v` | `⚡️LiteMonitor++_v` | `src/UI/Helpers/MainFormBizHelper.cs` |
-| A9 | 设置引导框 | `LiteMonitor Setup` | `LiteMonitor++ Setup` | `src/UI/Helpers/MenuMonitorHelper.cs:54` |
-| A10 | 设置窗消息框 | `LiteMonitor` | `LiteMonitor++` | `src/UI/SettingsForm.cs:236` |
-| A11 | 菜单消息框 | `LiteMonitor` | `LiteMonitor++` | `src/UI/MenuManager.cs:134` |
-| A12 | 任务栏设置消息框 | `LiteMonitor` | `LiteMonitor++` | `src/UI/Settings/TaskbarPage.cs:253` |
-| A13 | 硬件详情窗标题 | `LiteMonitor - Hardware Info` | `LiteMonitor++ - Hardware Info` | `src/UI/HardwareInfoForm.cs:26` |
-| A14 | 主题编辑器标题 | `LiteMonitor Theme Editor` | `LiteMonitor++ Theme Editor` | `src/ThemeEditor/ThemeEditorForm.cs:42` |
-| A15 | Web 页面标题 | `LiteMonitor WebServer` | `LiteMonitor++ WebServer` | `src/System/WebServer/WebPageContent.cs:31` |
-| A16 | 更新对话框标题 | `⚡️LiteMonitor - ` | `⚡️LiteMonitor++ - ` | `src/UI/UpdateDialog.cs:51` |
+| A9 | 设置引导框 | `LiteMonitor Setup` | `LiteMonitor++ Setup` | `src/UI/Helpers/MenuMonitorHelper.cs` |
+| A10 | 设置窗消息框 | `LiteMonitor` | `LiteMonitor++` | `src/UI/SettingsForm.cs` |
+| A11 | 菜单消息框 | `LiteMonitor` | `LiteMonitor++` | `src/UI/MenuManager.cs` |
+| A12 | 任务栏设置消息框 | `LiteMonitor` | `LiteMonitor++` | `src/UI/Settings/TaskbarPage.cs` |
+| A13 | 硬件详情窗标题 | `LiteMonitor - Hardware Info` | `LiteMonitor++ - Hardware Info` | `src/UI/HardwareInfoForm.cs` |
+| A14 | 主题编辑器标题 | `LiteMonitor Theme Editor` | `LiteMonitor++ Theme Editor` | `src/ThemeEditor/ThemeEditorForm.cs` |
+| A15 | Web 页面标题 | `LiteMonitor WebServer` | `LiteMonitor++ WebServer` | `src/System/WebServer/WebPageContent.cs` |
+| A16 | 更新对话框标题 | `⚡️LiteMonitor - ` | `⚡️LiteMonitor++ - ` | `src/UI/UpdateDialog.cs` |
 | A17 | 更新对话框 UA | `LiteMonitor-Updater/1.0` | `LiteMonitor++-Updater/1.0` | `src/UI/UpdateDialog.cs` |
 | A18 | 插件作者字段（12 个） | `"author": "LiteMonitor"` | `"author": "LiteMonitor++"` | `resources/plugins/*.json` |
 
@@ -72,27 +69,18 @@
 | B15 | FPS 本地落地路径 | `resources/LiteMonitorFPS.exe` | `resources/LiteMonitorPlusFPS.exe` | `DriverInstaller.cs` |
 | B16 | FPS 解压条目匹配 | `LiteMonitorFPS.exe` | `LiteMonitorPlusFPS.exe` | ⚠️ **不改则组件装不上** —— 详见下方「已修的坑」 |
 | B17 | FPS 进程名 | `LiteMonitorFPS` | `LiteMonitorPlusFPS` | 进程名 = 文件名去扩展名 |
-| B18 | FPS 组件路径 | `LiteMonitorFPS.exe` | `LiteMonitorPlusFPS.exe` | `FpsCounter.cs:88` |
+| B18 | FPS 组件路径 | `LiteMonitorFPS.exe` | `LiteMonitorPlusFPS.exe` | `FpsCounter.cs` |
 | B19 | User-Agent（插件） | `LiteMonitor/1.0` | `LiteMonitor++/1.0` | `PluginExecutor.cs` / `CryptoNative.cs` / `CityCodeResolver.cs` |
 | B20 | 发布包名 | `LiteMonitor_v{0}-win-x64.zip` | `LiteMonitorPlus_v{0}-win-x64.zip` | ⚠️ **必须与 `scripts/pack-release.ps1` 实际产物名一致** |
 | B21 | 版本号 | `1.3.6` | `1.0.0` | `LiteMonitor.csproj` / `resources/version.json` |
 
-### 已修的坑：驱动包里的 FPS 条目名
+### 约束：驱动包内的 FPS 条目名
 
-改名时漏了一处 **`resources/assets/driver.zip` 内部**的条目名 —— 包内仍是上游旧名
-`LiteMonitorFPS.exe`，而代码自 B16 起只认 `LiteMonitorPlusFPS.exe`，
-结果「安装驱动包」这条路径下 FPS 组件实际装不上。
+`resources/assets/driver.zip` 内部的条目名必须与代码识别的一致，即 `LiteMonitorPlusFPS.exe`；
+条目名不一致会导致「安装驱动包」这条路径下 FPS 组件装不上。
 
-修复方式：**只改条目名，不动二进制**。包内两个条目的 SHA256 与仓库中同名资产逐一相同：
-
-```
-LiteMonitorPlusFPS.exe  ee4eba300a521b16291b7ace14d95efb9fa149b0ef1d31b15df4ee345c4e002b
-PawnIO_setup.exe        1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032
-```
-
-重建后 `driver.zip` 的 SHA256 变为
-`343afd65b9d9ef4d6189d3b579487a6140cd2f4c2812d44aaa42464b5173c295`，
-已同步写入 `DriverInstaller.cs` 的 `DriverPackageSha256` 常量。
+重打包只改条目名，不动二进制内容——包内条目的 SHA256 必须与仓库中同名资产逐一相同。
+`driver.zip` 自身的 SHA256 变化后必须同步写入 `DriverInstaller.cs` 的 `DriverPackageSha256` 常量。
 
 ---
 
@@ -103,11 +91,10 @@ PawnIO_setup.exe        1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a
 | `LICENSE` | `Copyright (c) 2025 Diorser` | **MIT 强制义务** |
 | `NOTICE` | 上游仓库链接 `https://github.com/Diorser/LiteMonitor` | 致谢义务 |
 | `README.md` / `README.en.md` 致谢段 | 上游链接与原作者名 | 致谢义务 |
-| `src/UI/AboutForm.cs:20-23` | `© 2025 Diorser / LiteMonitor Project` | **双份版权的其中一份** |
-| `src/UI/AboutForm.cs:84,95` | `litemonitor.cn` 致谢链接 | 致谢义务 |
-| `docs/superpowers/plans/*.md` | 计划文档中的历史引用 | 变更记录 |
-| `src/Plugins/PluginMarket.cs:67` | `raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins` | 已是自有仓库，仅需核对 |
-| `src/System/AutoStart.cs:16` | `LegacyTaskName = "LiteMonitor_AutoStart"` | 旧任务清理逻辑要靠它识别 |
+| `src/UI/AboutForm.cs` | `© 2025 Diorser / LiteMonitor Project` | **双份版权的其中一份** |
+| `src/UI/AboutForm.cs` | `litemonitor.cn` 致谢链接 | 致谢义务 |
+| `src/Plugins/PluginMarket.cs` | `raw.githubusercontent.com/mojingjing-git/awesome-litemonitor-plugins` | 已是自有仓库，仅需核对 |
+| `src/System/AutoStart.cs` | `LegacyTaskName = "LiteMonitor_AutoStart"` | 旧任务清理逻辑要靠它识别 |
 
 > **判据**：凡是指向**上游网络端点**的（更新源 / 驱动源 / 城市库 / 行情接口）必须解除；
 > 凡是**署名与出处**的必须保留。二进制审计的判据是前者，不是后者。
@@ -150,12 +137,11 @@ git grep -n -E 'https?://' -- '*.cs' '*.json' | Select-String -NotMatch '^\s*doc
 ### 4.3 排除清单（替换时必须跳过）
 
 ```
-docs/superpowers/plans/**          # 计划文档，历史引用即变更记录
 LICENSE  NOTICE                    # MIT 署名义务
 resources/plugins/*.json           # 插件的 author 已改，但插件内部 URL 需逐条核对
-src/Plugins/PluginMarket.cs:67     # 已是自有仓库
-src/System/AutoStart.cs:16        # LegacyTaskName
-src/UI/AboutForm.cs:20-23,84,95   # 双份版权 + 上游致谢链接
+src/Plugins/PluginMarket.cs     # 已是自有仓库
+src/System/AutoStart.cs        # LegacyTaskName
+src/UI/AboutForm.cs   # 双份版权 + 上游致谢链接
 ```
 
 ---
@@ -181,7 +167,7 @@ pwsh -File scripts/pack-release.ps1 -Version 1.0.0
    - `LiteMonitor.csproj` 的 `<Version>` vs `-Version`
    - `resources/version.json` 的 `version` vs `-Version`
 2. **先发 Updater**（单文件 / 框架依赖），刷新仓库内 `resources\LiteMonitor++.Updater.exe`，
-   再发主程序 —— 主程序的 `Content` 引用的是仓库里那份，顺序反了会把旧版打进包。
+   再发主程序 —— 主程序的 `Content` 引用的是仓库里那份，顺序反了会把过期版本打进包。
 3. **平铺运行时资源**到 `resources/`：`driver.zip` / `LiteMonitorPlusFPS.exe` / `CityCode.json`。
 4. **删除 `resources/assets/`**：csproj 会把 `CityCode.json` 复制进去，与平铺副本重复。
 5. **打入 LICENSE / NOTICE**（MIT 分发义务，每个分发副本都必须带）。
@@ -198,7 +184,7 @@ resources/
   driver.zip                      驱动包（含 PawnIO 安装包 + FPS 组件）
   LiteMonitorPlusFPS.exe          FPS 帧率统计组件
   CityCode.json                   离线城市库
-  lang/ (9)  themes/ (10)  plugins/ (12)
+  lang/ (9)  themes/ (20)  plugins/ (13)
 使用说明(必读).txt
 LICENSE  NOTICE
 ```
@@ -236,7 +222,7 @@ pwsh -File scripts/make-icon.ps1
 
 1. 确认 `LiteMonitor.csproj` 的 `<Version>`、`resources/version.json` 的 `version`、
    `-Version` 参数**三处一致**；
-2. 确认 `resources/version.json` 的 `changelog` / `releaseDate` 写的是**本次**的变更；
+2. 确认 `resources/version.json` 的 `releaseDate` 写的是**当前发布**的发布日期；
 3. 跑 `pwsh -File scripts/pack-release.ps1 -Version <版本>`，确认脚本的自检全过；
 4. 检查产物名是 `LiteMonitorPlus_v<版本>-win-x64.zip`（**与 `UpdateChecker` 模板严格一致**）；
 5. 确认包内含 `LICENSE` 与 `NOTICE`（MIT 强制义务，**最容易漏、后果最严重**）；
@@ -265,25 +251,22 @@ pwsh -File scripts/make-icon.ps1
 | 9 | 防火墙引导 | 文案名称与 exe 一致 | ✅ 已自动验证 |
 | 10 | Web 监控 | `http://localhost:5000` 标题 = `LiteMonitor++ WebServer` | ✅ 已端到端验证 |
 | 11 | 主题编辑器 | 标题 = `LiteMonitor++ Theme Editor` | ✅ 已自动验证 |
-| 12 | 插件 | 12 个插件可加载；城市库断网可用 | ✅ 已自动验证（JSON 合法 + 城市库在包内） |
+| 12 | 插件 | 13 个插件可加载；城市库断网可用 | ✅ 已自动验证（JSON 合法 + 城市库在包内） |
 | 13 | 多语言 | 9 种语言无旧品牌残留 | ✅ 已自动验证 |
 | 14 | 卸载/清理 | 计划任务、崩溃日志、托盘图标无残留 | ⚠️ 人工 |
 
-> Web 面板默认 `WebServerEnabled = false`（`Settings.cs:141`），不开时 5000 端口不监听属预期。
+> Web 面板默认 `WebServerEnabled = false`（`Settings.cs`），不开时 5000 端口不监听属预期。
 > 验证方法：改包内 `settings.json` 的 `WebServerEnabled` 为 `true` 后重启。
 
 ---
 
-## 7. 已知阻塞项
+## 7. 许可与发布事项
 
-| # | 阻塞项 | 影响 | 谁来解决 |
-|---|---|---|---|
-| 1 | **上游 LICENSE 文件仍缺失** | 上游仓库根目录没有 LICENSE 文件（GitHub API `"license": null`），其 MIT 授权意图仅见于 README | **只能由用户去提**：在 `github.com/Diorser/LiteMonitor/issues` 开 issue 或邮件 `tueur2010@gmail.com` 索取。当前 `NOTICE` 已如实写明「上游仓库根目录尚未提交 LICENSE 文件，授权意图以其 README 声明为准」 |
-| 2 | **已解除：自有仓库 `mojingjing-git/LiteMonitorPlus` 已创建** | 2026-10-21 已按用户授权创建公开 GitHub 仓库并推送源码、资源和修复后的更新器；默认分支为 `master`，匹配现有资源 URL | 交付验收见 `docs/reviews/2026-10-21-remediation-validation.md`；正式 Release 仍见下一项，Gitee 镜像未在本次创建 |
-| 3 | **自有发布源尚未就绪** | `https://github.com/mojingjing-git/LiteMonitorPlus/releases/download/v{0}/LiteMonitorPlus_v{0}-win-x64.zip` | 仓库建好后创建 Release，资产名用脚本输出的同名 |
-| 4 | 无官网 | `{{SITE}}` 为空，所有原「官网」位改为「上游项目」致谢链接 | 可选，后续有域名再加 |
-
----
+| 事项 | 现状 | 处置 |
+|---|---|---|
+| 上游 LICENSE 文件 | 上游仓库根目录没有 LICENSE 文件（GitHub API 返回 `"license": null`），其 MIT 授权意图仅见于上游 README | 需由权利人补发：在 `github.com/Diorser/LiteMonitor` 开 issue 或邮件 `tueur2010@gmail.com` 索取。`NOTICE` 已如实写明「上游仓库根目录尚未提交 LICENSE 文件，授权意图以其 README 声明为准」 |
+| 自有发布源 | `https://github.com/mojingjing-git/LiteMonitorPlus/releases/download/v{0}/LiteMonitorPlus_v{0}-win-x64.zip` | 创建 Release 时，资产名使用打包脚本输出的同名文件 |
+| 官网 | 无官网域名 | 所有原「官网」位改为「上游项目」致谢链接 |
 
 ## 8. 去 emoji 规范（软件内禁用 emoji）
 
@@ -304,11 +287,11 @@ pwsh -File scripts/make-icon.ps1
 
 | 符号 | 码位 | 用途 |
 |---|---|---|
-| `↑` `↓` | U+2191 / U+2193 | 上行/下行方向语义。语言包 `Short.NET.Up` `Short.NET.Down` 用它取代原先的彩色三角 |
-| `↑↑` `↓↓` | U+2191 ×2 | 每日流量累计，取代原先的彩色双三角（单三角=即时速率，双三角=日累计） |
+| `↑` `↓` | U+2191 / U+2193 | 上行/下行方向语义。语言包 `Short.NET.Up` `Short.NET.Down` 统一使用方向符号表达 |
+| `↑↑` `↓↓` | U+2191 ×2 | 每日流量累计，（单箭头 = 即时速率，双箭头 = 日累计） |
 | `→` | U+2192 | 文档与插件标题里的方向指示 |
 | `▲` `▼` | U+25B2 / U+25BC | 任务栏监控项的排序按钮 |
-| `★` | U+2605 | 中文注释里的章节标记（**源码注释里 2262 处，全仓保留**） |
+| `★` | U+2605 | 中文注释里的章节标记（全仓保留） |
 | `©` | U+00A9 | 版权声明（MIT 义务，不可删） |
 
 ### 8.3 承载语义、不能删成空串的几处
