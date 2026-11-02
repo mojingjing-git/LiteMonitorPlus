@@ -528,6 +528,7 @@
   "LiteMonitor.Tests|LiteMonitor.Tests.FlagshipGpuRenderingTests.FixedPresetRenderingCreatesNoCaptureSessions": 1,
   "LiteMonitor.Tests|LiteMonitor.Tests.FlagshipGpuRenderingTests.NamedPresetsCapHostCaptureRequestToFalse": 1,
   "LiteMonitor.Tests|LiteMonitor.Tests.FlagshipGpuRenderingTests.StrictGpuExportsUseDistinctThemeSpecificPixels": 1,
+  "LiteMonitor.Tests|LiteMonitor.Tests.FlagshipGpuRenderingTests.\u5DE5\u4F5C\u5BA4\u9884\u89C8\u8BCA\u65AD_\u5FEB\u7167\u4E0E\u5237\u65B0\u8017\u65F6": 1,
   "LiteMonitor.Tests|LiteMonitor.Tests.FlagshipGpuThemeTests.ThemeStudioVisualPresetChoiceRebuildsPropertiesAcrossResetUndoAndRedo": 1,
   "LiteMonitor.Tests|LiteMonitor.Tests.FlagshipGpuThemeTests.Theme_BuildDerivedTheme_MatchesFallbackStyleAndSharesFonts": 3,
   "LiteMonitor.Tests|LiteMonitor.Tests.FlagshipGpuThemeTests.Theme_DocumentSession_RoundTripSaveAndExport": 3,

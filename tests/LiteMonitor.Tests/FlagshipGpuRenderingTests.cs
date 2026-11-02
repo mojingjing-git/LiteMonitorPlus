@@ -35,6 +35,54 @@ public sealed class FlagshipGpuRenderingTests : IDisposable
     }
 
     [Fact]
+    public void 工作室预览诊断_快照与刷新耗时()
+    {
+        // 诊断探针：导出工作室 GPU 预览的实际渲染帧（供人工比对"预览不对"），
+        // 并测量连续 RefreshPreviewNow 的耗时分布（模拟连续编辑的防抖触发）。
+        string diagDir = Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "TestResults", "studio-preview-diag");
+        Directory.CreateDirectory(diagDir);
+        string capturePath = Path.Combine(diagDir, "studio-crt-preview.png");
+
+        RunSta(() =>
+        {
+            using var form = new ThemeStudioForm();
+            form.Show();
+            form.OpenThemeForTesting("RetroCRT_Phosphor_GPU");
+            form.SelectTargetForTesting(ThemeEditTarget.GpuMain);
+            Application.DoEvents();
+
+            for (int i = 0; i < 100 &&
+                form.PreviewControlForTesting?.IsGpuPreviewActive != true; i++)
+            {
+                Thread.Sleep(20);
+                Application.DoEvents();
+            }
+
+            bool captured = form.PreviewCaptureForTesting(capturePath);
+            ThemePreviewControl? shell = form.PreviewControlForTesting;
+
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < 20; i++)
+            {
+                form.RefreshPreviewForTesting();
+                Application.DoEvents();
+            }
+            stopwatch.Stop();
+
+            Assert.True(captured,
+                $"GPU 预览快照失败: {shell?.PreviewDiagnosticsForTesting ?? "<no shell>"}");
+            File.WriteAllText(
+                Path.Combine(diagDir, "diag.txt"),
+                shell?.PreviewDiagnosticsForTesting + Environment.NewLine +
+                $"20 次刷新耗时: {stopwatch.ElapsedMilliseconds}ms（每次 {stopwatch.ElapsedMilliseconds / 20.0:F1}ms）");
+            Assert.True(
+                stopwatch.ElapsedMilliseconds < 2000,
+                $"20 次预览刷新耗时 {stopwatch.ElapsedMilliseconds}ms（每次 {stopwatch.ElapsedMilliseconds / 20.0:F1}ms）");
+        });
+    }
+
+    [Fact]
     public void StrictGpuExportsUseDistinctThemeSpecificPixels()
     {
         RunSta(() =>

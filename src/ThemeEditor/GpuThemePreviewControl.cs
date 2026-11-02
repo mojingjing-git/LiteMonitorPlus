@@ -154,6 +154,34 @@ public sealed class GpuThemePreviewControl : Control
     internal Size? RenderSurfaceSize =>
         _renderer is null ? null : new Size(_renderer.Width, _renderer.Height);
 
+    /// <summary>场景内容概要（诊断：预览卡片缺失时核对场景侧是否真的有指标）。</summary>
+    internal string SceneDiagnosticsForTesting
+    {
+        get
+        {
+            if (_scene is null)
+            {
+                return "<scene null>";
+            }
+
+            int metrics = 0;
+            int withText = 0;
+            foreach (SceneGroup group in _scene.Groups)
+            {
+                foreach (SceneMetric metric in group.Metrics)
+                {
+                    metrics++;
+                    if (!string.IsNullOrWhiteSpace(metric.DisplayValue))
+                    {
+                        withText++;
+                    }
+                }
+            }
+
+            return $"groups={_scene.Groups.Length} metrics={metrics} withText={withText}";
+        }
+    }
+
     public bool UpdateTheme(
         Theme theme,
         List<GroupLayoutInfo>? groups = null,

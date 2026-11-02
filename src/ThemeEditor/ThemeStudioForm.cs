@@ -1402,7 +1402,13 @@ namespace LiteMonitor.ThemeEditor
 
             if (_preview?.IsGpuPreviewActive == true)
             {
-                _statusRoute.Text = "预览路线：GPU 场景（同源） ｜ 目标：主效果";
+                // 预览始终显示 GPU 真实效果（所见即所得）；生产主面板受全局
+                // opt-in 控制——关闭时要明示差异，避免用户误以为预览欺骗。
+                bool productionGpu = Settings.Load().GpuThemeEffectsEnabled;
+                _statusRoute.Text = "预览路线：GPU 场景（同源） ｜ 目标：主效果" +
+                    (productionGpu
+                        ? ""
+                        : " ｜ ⚠ 主面板已关闭 GPU 效果，实际显示兼容外观");
             }
             else
             {
@@ -1640,6 +1646,9 @@ namespace LiteMonitor.ThemeEditor
         internal void UndoForTesting() => Undo();
 
         internal void RedoForTesting() => Redo();
+
+        internal bool PreviewCaptureForTesting(string pngPath) =>
+            _preview?.TryCaptureOnceForTesting(pngPath) == true;
 
         internal void ApplyForTesting() => ApplySession();
 

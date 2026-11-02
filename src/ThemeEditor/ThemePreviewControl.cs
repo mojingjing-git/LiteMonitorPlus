@@ -70,6 +70,11 @@ namespace LiteMonitor.ThemeEditor
         /// <summary>主题是否已换代（换代时让运行时主题代次自增、各层缓存失效）。</summary>
         private bool _themeChanged = true;
 
+        /// <summary>GDI 布局的构建条件跟踪（主题换代 / DPI / 宽度变化才重建）。</summary>
+        private float _layoutDpiScale;
+        private int _lastLayoutWidth = -1;
+        private int _lastLayoutHeight;
+
         /// <summary>控件是否已释放（释放后不再触碰运行时）。</summary>
         private bool _disposed;
         private GpuThemePreviewControl? _gpuPreview;
@@ -119,6 +124,15 @@ namespace LiteMonitor.ThemeEditor
 
         /// <summary>GPU 子控件最后成功保留的主题；仅供测试与 GDI 回退状态独立比较。</summary>
         internal Theme? CommittedGpuThemeForTesting => _gpuPreview?.CommittedThemeForTesting;
+        internal bool TryCaptureOnceForTesting(string pngPath) => _gpuPreview?.TryCaptureOnce(pngPath) == true;
+
+        internal string PreviewDiagnosticsForTesting =>
+            $"target={_target} gpuReq={_rawTheme?.Rendering?.IsGpuRequested} " +
+            $"safeMode={Program.SafeMode} handle={IsHandleCreated} size={Width}x{Height} " +
+            $"gpuCreated={_gpuPreview != null} gpuVisible={_gpuPreview?.Visible} " +
+            $"gpuActive={_gpuPreview?.IsActive} gpuErr={_gpuPreview?.Error ?? "<null>"} " +
+            $"gpuDevCreations={DeviceCreationCount} sessionUpdates={SessionUpdateCount} " +
+            $"scene=[{_gpuPreview?.SceneDiagnosticsForTesting ?? "<none>"}]";
 
         /// <summary>父控件交给 GDI 路线的实际主题；仅供测试验证失败后的完整回退派生。</summary>
         internal Theme? GdiRenderedThemeForTesting => _theme;
@@ -169,10 +183,38 @@ namespace LiteMonitor.ThemeEditor
             _shape = shape;
             _dpiScale = GetDpiScale();
 
+            // mock 场景输入是 GPU 与 GDI 两条预览路径共用的（轻量对象构建 + 一次布局），
+            // 必须在 GPU 分支之前完成——否则 GPU 场景拿到空组，预览只剩材质层。
+            BuildMockData();
+
             // 编辑目标是“用户想编辑哪条路线”，实际绘制主题还要看 GPU 是否真的可用。
             // F04：主效果目标在 GPU 关闭/安全模式/初始化失败时也必须走同一份
             // legacy fallback 派生主题，不能继续用主效果原始 Color 画 GDI 兜底。
-            Theme themeToRender = ResolveGdiTheme(effectiveTarget);
+            UpdateGpuPreview();
+
+            if (_gpuPreview is { IsActive: true, Visible: true })
+            {
+                // GPU 预览已接管画布：GDI 兜底层保持轻量——不做主题深拷贝、布局与
+                // mock 构建，也不触发重绘（重绘结果完全被 GPU 表面盖住，纯浪费）。
+                // GPU 失败回退时 UpdateGpuPreview 会立即走 BuildGdiPreview。
+                return;
+            }
+
+            BuildGdiPreview();
+        }
+
+        /// <summary>
+        /// 构建 GDI 绘制路径的全部状态（主题渲染副本、预览深拷贝、布局、mock 数据）。
+        /// 只在 GDI 真正要画的时候调用——GPU 预览活跃时这些工作全部被表面遮住。
+        /// </summary>
+        private void BuildGdiPreview()
+        {
+            if (_rawTheme is null)
+            {
+                return;
+            }
+
+            Theme themeToRender = ResolveGdiTheme(_target);
             _theme = themeToRender;
 
             // ★ 主题可能是**就地修改**的（编辑器改一个字段就会调一次 SetTheme），
@@ -188,7 +230,6 @@ namespace LiteMonitor.ThemeEditor
             // 换肤：主题代次自增，让各层缓存（纹理 / 渐变槽 / 噪点）失效
             _themeChanged = true;
 
-            UpdateGpuPreview();
             Invalidate();
         }
 
@@ -221,9 +262,11 @@ namespace LiteMonitor.ThemeEditor
 
         private bool IsGpuRouteUsable()
         {
-            return _rawTheme?.Rendering?.IsGpuRequested == true
-                && !Program.SafeMode
-                && Settings.Load().GpuThemeEffectsEnabled;
+            // 工作室预览不走生产 opt-in：预览控件有独立启动守卫（不读写生产崩溃标记）、
+            // 固定输入（不抓屏）、不消耗生产保守状态——编辑 GPU 主题时必须能看到
+            // GPU 效果，否则预览显示的是兼容派生外观，与主题真实效果完全不同。
+            // 生产主面板的 opt-in 语义在 GpuPresentationHostController 侧保持不变。
+            return _rawTheme?.Rendering?.IsGpuRequested == true && !Program.SafeMode;
         }
 
         private void UseGdiFallbackTheme()
@@ -278,9 +321,9 @@ namespace LiteMonitor.ThemeEditor
 
             if (_target == ThemeEditTarget.GpuMain && _rawTheme.Rendering?.IsGpuRequested == true)
             {
-                if (!Settings.Load().GpuThemeEffectsEnabled || Program.SafeMode)
+                if (Program.SafeMode)
                 {
-                    UseGdiFallbackTheme();
+                    BuildGdiPreview();
                     if (_gpuPreview != null)
                     {
                         _gpuPreview.Visible = false;
@@ -301,8 +344,10 @@ namespace LiteMonitor.ThemeEditor
 
                 if (_gpuPreview == null)
                 {
+                    // GPU 预览消费原始主题的 DPI 副本——不经过 _theme（那是 GDI
+                    // 绘制路径的状态，GPU 激活时 BuildGdiPreview 尚未执行）。
                     _gpuPreview = new GpuThemePreviewControl(
-                        GetPreviewTheme(GetDpiScale()),
+                        CreatePreviewTheme(_rawTheme, GetDpiScale()),
                         _groups,
                         shape: _shape)
                     {
@@ -318,12 +363,13 @@ namespace LiteMonitor.ThemeEditor
                     //   旧代码丢弃 bool 并继续把预览设为可见 ⇒ 主题非法时画布仍显示
                     //   上一个主题（用户看到「改了没反应」），且错误被彻底吞掉。
                     //   失败时隐藏 GPU 预览并保留 GpuThemePreviewControl.Error 以便 UI 提示。
+                    //   传给 UpdateTheme 的同样基于 _rawTheme（GPU 分支不依赖 _theme）。
                     if (!_gpuPreview.UpdateTheme(
-                            GetPreviewTheme(GetDpiScale()),
+                            CreatePreviewTheme(_rawTheme, GetDpiScale()),
                             _groups,
                             _shape))
                     {
-                        UseGdiFallbackTheme();
+                        BuildGdiPreview();
                         _gpuPreview.Visible = false;
                         return;
                     }
@@ -648,12 +694,23 @@ namespace LiteMonitor.ThemeEditor
                 float dpiScale = GetDpiScale();
                 _dpiScale = dpiScale;
 
+                // 布局只在主题换代 / DPI / 宽度变化时重建：BuildGdiPreview（或 BuildMockData）
+                // 已经对同一主题构建过布局并写入 _groups，这里重复 Build 是每帧全量字体测量。
+                bool layoutDirty = _themeChanged ||
+                    Math.Abs(_layoutDpiScale - dpiScale) > 0.01f ||
+                    _lastLayoutWidth != content.Width;
+                if (layoutDirty && _layout is not null)
+                {
+                    _layoutDpiScale = dpiScale;
+                    _lastLayoutWidth = content.Width;
+                    int builtHeight = _layout.Build(_groups);
+                    _lastLayoutHeight = Math.Max(1, builtHeight);
+                }
+
                 // 预览副本：主题或 DPI 变化时才重建（复用时运行时快照才能保持稳定）
                 Theme previewTheme = GetPreviewTheme(dpiScale);
-                var previewLayout = new UILayout(previewTheme);
-                int h = previewLayout.Build(_groups);
 
-                int bmpH = Math.Max(1, h);
+                int bmpH = Math.Max(1, _lastLayoutHeight);
                 var requiredSize = new Size(Math.Max(1, previewTheme.Layout.Width), bmpH);
 
                 // ★★★ 核心优化：复用 Bitmap 而非每次新建 ★★★
