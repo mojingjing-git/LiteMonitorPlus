@@ -43,7 +43,7 @@ LiteMonitor++ 的插件是一个 **`.json` 文本文件**，存放在 `resources
 *   `id` 一经发布即**不可更改** —— 它是用户的安装主键，改 id 等于换插件。
 *   `id` 不能与内置插件重名。内置 id 清单：`Bilibili`、`Crypto`、`Exchange`、`GitHub`、`Hitokoto`、
     `Holiday`、`ProxyLatency`、`PublicIP`、`Stock`、`UniversalAPI`、`Weather`、`WeiboHot`。
-*   `meta.author` 请填真实作者（GitHub 用户名最佳），不要用 `User` / `Codex` 这类占位符。
+*   `meta.author` 请填真实作者（GitHub 用户名最佳），不要用 `User` / `YourName` 这类占位符。
 
 ---
 
