@@ -1234,9 +1234,12 @@ namespace LiteMonitor.ThemeEditor
         {
             if (_preview is null)
             {
+                // 竖向预览不再填满宿主：控件按"设置面板宽度比例"自适配尺寸并在
+                // 宿主内居中（ThemePreviewControl.UpdatePanelFitBounds），所见即所得；
+                // 横向/任务栏形态由各自预览控件负责填满。
                 _preview = new ThemePreviewControl
                 {
-                    Dock = DockStyle.Fill,
+                    Dock = DockStyle.None,
                     BackColor = PreviewBack,
                 };
                 _preview.GpuPreviewUnavailable += OnGpuPreviewUnavailable;

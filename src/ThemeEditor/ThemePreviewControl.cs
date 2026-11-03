@@ -132,6 +132,7 @@ namespace LiteMonitor.ThemeEditor
             $"gpuCreated={_gpuPreview != null} gpuVisible={_gpuPreview?.Visible} " +
             $"gpuActive={_gpuPreview?.IsActive} gpuErr={_gpuPreview?.Error ?? "<null>"} " +
             $"gpuDevCreations={DeviceCreationCount} sessionUpdates={SessionUpdateCount} " +
+            $"gpuSurface={_gpuPreview?.RenderSurfaceSize?.ToString() ?? "<none>"} " +
             $"scene=[{_gpuPreview?.SceneDiagnosticsForTesting ?? "<none>"}]";
 
         /// <summary>父控件交给 GDI 路线的实际主题；仅供测试验证失败后的完整回退派生。</summary>
@@ -197,10 +198,19 @@ namespace LiteMonitor.ThemeEditor
                 // GPU 预览已接管画布：GDI 兜底层保持轻量——不做主题深拷贝、布局与
                 // mock 构建，也不触发重绘（重绘结果完全被 GPU 表面盖住，纯浪费）。
                 // GPU 失败回退时 UpdateGpuPreview 会立即走 BuildGdiPreview。
+                // 场景刚按当前客户区重建：同步真实内容高并适配面板尺寸
+                // （首次 SetTheme 时控件还是默认 200×100，必须在这里触发 fit）。
+                if (_gpuPreview.LastBuiltContentHeight > 0)
+                {
+                    _lastLayoutHeight = _gpuPreview.LastBuiltContentHeight;
+                }
+
+                UpdatePanelFitBounds();
                 return;
             }
 
             BuildGdiPreview();
+            UpdatePanelFitBounds();
         }
 
         /// <summary>
@@ -729,6 +739,18 @@ namespace LiteMonitor.ThemeEditor
                     }
 
                     _lastLayoutHeight = Math.Max(1, builtHeight);
+
+                    // 布局真高与线性估算的差在这里暴露：延迟一拍重算面板适配尺寸。
+                    if (!_disposed && IsHandleCreated)
+                    {
+                        BeginInvoke(new Action(() =>
+                        {
+                            if (!_disposed)
+                            {
+                                UpdatePanelFitBounds();
+                            }
+                        }));
+                    }
                 }
 
                 // 预览副本：主题或 DPI 变化时才重建（复用时运行时快照才能保持稳定）
@@ -891,6 +913,77 @@ namespace LiteMonitor.ThemeEditor
 
                 Invalidate();
             }
+
+            UpdatePanelFitBounds();
+        }
+
+        /// <summary>
+        /// 竖向预览的面板尺寸自适配：宽度取"设置面板宽度 × DPI"（生产同源，
+        /// 见 UIController 布局前对 Layout.Width 的赋值），高度取该宽度下的内容
+        /// 自然高；超出宿主可用区域时等比缩小，并在宿主内居中。
+        /// 横向/任务栏形态不走此逻辑（保持填满宿主）。
+        /// </summary>
+        private void UpdatePanelFitBounds()
+        {
+            if (_disposed || _rawTheme is null || Parent is null || !IsHandleCreated)
+            {
+                return;
+            }
+
+            Rectangle avail = Parent.ClientRectangle;
+            if (avail.Width < 40 || avail.Height < 40)
+            {
+                return;
+            }
+
+            if (_shape != PreviewShape.Vertical)
+            {
+                var fill = new Rectangle(Point.Empty, avail.Size);
+                if (Bounds != fill)
+                {
+                    Bounds = fill;
+                }
+                return;
+            }
+
+            float dpi = GetDpiScale();
+            int naturalWidth = Math.Max(80, (int)(Settings.Load().PanelWidth * dpi));
+            int naturalHeight = EstimatePanelHeight(naturalWidth);
+
+            double scale = Math.Min(1.0, Math.Min(
+                avail.Width / (double)naturalWidth,
+                avail.Height / (double)naturalHeight));
+            int width = Math.Max(60, (int)(naturalWidth * scale));
+            int height = Math.Max(60, (int)(naturalHeight * scale));
+            var desired = new Rectangle(
+                avail.Left + Math.Max(0, (avail.Width - width) / 2),
+                avail.Top + Math.Max(0, (avail.Height - height) / 2),
+                width,
+                height);
+
+            // 高度给 2px 容差：布局真高与线性估算的小差不再触发重排，防抖动循环。
+            bool sizeClose = Math.Abs(Bounds.Width - desired.Width) <= 1 &&
+                Math.Abs(Bounds.Height - desired.Height) <= 2;
+            if (sizeClose)
+            {
+                desired = new Rectangle(Bounds.Location, desired.Size);
+            }
+
+            if (Bounds != desired)
+            {
+                Bounds = desired;
+            }
+        }
+
+        /// <summary>按当前布局结果线性外推目标宽度下的内容高（宽度变化后下一轮修正）。</summary>
+        private int EstimatePanelHeight(int naturalWidth)
+        {
+            int currentWidth = _lastLayoutWidth > 0 ? _lastLayoutWidth : naturalWidth;
+            int currentHeight = _lastLayoutHeight > 0
+                ? _lastLayoutHeight
+                : (int)(420 * _dpiScale);
+            return Math.Max(120,
+                (int)(currentHeight * (naturalWidth / (double)Math.Max(1, currentWidth))));
         }
 
         /// <summary>

@@ -92,8 +92,26 @@ public sealed class FlagshipGpuRenderingTests : IDisposable
             }
             Report("activate-wait");
 
+            // 等面板适配尺寸收敛（fit 迭代 + 延迟修正）：连续两轮 Bounds 相同才继续，
+            // 否则快照会落在中间态尺寸上。
+            ThemePreviewControl? fitShell = form.PreviewControlForTesting;
+            for (int i = 0; i < 100 && fitShell is not null; i++)
+            {
+                Rectangle before = fitShell.Bounds;
+                Thread.Sleep(30);
+                Application.DoEvents();
+                if (before == fitShell.Bounds && i > 0)
+                {
+                    break;
+                }
+            }
+            Report("fit-settled");
+
+            string beforeCapture =
+                $"client={fitShell?.ClientSize} bounds={fitShell?.Bounds} " +
+                $"surface={form.PreviewControlForTesting?.PreviewDiagnosticsForTesting}";
             bool captured = form.PreviewCaptureForTesting(capturePath);
-            Report($"capture={captured}");
+            Report($"capture={captured} {beforeCapture}");
             ThemePreviewControl? shell = form.PreviewControlForTesting;
 
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -122,6 +140,8 @@ public sealed class FlagshipGpuRenderingTests : IDisposable
             Report("fallback-shot");
 
             phases.Add(shell?.PreviewDiagnosticsForTesting ?? "<no shell>");
+            phases.Add(shell is null ? "<no shell bounds>" :
+                $"previewBounds={shell.Bounds} hostClient={shell.Parent?.ClientSize}");
             phases.Add($"20refresh-total={stopwatch.ElapsedMilliseconds}ms");
             File.WriteAllText(diagPath, string.Join(Environment.NewLine, phases));
             ThemeDocumentStore.ResetRecoveryDir();

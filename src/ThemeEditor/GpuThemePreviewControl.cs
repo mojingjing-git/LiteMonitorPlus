@@ -182,6 +182,9 @@ public sealed class GpuThemePreviewControl : Control
         }
     }
 
+    /// <summary>最近一次竖向场景构建的内容高（像素，含顶部保护）——外壳用它做面板高度适配。</summary>
+    internal int LastBuiltContentHeight { get; private set; }
+
     public bool UpdateTheme(
         Theme theme,
         List<GroupLayoutInfo>? groups = null,
@@ -474,7 +477,23 @@ public sealed class GpuThemePreviewControl : Control
             }
 
             UILayout layout = new(_theme);
-            layout.Build(_groups);
+            int builtHeight = layout.Build(_groups);
+
+            // 顶部保护：与 GDI 路径（ThemePreviewControl.OnPaint）一致——首组面板
+            // 描边向上溢出的 1-2px 不被表面裁掉；两路共用同一份 groups，行为统一。
+            int topPad = (int)Math.Ceiling(2 * Math.Max(1f, DeviceDpi / 96f));
+            if (topPad > 0)
+            {
+                foreach (GroupLayoutInfo group in _groups)
+                {
+                    Rectangle b = group.Bounds;
+                    group.Bounds = new Rectangle(b.X, b.Y + topPad, b.Width, b.Height);
+                }
+                builtHeight += topPad;
+            }
+
+            LastBuiltContentHeight = Math.Max(1, builtHeight);
+
             _scene = UiSceneSnapshotAdapter.Build(
                 _groups,
                 _generations,
