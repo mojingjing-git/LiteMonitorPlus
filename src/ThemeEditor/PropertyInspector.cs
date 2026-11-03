@@ -240,9 +240,51 @@ namespace LiteMonitor.ThemeEditor
             base.Dispose(disposing);
         }
 
-        private void Rebuild()
+        /// <summary>
+        /// 结构性刷新：按当前草稿重新解析描述符序列。
+        /// <para>
+        /// 序列（JsonPath + 分组）与现状一致时只刷新行值，不销毁任何行控件——
+        /// 同材质内切换视觉效果预设/玻璃样式的绝大多数情形字段集合不变，
+        /// 全量重建会让所有选项控件一起闪烁重建；只有序列真的变化
+        /// （如 nebula 预设移除玻璃样式行）才走全量 Rebuild。
+        /// </para>
+        /// </summary>
+        public void RefreshStructure()
         {
-            SuspendLayout();
+            if (_session is null) return;
+
+            IReadOnlyList<ThemePropertyDescriptor> next =
+                ThemePropertyCatalog.GetProperties(_session.Draft, Target);
+            if (SamePropertySequence(_properties, next))
+            {
+                _properties = next;
+                RefreshValues();
+                return;
+            }
+
+            _properties = next;
+            Rebuild();
+        }
+
+        private static bool SamePropertySequence(
+            IReadOnlyList<ThemePropertyDescriptor> left,
+            IReadOnlyList<ThemePropertyDescriptor> right)
+        {
+            if (left.Count != right.Count) return false;
+            for (int i = 0; i < left.Count; i++)
+            {
+                if (!string.Equals(left[i].JsonPath, right[i].JsonPath, StringComparison.Ordinal) ||
+                    !string.Equals(left[i].Group, right[i].Group, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private void Rebuild()
+        {            SuspendLayout();
             try
             {
                 _toolTip.RemoveAll();

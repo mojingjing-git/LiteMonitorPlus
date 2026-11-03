@@ -391,6 +391,74 @@ public sealed class FlagshipGpuThemeTests : IDisposable
     // ================================================================
 
     [Fact]
+    public void 命名预设间切换_字段集合不变时不重建行控件()
+    {
+        // 增量刷新回归：CrtPhosphor ↔ NixieBrass 的可编辑字段集合完全一致
+        // （命名预设都没有玻璃样式行），结构刷新必须只刷新行值——
+        // 否则每次切预设所有选项控件一起销毁重建（闪烁 + 重建成本）。
+        RunSta(() =>
+        {
+            const string themeName = "EditableGpuTheme";
+            string themeDir = Path.Combine(_tempDir, "studio-themes-incremental");
+            string recoveryDir = Path.Combine(_tempDir, "studio-recovery-incremental");
+            Directory.CreateDirectory(themeDir);
+            Directory.CreateDirectory(recoveryDir);
+            File.WriteAllText(
+                Path.Combine(themeDir, themeName + ".json"),
+                EditableGpuThemeJson,
+                new UTF8Encoding(false));
+
+            ThemeDocumentStore.SetThemeDirForTests(themeDir);
+            ThemeDocumentStore.SetRecoveryDirForTests(recoveryDir);
+            try
+            {
+                using var form = new ThemeStudioForm();
+                form.Show();
+                form.OpenThemeForTesting(themeName);
+                form.SelectTargetForTesting(ThemeEditTarget.GpuMain);
+
+                PropertyInspector inspector = form.InspectorForTesting;
+                ComboBox presetCombo = Assert.IsType<ComboBox>(
+                    inspector.EditorForTesting("rendering.parameters.visualPreset"));
+                Assert.Equal(4, presetCombo.Items.Count); // default + 三个命名预设
+
+                // 1) 切到 CrtPhosphor：glassStyle 行消失 ⇒ 序列变化 ⇒ 允许整体重建。
+                presetCombo.SelectedIndex = 3;
+                Application.DoEvents();
+                Application.DoEvents();
+                ComboBox crtCombo = Assert.IsType<ComboBox>(
+                    inspector.EditorForTesting("rendering.parameters.visualPreset"));
+                Control fontEditor = Assert.IsType<Control>(
+                    inspector.EditorForTesting("font.family")!);
+                Assert.Null(inspector.EditorForTesting("rendering.parameters.glassStyle"));
+
+                // 2) CrtPhosphor → NixieBrass：字段集合完全一致 ⇒ 增量刷新，
+                //    所有行控件实例保持不变（其他选项不再跟着重建）。
+                crtCombo.SelectedIndex = 2;
+                Application.DoEvents();
+                Application.DoEvents();
+
+                ComboBox nixieCombo = Assert.IsType<ComboBox>(
+                    inspector.EditorForTesting("rendering.parameters.visualPreset"));
+                Assert.Same(crtCombo, nixieCombo);
+                Assert.Equal(
+                    ThemeRenderingConfig.NixieBrassVisualPreset,
+                    nixieCombo.SelectedItem);
+                Assert.Same(fontEditor, inspector.EditorForTesting("font.family"));
+                Assert.Null(inspector.EditorForTesting("rendering.parameters.glassStyle"));
+                Assert.Equal(
+                    ThemeRenderingConfig.NixieBrassVisualPreset,
+                    form.SessionForTesting!.Draft.Rendering!.Parameters["visualPreset"].GetString());
+            }
+            finally
+            {
+                ThemeDocumentStore.SetThemeDirForTests(null);
+                ThemeDocumentStore.ResetRecoveryDir();
+            }
+        });
+    }
+
+    [Fact]
     public void 预设下拉展开中切换选项_异步重建不崩溃()
     {
         // 回归：用户在下拉展开状态下切换预设（键盘导航/鼠标点击都会在展开中触发

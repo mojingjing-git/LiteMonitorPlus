@@ -1133,7 +1133,9 @@ namespace LiteMonitor.ThemeEditor
         private void RebindInspector()
         {
             if (_session is null) return;
-            _inspector.Bind(_session, _inspector.Target);
+            // 增量刷新：字段序列不变时只刷新行值（不重建控件），
+            // 序列真的变化才整体重建——预设切换不再让所有选项一起闪。
+            _inspector.RefreshStructure();
         }
 
         private void OnSessionChanged()
